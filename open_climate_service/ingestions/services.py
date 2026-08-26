@@ -1396,8 +1396,6 @@ def _store_artifact_record(
             request_scope=record.request_scope,
         )
         if existing is not None and existing.coverage == record.coverage:
-            if publish and existing.publication.status != PublicationStatus.PUBLISHED:
-                return existing
             return existing
 
         records.append(record)
