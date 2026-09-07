@@ -67,7 +67,6 @@ nav:
   - Quick start: setup_guide.md
   - Concepts:
       - Architecture: architecture.md
-      - Operator surfaces: operator_surface.md
       - Zarr and GeoZarr: zarr_and_geozarr.md
       - Raster conventions: conventions.md
       - Project overview: project_description.md
