@@ -25,6 +25,12 @@ def _annotation_to_schema(ann: Any) -> dict[str, Any]:
 
     Handles plain types (str, int, …) and nullable unions (str | None).
     Returns {} for types with no known mapping (e.g. xr.DataArray).
+
+    A nullable annotation keeps its null: `str | None` is `{"type": ["string", "null"]}`,
+    matching how the openEO process specs express an optional parameter whose default is
+    null (`aggregate_spatial`'s `target_dimension` is exactly this). Unwrapping to a bare
+    `"string"` would publish a schema that rejects the documented default, which is worse
+    than publishing none — a client validating the graph would refuse a valid call.
     """
     direct = _PYTHON_TYPE_MAP.get(ann)
     if direct:
@@ -35,8 +41,30 @@ def _annotation_to_schema(ann: Any) -> dict[str, Any]:
     if isinstance(ann, types.UnionType) or origin is typing.Union:
         non_none = [a for a in args if a is not type(None)]
         if len(non_none) == 1:
-            return _annotation_to_schema(non_none[0])
+            inner = _annotation_to_schema(non_none[0])
+            if not inner:
+                return {}
+            if len(non_none) < len(args):
+                return {**inner, "type": [inner["type"], "null"]}
+            return inner
     return {}
+
+
+def _schema_types(schema: Any) -> tuple[str, ...]:
+    """The JSON Schema `type` of a parameter schema, always as a tuple.
+
+    `type` is either a string or a list of them, and an absent or declared-empty schema has
+    none. Callers only ask whether a particular type is admitted, so normalise the shape here
+    rather than at each site.
+    """
+    if not isinstance(schema, dict):
+        return ()
+    declared = schema.get("type")
+    if isinstance(declared, str):
+        return (declared,)
+    if isinstance(declared, list):
+        return tuple(str(item) for item in declared)
+    return ()
 
 
 def _resolved_annotations(fn: Any) -> dict[str, Any]:
@@ -116,10 +144,11 @@ def process(
                     p["schema"] = schema
             if param.default is not inspect.Parameter.empty:
                 p["optional"] = True
-                # Only emit the default value when it is not None, or when the
-                # schema explicitly allows null.  Emitting default=None for a
-                # purely-string schema creates a type mismatch in the catalog.
-                if param.default is not None or not p.get("schema"):
+                # A nullable annotation now carries "null" in its schema, so a None default
+                # no longer contradicts it and can be published as-is. The check remains for
+                # a parameter annotated non-nullable but defaulting to None, where emitting
+                # default=None would still mismatch the declared type.
+                if param.default is not None or not p.get("schema") or "null" in _schema_types(p.get("schema")):
                     p["default"] = param.default
             if parameters and name in parameters:
                 p.update(parameters[name])

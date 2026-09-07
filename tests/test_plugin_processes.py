@@ -135,8 +135,35 @@ def test_string_annotations_are_resolved_to_schemas() -> None:
     assert schemas == {
         "threshold": {"type": "string"},
         "count": {"type": "integer"},
-        "ratio": {"type": "number"},
+        # `float | None` keeps its null, as the openEO specs do for a nullable parameter.
+        "ratio": {"type": ["number", "null"]},
     }
+
+
+def test_a_nullable_annotation_keeps_its_null_and_its_default() -> None:
+    """`str | None` must publish `["string", "null"]`, not a bare `"string"`.
+
+    This is how the openEO specs express an optional parameter defaulting to null —
+    `aggregate_spatial`'s `target_dimension` is exactly this shape. Unwrapping to `"string"`
+    publishes a schema that rejects the documented default, so a client validating the graph
+    would refuse a valid call. That is worse than publishing no schema at all.
+    """
+
+    @process
+    def nullable(target: str | None = None, count: int = 1) -> None:
+        """Has a nullable parameter."""
+
+    meta = get_process_metadata(nullable)
+    assert meta is not None
+    target, count = meta["parameters"]
+
+    assert target["schema"] == {"type": ["string", "null"]}
+    assert target["optional"] is True
+    assert target["default"] is None
+
+    # A non-nullable parameter is unaffected.
+    assert count["schema"] == {"type": "integer"}
+    assert count["default"] == 1
 
 
 def test_an_unresolvable_annotation_does_not_lose_the_process() -> None:
