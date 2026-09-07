@@ -203,7 +203,7 @@ async def manage_sync(request: Request) -> Response:
             )
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"redirect": "/manage?message=Sync+completed"},
+                {"redirect": f"{mount}/manage?message=Sync+completed"},
             )
         except HTTPException as exc:
             msg = urllib.parse.quote(str(exc.detail))

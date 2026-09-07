@@ -478,7 +478,7 @@
             return;
           }
           for (const col of collections) {
-            const href = `/collections/${col.id}`;
+            const href = `{{ mount }}/collections/${col.id}`;
             const opt = document.createElement("option");
             opt.value = href;
             opt.textContent = col.title ?? col.id;

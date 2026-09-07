@@ -288,6 +288,10 @@ def test_the_viewer_fetches_under_the_mount_prefix(mounted_client: TestClient) -
 
     assert 'fetch("/ocs/extent")' in body
     assert 'fetch("/ocs/collections")' in body
+    # The per-collection href too, not just the two literal fetch targets: a viewer that lists
+    # datasets under the mount and then resolves each one outside it shows a catalogue where every
+    # entry 404s on selection.
+    assert "`/ocs/collections/${col.id}`" in body
     assert _CONFIGURED not in body
 
 

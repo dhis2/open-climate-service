@@ -410,3 +410,43 @@ async def test_manage_redirects_keep_the_mount_prefix() -> None:
     assert response.status_code == 303
     assert response.headers["location"].startswith("/ocs/manage?error=")
     assert "://" not in response.headers["location"]
+
+
+@pytest.mark.anyio
+async def test_a_successful_sync_redirects_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The success redirect is the one a mounted deployment actually reaches on the happy path.
+
+    The error redirects were mount-relative while this one was not, so under `/ocs` a sync that
+    worked sent the browser to `/manage` and the proxy 404'd — a failure only visible when nothing
+    had gone wrong.
+    """
+    scheduled: list[Coroutine[object, object, None]] = []
+
+    def fake_sync_dataset(
+        *,
+        dataset_id: str,
+        end: str | None,
+        publish: bool,
+        on_progress: Callable[[int | None, int | None, str | None], None],
+    ) -> None:
+        on_progress(1, 1, "done")
+
+    async def fake_to_thread(func: Callable[[], None]) -> None:
+        func()
+
+    def fake_create_task(coro: Coroutine[object, object, None]) -> None:
+        scheduled.append(coro)
+        return None
+
+    monkeypatch.setattr(ingestion_services, "sync_dataset", fake_sync_dataset)
+    monkeypatch.setattr(system_routes.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
+
+    response = await system_routes.manage_sync(
+        cast(Request, _FakeRequest({"dataset_id": "chirps3_precipitation_daily"}, root_path="/ocs"))
+    )
+    await scheduled[0]
+    payload = "".join([chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator])
+
+    assert "/ocs/manage?message=Sync+completed" in payload
+    assert '"/manage?message' not in payload, "the bare path would 404 behind the proxy"
