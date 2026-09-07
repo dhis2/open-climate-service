@@ -283,3 +283,21 @@ def test_policy_is_inert_when_the_flag_is_off(client: TestClient) -> None:
     """is_blocked() describes the policy; the middleware only applies it when configured."""
     assert is_blocked("POST", "/ingestions")  # policy says yes...
     assert client.post("/ingestions", json={}).status_code != 403  # ...but it is not applied
+
+
+def test_read_only_still_refuses_the_console_under_a_mount_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The policy matches route paths as the app declares them, so the prefix must come off.
+
+    Unstripped, `/ocs/manage` matched no closed prefix and read-only mode failed *open*: the
+    admin console and the job listing were served. `POST /ocs/result` stayed refused only
+    because that rule falls through to the method check, which made the gap easy to miss.
+    """
+    from open_climate_service import config as api_config
+    from open_climate_service.main import app
+
+    monkeypatch.setattr(api_config, "is_read_only", lambda: True)
+    mounted = TestClient(app, root_path="/ocs")
+
+    assert mounted.get("/manage").status_code == 403
+    assert mounted.get("/jobs").status_code == 403
+    assert mounted.get("/stac").status_code == 200

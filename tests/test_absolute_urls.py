@@ -89,8 +89,12 @@ def test_the_self_url_drops_the_query_string(monkeypatch: pytest.MonkeyPatch) ->
     assert self_url(request) == f"{_CONFIGURED}/stac"
 
 
-def _fake_request(base: str, path: str, query: str = ""):
-    """A Request with just enough scope for the URL helpers."""
+def _fake_request(base: str, path: str, query: str = "", root_path: str = ""):
+    """A Request with just enough scope for the URL helpers.
+
+    `root_path` is a parameter because the mounted cases need it and rebuilding the whole scope
+    inline to change one key is how three tests ended up with a copy of this dict.
+    """
     from fastapi import Request
 
     host = base.split("://", 1)[1].rstrip("/")
@@ -103,7 +107,7 @@ def _fake_request(base: str, path: str, query: str = ""):
             "path": path,
             "query_string": query.encode(),
             "headers": [(b"host", host.encode())],
-            "root_path": "",
+            "root_path": root_path,
         }
     )
 
@@ -218,44 +222,20 @@ def test_the_self_link_does_not_double_a_mount_prefix(monkeypatch: pytest.Monkey
     `TestClient(root_path=...)` does not prepend the prefix to `path` the way uvicorn does, and
     because the configured origin must be unset for the fallback to be reached at all.
     """
-    from fastapi import Request
-
     from open_climate_service.shared.urls import self_url
 
     monkeypatch.delenv(BASE_URL_ENV, raising=False)
-    request = Request(
-        {
-            "type": "http",
-            "scheme": "http",
-            "server": ("host", 80),
-            "path": "/ocs/stac",
-            "root_path": "/ocs",
-            "query_string": b"",
-            "headers": [(b"host", b"host")],
-        }
-    )
+    request = _fake_request("http://host/", "/ocs/stac", root_path="/ocs")
     assert self_url(request) == "http://host/ocs/stac"
 
 
 def test_a_configured_origin_is_unaffected_by_a_mount_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     """The prefix belongs to the deployment, so a configured public origin that already
     includes it must not have it stripped or doubled."""
-    from fastapi import Request
-
     from open_climate_service.shared.urls import self_url
 
     monkeypatch.setenv(BASE_URL_ENV, "https://example.org/ocs")
-    request = Request(
-        {
-            "type": "http",
-            "scheme": "http",
-            "server": ("host", 80),
-            "path": "/ocs/stac",
-            "root_path": "/ocs",
-            "query_string": b"",
-            "headers": [(b"host", b"host")],
-        }
-    )
+    request = _fake_request("http://host/", "/ocs/stac", root_path="/ocs")
     assert self_url(request) == "https://example.org/ocs/stac"
 
 
@@ -327,3 +307,48 @@ def test_mount_prefix_strips_a_trailing_slash() -> None:
         request = _fake_request("http://host/", "/manage")
         request.scope["root_path"] = reported
         assert mount_prefix(request) == expected, reported
+
+
+def test_the_mount_prefix_falls_back_to_the_base_url_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No shipped entry point sets ASGI `root_path`, so this is the usual mounted deployment.
+
+    With the prefix declared only in `CLIMATE_SERVICE_BASE_URL`, in-page links previously came
+    out unprefixed — an instance behind `https://host/ocs/` rendered `/map`, which 404s at the
+    proxy. `root_path` still wins when a server does set it.
+    """
+    from open_climate_service.shared.urls import mount_prefix
+
+    monkeypatch.setenv(BASE_URL_ENV, "https://host/ocs")
+    assert mount_prefix(_fake_request("https://host/", "/")) == "/ocs"
+
+    monkeypatch.setenv(BASE_URL_ENV, "https://host")
+    assert mount_prefix(_fake_request("https://host/", "/")) == ""
+
+
+def test_the_self_link_keeps_the_prefix_of_an_embedding_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`request.base_url` is built from `app_root_path`, so the strip must use the same key.
+
+    Under `outer.mount("/ocs", create_app())` Starlette sets `root_path` on the inner app while
+    `base_url` keeps the outer prefix; stripping `root_path` removed a prefix `base_url` had
+    never added, and `self` came back as `/stac` — a 404.
+    """
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    from open_climate_service.main import app as inner
+
+    monkeypatch.delenv(BASE_URL_ENV, raising=False)
+    outer = Starlette(routes=[Mount("/ocs", app=inner)])
+    payload = TestClient(outer).get("/ocs/stac").json()
+    self_href = next(link["href"] for link in payload["links"] if link["rel"] == "self")
+    assert self_href == "http://testserver/ocs/stac"
+
+
+def test_stripping_a_prefix_respects_segment_boundaries() -> None:
+    """`startswith` alone turned `/stac` under a `/st` prefix into `/ac`."""
+    from open_climate_service.shared.urls import strip_mount
+
+    assert strip_mount("/stac", "/st") == "/stac"
+    assert strip_mount("/ocs/stac", "/ocs") == "/stac"
+    assert strip_mount("/ocs", "/ocs") == "/"
+    assert strip_mount("/stac", "") == "/stac"

@@ -77,10 +77,9 @@ def manage(
 def _manage_url(mount: str, *, error: str | None = None, message: str | None = None) -> str:
     """A `/manage` URL carrying one banner, with the text percent-encoded.
 
-    Assembled in one place because it was assembled in twelve. Commit 32a74ad added the mount
-    prefix to eleven of them and missed the twelfth, which then needed its own follow-up commit
-    and a dedicated regression test — the redirect that fires on a *successful* sync, where the
-    error paths that surround it were all correct.
+    One place rather than at each redirect: a prefix added to most of them and missed on one is
+    a bug that only shows on the path nobody re-tests, and the miss landed on the *success*
+    redirect while every error path around it stayed correct.
     """
     banner = "error" if error is not None else "message"
     text = error if error is not None else message

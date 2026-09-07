@@ -23,6 +23,7 @@ expression repeated, and the sites that forgot it are exactly the bug.
 """
 
 import os
+import urllib.parse
 
 from fastapi import Request
 
@@ -50,23 +51,42 @@ def absolute_url(request: Request, path: str) -> str:
 def mount_prefix(request: Request) -> str:
     """The path prefix this instance is served under, or `""` when it is at the root.
 
-    For links and form actions *within* a served page, which need to be same-origin but
-    mount-correct. A path carries no scheme and no host, so it inherits both from the page —
-    which is what fixes the mixed-content defect — while still resolving under a deployment
-    prefix.
+    For links and form actions *within* a served page: a path carries no scheme and no host, so
+    it inherits both from the page — which is what fixes the mixed-content defect — while still
+    resolving under a deployment prefix. An origin would not, since an operator on a port-forward
+    would then submit forms to the configured public instance.
 
-    The two wrong answers this sits between, both of which shipped in this file's history:
-
-    * `absolute_base()` names an origin, so an operator reaching the console through a
-      port-forward would submit forms to the configured *public* instance. Silently, since CORS
-      is `allow_origins=["*"]`.
-    * A bare leading slash resolves from the origin root, so under `--root-path /ocs` a page at
-      `/ocs/manage` posted to `/manage` and the proxy returned 404.
+    Two places can carry the prefix and this reconciles them, so callers have one answer. ASGI
+    `root_path` wins when set. Nothing in the shipped entry points sets it — `cli.py` passes only
+    host and port — so the usual case is a proxy prefix declared solely in the path of
+    `CLIMATE_SERVICE_BASE_URL`, and that is the fallback. Without it, an instance behind
+    `https://host/ocs/` renders `/map`, which 404s at the proxy.
 
     Returned without a trailing slash, so `f"{mount_prefix(request)}/manage"` is right whether
     or not there is a prefix.
     """
-    return str(request.scope.get("root_path", "")).rstrip("/")
+    root_path = str(request.scope.get("root_path", "")).rstrip("/")
+    if root_path:
+        return root_path
+    configured = os.getenv(BASE_URL_ENV, "").strip().rstrip("/")
+    if not configured:
+        return ""
+    return urllib.parse.urlsplit(configured).path.rstrip("/")
+
+
+def strip_mount(path: str, prefix: str) -> str:
+    """`path` with `prefix` removed, only when it ends on a path-segment boundary.
+
+    `startswith` alone would turn `/stac` under a `/st` prefix into `/ac`. Unreachable through
+    uvicorn, but the guard costs one comparison and mirrors what Starlette's own
+    `get_route_path` does.
+    """
+    if not prefix or not path.startswith(prefix):
+        return path
+    remainder = path[len(prefix) :]
+    if remainder and not remainder.startswith("/"):
+        return path
+    return remainder or "/"
 
 
 def self_url(request: Request) -> str:
@@ -83,16 +103,16 @@ def self_url(request: Request) -> str:
     `--root-path /ocs` the request arrives as `/stac`, `request.url.path` becomes `/ocs/stac`,
     and the fallback origin `request.base_url` already ends in `/ocs/`. Appending the path
     unstripped would give `/ocs/ocs/stac` for `self` while every other link stayed correct, and
-    a STAC client following `self` would 404. Verified against uvicorn booted with
-    `root_path="/ocs"`: with the strip `self` is `.../ocs/stac`, without it `.../ocs/ocs/stac`.
+    a STAC client following `self` would 404.
 
     `TestClient(root_path=...)` does not prepend the prefix to `path` the way uvicorn does, so
-    the `mounted_client` tests cannot reproduce the doubling. The coverage lives in
-    `test_the_self_link_does_not_double_a_mount_prefix`, which builds the scope by hand and
-    unsets the configured origin so the fallback is exercised; removing the strip fails it.
+    a test that wants this behaviour has to build the scope by hand and unset the configured
+    origin, or it will pass whether or not the strip is here.
     """
-    path = request.url.path
-    root_path = request.scope.get("root_path", "")
-    if root_path and path.startswith(root_path):
-        path = path[len(root_path) :] or "/"
-    return absolute_url(request, path)
+    # `app_root_path` rather than `root_path`: `request.base_url` is built from the former, so
+    # the strip has to match it or the two disagree. Under `outer.mount("/ocs", create_app())`
+    # Starlette sets `root_path` on the inner app while `base_url` keeps the outer prefix, and
+    # stripping `root_path` there removed a prefix `base_url` had never added.
+    scope = request.scope
+    prefix = str(scope.get("app_root_path", scope.get("root_path", "")))
+    return absolute_url(request, strip_mount(request.url.path, prefix))

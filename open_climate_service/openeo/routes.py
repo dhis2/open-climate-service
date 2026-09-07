@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from open_climate_service.openeo import collections as collections_service
 from open_climate_service.openeo import processes as processes_service
 from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.capabilities import build_capabilities
 from open_climate_service.openeo.jobs import get_openeo_job_service
 from open_climate_service.openeo.schemas import (
     OpenEOJobCreate,
@@ -29,19 +28,6 @@ processes_router = APIRouter(tags=["openEO"])
 jobs_router = APIRouter(tags=["openEO"])
 udp_router = APIRouter(tags=["openEO"])
 result_router = APIRouter(tags=["openEO"])
-
-
-# ---------------------------------------------------------------------------
-# Capabilities  GET /
-# (registered without prefix in main.py so it overlays the system route)
-# ---------------------------------------------------------------------------
-
-
-def get_openeo_capabilities(request: Request) -> JSONResponse:
-    """Return openEO capabilities when the client requests JSON."""
-    base_url = absolute_base(request)
-    caps = build_capabilities(base_url)
-    return JSONResponse(caps.model_dump())
 
 
 @capabilities_router.get("/.well-known/openeo")
