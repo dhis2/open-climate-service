@@ -111,12 +111,19 @@ def _fake_request(base: str, path: str, query: str = ""):
 # -- the two reported endpoints -------------------------------------------------------------
 
 
-def test_the_map_viewer_carries_no_origin_at_all(https_client: TestClient) -> None:
-    """The reported defect was `http://` fetch targets on an `https://` page. Root-relative
+def test_the_map_viewer_html_carries_no_origin(https_client: TestClient) -> None:
+    """The reported defect was `http://` fetch targets on an `https://` page. Mount-relative
     targets fix it without naming an origin, which also removes a hazard the first fix
     introduced: with the configured origin baked in, opening the viewer through a port-forward
     fetched the *public* instance's catalogue — permitted by the wildcard CORS — and the
     operator would validate an ingest against another instance's data (CLIM-974 review).
+
+    Scoped to the HTML the server renders, which is all this greps. Once a collection is
+    selected the page loads raster data from the `zarr.href` inside the collection JSON, and
+    `build_collection` builds that with `absolute_url`, so it names the configured origin. On a
+    port-forward the dropdown is therefore local while the chunks come from the configured
+    instance. That is arguably correct STAC behaviour and predates this change, but it is not
+    covered here — see the PR description.
     """
     body = https_client.get("/map").text
 
