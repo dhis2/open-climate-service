@@ -25,6 +25,7 @@ _FREQUENCIES = ("dayofyear", "month")
 @process(
     summary="Climatological normal (day-of-year or month-of-year)",
     parameters={
+        "data": {"description": "A raster data cube with a temporal dimension."},
         "frequency": {"description": "Climatology resolution: 'dayofyear' (1..366, default) or 'month' (1..12)."},
         "smoothing_window": {
             "description": (
