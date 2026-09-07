@@ -446,7 +446,11 @@ async def test_a_successful_sync_redirects_under_the_mount(monkeypatch: pytest.M
         cast(Request, _FakeRequest({"dataset_id": "chirps3_precipitation_daily"}, root_path="/ocs"))
     )
     await scheduled[0]
-    payload = "".join([chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator])
+    # Narrowed rather than accessed directly: the endpoint is typed `-> Response`, and only a
+    # StreamingResponse carries the SSE body this assertion reads.
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk async for chunk in response.body_iterator]
+    payload = "".join(chunk.decode() if isinstance(chunk, bytes) else str(chunk) for chunk in chunks)
 
     assert "/ocs/manage?message=Sync+completed" in payload
     assert '"/manage?message' not in payload, "the bare path would 404 behind the proxy"
