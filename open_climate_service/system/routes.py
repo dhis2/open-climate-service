@@ -74,6 +74,19 @@ def manage(
     return HTMLResponse(render_manage(app_version, mount_prefix(request), message=message, error=error))
 
 
+def _manage_url(mount: str, *, error: str | None = None, message: str | None = None) -> str:
+    """A `/manage` URL carrying one banner, with the text percent-encoded.
+
+    Assembled in one place because it was assembled in twelve. Commit 32a74ad added the mount
+    prefix to eleven of them and missed the twelfth, which then needed its own follow-up commit
+    and a dedicated regression test — the redirect that fires on a *successful* sync, where the
+    error paths that surround it were all correct.
+    """
+    banner = "error" if error is not None else "message"
+    text = error if error is not None else message
+    return f"{mount}/manage?{banner}={urllib.parse.quote(str(text))}"
+
+
 @router.post("/manage/ingest", include_in_schema=False)
 async def manage_ingest(request: Request) -> Response:
     """Handle ingest form submission and stream progress via SSE."""
@@ -96,26 +109,30 @@ async def manage_ingest(request: Request) -> Response:
 
         template = get_dataset(dataset_id)
         if template is None:
-            msg = urllib.parse.quote(f"Dataset template '{dataset_id}' not found")
-            return RedirectResponse(f"{mount}/manage?error={msg}", status_code=303)
+            return RedirectResponse(
+                _manage_url(mount, error=f"Dataset template '{dataset_id}' not found"), status_code=303
+            )
 
         # Validate the blank start here rather than leaving it to create_artifact. The work
         # below runs inside an SSE stream, and a response that has already begun cannot
         # redirect — the operator would get a progress bar that fails mid-flight instead of
         # the error banner. Only a forecast may omit it (see temporal_direction).
         if start is None and not registry_datasets.is_future_facing(template):
-            msg = urllib.parse.quote(f"Start period is required for '{dataset_id}': its periods are not in the future")
-            return RedirectResponse(f"{mount}/manage?error={msg}", status_code=303)
+            return RedirectResponse(
+                _manage_url(
+                    mount,
+                    error=f"Start period is required for '{dataset_id}': its periods are not in the future",
+                ),
+                status_code=303,
+            )
 
         extent = get_extent_or_404()
         resolved_bbox = list(extent["bbox"])
         country_code = extent.get("country_code")
     except HTTPException as exc:
-        msg = urllib.parse.quote(str(exc.detail))
-        return RedirectResponse(f"{mount}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, error=str(exc.detail)), status_code=303)
     except Exception as exc:
-        msg = urllib.parse.quote(str(exc))
-        return RedirectResponse(f"{mount}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, error=str(exc)), status_code=303)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -140,22 +157,20 @@ async def manage_ingest(request: Request) -> Response:
                     on_progress=on_progress,
                 )
             )
-            name = urllib.parse.quote(str(template.get("name", dataset_id)))
+            name = str(template.get("name", dataset_id))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"redirect": f"{mount}/manage?message=Ingested+{name}"},
+                {"redirect": _manage_url(mount, message=f"Ingested {name}")},
             )
         except HTTPException as exc:
-            msg = urllib.parse.quote(str(exc.detail))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc.detail), "redirect": f"{mount}/manage?error={msg}"},
+                {"error": str(exc.detail), "redirect": _manage_url(mount, error=str(exc.detail))},
             )
         except Exception as exc:
-            msg = urllib.parse.quote(str(exc))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc), "redirect": f"{mount}/manage?error={msg}"},
+                {"error": str(exc), "redirect": _manage_url(mount, error=str(exc))},
             )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -181,11 +196,9 @@ async def manage_sync(request: Request) -> Response:
         if not dataset_id:
             raise HTTPException(status_code=400, detail="Dataset ID is required")
     except HTTPException as exc:
-        msg = urllib.parse.quote(str(exc.detail))
-        return RedirectResponse(f"{mount}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, error=str(exc.detail)), status_code=303)
     except Exception as exc:
-        msg = urllib.parse.quote(str(exc))
-        return RedirectResponse(f"{mount}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, error=str(exc)), status_code=303)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -203,19 +216,17 @@ async def manage_sync(request: Request) -> Response:
             )
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"redirect": f"{mount}/manage?message=Sync+completed"},
+                {"redirect": _manage_url(mount, message="Sync completed")},
             )
         except HTTPException as exc:
-            msg = urllib.parse.quote(str(exc.detail))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc.detail), "redirect": f"{mount}/manage?error={msg}"},
+                {"error": str(exc.detail), "redirect": _manage_url(mount, error=str(exc.detail))},
             )
         except Exception as exc:
-            msg = urllib.parse.quote(str(exc))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc), "redirect": f"{mount}/manage?error={msg}"},
+                {"error": str(exc), "redirect": _manage_url(mount, error=str(exc))},
             )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)

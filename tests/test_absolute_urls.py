@@ -132,7 +132,9 @@ def test_the_manage_console_posts_to_the_origin_it_was_reached_on(https_client: 
     body = https_client.get("/manage").text
 
     assert _CONFIGURED not in body
-    assert 'action="/manage/ingest"' in body or "/manage/ingest" in body
+    # Strict: the bare substring is also present in the pre-PR `action="http://testserver/..."`
+    # form this test exists to reject, so an `or` on it would pass against the very bug.
+    assert 'action="/manage/ingest"' in body
 
 
 def test_the_landing_page_links_within_the_instance_it_is_served_from(https_client: TestClient) -> None:
@@ -197,10 +199,17 @@ def test_a_base_url_that_is_only_slashes_falls_back_to_the_request(
 
 
 def test_the_self_link_does_not_double_a_mount_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Behind a non-stripping proxy in front of `--root-path /ocs`, the fallback origin ends
-    with the prefix and `request.url.path` carries it again, so `self` became
-    `/ocs/ocs/stac` while every other link stayed correct — a STAC client following `self`
-    would 404 (CLIM-974 review).
+    """The ordinary mounted deployment, not an exotic one.
+
+    Uvicorn sets `scope["path"] = root_path + path`, so with `--root-path /ocs` behind a normal
+    stripping proxy the request arrives as `/stac` and `request.url.path` becomes `/ocs/stac`,
+    while the fallback origin `request.base_url` already ends in `/ocs/`. Appending the path
+    unstripped gives `/ocs/ocs/stac` for `self` while every other link stays correct, and a STAC
+    client following `self` 404s.
+
+    The scope is built by hand rather than through `mounted_client` because
+    `TestClient(root_path=...)` does not prepend the prefix to `path` the way uvicorn does, and
+    because the configured origin must be unset for the fallback to be reached at all.
     """
     from fastapi import Request
 

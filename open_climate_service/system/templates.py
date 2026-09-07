@@ -113,14 +113,18 @@ def wants_json(request: Request) -> bool:
     return json_q >= 0 and (html_q < 0 or json_q >= html_q)
 
 
-def render_maps(mount: str = "") -> str:
+def render_maps(mount: str) -> str:
     """Render the map viewer page.
 
-    Takes no base URL: every link and fetch target in the page is same-origin, so the template
-    uses root-relative paths. Those inherit the page's scheme, which fixes the mixed-content
-    bug in CLIM-974 without the risk of substituting a *different* origin — an operator on a
-    port-forward would otherwise have the viewer fetch the configured public instance's
-    catalogue instead of the one they are looking at.
+    Takes a mount prefix rather than a base URL: every link and fetch target in the page is
+    same-origin, so the template emits `{{ mount }}`-prefixed paths. A path carries no scheme
+    or host, so it inherits both from the page — which fixes the mixed-content bug in CLIM-974
+    without the risk of substituting a *different* origin, as an operator on a port-forward
+    would otherwise have the viewer fetch the configured public instance's catalogue. The
+    prefix is what keeps those paths resolving under `--root-path`.
+
+    Required rather than defaulted: an omitted mount yields links that work unmounted and 404
+    behind a prefix, which is the failure this parameter exists to prevent.
     """
     return get_template("map-viewer.html").render(mount=mount, name=api_config.get_name())
 
@@ -162,7 +166,7 @@ def _load_datasets() -> list[Any]:
         return []
 
 
-def render_landing(version: str, mount: str = "") -> str:
+def render_landing(version: str, mount: str) -> str:
     """Render the root landing page with live instance status."""
     return get_template("landing_page.html").render(
         version=version,
@@ -176,7 +180,7 @@ def render_landing(version: str, mount: str = "") -> str:
     )
 
 
-def render_manage(version: str, mount: str = "", message: str | None = None, error: str | None = None) -> str:
+def render_manage(version: str, mount: str, message: str | None = None, error: str | None = None) -> str:
     """Render the management page."""
     today = date.today().isoformat()
     year_ago = date.today().replace(year=date.today().year - 1).isoformat()

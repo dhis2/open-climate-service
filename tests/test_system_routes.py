@@ -452,5 +452,8 @@ async def test_a_successful_sync_redirects_under_the_mount(monkeypatch: pytest.M
     chunks = [chunk async for chunk in response.body_iterator]
     payload = "".join(chunk.decode() if isinstance(chunk, bytes) else str(chunk) for chunk in chunks)
 
-    assert "/ocs/manage?message=Sync+completed" in payload
+    # %20 rather than + : the banner text is now percent-encoded by `_manage_url` like every
+    # other manage banner, where these two success messages used to hard-code a literal +.
+    # Starlette decodes both to "Sync completed", so the page is unaffected.
+    assert "/ocs/manage?message=Sync%20completed" in payload
     assert '"/manage?message' not in payload, "the bare path would 404 behind the proxy"

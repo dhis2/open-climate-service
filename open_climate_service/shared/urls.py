@@ -77,11 +77,19 @@ def self_url(request: Request) -> str:
     string is deliberately dropped: no OCS document varies by it, and reflecting arbitrary
     client input back into a served document is not worth the trouble it invites.
 
-    `root_path` is removed before the path is appended. Mounted under a prefix, the fallback
-    origin (`request.base_url`) already ends with that prefix; a server that leaves the prefix
-    on `request.url.path` as well — a non-stripping proxy in front of `--root-path` — would
-    otherwise produce `/ocs/ocs/stac` for `self` while every other link stayed correct, and a
-    STAC client following `self` would 404.
+    `root_path` is removed before the path is appended, and this is **required in the ordinary
+    deployment** rather than a defensive measure. Uvicorn sets `scope["path"] = root_path + path`
+    (`uvicorn/protocols/http/h11_impl.py`), so behind a normal stripping proxy with
+    `--root-path /ocs` the request arrives as `/stac`, `request.url.path` becomes `/ocs/stac`,
+    and the fallback origin `request.base_url` already ends in `/ocs/`. Appending the path
+    unstripped would give `/ocs/ocs/stac` for `self` while every other link stayed correct, and
+    a STAC client following `self` would 404. Verified against uvicorn booted with
+    `root_path="/ocs"`: with the strip `self` is `.../ocs/stac`, without it `.../ocs/ocs/stac`.
+
+    `TestClient(root_path=...)` does not prepend the prefix to `path` the way uvicorn does, so
+    the `mounted_client` tests cannot reproduce the doubling. The coverage lives in
+    `test_the_self_link_does_not_double_a_mount_prefix`, which builds the scope by hand and
+    unsets the configured origin so the fallback is exercised; removing the strip fails it.
     """
     path = request.url.path
     root_path = request.scope.get("root_path", "")
