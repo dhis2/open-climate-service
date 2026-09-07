@@ -113,3 +113,44 @@ def cdd(pr: xr.DataArray, thresh: str = "1mm/day") -> xr.DataArray:
     procs = {p["id"]: p for p in response.json()["processes"]}
     assert "cdd" in procs
     assert procs["cdd"]["summary"] == "Consecutive dry days"
+
+
+def test_string_annotations_are_resolved_to_schemas() -> None:
+    """`from __future__ import annotations` stores annotations as strings.
+
+    A raw `param.annotation` is then `"str"` rather than `str`, the type map never matches, and the
+    parameter is published with an empty schema — a client building a graph gets an untyped field
+    with nothing to validate against. Written here as explicit string annotations, which is exactly
+    what that import produces.
+    """
+
+    @process
+    def scaled(threshold: "str", count: "int" = 3, ratio: "float | None" = None) -> "str":
+        """Do something with a threshold."""
+        return threshold
+
+    meta = get_process_metadata(scaled)
+    assert meta is not None
+    schemas = {p["name"]: p.get("schema") for p in meta["parameters"]}
+    assert schemas == {
+        "threshold": {"type": "string"},
+        "count": {"type": "integer"},
+        "ratio": {"type": "number"},
+    }
+
+
+def test_an_unresolvable_annotation_does_not_lose_the_process() -> None:
+    """A plugin may annotate a type it imports only under TYPE_CHECKING.
+
+    Resolution needs the module namespace and fails for those, which must cost the schema for that
+    process rather than the process itself.
+    """
+
+    @process
+    def exotic(data: "SomeTypeThatIsNotImported", factor: "int" = 2) -> None:  # noqa: F821
+        """Takes something unresolvable."""
+
+    meta = get_process_metadata(exotic)
+    assert meta is not None
+    assert [p["name"] for p in meta["parameters"]] == ["data", "factor"]
+    assert meta["parameters"][0]["schema"] == {}

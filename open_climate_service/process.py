@@ -53,6 +53,23 @@ def process(
 ) -> Callable[[F], F]: ...
 
 
+def _resolved_annotations(fn: Any) -> dict[str, Any]:
+    """A function's annotations as objects rather than strings.
+
+    `from __future__ import annotations` stores every annotation as a string, so a raw
+    `param.annotation` is `"str"` rather than `str` and the type map below never matches — the
+    parameter is then published with an empty schema, and a client building a graph gets an
+    untyped field with nothing to validate against.
+
+    Resolution needs the module's namespace and can fail on a type imported only under
+    `TYPE_CHECKING`. That falls back to the raw annotations rather than dropping the process.
+    """
+    try:
+        return typing.get_type_hints(fn)
+    except Exception:  # noqa: BLE001 — an unresolvable hint is not worth losing the process over
+        return {}
+
+
 def process(
     func: F | None = None,
     *,
@@ -85,13 +102,14 @@ def process(
     def decorator(fn: F) -> F:
         doc = inspect.getdoc(fn) or ""
         sig = inspect.signature(fn)
+        hints = _resolved_annotations(fn)
 
         params: list[dict[str, Any]] = []
         for name, param in sig.parameters.items():
             if name in ("self", "cls"):
                 continue
             p: dict[str, Any] = {"name": name, "schema": {}}
-            ann = param.annotation
+            ann = hints.get(name, param.annotation)
             if ann is not inspect.Parameter.empty:
                 schema = _annotation_to_schema(ann)
                 if schema:
