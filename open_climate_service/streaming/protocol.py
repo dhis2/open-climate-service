@@ -99,6 +99,9 @@ class IngestionPlugin(Protocol):
       `t` / `x` / `y`), and `crs` (the CRS fallback for grid inference, default 4326)
 
     The store grid is inferred from the first fetched period.
+    Planning may run `periods(...)` on a different event loop from asynchronous
+    `fetch_period(...)` calls. Do not share loop-bound resources between them;
+    create and close those resources within the call that uses them.
     `ingestion.params` are forwarded to `fetch_period(...)` as `**params` for
     sources that prefer per-call configuration rather than constructor state.
 

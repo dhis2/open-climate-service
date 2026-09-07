@@ -565,6 +565,37 @@ def test_plan_streaming_materialization_rematerializes_a_gapped_store(
     assert plan.periods == ["2026-01-01", "2026-01-02", "2026-01-03"]
 
 
+@pytest.mark.parametrize("missing_count", [1, 5, 7])
+def test_plan_streaming_materialization_reports_missing_history(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    missing_count: int,
+) -> None:
+    committed = daily_period_ids("2026-01-02", f"2026-01-{missing_count + 2:02d}")
+    missing = committed[1:]
+    plugin = _PeriodsPlugin(["2026-01-01", "2026-01-02"])
+    monkeypatch.setattr(services, "read_committed_period_ids_ordered", lambda *args, **kwargs: committed)
+
+    with pytest.raises(services.HTTPException) as exc_info:
+        services._plan_streaming_materialization(
+            plugin=plugin,
+            store_path=tmp_path / "dataset.icechunk",
+            start="2026-01-01",
+            end="2026-01-01",
+            period_type="daily",
+            overwrite=False,
+            periods=None,
+        )
+
+    assert exc_info.value.status_code == 409
+    expected = ", ".join(missing[:5])
+    if missing_count > 5:
+        expected += f" and {missing_count - 5} more"
+    assert exc_info.value.detail == (
+        "Source can no longer reproduce committed period(s) required for the temporal union: " + expected
+    )
+
+
 def test_plan_streaming_materialization_uses_plugin_time_dimension(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

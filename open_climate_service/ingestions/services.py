@@ -391,9 +391,10 @@ def _plan_streaming_materialization(
 ) -> _StreamingMaterializationPlan:
     """Plan a contiguous union before allowing streaming ingest to write.
 
-    A forward request can append only when the committed coordinate is an exact
-    prefix of every source-valid period in the union. Earlier requests, gaps, or
-    non-monotonic committed coordinates require a sibling-store rematerialization.
+    A forward request extends a contiguous committed prefix by enumerating only
+    the missing delta; the source need not reproduce committed history. Earlier
+    requests, gaps, or non-monotonic committed coordinates require a sibling-store
+    rematerialization and a source that can reproduce the complete union.
     """
     committed = _normalize_ordered_periods(
         read_committed_period_ids_ordered(
@@ -511,11 +512,13 @@ def _plan_streaming_materialization(
     available_set = set(available)
     missing_committed = [period for period in committed if period not in available_set]
     if missing_committed:
+        missing_summary = ", ".join(missing_committed[:5])
+        if len(missing_committed) > 5:
+            missing_summary += f" and {len(missing_committed) - 5} more"
         raise HTTPException(
             status_code=409,
             detail=(
-                "Source can no longer reproduce committed period(s) required for the temporal union: "
-                + ", ".join(missing_committed[:5])
+                "Source can no longer reproduce committed period(s) required for the temporal union: " + missing_summary
             ),
         )
 
@@ -552,10 +555,10 @@ def _create_streaming_artifact(
 ) -> ArtifactRecord:
     """Create or update one plugin-backed Icechunk artifact.
 
-    The same helper is used for both initial ingest and store-based sync. The
-    streaming orchestrator enumerates the plugin's periods for the full requested
-    range, then appends only periods that are not already committed in the target
-    Icechunk-backed store.
+    The same helper is used for both initial ingest and store-based sync. Planning
+    enumerates the missing delta for a forward append, or the complete scope for
+    a new store or rematerialization. The orchestrator receives the planned periods
+    and fetches only those not already committed in its target Icechunk store.
     """
     if bbox is None:
         raise HTTPException(status_code=400, detail="Streaming ingest requires a bounding box")
