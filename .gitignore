@@ -1,10 +1,14 @@
 .DS_Store
-.claude/
 __pycache__/
-.venv/
 .env
 climate-service.yaml
 eo_api.egg-info/
-data/
 docs/internal/
 site/
+
+# Without a trailing slash these match a symlink of that name too, which "/" lets through.
+.venv
+.claude
+
+# Anchored to the repo root, so a nested tests/data/ stays visible to git.
+/data
