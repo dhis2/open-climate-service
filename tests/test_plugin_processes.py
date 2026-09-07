@@ -147,7 +147,7 @@ def test_an_unresolvable_annotation_does_not_lose_the_process() -> None:
     """
 
     @process
-    def exotic(data: "SomeTypeThatIsNotImported", factor: "int" = 2) -> None:  # noqa: F821
+    def exotic(data: "SomeTypeThatIsNotImported", factor: "int" = 2) -> None:  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
         """Takes something unresolvable."""
 
     meta = get_process_metadata(exotic)

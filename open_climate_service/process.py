@@ -39,20 +39,6 @@ def _annotation_to_schema(ann: Any) -> dict[str, Any]:
     return {}
 
 
-@overload
-def process(func: F) -> F: ...
-
-
-@overload
-def process(
-    func: None = None,
-    *,
-    summary: str | None = None,
-    description: str | None = None,
-    parameters: dict[str, dict[str, Any]] | None = None,
-) -> Callable[[F], F]: ...
-
-
 def _resolved_annotations(fn: Any) -> dict[str, Any]:
     """A function's annotations as objects rather than strings.
 
@@ -68,6 +54,20 @@ def _resolved_annotations(fn: Any) -> dict[str, Any]:
         return typing.get_type_hints(fn)
     except Exception:  # noqa: BLE001 — an unresolvable hint is not worth losing the process over
         return {}
+
+
+@overload
+def process(func: F) -> F: ...
+
+
+@overload
+def process(
+    func: None = None,
+    *,
+    summary: str | None = None,
+    description: str | None = None,
+    parameters: dict[str, dict[str, Any]] | None = None,
+) -> Callable[[F], F]: ...
 
 
 def process(
