@@ -201,6 +201,14 @@ The `format` argument of `save_result` controls what the server writes. `GET /fi
 
 For aggregating a dataset to DHIS2 org units and producing `DHIS2JSON` or `CHAPCSV` directly, see the built-in [org-unit aggregation workflows](workflows.md#built-in-workflows).
 
+To combine three or more named predictors for CHAP, chain `merge_cubes`: merge two
+predictors, then merge the result with another predictor or another merged group.
+Distinct variable names are retained as predictor labels, including single-variable
+datasets returned by spatial aggregation. Additional predictors must have matching
+dimensions and coordinate indexes; align their periods and locations before merging.
+Overlapping predictor labels continue to use the upstream merge and overlap-resolver
+behavior.
+
 ```bash
 # Monthly precipitation totals as NetCDF
 curl -X POST http://127.0.0.1:9000/result \

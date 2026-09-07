@@ -89,28 +89,94 @@ def _make_sorted_atp(original_fn: Any) -> Any:
 
 
 def _make_named_merge_cubes(original_fn: Any) -> Any:
-    """Wrap merge_cubes to preserve DataArray names on the ``__cubes__`` axis.
+    """Wrap merge_cubes to preserve and extend named predictor cubes.
 
     The upstream implementation returns a DataArray stacked on a synthetic
     ``__cubes__`` dimension with labels like ``cube1`` / ``cube2``. That loses
     semantic source names like ``tp`` and ``t2m``. Keep the upstream return type
-    unchanged, but relabel ``__cubes__`` to the original DataArray names when
-    both inputs are named and distinct.
+    unchanged for the initial merge, but relabel ``__cubes__`` to the original
+    DataArray names when both inputs are named and distinct.
+
+    A later ``merge_cubes`` in the same graph receives that already-stacked
+    DataArray plus another predictor. Upstream treats their shared dimensions as
+    an unresolved overlap and raises ``OverlapResolverMissing``. Append predictors
+    with disjoint ``__cubes__`` labels directly, requiring all remaining indexes
+    to match exactly so temporal or location misalignment is never hidden.
+
+    ``aggregate_spatial`` returns an ``xr.Dataset`` even for one input variable.
+    Normalise that common single-variable result back to its named DataArray so
+    predictors can be merged before or after zonal aggregation in the same way.
     """
+    cube_axis = "__cubes__"
+
+    def _as_named_array(cube: Any) -> xr.DataArray | None:
+        if isinstance(cube, xr.DataArray):
+            return cube
+        if isinstance(cube, xr.Dataset) and len(cube.data_vars) == 1:
+            variable = str(next(iter(cube.data_vars)))
+            array = cube[variable]
+            return array if array.name else array.rename(variable)
+        return None
+
+    def _with_cube_axis(cube: xr.DataArray) -> xr.DataArray | None:
+        if cube_axis in cube.dims:
+            return cube if cube_axis in cube.coords else None
+        if not cube.name:
+            return None
+        return cube.expand_dims({cube_axis: [str(cube.name)]})
+
+    def _append_disjoint_predictors(cube1: xr.DataArray, cube2: xr.DataArray) -> xr.DataArray | None:
+        if cube_axis not in cube1.dims and cube_axis not in cube2.dims:
+            return None
+
+        left = _with_cube_axis(cube1)
+        right = _with_cube_axis(cube2)
+        if left is None or right is None:
+            return None
+
+        left_labels = {str(value) for value in left[cube_axis].values.tolist()}
+        right_labels = {str(value) for value in right[cube_axis].values.tolist()}
+        if left_labels & right_labels:
+            return None
+
+        if set(left.dims) != set(right.dims):
+            raise ValueError("Named predictors must have the same dimensions before merging")
+        if set(left.indexes) != set(right.indexes):
+            raise ValueError("Named predictors must have the same coordinate indexes before merging")
+
+        # ``join=exact`` is deliberate: combining predictors must not silently
+        # introduce missing location-period rows through an outer alignment.
+        return xr.concat(
+            [left, right],
+            dim=cube_axis,
+            join="exact",
+            coords="minimal",
+            compat="equals",
+        )
 
     def _named_merge_cubes(cube1: Any, cube2: Any, **kwargs: Any) -> Any:
+        array1 = _as_named_array(cube1)
+        array2 = _as_named_array(cube2)
+        if array1 is not None and array2 is not None:
+            appended = _append_disjoint_predictors(array1, array2)
+            if appended is not None:
+                return appended
+            cube1, cube2 = array1, array2
+
         merged = original_fn(cube1=cube1, cube2=cube2, **kwargs)
         if (
-            isinstance(cube1, xr.DataArray)
-            and isinstance(cube2, xr.DataArray)
-            and cube1.name
-            and cube2.name
-            and cube1.name != cube2.name
+            array1 is not None
+            and array2 is not None
+            and array1.name
+            and array2.name
+            and array1.name != array2.name
+            and cube_axis not in array1.dims
+            and cube_axis not in array2.dims
             and isinstance(merged, xr.DataArray)
-            and "__cubes__" in merged.dims
+            and cube_axis in merged.dims
         ):
             try:
-                return merged.assign_coords(__cubes__=[str(cube1.name), str(cube2.name)])
+                return merged.assign_coords({cube_axis: [str(array1.name), str(array2.name)]})
             except Exception as exc:
                 logger.debug("Falling back to default __cubes__ labels after merge_cubes", exc_info=exc)
         return merged

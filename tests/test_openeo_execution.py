@@ -1118,6 +1118,176 @@ def test_merge_cubes_wrapper_preserves_named_dataarrays_on_cube_axis() -> None:
     assert list(merged["__cubes__"].values) == ["tp", "t2m"]
 
 
+def test_merge_cubes_wrapper_appends_third_named_predictor() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    reg = _build_process_registry()
+    merge = reg["merge_cubes"].implementation
+    coords = {
+        "t": np.array(["2025-01-01", "2025-02-01"], dtype="datetime64[D]"),
+        "geometry": ["DISTRICT_A", "DISTRICT_B"],
+    }
+    precipitation = xr.DataArray(
+        np.array([[100.0, 80.0], [120.0, 90.0]], dtype=np.float32),
+        dims=("t", "geometry"),
+        coords=coords,
+        name="precip",
+    )
+    temperature = xr.DataArray(
+        np.array([[25.0, 24.0], [26.0, 25.0]], dtype=np.float32),
+        dims=("t", "geometry"),
+        coords=coords,
+        name="t2m",
+    )
+    population = xr.DataArray(
+        np.array([[10_000.0, 20_000.0], [10_000.0, 20_000.0]], dtype=np.float32),
+        dims=("t", "geometry"),
+        coords=coords,
+        name="pop_total",
+    )
+
+    climate = merge(cube1=precipitation, cube2=temperature)
+    merged = merge(cube1=climate, cube2=population)
+
+    assert isinstance(merged, xr.DataArray)
+    assert list(merged["__cubes__"].values) == ["precip", "t2m", "pop_total"]
+    xr.testing.assert_equal(merged.sel(__cubes__="pop_total", drop=True), population)
+
+
+def test_merge_cubes_wrapper_combines_three_zonal_datasets_as_chap_csv() -> None:
+    """Single-variable Datasets mirror aggregate_spatial's return type."""
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    reg = _build_process_registry()
+    merge = reg["merge_cubes"].implementation
+    coords = {
+        "t": np.array(["2025-01-01", "2025-02-01"], dtype="datetime64[D]"),
+        "geometry": ["DISTRICT_A"],
+    }
+    precipitation = xr.Dataset(
+        {"precip": (("t", "geometry"), np.array([[100.0], [120.0]], dtype=np.float32))},
+        coords=coords,
+    )
+    temperature = xr.Dataset(
+        {"t2m": (("t", "geometry"), np.array([[25.0], [26.0]], dtype=np.float32))},
+        coords=coords,
+    )
+    population = xr.Dataset(
+        {"pop_total": (("t", "geometry"), np.array([[10_000.0], [10_000.0]], dtype=np.float32))},
+        coords=coords,
+    )
+
+    climate = merge(cube1=precipitation, cube2=temperature)
+    merged = merge(cube1=climate, cube2=population)
+    frame = _build_chap_csv_frame(merged.to_dataframe().reset_index(), {"period_type": "monthly"})
+
+    assert frame.to_dict(orient="records") == [
+        {
+            "time_period": "202501",
+            "location": "DISTRICT_A",
+            "precip": "100",
+            "t2m": "25",
+            "pop_total": "10000",
+        },
+        {
+            "time_period": "202502",
+            "location": "DISTRICT_A",
+            "precip": "120",
+            "t2m": "26",
+            "pop_total": "10000",
+        },
+    ]
+
+
+def test_merge_cubes_wrapper_rejects_misaligned_predictor_indexes() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    reg = _build_process_registry()
+    merge = reg["merge_cubes"].implementation
+    precipitation = xr.DataArray(
+        np.ones((2, 1), dtype=np.float32),
+        dims=("t", "geometry"),
+        coords={"t": [0, 1], "geometry": ["DISTRICT_A"]},
+        name="precip",
+    )
+    temperature = precipitation.rename("t2m")
+    population = xr.DataArray(
+        np.ones((2, 1), dtype=np.float32),
+        dims=("t", "geometry"),
+        coords={"t": [0, 2], "geometry": ["DISTRICT_A"]},
+        name="pop_total",
+    )
+
+    climate = merge(cube1=precipitation, cube2=temperature)
+    with pytest.raises(ValueError, match="cannot align objects with join='exact'"):
+        merge(cube1=climate, cube2=population)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_merge_cubes_wrapper_combines_two_named_predictor_groups(reverse: bool) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    predictors = [
+        xr.DataArray([float(index)], dims="t", coords={"t": [0]}, name=name)
+        for index, name in enumerate(["precip", "t2m", "pop_total", "elevation"])
+    ]
+    left = merge(cube1=predictors[0], cube2=predictors[1])
+    right = merge(cube1=predictors[2], cube2=predictors[3])
+    merged = merge(cube1=right, cube2=left) if reverse else merge(cube1=left, cube2=right)
+
+    expected = predictors[2:] + predictors[:2] if reverse else predictors
+    assert list(merged["__cubes__"].values) == [cube.name for cube in expected]
+    for cube in predictors:
+        xr.testing.assert_equal(merged.sel(__cubes__=cube.name, drop=True), cube)
+
+
+@pytest.mark.parametrize("missing", ["dimension", "index"])
+def test_merge_cubes_wrapper_does_not_broadcast_missing_predictor_axes(missing: str) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray(
+        np.ones((2, 1)),
+        dims=("t", "geometry"),
+        coords={"t": [0, 1], "geometry": ["DISTRICT_A"]},
+        name="precip",
+    )
+    climate = merge(cube1=cube, cube2=cube.rename("t2m"))
+    population = cube.rename("pop_total")
+    if missing == "dimension":
+        population = population.isel(t=0, drop=True)
+    else:
+        population = population.drop_indexes("t")
+    with pytest.raises(ValueError, match="Named predictors must have the same"):
+        merge(cube1=climate, cube2=population)
+
+
+def test_merge_cubes_wrapper_delegates_overlapping_labels_and_resolver() -> None:
+    from open_climate_service.openeo.execution import _make_named_merge_cubes
+
+    cube = xr.DataArray(
+        [[1.0], [2.0]],
+        dims=("__cubes__", "t"),
+        coords={"__cubes__": ["precip", "t2m"], "t": [0]},
+        name="precip",
+    )
+    other = cube.rename("other")
+    captured: dict[str, Any] = {}
+
+    def original(**kwargs: Any) -> xr.DataArray:
+        captured.update(kwargs)
+        return cube
+
+    resolver = object()
+    result = _make_named_merge_cubes(original)(cube1=cube, cube2=other, overlap_resolver=resolver)
+    assert captured["cube1"] is cube
+    assert captured["cube2"] is other
+    assert captured["overlap_resolver"] is resolver
+    assert result is cube
+    assert list(result["__cubes__"].values) == ["precip", "t2m"]
+
+
 def test_dhis2_period_string_accepts_existing_monthly_string() -> None:
     assert _to_dhis2_period_string("202401") == "202401"
 
