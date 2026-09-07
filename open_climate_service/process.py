@@ -76,12 +76,33 @@ def _resolved_annotations(fn: Any) -> dict[str, Any]:
     untyped field with nothing to validate against.
 
     Resolution needs the module's namespace and can fail on a type imported only under
-    `TYPE_CHECKING`. That falls back to the raw annotations rather than dropping the process.
+    `TYPE_CHECKING`.
+
+    `get_type_hints` resolves the whole mapping atomically, so a single unresolvable name would
+    cost *every* parameter its schema — a plugin annotating one exotic type would publish an
+    untyped contract for its ordinary `str` and `int` parameters too. So a failure degrades to
+    resolving each annotation on its own, and only the ones that genuinely cannot be resolved
+    are left out. Omitting a name is what the caller wants: it falls back to the raw string
+    annotation, which maps to an empty schema for that parameter alone.
     """
     try:
         return typing.get_type_hints(fn)
-    except Exception:  # noqa: BLE001 — an unresolvable hint is not worth losing the process over
-        return {}
+    except Exception:  # noqa: BLE001 — fall through to per-annotation resolution below
+        pass
+
+    # Same operation `get_type_hints` performs internally, against the function's own module
+    # globals — the strings come from the plugin's source, so this is no wider a trust boundary.
+    globalns = getattr(fn, "__globals__", {})
+    resolved: dict[str, Any] = {}
+    for name, annotation in getattr(fn, "__annotations__", {}).items():
+        if not isinstance(annotation, str):
+            resolved[name] = annotation
+            continue
+        try:
+            resolved[name] = eval(annotation, globalns)  # noqa: S307 — see above
+        except Exception:  # noqa: BLE001, S112 — one unresolvable name costs only its own schema
+            continue
+    return resolved
 
 
 @overload

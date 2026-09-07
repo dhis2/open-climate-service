@@ -179,5 +179,11 @@ def test_an_unresolvable_annotation_does_not_lose_the_process() -> None:
 
     meta = get_process_metadata(exotic)
     assert meta is not None
+    data, factor = meta["parameters"]
     assert [p["name"] for p in meta["parameters"]] == ["data", "factor"]
-    assert meta["parameters"][0]["schema"] == {}
+
+    # Only the offending parameter loses its schema. `get_type_hints` resolves the whole
+    # mapping atomically, so without per-annotation fallback `factor` would be empty too —
+    # one exotic type would publish an untyped contract for the whole process.
+    assert data["schema"] == {}
+    assert factor["schema"] == {"type": "integer"}
