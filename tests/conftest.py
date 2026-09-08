@@ -51,9 +51,15 @@ def _unset_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     that builds an absolute URL reads it, so with it set the assertions that pin
     `http://testserver/...` fail — a test run whose result depends on the shell it was started
     from. Tests that need a configured origin set it themselves.
+
+    `ROOT_PATH` is the same hazard one step earlier: `create_app()` reads it when `main` is
+    imported, so the shared `app` above already carries the developer's prefix by the time this
+    fixture runs, and unsetting the variable alone leaves every route rendering it. The
+    attribute is reset too, since FastAPI copies `app.root_path` into each request scope.
     """
     monkeypatch.delenv("CLIMATE_SERVICE_BASE_URL", raising=False)
     monkeypatch.delenv("ROOT_PATH", raising=False)
+    monkeypatch.setattr(app, "root_path", "")
 
 
 @pytest.fixture
