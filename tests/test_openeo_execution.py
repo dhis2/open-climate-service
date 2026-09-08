@@ -1263,6 +1263,62 @@ def test_merge_cubes_wrapper_does_not_broadcast_missing_predictor_axes(missing: 
         merge(cube1=climate, cube2=population)
 
 
+@pytest.mark.parametrize("dimension, labels", [("geometry", ["B", "A"]), ("y", [2.0, 1.0])])
+@pytest.mark.parametrize("noise", [0.0, 1e-9])
+def test_merge_cubes_wrapper_aligns_reordered_predictors(dimension: str, labels: list[Any], noise: float) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([10.0, 20.0], dims=dimension, coords={dimension: labels}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m").copy(deep=True))
+    third = cube.rename("population").isel({dimension: [1, 0]})
+    if dimension == "y":
+        third = third.assign_coords({dimension: third[dimension] + noise})
+    before = third.copy(deep=True)
+    result = merge(cube1=stacked, cube2=third)
+    xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
+    xr.testing.assert_identical(third, before)
+    assert result.chunksizes["__cubes__"] == (3,)
+
+
+@pytest.mark.parametrize("offset", [1e-9, 1e-4])
+def test_merge_cubes_wrapper_uses_upstream_coordinate_tolerance(offset: float) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0, 2.0], dims="x", coords={"x": [10.0, 11.0]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m").copy(deep=True))
+    third = cube.rename("population").assign_coords(x=cube.x + offset)
+    if offset > 1e-6:
+        with pytest.raises(ValueError, match="cannot align objects with join='exact'"):
+            merge(cube1=stacked, cube2=third)
+    else:
+        result = merge(cube1=stacked, cube2=third)
+        xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_merge_cubes_wrapper_delegates_disjoint_resolver_and_context(grouped: bool) -> None:
+    from open_climate_service.openeo.execution import _make_named_merge_cubes
+
+    cube = xr.DataArray([[1.0], [2.0]], dims=("__cubes__", "t"), coords={"__cubes__": ["precip", "t2m"], "t": [0]})
+    other = xr.DataArray([3.0], dims="t", coords={"t": [0]}, name="population")
+    if grouped:
+        other = other.expand_dims(__cubes__=["population"])
+    captured: dict[str, Any] = {}
+    reduced = other.sum()
+
+    def original(**kwargs: Any) -> xr.DataArray:
+        captured.update(kwargs)
+        return reduced
+
+    resolver = object()
+    context = {"scale": 2}
+    result = _make_named_merge_cubes(original)(cube1=cube, cube2=other, overlap_resolver=resolver, context=context)
+    assert captured == {"cube1": cube, "cube2": other, "overlap_resolver": resolver, "context": context}
+    assert result is reduced
+
+
 def test_merge_cubes_wrapper_delegates_overlapping_labels_and_resolver() -> None:
     from open_climate_service.openeo.execution import _make_named_merge_cubes
 

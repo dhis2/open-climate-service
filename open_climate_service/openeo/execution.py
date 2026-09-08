@@ -100,8 +100,9 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
     A later ``merge_cubes`` in the same graph receives that already-stacked
     DataArray plus another predictor. Upstream treats their shared dimensions as
     an unresolved overlap and raises ``OverlapResolverMissing``. Append predictors
-    with disjoint ``__cubes__`` labels directly, requiring all remaining indexes
-    to match exactly so temporal or location misalignment is never hidden.
+    with disjoint ``__cubes__`` labels directly when no resolver is supplied.
+    Match upstream's coordinate tolerance and align label order before requiring
+    equal indexes, so temporal or location misalignment is never hidden.
 
     ``aggregate_spatial`` returns an ``xr.Dataset`` even for one input variable.
     Normalise that common single-variable result back to its named DataArray so
@@ -144,23 +145,36 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
         if set(left.indexes) != set(right.indexes):
             raise ValueError("Named predictors must have the same coordinate indexes before merging")
 
-        # ``join=exact`` is deliberate: combining predictors must not silently
-        # introduce missing location-period rows through an outer alignment.
-        return xr.concat(
+        from openeo_processes_dask.process_implementations.cubes.merge import _align_coordinates
+
+        # Compare in label order so upstream's float tolerance also works for
+        # independently reordered grids. Restore the left cube's order only after
+        # verifying equality, without filling any missing location-period rows.
+        dimensions = [dim for dim in left.dims if dim != cube_axis and dim in left.indexes]
+        ordered_left, ordered_right = left, right
+        for dim in dimensions:
+            ordered_left = ordered_left.sortby(dim)
+            ordered_right = ordered_right.sortby(dim)
+        ordered_left, ordered_right = _align_coordinates(ordered_left, ordered_right)
+        xr.align(ordered_left, ordered_right, join="exact", exclude={cube_axis})
+        right = ordered_right.reindex({dim: left[dim] for dim in dimensions})
+        appended: xr.DataArray = xr.concat(
             [left, right],
             dim=cube_axis,
             join="exact",
             coords="minimal",
             compat="equals",
-        )
+        ).chunk({cube_axis: -1})
+        return appended
 
     def _named_merge_cubes(cube1: Any, cube2: Any, **kwargs: Any) -> Any:
         array1 = _as_named_array(cube1)
         array2 = _as_named_array(cube2)
         if array1 is not None and array2 is not None:
-            appended = _append_disjoint_predictors(array1, array2)
-            if appended is not None:
-                return appended
+            if kwargs.get("overlap_resolver") is None:
+                appended = _append_disjoint_predictors(array1, array2)
+                if appended is not None:
+                    return appended
             cube1, cube2 = array1, array2
 
         merged = original_fn(cube1=cube1, cube2=cube2, **kwargs)

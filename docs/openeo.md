@@ -205,9 +205,10 @@ To combine three or more named predictors for CHAP, chain `merge_cubes`: merge t
 predictors, then merge the result with another predictor or another merged group.
 Distinct variable names are retained as predictor labels, including single-variable
 datasets returned by spatial aggregation. Additional predictors must have matching
-dimensions and coordinate indexes; align their periods and locations before merging.
-Overlapping predictor labels continue to use the upstream merge and overlap-resolver
-behavior.
+dimensions and coordinate labels. Label ordering is aligned automatically, and
+floating coordinates use the upstream tolerance of `1e-6`; genuinely different
+periods or locations must be aligned before merging. A supplied overlap resolver
+and its context, or overlapping predictor labels, use the upstream merge behavior.
 
 ```bash
 # Monthly precipitation totals as NetCDF
