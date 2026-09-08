@@ -116,14 +116,13 @@ def wants_json(request: Request) -> bool:
 def render_maps(mount: str) -> str:
     """Render the map viewer page.
 
-    Takes a mount prefix rather than a base URL: every link and fetch target in the page is
-    same-origin, so the template emits `{{ mount }}`-prefixed paths. A path carries no scheme
-    or host, so it inherits both from the page — which fixes the mixed-content bug in CLIM-974
-    without the risk of substituting a *different* origin, as an operator on a port-forward
-    would otherwise have the viewer fetch the configured public instance's catalogue. The
-    prefix is what keeps those paths resolving under `--root-path`.
+    A mount prefix rather than a base URL, because every link and fetch target in the page is
+    same-origin. A path carries no scheme or host and inherits both from the page, which fixes
+    the mixed-content bug in CLIM-974 without the risk of naming a *different* origin — an
+    operator on a port-forward would otherwise have the viewer fetch the public instance's
+    catalogue. The prefix keeps those paths resolving under `--root-path`.
 
-    Required rather than defaulted: an omitted mount yields links that work unmounted and 404
+    Required rather than defaulted: an omitted mount gives links that work unmounted and 404
     behind a prefix, which is the failure this parameter exists to prevent.
     """
     return get_template("map-viewer.html").render(mount=mount, name=api_config.get_name())

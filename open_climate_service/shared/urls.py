@@ -9,38 +9,89 @@ from the request carries a scheme that is wrong for the outside world (CLIM-974)
 The request is the fallback for a direct deployment where nothing is configured, which is
 the local-development case.
 
-The failure this prevents is easy to misread. An HTTPS page fetching `http://` URLs is
-active mixed content, so the browser blocks the requests and the map viewer renders an empty
-catalogue — while curl against every endpoint still returns 200, because the endpoints were
-never the problem. HSTS masks it completely: the browser rewrites the scheme before the
-request leaves, so a deployment with HSTS at the edge looks correct and only clients that
-have not yet seen the HSTS header (and non-browser STAC clients, which do not implement it
-at all) see the defect.
+The symptom is easy to misread. An HTTPS page fetching `http://` URLs is active mixed
+content, so the browser blocks the requests and the map viewer renders an empty catalogue,
+while curl against every endpoint returns 200 — the endpoints are not the problem. HSTS masks
+it entirely for clients that have already seen the header, so the deployment can look correct
+while non-browser STAC clients, which do not implement HSTS, still fail.
 
-Use these helpers rather than `request.base_url` or `request.url` for anything that leaves
-the process. Reading the environment variable at each call site is the same one-line
-expression repeated, and the sites that forgot it are exactly the bug.
+Use these helpers rather than `request.base_url` or `request.url` for anything that leaves the
+process, so the rule lives in one place instead of being repeated at each call site.
 """
 
+import functools
+import logging
 import os
 import urllib.parse
 
 from fastapi import Request
 
+logger = logging.getLogger(__name__)
+
 BASE_URL_ENV = "CLIMATE_SERVICE_BASE_URL"
 
 
-def absolute_base(request: Request) -> str:
-    """The configured public origin, or the request's own, without a trailing slash.
+@functools.lru_cache(maxsize=8)
+def _parse_configured_base(raw: str) -> str:
+    """Normalise `CLIMATE_SERVICE_BASE_URL`, or return `""` when it is unusable.
 
-    Trailing slashes are stripped *before* the value is judged usable. Testing truthiness
-    first accepted `CLIMATE_SERVICE_BASE_URL="/"`, stripped it to the empty string and
-    returned that, so every href in every served document lost its origin.
+    Parsed, not string-trimmed, because a path is appended to whatever comes back and every
+    consumer must read the value the same way. A surviving query string turns
+    `https://host/ocs?x=1` into `https://host/ocs?x=1/stac`.
+
+    A value with no scheme or no host is refused — `host.example` yields a schemeless
+    `host.example/stac`, which a browser resolves as a relative path, and `"/"` and `https://`
+    yield nothing to build on. Refusing falls back to the request origin: wrong in the way this
+    variable exists to fix, but well-formed and logged.
+
+    Cached on the raw string, so the warning appears once per distinct value rather than once
+    per request.
     """
-    configured = os.getenv(BASE_URL_ENV, "").strip().rstrip("/")
+    value = raw.strip()
+    if not value:
+        return ""
+    split = urllib.parse.urlsplit(value)
+    if not split.scheme or not split.netloc:
+        logger.warning(
+            "%s=%r is not a usable absolute URL (needs a scheme and a host); "
+            "falling back to the request origin, so absolute URLs will name the internal address",
+            BASE_URL_ENV,
+            value,
+        )
+        return ""
+    if split.query or split.fragment:
+        logger.warning(
+            "%s=%r carries a query string or fragment; ignoring them, since a path is appended to this value",
+            BASE_URL_ENV,
+            value,
+        )
+    return urllib.parse.urlunsplit((split.scheme, split.netloc, split.path.rstrip("/"), "", ""))
+
+
+def configured_base() -> str:
+    """The normalised configured public origin, or `""` when unset or unusable."""
+    return _parse_configured_base(os.getenv(BASE_URL_ENV, ""))
+
+
+def absolute_base(request: Request) -> str:
+    """The public service root — origin and mount prefix — without a trailing slash.
+
+    The root of this service *as the outside world addresses it*, so appending a route path
+    always yields a working URL. One rule for every caller, so no document can mix a prefixed
+    link with an unprefixed one.
+
+    `request.base_url` is the fallback when nothing is configured, and it needs the prefix added:
+    Starlette builds it from `app_root_path`, which under an embedding `Mount("/ocs", app)` is
+    the outer root with no prefix at all.
+    """
+    configured = configured_base()
     if configured:
         return configured
-    return str(request.base_url).rstrip("/")
+    base = str(request.base_url).rstrip("/")
+    prefix = asgi_prefix(request)
+    if prefix and not base.endswith(prefix):
+        base += prefix
+    return base
 
 
 def absolute_url(request: Request, path: str) -> str:
@@ -56,11 +107,12 @@ def mount_prefix(request: Request) -> str:
     resolving under a deployment prefix. An origin would not, since an operator on a port-forward
     would then submit forms to the configured public instance.
 
-    Two places can carry the prefix and this reconciles them, so callers have one answer. ASGI
-    `root_path` wins when set. Nothing in the shipped entry points sets it — `cli.py` passes only
-    host and port — so the usual case is a proxy prefix declared solely in the path of
-    `CLIMATE_SERVICE_BASE_URL`, and that is the fallback. Without it, an instance behind
-    `https://host/ocs/` renders `/map`, which 404s at the proxy.
+    Two places can carry the prefix, and this reconciles them so callers have one answer. ASGI
+    `root_path` wins, which is what `ROOT_PATH` sets through `cli.py`. The fallback is the path
+    of `CLIMATE_SERVICE_BASE_URL`, for deployments that declare the prefix only there: without
+    it an instance behind `https://host/ocs/` renders `/map`, which 404s at the proxy. That
+    fallback cannot distinguish a proxied request from a direct one, so it prefixes links on a
+    port-forward too — a reason to prefer `ROOT_PATH`, not to drop the fallback.
 
     Returned without a trailing slash, so `f"{mount_prefix(request)}/manage"` is right whether
     or not there is a prefix.
@@ -68,21 +120,17 @@ def mount_prefix(request: Request) -> str:
     root_path = str(request.scope.get("root_path", "")).rstrip("/")
     if root_path:
         return root_path
-    configured = os.getenv(BASE_URL_ENV, "").strip().rstrip("/")
-    if not configured:
-        return ""
-    return urllib.parse.urlsplit(configured).path.rstrip("/")
+    return urllib.parse.urlsplit(configured_base()).path.rstrip("/")
 
 
 def asgi_prefix(request: Request) -> str:
     """The prefix the routing layer has put on `request.url.path`, or `""`.
 
-    Distinct from `mount_prefix`, and the two must not be swapped. This one describes the
+    Distinct from `mount_prefix`, and the two must not be swapped: this one describes the
     *incoming* path, so it is what to remove before matching a path against a route. It never
-    consults `CLIMATE_SERVICE_BASE_URL`: that variable states a public origin, and its path
-    component is not necessarily an ASGI mount. Using it here let a base URL of
-    `https://host/jobs` strip `/jobs` off the real route and turn read-only mode's `GET /jobs`
-    into a 200.
+    consults `CLIMATE_SERVICE_BASE_URL`, because that variable states a public origin and its
+    path is not necessarily an ASGI mount — a base URL of `https://host/jobs` would otherwise
+    strip `/jobs` off a real route and turn read-only mode's `GET /jobs` into a 200.
     """
     return str(request.scope.get("root_path", "")).rstrip("/")
 
@@ -91,8 +139,7 @@ def strip_mount(path: str, prefix: str) -> str:
     """`path` with `prefix` removed, only when it ends on a path-segment boundary.
 
     `startswith` alone would turn `/stac` under a `/st` prefix into `/ac`. Unreachable through
-    uvicorn, but the guard costs one comparison and mirrors what Starlette's own
-    `get_route_path` does.
+    uvicorn, but the guard costs one comparison and mirrors Starlette's own `get_route_path`.
     """
     if not prefix or not path.startswith(prefix):
         return path
@@ -110,31 +157,14 @@ def self_url(request: Request) -> str:
     string is deliberately dropped: no OCS document varies by it, and reflecting arbitrary
     client input back into a served document is not worth the trouble it invites.
 
-    `root_path` is removed before the path is appended, and this is **required in the ordinary
-    deployment** rather than a defensive measure. Uvicorn sets `scope["path"] = root_path + path`
-    (`uvicorn/protocols/http/h11_impl.py`), so behind a normal stripping proxy with
-    `--root-path /ocs` the request arrives as `/stac`, `request.url.path` becomes `/ocs/stac`,
-    and the fallback origin `request.base_url` already ends in `/ocs/`. Appending the path
-    unstripped would give `/ocs/ocs/stac` for `self` while every other link stayed correct, and
-    a STAC client following `self` would 404.
+    The ASGI prefix comes off the path because `absolute_base` supplies it — one rule, whichever
+    origin is in play. It is **required in the ordinary deployment**, not defensive: uvicorn sets
+    `scope["path"] = root_path + path` (`uvicorn/protocols/http/h11_impl.py`), so behind a
+    stripping proxy with `--root-path /ocs` a request for `/stac` arrives with
+    `request.url.path == "/ocs/stac"`. Appending that unstripped gives `/ocs/ocs/stac` for `self`
+    while every other link stays correct, and a STAC client following `self` 404s.
 
-    `TestClient(root_path=...)` does not prepend the prefix to `path` the way uvicorn does, so
-    a test that wants this behaviour has to build the scope by hand and unset the configured
-    origin, or it will pass whether or not the strip is here.
+    `TestClient(root_path=...)` does not prepend the prefix to `path` the way uvicorn does, so a
+    test covering this has to build the scope by hand, or it passes either way.
     """
-    # How much to strip depends on which origin the path is about to be appended to, because the
-    # two origins already account for different amounts of the prefix.
-    #
-    # A configured `CLIMATE_SERVICE_BASE_URL` *is* the service root, path included, so the whole
-    # ASGI prefix comes off. `request.base_url`, by contrast, is built from `app_root_path` and
-    # so already carries exactly that much — removing more would delete a prefix it never added.
-    #
-    # The distinction is invisible in most shapes and load-bearing in two: an embedding
-    # `Mount("/ocs", app)` sets `root_path` while leaving `base_url` at the outer root, and
-    # uvicorn's `--root-path` puts the prefix on both the path and `base_url`.
-    scope = request.scope
-    if os.getenv(BASE_URL_ENV, "").strip().rstrip("/"):
-        prefix = str(scope.get("root_path", ""))
-    else:
-        prefix = str(scope.get("app_root_path", scope.get("root_path", "")))
-    return absolute_url(request, strip_mount(request.url.path, prefix))
+    return absolute_url(request, strip_mount(request.url.path, asgi_prefix(request)))

@@ -116,18 +116,18 @@ def _fake_request(base: str, path: str, query: str = "", root_path: str = ""):
 
 
 def test_the_map_viewer_html_carries_no_origin(https_client: TestClient) -> None:
-    """The reported defect was `http://` fetch targets on an `https://` page. Mount-relative
-    targets fix it without naming an origin, which also removes a hazard the first fix
-    introduced: with the configured origin baked in, opening the viewer through a port-forward
-    fetched the *public* instance's catalogue — permitted by the wildcard CORS — and the
-    operator would validate an ingest against another instance's data (CLIM-974 review).
+    """The reported defect is `http://` fetch targets on an `https://` page (CLIM-974).
+
+    Mount-relative targets fix it without naming an origin, which matters: with the configured
+    origin baked in, opening the viewer through a port-forward fetches the *public* instance's
+    catalogue — permitted by the wildcard CORS — and the operator validates an ingest against
+    another instance's data.
 
     Scoped to the HTML the server renders, which is all this greps. Once a collection is
-    selected the page loads raster data from the `zarr.href` inside the collection JSON, and
-    `build_collection` builds that with `absolute_url`, so it names the configured origin. On a
-    port-forward the dropdown is therefore local while the chunks come from the configured
-    instance. That is arguably correct STAC behaviour and predates this change, but it is not
-    covered here — see the PR description.
+    selected the page loads raster data from the `zarr.href` inside the collection JSON, which
+    `build_collection` builds with `absolute_url` and so names the configured origin. On a
+    port-forward the dropdown is local while the chunks come from the configured instance —
+    arguably correct STAC behaviour, and not covered here; see the PR description.
     """
     body = https_client.get("/map").text
 
@@ -143,8 +143,8 @@ def test_the_manage_console_posts_to_the_origin_it_was_reached_on(https_client: 
     body = https_client.get("/manage").text
 
     assert _CONFIGURED not in body
-    # Strict: the bare substring is also present in the pre-PR `action="http://testserver/..."`
-    # form this test exists to reject, so an `or` on it would pass against the very bug.
+    # Strict: the bare substring also appears in the `action="http://testserver/..."` form this
+    # test exists to reject, so matching on it alone would pass against the very bug.
     assert 'action="/manage/ingest"' in body
 
 
@@ -198,10 +198,11 @@ def test_no_served_document_leaks_the_internal_origin(https_client: TestClient) 
 def test_a_base_url_that_is_only_slashes_falls_back_to_the_request(
     monkeypatch: pytest.MonkeyPatch, configured: str
 ) -> None:
-    """Truthiness was tested before the trailing slashes were stripped, so `"/"` survived the
-    check, stripped to the empty string, and was returned — every href in every served
-    document lost its origin, and `/openeo` redirected to `editor.openeo.org/?server=`
-    (CLIM-974 review).
+    """A value that is nothing but slashes has no origin in it to use.
+
+    Judged before the slashes come off, `"/"` passes as configured and then strips to the empty
+    string: every href in every served document loses its origin and `/openeo` redirects to
+    `editor.openeo.org/?server=`.
     """
     from open_climate_service.shared.urls import absolute_base
 
@@ -212,11 +213,11 @@ def test_a_base_url_that_is_only_slashes_falls_back_to_the_request(
 def test_the_self_link_does_not_double_a_mount_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ordinary mounted deployment, not an exotic one.
 
-    Uvicorn sets `scope["path"] = root_path + path`, so with `--root-path /ocs` behind a normal
-    stripping proxy the request arrives as `/stac` and `request.url.path` becomes `/ocs/stac`,
-    while the fallback origin `request.base_url` already ends in `/ocs/`. Appending the path
-    unstripped gives `/ocs/ocs/stac` for `self` while every other link stays correct, and a STAC
-    client following `self` 404s.
+    Uvicorn sets `scope["path"] = root_path + path`, so with `--root-path /ocs` behind a
+    stripping proxy a request for `/stac` arrives with `request.url.path == "/ocs/stac"` while
+    the fallback origin `request.base_url` already ends in `/ocs/`. Appending that unstripped
+    gives `/ocs/ocs/stac` for `self` while every other link stays correct, and a STAC client
+    following `self` 404s.
 
     The scope is built by hand rather than through `mounted_client` because
     `TestClient(root_path=...)` does not prepend the prefix to `path` the way uvicorn does, and
@@ -241,8 +242,8 @@ def test_a_configured_origin_is_unaffected_by_a_mount_prefix(monkeypatch: pytest
 
 # -- mount prefix ----------------------------------------------------------------------------
 #
-# Three positions on the same links, all of which have been in this file's history. Two are
-# wrong in opposite directions, so the tests below pin all three rather than the survivor:
+# Three possible positions on the same links. Two are wrong in opposite directions, so the
+# tests below pin all three rather than only the right one:
 #
 #   absolute, configured origin -> submits to the *public* instance from a port-forward
 #   bare leading slash          -> drops a deployment prefix, proxy 404
@@ -259,8 +260,8 @@ def mounted_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 def test_the_manage_console_posts_under_the_mount_prefix(mounted_client: TestClient) -> None:
-    """A page served at `/ocs/manage` posting to `/manage/ingest` reached the proxy, not the
-    app, and returned 404."""
+    """A page served at `/ocs/manage` that posts to `/manage/ingest` reaches the proxy, not the
+    app, and gets a 404."""
     body = mounted_client.get("/manage").text
 
     assert 'action="/ocs/manage/ingest"' in body
@@ -310,11 +311,12 @@ def test_mount_prefix_strips_a_trailing_slash() -> None:
 
 
 def test_the_mount_prefix_falls_back_to_the_base_url_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No shipped entry point sets ASGI `root_path`, so this is the usual mounted deployment.
+    """The deployment that declares its prefix only in `CLIMATE_SERVICE_BASE_URL`.
 
-    With the prefix declared only in `CLIMATE_SERVICE_BASE_URL`, in-page links previously came
-    out unprefixed — an instance behind `https://host/ocs/` rendered `/map`, which 404s at the
-    proxy. `root_path` still wins when a server does set it.
+    Without the fallback, in-page links come out unprefixed: an instance behind
+    `https://host/ocs/` renders `/map`, which 404s at the proxy. `ROOT_PATH` states this more
+    directly and `root_path` wins whenever set, but the fallback has to keep working for
+    deployments that cannot set it.
     """
     from open_climate_service.shared.urls import mount_prefix
 
@@ -326,11 +328,12 @@ def test_the_mount_prefix_falls_back_to_the_base_url_path(monkeypatch: pytest.Mo
 
 
 def test_the_self_link_keeps_the_prefix_of_an_embedding_mount(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`request.base_url` is built from `app_root_path`, so the strip must use the same key.
+    """Under an embedding mount the fallback origin needs the prefix added to it.
 
-    Under `outer.mount("/ocs", create_app())` Starlette sets `root_path` on the inner app while
-    `base_url` keeps the outer prefix; stripping `root_path` removed a prefix `base_url` had
-    never added, and `self` came back as `/stac` — a 404.
+    Starlette builds `base_url` from `app_root_path`, which under `Mount("/ocs", app)` is the
+    outer root with no prefix at all, while `request.url.path` carries `/ocs`. Stripping the
+    prefix off the path without adding it to the origin drops it altogether and `self` comes
+    back as `/stac` — a 404.
     """
     from starlette.applications import Starlette
     from starlette.routing import Mount
@@ -357,13 +360,12 @@ def test_stripping_a_prefix_respects_segment_boundaries() -> None:
 def test_the_self_link_does_not_double_a_configured_path_under_an_embedding_mount(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Two origins account for different amounts of the prefix, so the strip differs.
+    """The configured origin already is the service root, prefix included, so nothing adds it
+    twice.
 
-    A configured `CLIMATE_SERVICE_BASE_URL` *is* the service root, path included, so the whole
-    ASGI prefix comes off. `request.base_url` is built from `app_root_path` and already carries
-    exactly that much. `Mount("/ocs", app)` sets `root_path` while leaving `base_url` at the
-    outer root, so stripping the `base_url` amount there left the prefix on the path and the
-    configured path supplied it a second time: `https://public.example/ocs/ocs/stac`.
+    Varying how much of the prefix comes off the path by which origin it is appended to leaves
+    the prefix on the path under `Mount("/ocs", app)` while the configured path supplies it a
+    second time: `https://public.example/ocs/ocs/stac`.
     """
     from starlette.applications import Starlette
     from starlette.routing import Mount
@@ -375,6 +377,86 @@ def test_the_self_link_does_not_double_a_configured_path_under_an_embedding_moun
     payload = TestClient(outer).get("/ocs/stac").json()
     self_href = next(link["href"] for link in payload["links"] if link["rel"] == "self")
     assert self_href == "https://public.example/ocs/stac"
+
+
+def test_every_link_of_one_document_agrees_under_an_embedding_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`self` is not the only link in the document, and the others are built differently.
+
+    `root` and the child links come from `absolute_base` rather than the request path, so an
+    origin without the prefix puts both forms in one STAC document — `self` with `/ocs`, `root`
+    without — and a client following `root` gets a 404.
+    """
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    from open_climate_service.main import app as inner
+
+    monkeypatch.delenv(BASE_URL_ENV, raising=False)
+    outer = Starlette(routes=[Mount("/ocs", app=inner)])
+    payload = TestClient(outer).get("/ocs/stac").json()
+
+    for link in payload["links"]:
+        assert link["href"].startswith("http://testserver/ocs/"), link
+
+
+# -- unusable configuration ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "configured",
+    ["ocs-demo-nepal.dhis2.org", "ocs-demo-nepal.dhis2.org/ocs", "https://", "//host/ocs"],
+)
+def test_a_base_url_without_a_scheme_and_host_falls_back_to_the_request(
+    monkeypatch: pytest.MonkeyPatch, configured: str
+) -> None:
+    """Trimming instead of parsing accepts anything non-empty as an origin.
+
+    A host with no scheme gives `ocs-demo-nepal.dhis2.org/stac`, which a browser resolves
+    against the current page as a *relative* path; `https://` gives `https:/stac`. Both leave
+    the API returning 200 and every served document carrying broken links. Falling back to the
+    request origin is wrong in the way this variable exists to fix, but it is well-formed and it
+    logs.
+    """
+    from open_climate_service.shared.urls import absolute_base
+
+    monkeypatch.setenv(BASE_URL_ENV, configured)
+    assert absolute_base(_fake_request("http://localhost:9000/", "/stac")) == "http://localhost:9000"
+
+
+def test_a_base_url_is_parsed_rather_than_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A query string or fragment otherwise lands in the middle of every absolute URL.
+
+    `https://host/ocs?x=1` gives `https://host/ocs?x=1/stac` while in-page links stay correct,
+    because two readings of one variable disagree. Both go through the same parse.
+    """
+    from open_climate_service.shared.urls import absolute_url, mount_prefix
+
+    for configured in ("https://host/ocs?x=1", "https://host/ocs#frag", "https://host/ocs/#"):
+        monkeypatch.setenv(BASE_URL_ENV, configured)
+        request = _fake_request("http://internal:9000/", "/stac")
+        assert absolute_url(request, "/stac") == "https://host/ocs/stac", configured
+        assert mount_prefix(request) == "/ocs", configured
+
+
+def test_an_unusable_base_url_is_logged_once(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Silence is how this survives: the links are broken but every response is a 200."""
+    import logging
+
+    from open_climate_service.shared.urls import _parse_configured_base, absolute_base
+
+    # `startup.py` gives the package logger its own handler and stops propagation, so `caplog`
+    # sees nothing until it is let through.
+    monkeypatch.setattr(logging.getLogger("open_climate_service"), "propagate", True)
+    _parse_configured_base.cache_clear()
+    monkeypatch.setenv(BASE_URL_ENV, "ocs-demo-nepal.dhis2.org")
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            absolute_base(_fake_request("http://localhost:9000/", "/stac"))
+
+    assert len(caplog.records) == 1, "cached on the raw value, so one warning per distinct value"
+    assert BASE_URL_ENV in caplog.text
 
 
 def test_the_asgi_prefix_ignores_the_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

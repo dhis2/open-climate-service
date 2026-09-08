@@ -80,16 +80,16 @@ async def read_only_middleware(
 ) -> Response:
     """Refuse state-changing and admin requests when the instance is configured read-only.
 
-    The ASGI prefix is removed before the policy sees the path. `is_blocked` matches against
-    route paths as the app declares them, so under `--root-path /ocs` an unstripped
-    `/ocs/manage` matched no closed prefix and read-only mode **failed open** — the admin
-    console and the job listing were served, while `POST /ocs/result` was still refused because
-    that rule falls through to the method check.
+    The ASGI prefix is removed before the policy sees the path, because `is_blocked` matches
+    route paths as the app declares them. Left on, `/ocs/manage` under `--root-path /ocs`
+    matches no closed prefix and read-only mode **fails open**, serving the admin console and
+    the job listing while `POST /ocs/result` is still refused by the method check — a partial
+    failure that looks like a working configuration.
 
     `asgi_prefix`, never `mount_prefix`: the latter falls back to the path of
-    `CLIMATE_SERVICE_BASE_URL`, which is a statement about the public origin rather than about
-    the incoming path. With a base URL of `https://host/jobs` that fallback stripped `/jobs`
-    from the real route and served the job listing with a 200.
+    `CLIMATE_SERVICE_BASE_URL`, a statement about the public origin rather than the incoming
+    path. A base URL of `https://host/jobs` would strip `/jobs` off the real route and serve the
+    job listing with a 200.
     """
     path = strip_mount(request.url.path, asgi_prefix(request))
     if api_config.is_read_only() and is_blocked(request.method, path):
