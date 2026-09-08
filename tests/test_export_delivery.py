@@ -73,8 +73,15 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
 def fake_send(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
 
-    def send(self: Dhis2ExportPlugin, payload: bytes, target: Any, *, dry_run: bool = False) -> ExportReport:
-        calls.append({"payload": payload, "target": target, "dry_run": dry_run})
+    def send(
+        self: Dhis2ExportPlugin,
+        payload: bytes,
+        target: Any,
+        *,
+        dry_run: bool = False,
+        context: Any = None,
+    ) -> ExportReport:
+        calls.append({"payload": payload, "target": target, "dry_run": dry_run, "context": context})
         return ExportReport(
             plugin_id=self.id,
             connection_id=target,

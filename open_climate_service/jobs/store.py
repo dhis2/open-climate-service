@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -112,10 +114,31 @@ def _mutate_records(mutation: Callable[[list[dict[str, object]]], JobRecord]) ->
                 raise ValueError("jobs.json must contain a list")
             records = payload
             result = mutation(records)
-            handle.seek(0)
-            json.dump(records, handle, indent=2)
-            handle.write("\n")
-            handle.truncate()
+            _atomic_write_records(records)
             return result
         finally:
             portalocker.unlock(handle)
+
+
+def _atomic_write_records(records: list[dict[str, object]]) -> None:
+    """Replace jobs.json by first flushing a complete temporary copy.
+
+    The in-place rewrite used before could leave a truncated index if the process
+    crashed mid-write. Writing a sibling file and replacing the index atomically
+    keeps delivery checkpoints and idempotency state durable across a crash.
+    """
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=JOBS_DIR, prefix=".jobs-", suffix=".json.tmp", mode="w", delete=False, encoding="utf-8"
+        ) as handle:
+            temporary = handle.name
+            json.dump(records, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, JOBS_INDEX_PATH)
+        temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)

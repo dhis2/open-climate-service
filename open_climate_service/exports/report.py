@@ -52,3 +52,83 @@ class ExportReport(BaseModel):
     remote_task_ids: list[str] = Field(default_factory=list)
     created_at: str
     finished_at: str
+
+
+# Ordered by severity; a merged report takes the first matching outcome.
+_OUTCOME_PRECEDENCE: tuple[ExportOutcome, ...] = (
+    ExportOutcome.REJECTED,
+    ExportOutcome.UNKNOWN,
+    ExportOutcome.CANCELLED,
+    ExportOutcome.PARTIAL,
+)
+
+
+def merge_chunk_reports(
+    reports: list[ExportReport],
+    *,
+    plugin_id: str,
+    connection_id: str | None,
+    dry_run: bool,
+    payload_sha256: str,
+    created_at: str,
+    finished_at: str,
+    submitted: int | None = None,
+    cancelled_early: bool = False,
+    message: str | None = None,
+) -> ExportReport:
+    """Combine per-chunk reports into one authoritative delivery report.
+
+    Counts, conflicts, remote task IDs, and attempts are summed. The aggregate
+    outcome is the most severe chunk outcome; a dry run that fully validated
+    reports ``dry_run``, otherwise a clean run reports ``success``. An early
+    cancellation is recorded as ``cancelled`` unless a chunk was rejected or its
+    outcome is unknown.
+    """
+    outcomes: set[ExportOutcome]
+    if reports:
+        attempts = sum(report.attempts for report in reports)
+        imported = sum(report.imported for report in reports)
+        updated = sum(report.updated for report in reports)
+        ignored = sum(report.ignored for report in reports)
+        deleted = sum(report.deleted for report in reports)
+        conflicts = [conflict for report in reports for conflict in report.conflicts]
+        remote_task_ids = [task_id for report in reports for task_id in report.remote_task_ids]
+        chunks = len(reports)
+        total_submitted = submitted if submitted is not None else sum(report.submitted for report in reports)
+        outcomes = {report.outcome for report in reports}
+    else:
+        attempts = 0
+        imported = updated = ignored = deleted = 0
+        conflicts = []
+        remote_task_ids = []
+        chunks = 0
+        total_submitted = submitted if submitted is not None else 0
+        outcomes = set()
+
+    outcome = ExportOutcome.SUCCESS
+    for candidate in _OUTCOME_PRECEDENCE:
+        if candidate in outcomes or (candidate == ExportOutcome.CANCELLED and cancelled_early):
+            outcome = candidate
+            break
+    if outcome == ExportOutcome.SUCCESS:
+        outcome = ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS
+
+    return ExportReport(
+        plugin_id=plugin_id,
+        connection_id=connection_id,
+        dry_run=dry_run,
+        outcome=outcome,
+        message=message,
+        payload_sha256=payload_sha256,
+        attempts=attempts,
+        chunks=chunks,
+        submitted=total_submitted,
+        imported=imported,
+        updated=updated,
+        ignored=ignored,
+        deleted=deleted,
+        conflicts=conflicts,
+        remote_task_ids=remote_task_ids,
+        created_at=created_at,
+        finished_at=finished_at,
+    )
