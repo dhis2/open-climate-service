@@ -1,4 +1,4 @@
-"""Strict single-series DHIS2 rendering for named export mappings."""
+"""DHIS2 rendering for named single- and multi-series export mappings."""
 
 from __future__ import annotations
 
@@ -12,16 +12,15 @@ from typing import Any
 from open_climate_service.exports.base import BaseExportPlugin, DeliveryContext, RenderedExport
 from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
 from open_climate_service.exports.tabular import (
-    _build_dhis2_json_payload,
     _is_nullish,
     _normalise_period_type,
-    _select_dhis2_value_field,
     _to_dhis2_period_string,
+    _to_dhis2_value_string,
 )
 
 
 class Dhis2ExportPlugin(BaseExportPlugin):
-    """Map one prepared aggregate series to one DHIS2 data element."""
+    """Map prepared aggregate series to DHIS2 data elements."""
 
     id = "dhis2"
     format = "DHIS2JSON"
@@ -45,20 +44,34 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             raise ValueError("DHIS2 mapping requires period_type; temporal aggregation must happen upstream")
         kind = _normalise_period_type(period_type)
         series = mapping.get("series")
-        if not isinstance(series, list) or len(series) != 1 or not isinstance(series[0], dict):
-            raise ValueError("This phase supports exactly one DHIS2 series per export")
-        entry = series[0]
-        if set(entry) - {"select", "data_element", "category_option_combo", "attribute_option_combo"}:
-            raise ValueError("Unsupported DHIS2 series fields")
-        select = entry.get("select", {})
-        if not isinstance(select, dict) or set(select) - {"variable"}:
-            raise ValueError("Single-series select supports only an optional 'variable' name")
-        if "variable" in select and (not isinstance(select["variable"], str) or not select["variable"].strip()):
-            raise ValueError("select.variable must be a non-empty variable name")
-        _uid(entry.get("data_element"), "series.data_element")
-        for field in ("category_option_combo", "attribute_option_combo"):
-            if field in entry:
-                _uid(entry[field], f"series.{field}")
+        if not isinstance(series, list) or not series or not all(isinstance(entry, dict) for entry in series):
+            raise ValueError("DHIS2 mapping requires a non-empty list of series mappings")
+        validated_series: list[dict[str, Any]] = []
+        for index, entry in enumerate(series):
+            prefix = f"series[{index}]"
+            if set(entry) - {"select", "data_element", "category_option_combo", "attribute_option_combo"}:
+                raise ValueError(f"Unsupported {prefix} fields")
+            select = entry.get("select", {})
+            if not isinstance(select, dict) or set(select) - {"variable", "quantile"}:
+                raise ValueError(f"{prefix}.select supports only 'variable' and 'quantile'")
+            variable = select.get("variable")
+            if "variable" in select and (not isinstance(variable, str) or not variable.strip()):
+                raise ValueError(f"{prefix}.select.variable must be a non-empty variable name")
+            quantile = select.get("quantile")
+            if "quantile" in select and (
+                isinstance(quantile, bool)
+                or not isinstance(quantile, (int, float))
+                or not math.isfinite(float(quantile))
+            ):
+                raise ValueError(f"{prefix}.select.quantile must be a finite number")
+            validated: dict[str, Any] = {
+                "data_element": _uid(entry.get("data_element"), f"{prefix}.data_element"),
+                "select": dict(select),
+            }
+            for field in ("category_option_combo", "attribute_option_combo"):
+                if field in entry:
+                    validated[field] = _uid(entry[field], f"{prefix}.{field}")
+            validated_series.append(validated)
         for field, default in (("org_unit_field", "geometry"), ("period_field", "t")):
             value = mapping.get(field, default)
             if not isinstance(value, str) or not value.strip():
@@ -67,79 +80,179 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             raise ValueError("Organisation unit and period fields must be distinct")
         if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max"):
             raise ValueError("aggregation must be mean, sum, min, or max; it declares upstream computation")
-        return {**mapping, "period_type": kind, "series": [{**entry, "select": select}]}
+        return {**mapping, "period_type": kind, "series": validated_series}
 
     def render(self, data: Any, mapping: dict[str, Any]) -> RenderedExport:
         import numpy as np
-        import pandas as pd
-        import xarray as xr
 
-        entry = mapping["series"][0]
+        entries = mapping["series"]
         org_field = mapping.get("org_unit_field", "geometry")
         period_field = mapping.get("period_field", "t")
         kind = mapping["period_type"]
-        variable = entry["select"].get("variable")
-        if isinstance(data, xr.DataArray):
-            data = data.to_dataset(name=data.name or "result")
-        if isinstance(data, xr.Dataset):
-            if variable is not None:
-                if variable not in data.data_vars:
-                    raise ValueError(f"Selected variable '{variable}' is not present in the result")
-                data = data[[variable]]
-            if set(data.dims) - {org_field, period_field}:
-                raise ValueError("DHIS2 export requires aggregates with only organisation-unit and period dimensions")
-            declared_period = data.attrs.get("period_type")
-            if declared_period is not None and _normalise_period_type(str(declared_period)) != kind:
-                raise ValueError("Result period_type differs from the mapping; aggregate temporally before exporting")
-            frame = data.to_dataframe().reset_index()
-        elif isinstance(data, pd.DataFrame):
-            frame = pd.DataFrame(data).copy()
-            if variable is not None:
-                required = [org_field, period_field, variable]
-                if not all(field in frame.columns for field in required):
-                    raise ValueError("Selected variable or identity fields are missing from the result")
-                frame = frame[required]
-        else:
-            raise ValueError("DHIS2 export requires an xarray aggregate or a pandas/GeoPandas table")
-        if org_field not in frame or period_field not in frame:
+
+        frame, value_columns = self._to_frame(data, org_field, period_field, kind)
+        if org_field not in frame.columns or period_field not in frame.columns:
             raise ValueError("DHIS2 result is missing organisation-unit or period fields")
         if not frame.columns.is_unique:
             raise ValueError("DHIS2 result contains duplicate column names")
-        value_field = _select_dhis2_value_field(frame, org_field, period_field)
-        keys: set[tuple[str, str]] = set()
-        for index, record in enumerate(frame.to_dict(orient="records")):
-            org = _uid(record[org_field], f"row {index} organisation unit (feature.id)")
-            period = _to_dhis2_period_string(record[period_field], kind)
-            _validate_period(period, kind)
-            key = (org, period)
-            if key in keys:
-                raise ValueError(f"Duplicate DHIS2 value for organisation unit '{org}' and period '{period}'")
-            keys.add(key)
-            value = record[value_field]
-            if not _is_nullish(value) and (
-                not isinstance(value, (int, float, Decimal, np.integer, np.floating, bool, np.bool_))
-                or not math.isfinite(value)
-            ):
-                raise ValueError(f"Row {index} must contain a finite scalar numeric value")
-        options = {
-            "data_element_id": entry["data_element"],
-            "org_unit_field": org_field,
-            "period_field": period_field,
-            "period_type": kind,
-        }
-        if "category_option_combo" in entry:
-            options["category_option_combo"] = entry["category_option_combo"]
-        payload = _build_dhis2_json_payload(frame, options)
-        values = payload["dataValues"]
-        if "attribute_option_combo" in entry:
-            for value in values:
-                value["attributeOptionCombo"] = entry["attribute_option_combo"]
+
+        residual_dims: list[str] = []
+        if value_columns is not None:
+            residual_dims = [
+                str(column)
+                for column in frame.columns
+                if column not in {org_field, period_field}
+                and str(column) not in value_columns
+                and str(column) not in {"geometry", "spatial_ref", "index", "band", "bands"}
+            ]
+
+        data_values: list[dict[str, str]] = []
+        seen_keys: set[tuple[str, str, str, str, str]] = set()
+        periods: set[str] = set()
+        record_count = 0
+        skipped_count = 0
+
+        for entry in entries:
+            select = entry.get("select", {})
+            selected = frame
+            if "quantile" in select:
+                selected = self._select_quantile_rows(selected, select["quantile"])
+            elif "quantile" in residual_dims:
+                raise ValueError(
+                    "DHIS2 export requires aggregates with only organisation-unit and period dimensions; "
+                    "the result contains a 'quantile' dimension — select a quantile or aggregate before exporting"
+                )
+            unhandled = [column for column in residual_dims if column != "quantile"]
+            if unhandled:
+                raise ValueError(
+                    "DHIS2 export requires aggregates with only organisation-unit and period dimensions; "
+                    f"found residual dimensions {unhandled}"
+                )
+            column = self._resolve_series_column(selected, select, value_columns, org_field, period_field)
+            for index, record in enumerate(selected.to_dict(orient="records")):
+                org = _uid(record[org_field], f"row {index} organisation unit (feature.id)")
+                period = _to_dhis2_period_string(record[period_field], kind)
+                _validate_period(period, kind)
+                value = record[column]
+                if _is_nullish(value):
+                    skipped_count += 1
+                    continue
+                if not isinstance(
+                    value, (int, float, Decimal, np.integer, np.floating, bool, np.bool_)
+                ) or not math.isfinite(value):
+                    raise ValueError(f"Row {index} must contain a finite scalar numeric value")
+                category_combo = entry.get("category_option_combo")
+                attribute_combo = entry.get("attribute_option_combo")
+                key = (entry["data_element"], org, period, category_combo or "", attribute_combo or "")
+                if key in seen_keys:
+                    raise ValueError(
+                        f"Duplicate DHIS2 value for data element '{entry['data_element']}', "
+                        f"organisation unit '{org}', and period '{period}'"
+                    )
+                seen_keys.add(key)
+                item: dict[str, str] = {
+                    "dataElement": entry["data_element"],
+                    "orgUnit": org,
+                    "period": period,
+                    "value": _to_dhis2_value_string(value),
+                }
+                if category_combo is not None:
+                    item["categoryOptionCombo"] = category_combo
+                if attribute_combo is not None:
+                    item["attributeOptionCombo"] = attribute_combo
+                data_values.append(item)
+                periods.add(period)
+                record_count += 1
+
         return RenderedExport(
-            content=json.dumps(payload, allow_nan=False).encode(),
-            record_count=len(values),
-            skipped_count=len(frame) - len(values),
-            periods=tuple(sorted({value["period"] for value in values})),
+            content=json.dumps({"dataValues": data_values}, allow_nan=False).encode(),
+            record_count=record_count,
+            skipped_count=skipped_count,
+            periods=tuple(sorted(periods)),
         )
+
+    def _to_frame(self, data: Any, org_field: str, period_field: str, kind: str) -> tuple[Any, list[str] | None]:
+        """Normalize an xarray object or DataFrame to one wide table.
+
+        Returns ``(frame, value_columns)``. ``value_columns`` names the value
+        columns when the input carried xarray data-variable metadata; it is
+        ``None`` for a plain DataFrame, whose value columns are derived later by
+        exclusion. A merged cube's synthetic ``__cubes__`` dimension is pivoted
+        into one column per cube label so selectors address source names rather
+        than the internal dimension name.
+        """
+        import pandas as pd
+        import xarray as xr
+
+        if isinstance(data, xr.DataArray):
+            data = data.to_dataset(name=data.name or "result")
+        if isinstance(data, xr.Dataset):
+            declared_period = data.attrs.get("period_type")
+            if declared_period is not None and _normalise_period_type(str(declared_period)) != kind:
+                raise ValueError("Result period_type differs from the mapping; aggregate temporally before exporting")
+            value_columns = [str(name) for name in data.data_vars]
+            if not value_columns:
+                raise ValueError("DHIS2 result contains no data variables")
+            frame = data.to_dataframe().reset_index()
+            if "__cubes__" in frame.columns:
+                if len(value_columns) != 1:
+                    raise ValueError("Merged-cube results require exactly one value column")
+                value_column = value_columns[0]
+                index_columns = [column for column in frame.columns if column != value_column and column != "__cubes__"]
+                if not index_columns:
+                    raise ValueError("Merged-cube result has no organisation-unit or period columns")
+                frame = frame.pivot(index=index_columns, columns="__cubes__", values=value_column).reset_index()
+                frame.columns.name = None
+                value_columns = [str(column) for column in frame.columns if column not in index_columns]
+            return frame, value_columns
+        if isinstance(data, pd.DataFrame):
+            return pd.DataFrame(data).copy(), None
+        raise ValueError("DHIS2 export requires an xarray aggregate or a pandas/GeoPandas table")
+
+    def _resolve_series_column(
+        self,
+        frame: Any,
+        select: dict[str, Any],
+        value_columns: list[str] | None,
+        org_field: str,
+        period_field: str,
+    ) -> str:
+        """Return the single value column a series selector resolves to."""
+        variable = select.get("variable")
+        if variable is not None:
+            if not isinstance(variable, str):
+                raise ValueError("select.variable must be a string")
+            if variable not in frame.columns:
+                raise ValueError(f"Selected variable '{variable}' is not present in the result")
+            return variable
+        fields = self._candidate_value_fields(frame, value_columns, org_field, period_field)
+        if len(fields) != 1:
+            raise ValueError(
+                "DHIS2 export with an empty series selector requires exactly one value column "
+                f"after excluding '{org_field}' and '{period_field}'; found {fields}"
+            )
+        return fields[0]
+
+    @staticmethod
+    def _candidate_value_fields(
+        frame: Any, value_columns: list[str] | None, org_field: str, period_field: str
+    ) -> list[str]:
+        if value_columns is not None:
+            return [column for column in value_columns if column in frame.columns]
+        excluded = {org_field, period_field, "geometry", "spatial_ref", "index", "band", "bands"}
+        return [
+            str(column) for column in frame.columns if column not in excluded and not str(column).startswith("level_")
+        ]
+
+    @staticmethod
+    def _select_quantile_rows(frame: Any, quantile: Any) -> Any:
+        """Filter a table to one quantile along its ``quantile`` dimension."""
+        if "quantile" not in frame.columns:
+            raise ValueError("select.quantile requires a 'quantile' dimension in the result")
+        mask = frame["quantile"] == quantile
+        if not bool(mask.any()):
+            raise ValueError(f"select.quantile value {quantile!r} is not present in the result")
+        return frame.loc[mask]
 
     def send(
         self,
