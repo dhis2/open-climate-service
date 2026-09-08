@@ -5,7 +5,6 @@ from typing import cast
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
-from starlette.datastructures import URL
 from starlette.responses import StreamingResponse
 
 from open_climate_service.ingestions import services as ingestion_services
@@ -57,7 +56,6 @@ class _FakeRequest:
 
     def __init__(self, form_data: dict[str, str], root_path: str = "") -> None:
         self._form_data = form_data
-        self.base_url = URL("http://testserver/")
         self.scope = {"root_path": root_path}
 
     async def form(self) -> dict[str, str]:

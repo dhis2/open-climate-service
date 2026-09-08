@@ -7,10 +7,14 @@ catalogue, while curl against every endpoint still returns 200. HSTS hides it en
 the deployment where it was found looked fine.
 """
 
+import urllib.parse
+
 import pytest
 from fastapi.testclient import TestClient
 
 from open_climate_service.shared.urls import BASE_URL_ENV
+
+from .conftest import MountedClientFactory
 
 _CONFIGURED = "https://ocs-demo-nepal.dhis2.org"
 
@@ -89,27 +93,27 @@ def test_the_self_url_drops_the_query_string(monkeypatch: pytest.MonkeyPatch) ->
     assert self_url(request) == f"{_CONFIGURED}/stac"
 
 
-def _fake_request(base: str, path: str, query: str = "", root_path: str = ""):
+def _fake_request(base: str, path: str, query: str = "", root_path: str = "", app_root_path: str | None = None):
     """A Request with just enough scope for the URL helpers.
 
-    `root_path` is a parameter because the mounted cases need it and rebuilding the whole scope
-    inline to change one key is how three tests ended up with a copy of this dict.
+    `root_path` is what uvicorn or an embedding `Mount` sets; `app_root_path` is what Starlette
+    records for the outermost app, which under a `Mount` differs from `root_path`.
     """
     from fastapi import Request
 
-    host = base.split("://", 1)[1].rstrip("/")
-    hostname, _, port = host.partition(":")
-    return Request(
-        {
-            "type": "http",
-            "scheme": base.split("://", 1)[0],
-            "server": (hostname, int(port) if port else 80),
-            "path": path,
-            "query_string": query.encode(),
-            "headers": [(b"host", host.encode())],
-            "root_path": root_path,
-        }
-    )
+    split = urllib.parse.urlsplit(base)
+    scope = {
+        "type": "http",
+        "scheme": split.scheme,
+        "server": (split.hostname, split.port or 80),
+        "path": path,
+        "query_string": query.encode(),
+        "headers": [(b"host", split.netloc.encode())],
+        "root_path": root_path,
+    }
+    if app_root_path is not None:
+        scope["app_root_path"] = app_root_path
+    return Request(scope)
 
 
 # -- the two reported endpoints -------------------------------------------------------------
@@ -251,12 +255,26 @@ def test_a_configured_origin_is_unaffected_by_a_mount_prefix(monkeypatch: pytest
 
 
 @pytest.fixture
-def mounted_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Served under `/ocs`, with a configured public origin that is *not* the request's."""
-    from open_climate_service.main import app
-
+def mounted_client(monkeypatch: pytest.MonkeyPatch, mounted_client_factory: MountedClientFactory) -> TestClient:
+    """Served under `/ocs` the way uvicorn does it, with a configured public origin that is
+    *not* the request's and that carries no path of its own."""
     monkeypatch.setenv(BASE_URL_ENV, _CONFIGURED)
-    return TestClient(app, root_path="/ocs")
+    return mounted_client_factory("/ocs")
+
+
+def test_an_origin_only_base_url_composes_with_the_asgi_prefix(mounted_client: TestClient) -> None:
+    """`ROOT_PATH=/ocs` with `CLIMATE_SERVICE_BASE_URL=https://host` is the documented pairing.
+
+    Returning the configured value verbatim put the HTML links under `/ocs` while every STAC
+    and openEO href named the origin root: one document, two service roots, and the absolute
+    half 404s at the proxy.
+    """
+    payload = mounted_client.get("/stac").json()
+    for link in payload["links"]:
+        assert link["href"].startswith(f"{_CONFIGURED}/ocs/"), link
+
+    well_known = mounted_client.get("/.well-known/openeo").json()
+    assert all(v["url"].startswith(f"{_CONFIGURED}/ocs") for v in well_known["versions"]), well_known
 
 
 def test_the_manage_console_posts_under_the_mount_prefix(mounted_client: TestClient) -> None:
@@ -300,14 +318,50 @@ def test_an_unmounted_instance_gains_no_prefix(https_client: TestClient) -> None
     assert "//manage" not in body, "empty prefix must not leave a doubled slash"
 
 
-def test_mount_prefix_strips_a_trailing_slash() -> None:
+@pytest.mark.parametrize(("reported", "expected"), [("/ocs/", "/ocs"), ("/ocs", "/ocs"), ("/", ""), ("", "")])
+def test_mount_prefix_strips_a_trailing_slash(reported: str, expected: str) -> None:
     """`f"{mount_prefix(request)}/manage"` has to be right for every form the server reports."""
     from open_climate_service.shared.urls import mount_prefix
 
-    for reported, expected in (("/ocs/", "/ocs"), ("/ocs", "/ocs"), ("/", ""), ("", "")):
-        request = _fake_request("http://host/", "/manage")
-        request.scope["root_path"] = reported
-        assert mount_prefix(request) == expected, reported
+    assert mount_prefix(_fake_request("http://host/", "/manage", root_path=reported)) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("/ocs", "/ocs"), ("/ocs/", "/ocs"), ("ocs", "/ocs"), (" /ocs/ ", "/ocs"), ("/", ""), ("", ""), ("  ", "")],
+)
+def test_the_root_path_setting_is_normalised(monkeypatch: pytest.MonkeyPatch, raw: str, expected: str) -> None:
+    """Uvicorn joins `root_path + path` verbatim, so `ROOT_PATH=/ocs/` would put `/ocs//manage`
+    on the scope, and `ocs` would render relative links. Both are the operator's most likely
+    spellings after the canonical one."""
+    from open_climate_service.shared.urls import configured_root_path
+
+    monkeypatch.setenv("ROOT_PATH", raw)
+    assert configured_root_path() == expected
+
+
+def test_the_app_reads_the_root_path_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ROOT_PATH` set in `.env` must work under `make run` and bare uvicorn, which never go
+    through `cli.py`. The app owns the setting, so every launcher gets it."""
+    from open_climate_service.main import create_app
+
+    monkeypatch.setenv("ROOT_PATH", "/ocs/")
+    client = TestClient(create_app())
+
+    assert 'action="/ocs/manage/ingest"' in client.get("/manage").text
+    self_href = next(link["href"] for link in client.get("/stac").json()["links"] if link["rel"] == "self")
+    assert self_href == "http://testserver/ocs/stac"
+
+
+@pytest.mark.parametrize("root_path", ["/ocs", "/ocs/"])
+def test_the_route_path_strips_the_prefix_the_way_starlette_does(root_path: str) -> None:
+    """A trailing slash in `root_path` doubles the slash on the joined path. Starlette routes
+    `/ocs//manage` under `/ocs/` to `/manage`; the read-only policy must see the same path."""
+    from open_climate_service.shared.urls import route_path, self_url
+
+    request = _fake_request("http://host/", root_path + "/manage", root_path=root_path)
+    assert route_path(request) == "/manage"
+    assert self_url(request) == "http://host/ocs/manage"
 
 
 def test_the_mount_prefix_falls_back_to_the_base_url_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -355,6 +409,7 @@ def test_stripping_a_prefix_respects_segment_boundaries() -> None:
     assert strip_mount("/ocs/stac", "/ocs") == "/stac"
     assert strip_mount("/ocs", "/ocs") == "/"
     assert strip_mount("/stac", "") == "/stac"
+    assert strip_mount("/ocs//stac", "/ocs/") == "/stac", "a trailing-slash prefix consumes the doubled slash"
 
 
 def test_the_self_link_does_not_double_a_configured_path_under_an_embedding_mount(
@@ -401,6 +456,28 @@ def test_every_link_of_one_document_agrees_under_an_embedding_mount(
         assert link["href"].startswith("http://testserver/ocs/"), link
 
 
+def test_a_host_named_like_the_prefix_does_not_lose_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deciding whether `base_url` already carries the prefix by `endswith` compared a URL
+    against a path: `http://ocs` ends with `/ocs`, so a compose service named after its mount
+    served `self` as `http://ocs/stac`."""
+    from open_climate_service.shared.urls import self_url
+
+    monkeypatch.delenv(BASE_URL_ENV, raising=False)
+    request = _fake_request("http://ocs/", "/ocs/stac", root_path="/ocs", app_root_path="")
+    assert self_url(request) == "http://ocs/ocs/stac"
+
+
+def test_a_mount_inside_a_root_path_carries_both_prefixes_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--root-path /api` with `Mount("/ocs", app)` inside it: Starlette composes the child
+    `root_path` as `/api/ocs` while `base_url` stops at the outer `/api`. Appending the whole
+    child prefix to that gave `/api/api/ocs`."""
+    from open_climate_service.shared.urls import self_url
+
+    monkeypatch.delenv(BASE_URL_ENV, raising=False)
+    request = _fake_request("http://host/", "/api/ocs/stac", root_path="/api/ocs", app_root_path="/api")
+    assert self_url(request) == "http://host/api/ocs/stac"
+
+
 # -- unusable configuration ------------------------------------------------------------------
 
 
@@ -425,7 +502,8 @@ def test_a_base_url_without_a_scheme_and_host_falls_back_to_the_request(
     assert absolute_base(_fake_request("http://localhost:9000/", "/stac")) == "http://localhost:9000"
 
 
-def test_a_base_url_is_parsed_rather_than_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("configured", ["https://host/ocs?x=1", "https://host/ocs#frag", "https://host/ocs/#"])
+def test_a_base_url_is_parsed_rather_than_trimmed(monkeypatch: pytest.MonkeyPatch, configured: str) -> None:
     """A query string or fragment otherwise lands in the middle of every absolute URL.
 
     `https://host/ocs?x=1` gives `https://host/ocs?x=1/stac` while in-page links stay correct,
@@ -433,11 +511,10 @@ def test_a_base_url_is_parsed_rather_than_trimmed(monkeypatch: pytest.MonkeyPatc
     """
     from open_climate_service.shared.urls import absolute_url, mount_prefix
 
-    for configured in ("https://host/ocs?x=1", "https://host/ocs#frag", "https://host/ocs/#"):
-        monkeypatch.setenv(BASE_URL_ENV, configured)
-        request = _fake_request("http://internal:9000/", "/stac")
-        assert absolute_url(request, "/stac") == "https://host/ocs/stac", configured
-        assert mount_prefix(request) == "/ocs", configured
+    monkeypatch.setenv(BASE_URL_ENV, configured)
+    request = _fake_request("http://internal:9000/", "/stac")
+    assert absolute_url(request, "/stac") == "https://host/ocs/stac"
+    assert mount_prefix(request) == "/ocs"
 
 
 def test_an_unusable_base_url_is_logged_once(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

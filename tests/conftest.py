@@ -1,8 +1,9 @@
 import os
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from open_climate_service import config as api_config
 from open_climate_service.main import app
@@ -52,8 +53,34 @@ def _unset_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     from. Tests that need a configured origin set it themselves.
     """
     monkeypatch.delenv("CLIMATE_SERVICE_BASE_URL", raising=False)
+    monkeypatch.delenv("ROOT_PATH", raising=False)
 
 
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(app)
+
+
+MountedClientFactory = Callable[..., TestClient]
+
+
+@pytest.fixture
+def mounted_client_factory() -> MountedClientFactory:
+    """Build a client that reaches the app the way uvicorn does under `--root-path`.
+
+    Uvicorn sets `scope["root_path"]` *and* prepends it to `scope["path"]`, so `/manage` under
+    `/ocs` arrives as `/ocs/manage`. `TestClient(root_path=...)` only sets the former, which
+    makes any prefix-stripping code a no-op under test and lets a test pass with the strip
+    removed. The prefix is passed verbatim, so a trailing slash reaches the app as it would in
+    production.
+    """
+
+    def make(root_path: str = "/ocs", target: ASGIApp = app) -> TestClient:
+        async def uvicorn_shaped(scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] == "http":
+                scope = {**scope, "root_path": root_path, "path": root_path + scope["path"]}
+            await target(scope, receive, send)
+
+        return TestClient(uvicorn_shaped)
+
+    return make

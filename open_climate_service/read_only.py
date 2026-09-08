@@ -31,7 +31,7 @@ from fastapi import Request
 from starlette.responses import JSONResponse, Response
 
 from open_climate_service import config as api_config
-from open_climate_service.shared.urls import asgi_prefix, strip_mount
+from open_climate_service.shared.urls import route_path
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -80,19 +80,16 @@ async def read_only_middleware(
 ) -> Response:
     """Refuse state-changing and admin requests when the instance is configured read-only.
 
-    The ASGI prefix is removed before the policy sees the path, because `is_blocked` matches
-    route paths as the app declares them. Left on, `/ocs/manage` under `--root-path /ocs`
-    matches no closed prefix and read-only mode **fails open**, serving the admin console and
-    the job listing while `POST /ocs/result` is still refused by the method check — a partial
-    failure that looks like a working configuration.
-
-    `asgi_prefix`, never `mount_prefix`: the latter falls back to the path of
-    `CLIMATE_SERVICE_BASE_URL`, a statement about the public origin rather than the incoming
-    path. A base URL of `https://host/jobs` would strip `/jobs` off the real route and serve the
-    job listing with a 200.
+    The policy is matched against the route path, with the ASGI prefix removed, because
+    `is_blocked` matches route paths as the app declares them. Matched against the raw request
+    path, `/ocs/manage` under `ROOT_PATH=/ocs` hits no closed prefix and read-only mode fails
+    open. `route_path` never consults `CLIMATE_SERVICE_BASE_URL`, whose path is a public-origin
+    statement rather than an incoming prefix.
     """
-    path = strip_mount(request.url.path, asgi_prefix(request))
-    if api_config.is_read_only() and is_blocked(request.method, path):
+    if not api_config.is_read_only():
+        return await call_next(request)
+    path = route_path(request)
+    if is_blocked(request.method, path):
         message = _MESSAGE.format(method=request.method, path=path)
         return JSONResponse(
             status_code=403,
