@@ -31,7 +31,7 @@ from fastapi import Request
 from starlette.responses import JSONResponse, Response
 
 from open_climate_service import config as api_config
-from open_climate_service.shared.urls import mount_prefix, strip_mount
+from open_climate_service.shared.urls import asgi_prefix, strip_mount
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -80,13 +80,18 @@ async def read_only_middleware(
 ) -> Response:
     """Refuse state-changing and admin requests when the instance is configured read-only.
 
-    The mount prefix is removed before the policy sees the path. `is_blocked` matches against
+    The ASGI prefix is removed before the policy sees the path. `is_blocked` matches against
     route paths as the app declares them, so under `--root-path /ocs` an unstripped
     `/ocs/manage` matched no closed prefix and read-only mode **failed open** — the admin
     console and the job listing were served, while `POST /ocs/result` was still refused because
     that rule falls through to the method check.
+
+    `asgi_prefix`, never `mount_prefix`: the latter falls back to the path of
+    `CLIMATE_SERVICE_BASE_URL`, which is a statement about the public origin rather than about
+    the incoming path. With a base URL of `https://host/jobs` that fallback stripped `/jobs`
+    from the real route and served the job listing with a 200.
     """
-    path = strip_mount(request.url.path, mount_prefix(request))
+    path = strip_mount(request.url.path, asgi_prefix(request))
     if api_config.is_read_only() and is_blocked(request.method, path):
         message = _MESSAGE.format(method=request.method, path=path)
         return JSONResponse(

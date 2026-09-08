@@ -301,3 +301,22 @@ def test_read_only_still_refuses_the_console_under_a_mount_prefix(monkeypatch: p
     assert mounted.get("/manage").status_code == 403
     assert mounted.get("/jobs").status_code == 403
     assert mounted.get("/stac").status_code == 200
+
+
+def test_a_configured_base_url_path_cannot_bypass_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The policy must read the ASGI path, not the configured public URL.
+
+    `mount_prefix` falls back to the path of `CLIMATE_SERVICE_BASE_URL` so that in-page links
+    carry the prefix when no server sets `root_path`. Applying that fallback to the *incoming*
+    path let a base URL of `https://public.example/jobs` strip `/jobs` off the real route:
+    `GET /jobs` matched no closed prefix and returned the shared job listing with a 200.
+    """
+    from open_climate_service import config as api_config
+    from open_climate_service.main import app
+
+    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "https://public.example/jobs")
+    monkeypatch.setattr(api_config, "is_read_only", lambda: True)
+    client = TestClient(app)
+
+    assert client.get("/jobs").status_code == 403
+    assert client.get("/manage").status_code == 403

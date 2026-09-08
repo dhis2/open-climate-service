@@ -352,3 +352,40 @@ def test_stripping_a_prefix_respects_segment_boundaries() -> None:
     assert strip_mount("/ocs/stac", "/ocs") == "/stac"
     assert strip_mount("/ocs", "/ocs") == "/"
     assert strip_mount("/stac", "") == "/stac"
+
+
+def test_the_self_link_does_not_double_a_configured_path_under_an_embedding_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two origins account for different amounts of the prefix, so the strip differs.
+
+    A configured `CLIMATE_SERVICE_BASE_URL` *is* the service root, path included, so the whole
+    ASGI prefix comes off. `request.base_url` is built from `app_root_path` and already carries
+    exactly that much. `Mount("/ocs", app)` sets `root_path` while leaving `base_url` at the
+    outer root, so stripping the `base_url` amount there left the prefix on the path and the
+    configured path supplied it a second time: `https://public.example/ocs/ocs/stac`.
+    """
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    from open_climate_service.main import app as inner
+
+    monkeypatch.setenv(BASE_URL_ENV, "https://public.example/ocs")
+    outer = Starlette(routes=[Mount("/ocs", app=inner)])
+    payload = TestClient(outer).get("/ocs/stac").json()
+    self_href = next(link["href"] for link in payload["links"] if link["rel"] == "self")
+    assert self_href == "https://public.example/ocs/stac"
+
+
+def test_the_asgi_prefix_ignores_the_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`asgi_prefix` describes the incoming path; `mount_prefix` describes outgoing links.
+
+    Swapping them is what let a base URL of `https://host/jobs` strip `/jobs` off a real route.
+    """
+    from open_climate_service.shared.urls import asgi_prefix, mount_prefix
+
+    monkeypatch.setenv(BASE_URL_ENV, "https://host/jobs")
+    request = _fake_request("https://host/", "/jobs")
+
+    assert asgi_prefix(request) == ""
+    assert mount_prefix(request) == "/jobs"

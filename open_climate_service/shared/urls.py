@@ -74,6 +74,19 @@ def mount_prefix(request: Request) -> str:
     return urllib.parse.urlsplit(configured).path.rstrip("/")
 
 
+def asgi_prefix(request: Request) -> str:
+    """The prefix the routing layer has put on `request.url.path`, or `""`.
+
+    Distinct from `mount_prefix`, and the two must not be swapped. This one describes the
+    *incoming* path, so it is what to remove before matching a path against a route. It never
+    consults `CLIMATE_SERVICE_BASE_URL`: that variable states a public origin, and its path
+    component is not necessarily an ASGI mount. Using it here let a base URL of
+    `https://host/jobs` strip `/jobs` off the real route and turn read-only mode's `GET /jobs`
+    into a 200.
+    """
+    return str(request.scope.get("root_path", "")).rstrip("/")
+
+
 def strip_mount(path: str, prefix: str) -> str:
     """`path` with `prefix` removed, only when it ends on a path-segment boundary.
 
@@ -109,10 +122,19 @@ def self_url(request: Request) -> str:
     a test that wants this behaviour has to build the scope by hand and unset the configured
     origin, or it will pass whether or not the strip is here.
     """
-    # `app_root_path` rather than `root_path`: `request.base_url` is built from the former, so
-    # the strip has to match it or the two disagree. Under `outer.mount("/ocs", create_app())`
-    # Starlette sets `root_path` on the inner app while `base_url` keeps the outer prefix, and
-    # stripping `root_path` there removed a prefix `base_url` had never added.
+    # How much to strip depends on which origin the path is about to be appended to, because the
+    # two origins already account for different amounts of the prefix.
+    #
+    # A configured `CLIMATE_SERVICE_BASE_URL` *is* the service root, path included, so the whole
+    # ASGI prefix comes off. `request.base_url`, by contrast, is built from `app_root_path` and
+    # so already carries exactly that much — removing more would delete a prefix it never added.
+    #
+    # The distinction is invisible in most shapes and load-bearing in two: an embedding
+    # `Mount("/ocs", app)` sets `root_path` while leaving `base_url` at the outer root, and
+    # uvicorn's `--root-path` puts the prefix on both the path and `base_url`.
     scope = request.scope
-    prefix = str(scope.get("app_root_path", scope.get("root_path", "")))
+    if os.getenv(BASE_URL_ENV, "").strip().rstrip("/"):
+        prefix = str(scope.get("root_path", ""))
+    else:
+        prefix = str(scope.get("app_root_path", scope.get("root_path", "")))
     return absolute_url(request, strip_mount(request.url.path, prefix))
