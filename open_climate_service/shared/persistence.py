@@ -27,7 +27,9 @@ def atomic_json(path: Path, value: Any) -> None:
     """Flush contents and directory entries before returning to the caller."""
     temporary: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".index-", mode="w", delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=".index-", mode="w", encoding="utf-8", delete=False
+        ) as handle:
             temporary = handle.name
             json.dump(value, handle, allow_nan=False)
             handle.flush()
