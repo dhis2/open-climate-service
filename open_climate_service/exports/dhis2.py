@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING
 
 from open_climate_service import config
 from open_climate_service.exports.dhis2_config import Dhis2ConnectionConfig, parse_connections
+from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
 if TYPE_CHECKING:
     from dhis2_client import DHIS2Client
 
-__all__ = ["Dhis2ConnectionConfig", "get_connection", "get_connection_config"]
+__all__ = ["Dhis2ConnectionConfig", "Dhis2ExportPlugin", "get_connection", "get_connection_config"]
 
 
 def get_connection_config(connection_id: str) -> Dhis2ConnectionConfig:

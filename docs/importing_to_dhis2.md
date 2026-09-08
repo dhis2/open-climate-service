@@ -81,6 +81,10 @@ operator command or future HTTP route remains responsible for those controls.
 
 ## 1. Fetch organisation units from DHIS2
 
+For reusable destination mappings and pure rendering through `save_result`, see
+[Export plugins and named mappings](export_plugins.md). The client-driven workflow
+below remains supported.
+
 Pull the org unit boundaries as GeoJSON. Each feature's `id` is the org unit UID, which the workflow uses as the `orgUnit`.
 
 ```python

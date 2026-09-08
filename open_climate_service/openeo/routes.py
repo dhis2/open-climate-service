@@ -68,7 +68,7 @@ def credentials_oidc() -> dict[str, Any]:
 @capabilities_router.get("/file_formats")
 def file_formats() -> dict[str, Any]:
     """Return supported input and output file formats."""
-    output_formats = {
+    output_formats: dict[str, Any] = {
         "ZARR": {
             "title": "Zarr",
             "description": "Zarr v3 chunked array store — cloud-native format for multi-dimensional data",
@@ -148,6 +148,21 @@ def file_formats() -> dict[str, Any]:
             "links": [],
         },
     }
+    from open_climate_service.exports.registry import load_export_plugins
+
+    for plugin in load_export_plugins().values():
+        if plugin.format not in output_formats:
+            output_formats[plugin.format] = {
+                "title": plugin.format,
+                "description": "Pure export renderer; requires a configured export ID in save_result options.",
+                "gis_data_types": ["table"],
+                "parameters": {},
+                "links": [],
+            }
+        output_formats[plugin.format]["parameters"]["export"] = {
+            "type": "string",
+            "description": "Named export mapping; use this option without per-request mapping overrides.",
+        }
     return {
         "input": {},
         "output": output_formats,
@@ -339,6 +354,11 @@ def download_result_file(job_id: str, filename: str) -> FileResponse:
 
     suffix = path.suffix.lower()
     media_type = _RESULT_MEDIA_TYPES.get(suffix, "application/octet-stream")
+    from open_climate_service.exports.service import read_export_metadata
+
+    metadata = read_export_metadata(path)
+    if metadata is not None:
+        media_type = metadata["media_type"]
     return FileResponse(str(path), media_type=media_type, filename=filename)
 
 
@@ -412,6 +432,15 @@ def execute_synchronous(
         fmt = result.format
         options = result.options
         result = result.data
+
+    if "export" in options:
+        from open_climate_service.exports.service import render_named_export
+
+        try:
+            plugin, rendered = render_named_export(result, fmt, options)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(content=rendered.content, media_type=plugin.media_type)
 
     if isinstance(result, xr.DataArray):
         result = result.to_dataset(name=result.name or "result")
