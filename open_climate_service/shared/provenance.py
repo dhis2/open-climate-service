@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from os import PathLike
+from pathlib import Path
 from typing import Any
 
 
@@ -24,6 +25,7 @@ class ExecutionEvidence:
     """Observed inputs; this is not per-output lineage or an aggregation proof."""
 
     process_sha256: str | None
+    require_feature_ids: bool = False
     sources: list[dict[str, Any]] = field(default_factory=list)
     features: list[dict[str, Any]] = field(default_factory=list)
     snapshots: dict[str, str] = field(default_factory=dict, repr=False)
@@ -57,7 +59,7 @@ def capture_execution(process: dict[str, Any]) -> Iterator[ExecutionEvidence]:
         digest = json_digest(process)
     except (ValueError, TypeError):
         digest = None
-    evidence = ExecutionEvidence(digest)
+    evidence = ExecutionEvidence(digest, require_feature_ids=_has_named_dhis2_export(process))
     token = _current.set(evidence)
     try:
         yield evidence
@@ -69,7 +71,7 @@ def record_snapshot(path: str, snapshot_id: str) -> None:
     """Record the snapshot belonging to the actual opened readonly session."""
     evidence = _current.get()
     if evidence is not None:
-        evidence.snapshots[path] = snapshot_id
+        evidence.snapshots[str(Path(path).resolve())] = snapshot_id
 
 
 def record_source(collection_id: str, artifact: Any) -> None:
@@ -85,7 +87,7 @@ def record_source(collection_id: str, artifact: Any) -> None:
     paths = getattr(artifact, "asset_paths", [])
     if raw_path is None and isinstance(paths, list) and paths:
         raw_path = paths[0]
-    path = str(raw_path) if isinstance(raw_path, (str, PathLike)) else None
+    path = str(Path(raw_path).resolve()) if isinstance(raw_path, (str, PathLike)) else None
     observation["snapshot_id"] = evidence.snapshots.pop(path, None) if path is not None else None
     evidence.sources.append(observation)
 
@@ -95,6 +97,10 @@ def record_features(geometries: Any) -> None:
     evidence = _current.get()
     if evidence is None:
         return
+    if evidence.require_feature_ids:
+        from open_climate_service.shared.features import validate_feature_ids
+
+        validate_feature_ids(geometries)
     if not isinstance(geometries, dict) or geometries.get("type") not in {"Feature", "FeatureCollection"}:
         evidence.features.append({"input_sha256": None, "ids_valid": False, "reason": "no_feature_ids"})
         return
@@ -112,3 +118,20 @@ def record_features(geometries: Any) -> None:
     except (TypeError, ValueError):
         digest = None
     evidence.features.append({"input_sha256": digest, "feature_count": len(features), "ids_valid": valid})
+
+
+def _has_named_dhis2_export(value: Any) -> bool:
+    if isinstance(value, dict):
+        arguments = value.get("arguments", {})
+        if value.get("process_id") == "save_result" and isinstance(arguments, dict):
+            options = arguments.get("options", {})
+            if (
+                str(arguments.get("format", "")).upper() == "DHIS2JSON"
+                and isinstance(options, dict)
+                and "export" in options
+            ):
+                return True
+        return any(_has_named_dhis2_export(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_has_named_dhis2_export(child) for child in value)
+    return False

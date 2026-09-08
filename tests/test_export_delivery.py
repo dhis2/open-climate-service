@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from open_climate_service import config
 from open_climate_service.exports import ExportReport
 from open_climate_service.exports.delivery import deliver_named_export, submit_delivery
+from open_climate_service.exports.delivery_input import lease_export_input
 from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin, build_dhis2_report
 from open_climate_service.exports.report import ExportOutcome
 from open_climate_service.exports.service import write_named_export
@@ -24,6 +25,7 @@ from open_climate_service.jobs import store as native_store
 from open_climate_service.jobs.models import JobRecord, JobStatus
 from open_climate_service.openeo import jobs as openeo_jobs
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_climate_service.shared.provenance import json_digest
 from open_climate_service.shared.time import utc_now
 
 
@@ -127,7 +129,9 @@ def test_build_dhis2_report_outcomes() -> None:
 
 
 def test_deliver_named_export_calls_plugin_send(saved: Path, fake_send: list[dict[str, Any]]) -> None:
-    report = deliver_named_export("rain", "source", dry_run=True)
+    with lease_export_input("rain", "source") as verified:
+        digest = json_digest(verified.manifest.model_dump(mode="json"))
+    report = deliver_named_export("rain", "source", dry_run=True, expected_manifest_sha256=digest)
     assert report["outcome"] == ExportOutcome.DRY_RUN
     assert len(fake_send) == 1
     assert fake_send[0]["target"] == "hmis"
@@ -139,29 +143,34 @@ def test_submit_delivery_deduplicates_by_idempotency_key(saved: Path, monkeypatc
     submitted: list[dict[str, Any]] = []
 
     class FakeService:
-        def submit_callable_job(self, *, func: Any, label: str, request: dict[str, Any], **_: Any) -> JobRecord:
+        def submit_callable_job(
+            self: Any, *, func: Any, label: str, request: dict[str, Any], job_id: str, **_: Any
+        ) -> JobRecord:
             submitted.append({"func": func, "label": label, "request": request})
-            job_id = f"delivery-{len(submitted)}"
-            return JobRecord(
+            record = JobRecord(
                 job_id=job_id, process_id=label, status=JobStatus.ACCEPTED, created_at=utc_now(), request=request
             )
+            return native_store.create_job_record(record)
 
     monkeypatch.setattr(job_service_module, "get_job_service", lambda: FakeService())
 
     first, reused = submit_delivery("rain", "source", dry_run=False, idempotency_key="key-1")
-    assert (first, reused) == ("delivery-1", False)
+    assert not reused
     second, reused = submit_delivery("rain", "source", dry_run=False, idempotency_key="key-1")
-    assert (second, reused) == ("delivery-1", True)
+    assert (second, reused) == (first, True)
     assert len(submitted) == 1
     assert submitted[0]["label"] == "export:rain"
-    assert submitted[0]["request"] == {"export_id": "rain", "job_id": "source", "dry_run": False}
+    assert submitted[0]["request"]["export_id"] == "rain"
+    assert submitted[0]["request"]["job_id"] == "source"
+    assert submitted[0]["request"]["dry_run"] is False
+    assert submitted[0]["request"]["expected_manifest_sha256"]
 
 
 def test_submit_delivery_conflicts_on_reused_key_with_different_content(
     saved: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeService:
-        def submit_callable_job(self, **kwargs: Any) -> JobRecord:
+        def submit_callable_job(self: Any, **kwargs: Any) -> JobRecord:
             return JobRecord(
                 job_id="delivery-1", process_id="export:rain", status=JobStatus.ACCEPTED, created_at=utc_now()
             )
@@ -243,3 +252,106 @@ def _await_terminal(service: Any, job_id: str, timeout: float = 5.0) -> JobRecor
             return record
         time.sleep(0.05)
     pytest.fail(f"Delivery job '{job_id}' did not finish within {timeout}s")
+
+
+@pytest.mark.parametrize(
+    "status_code,summary,outcome",
+    [
+        (400, {"status": "ERROR"}, ExportOutcome.REJECTED),
+        (200, {"status": "ERROR"}, ExportOutcome.REJECTED),
+        (200, {"status": "WARNING", "conflicts": [{"object": "bad"}]}, ExportOutcome.PARTIAL),
+        (200, {}, ExportOutcome.UNKNOWN),
+    ],
+)
+def test_dry_run_preserves_rejection_and_uncertainty(status_code: int, summary: dict[str, Any], outcome: ExportOutcome):
+    report = build_dhis2_report(
+        status_code,
+        summary,
+        plugin_id="dhis2",
+        connection_id="hmis",
+        dry_run=True,
+        payload_sha256="a" * 64,
+        submitted=1,
+        created_at=utc_now().isoformat(),
+    )
+    assert report.outcome == outcome
+    assert report.dry_run
+
+
+def test_concurrent_submissions_reserve_before_enqueue(
+    saved: Path, fake_send: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from open_climate_service.exports.reservations import find_delivery
+
+    service = job_service_module.get_job_service()
+    original = service.submit_callable_job
+
+    def submit(**kwargs: Any):
+        reservation = find_delivery("concurrent")
+        assert reservation is not None
+        assert reservation["delivery_job_id"] == kwargs["job_id"]
+        return original(**kwargs)
+
+    monkeypatch.setattr(service, "submit_callable_job", submit)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: submit_delivery("rain", "source", False, "concurrent"), range(4)))
+    assert len({job_id for job_id, _ in results}) == 1
+    assert sum(not reused for _, reused in results) == 1
+    _await_terminal(service, results[0][0])
+    assert len(fake_send) == 1
+
+
+def test_retry_repairs_reservation_after_enqueue_failure(
+    saved: Path, fake_send: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+):
+    from open_climate_service.exports.reservations import find_delivery
+
+    service = job_service_module.get_job_service()
+    original = service.submit_callable_job
+
+    def fail(**kwargs: Any):
+        raise RuntimeError("simulated crash before job creation")
+
+    monkeypatch.setattr(service, "submit_callable_job", fail)
+    with pytest.raises(RuntimeError):
+        submit_delivery("rain", "source", False, "recover")
+    reservation = find_delivery("recover")
+    assert reservation
+    monkeypatch.setattr(service, "submit_callable_job", original)
+    job_id, reused = submit_delivery("rain", "source", False, "recover")
+    assert job_id == reservation["delivery_job_id"]
+    assert reused
+    _await_terminal(service, job_id)
+    assert len(fake_send) == 1
+
+
+def test_queued_delivery_rejects_replaced_source(saved: Path, fake_send: list[dict[str, Any]]):
+    from concurrent.futures import Future
+
+    class PausedExecutor:
+        kind = "test"
+
+        def submit(self: Any, *args: Any, **kwargs: Any):
+            return Future()
+
+        def shutdown(self: Any):
+            pass
+
+    service = job_service_module.JobService(executor=PausedExecutor())
+    job_service_module._job_service = service
+    job_id, _ = submit_delivery("rain", "source", False, "frozen")
+    path = write_named_export(_data(), saved.parent, "DHIS2JSON", {"export": "rain"}, job_id="source")
+    openeo_jobs.store_update_job("source", lambda r: r.model_copy(update={"usage": {"output_path": path}}))
+    with pytest.raises(HTTPException, match="different delivery content"):
+        submit_delivery("rain", "source", False, "frozen")
+    service._execute_job(job_id)
+    assert service.get_job_or_404(job_id).status == JobStatus.FAILED
+    assert fake_send == []
+
+
+def test_delivery_report_requires_matching_export(saved: Path, fake_send: list[dict[str, Any]], client: TestClient):
+    job_id, _ = submit_delivery("rain", "source", False, "report-binding")
+    _await_terminal(job_service_module.get_job_service(), job_id)
+    assert client.get(f"/exports/other/jobs/{job_id}").status_code == 404

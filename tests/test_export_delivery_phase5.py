@@ -15,31 +15,31 @@ from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
+    def __init__(self: Any, status_code: int, payload: dict[str, Any]) -> None:
         self.status_code = status_code
         self._payload = payload
 
-    def json(self) -> dict[str, Any]:
+    def json(self: Any) -> dict[str, Any]:
         return self._payload
 
 
 class FakeClient:
-    def __init__(self) -> None:
+    def __init__(self: Any) -> None:
         self.posts: list[dict[str, Any]] = []
         self.gets: list[str] = []
         self.post_handler: Any = None
         self.get_handler: Any = None
 
-    def close(self) -> None:
+    def close(self: Any) -> None:
         pass
 
-    def post(self, path: str, json: Any = None, params: Any = None) -> FakeResponse:
+    def post(self: Any, path: str, json: Any = None, params: Any = None) -> FakeResponse:
         self.posts.append({"path": path, "json": json, "params": params})
         if self.post_handler is None:
             raise AssertionError("Unexpected POST")
         return self.post_handler(path, json, params)
 
-    def get(self, path: str) -> FakeResponse:
+    def get(self: Any, path: str) -> FakeResponse:
         self.gets.append(path)
         if self.get_handler is None:
             raise AssertionError("Unexpected GET")
@@ -47,21 +47,21 @@ class FakeClient:
 
 
 class FakeContext:
-    def __init__(self) -> None:
+    def __init__(self: Any) -> None:
         self.checkpoints: dict[str, Any] = {}
         self.progress: list[tuple[Any, Any, Any]] = []
         self.cancelled = False
 
-    def report_progress(self, done: Any = None, total: Any = None, message: Any = None) -> None:
+    def report_progress(self: Any, done: Any = None, total: Any = None, message: Any = None) -> None:
         self.progress.append((done, total, message))
 
-    def is_cancel_requested(self) -> bool:
+    def is_cancel_requested(self: Any) -> bool:
         return self.cancelled
 
-    def save_checkpoint(self, key: str, state: dict[str, Any]) -> None:
+    def save_checkpoint(self: Any, key: str, state: dict[str, Any]) -> None:
         self.checkpoints[key] = state
 
-    def load_checkpoint(self, key: str) -> dict[str, Any] | None:
+    def load_checkpoint(self: Any, key: str) -> dict[str, Any] | None:
         return self.checkpoints.get(key)
 
 
@@ -251,7 +251,7 @@ def test_send_stops_when_cancellation_requested(monkeypatch: pytest.MonkeyPatch)
 
     assert report.outcome == ExportOutcome.CANCELLED
     assert len(client.posts) == 1
-    assert report.submitted == 5
+    assert report.submitted == 2
     assert report.imported == 2
 
 
@@ -435,3 +435,140 @@ def test_third_party_delivery_plugin_uses_only_public_apis(monkeypatch: pytest.M
     again = plugin.send(rendered.content, "some-target", context=context)
     assert again.outcome == ExportOutcome.SUCCESS
     assert again.imported == 11
+
+
+def test_restart_after_remote_acceptance_does_not_resend(monkeypatch: pytest.MonkeyPatch):
+    from open_climate_service.exports import dhis2
+
+    plugin = _plugin(poll_backoff_base=0)
+    client = FakeClient()
+    context = FakeContext()
+    payload = _payload(_values(1))
+    monkeypatch.setattr(dhis2, "get_connection", lambda _: client)
+
+    def crash_after_acceptance(path: Any, json: Any, params: Any):
+        raise SystemExit("process died after the remote write")
+
+    client.post_handler = crash_after_acceptance
+    with pytest.raises(SystemExit):
+        plugin.send(payload, "hmis", context=context)
+    client.post_handler = lambda *args: pytest.fail("Uncertain chunk must not be resent")
+    report = plugin.send(payload, "hmis", context=context)
+    assert report.outcome == ExportOutcome.UNKNOWN
+    assert len(client.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"status": "completed", "report": {}},
+        {"status": "unrecognized"},
+        {"status": "completed", "digest": "changed", "report": {}},
+    ],
+)
+def test_corrupt_checkpoint_refuses_resubmission(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]):
+    from open_climate_service.exports import dhis2
+
+    values = _values(1)
+    client = FakeClient()
+    context = FakeContext()
+    context.checkpoints["chunk:0"] = {"digest": _chunk_digest(values), **state}
+    monkeypatch.setattr(dhis2, "get_connection", lambda _: client)
+    with pytest.raises(ValueError):
+        _plugin().send(_payload(values), "hmis", context=context)
+    assert client.posts == []
+
+
+def test_nested_async_task_is_checkpointed_and_polled_on_restart(monkeypatch: pytest.MonkeyPatch):
+    from open_climate_service.exports import dhis2
+
+    plugin = _plugin(max_poll_attempts=1, poll_backoff_base=0)
+    client = FakeClient()
+    client.post_handler = lambda *args, **kwargs: {
+        "httpStatusCode": 200,
+        "status": "OK",
+        "response": {"jobType": "DATAVALUE_IMPORT", "id": "task1"},
+    }
+    client.get_handler = lambda _: {}
+    context = FakeContext()
+    monkeypatch.setattr(dhis2, "get_connection", lambda _: client)
+    payload = _payload(_values(1))
+    first = plugin.send(payload, "hmis", context=context)
+    assert first.outcome == ExportOutcome.UNKNOWN
+    assert context.checkpoints["chunk:0"]["remote_task_ids"] == ["task1"]
+    client.get_handler = lambda _: {"status": "SUCCESS", "importCount": {"imported": 1}}
+    second = plugin.send(payload, "hmis", context=context)
+    assert second.outcome == ExportOutcome.SUCCESS
+    assert len(client.posts) == 1
+    assert client.gets == ["/api/system/taskSummaries/DATAVALUE_IMPORT/task1"] * 2
+
+
+@pytest.mark.parametrize("status_code,outcome", [(200, ExportOutcome.SUCCESS), (409, ExportOutcome.REJECTED)])
+def test_pinned_client_response_contract(monkeypatch: pytest.MonkeyPatch, status_code: int, outcome: ExportOutcome):
+    import httpx
+
+    from open_climate_service import config
+
+    pytest.importorskip("dhis2_client")
+    monkeypatch.setattr(
+        config,
+        "_cache",
+        {
+            "dhis2_connections": [
+                {"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "REVIEW_TEST_TOKEN"},
+            ]
+        },
+    )
+    monkeypatch.setenv("REVIEW_TEST_TOKEN", "test-token")
+    requests = []
+
+    def handler(request: httpx.Request):
+        requests.append(request)
+        assert request.url.path == "/dhis/api/dataValueSets"
+        return httpx.Response(
+            status_code,
+            json={
+                "response": {"status": "SUCCESS" if status_code == 200 else "ERROR", "importCount": {"imported": 1}},
+            },
+        )
+
+    original = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(handler)))
+    report = _plugin().send(_payload(_values(1)), "hmis")
+    assert report.outcome == outcome
+    assert len(requests) == 1
+
+
+def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from open_climate_service import config
+    from open_climate_service.exports.delivery import deliver_named_export
+    from open_climate_service.exports.delivery_input import lease_export_input
+    from open_climate_service.exports.service import write_named_export
+    from open_climate_service.openeo import jobs
+    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_climate_service.shared.provenance import json_digest
+    from open_climate_service.shared.time import utc_now
+
+    _install_delivery_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(jobs, "_JOBS_DIR", tmp_path / "jobs")
+    monkeypatch.setattr(config, "get_data_root", lambda: tmp_path)
+    config.get_config()["exports"] = [{"id": "chunky", "plugin": "chunky", "connection": "hmis"}]
+    config.get_config()["dhis2_connections"] = [
+        {"id": "hmis", "url": "https://example.org", "token_env": "UNSET_TEST_TOKEN"},
+    ]
+    directory = tmp_path / "jobs" / "source" / "results"
+    directory.mkdir(parents=True)
+    path = write_named_export("hello", directory, "CHUNKY", {"export": "chunky"}, job_id="source")
+    jobs.store_create_job(
+        OpenEOJobRecord(
+            id="source",
+            status=OpenEOJobStatus.FINISHED,
+            created=utc_now(),
+            usage={"output_path": path},
+        )
+    )
+    with lease_export_input("chunky", "source") as verified:
+        digest = json_digest(verified.manifest.model_dump(mode="json"))
+    report = deliver_named_export("chunky", "source", expected_manifest_sha256=digest)
+    assert report["outcome"] == "success"
+    assert report["imported"] == 5

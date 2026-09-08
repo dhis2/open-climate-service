@@ -1,42 +1,35 @@
-"""Idempotency reservations for delivery submissions.
-
-Slice-4 persistence: a JSON index guarded by an exclusive lock. Crash-safe
-atomic reservation across a send operation is deferred to CLIM-927 (see the
-CLIM-840 approach doc); this store prevents duplicate submission within a
-running process and across processes via ``portalocker``, but a crash between
-enqueue and reservation can still leave a delivery without a reservation entry.
-"""
+"""Durable idempotency reservations, written before a delivery is enqueued."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
-import portalocker
-
 from open_climate_service import config as api_config
+from open_climate_service.shared.persistence import atomic_json, index_lock
 
 
 def _reservations_path() -> Path:
     return api_config.get_data_root() / "exports" / "delivery_reservations.json"
 
 
-def _ensure_store() -> None:
-    path = _reservations_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text("{}\n", encoding="utf-8")
-
-
 def _load() -> dict[str, dict[str, object]]:
-    _ensure_store()
-    with open(_reservations_path(), encoding="utf-8") as handle:
-        portalocker.lock(handle, portalocker.LOCK_SH)
-        try:
-            payload = json.load(handle)
-        finally:
-            portalocker.unlock(handle)
-    return payload if isinstance(payload, dict) else {}
+    path = _reservations_path()
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not all(isinstance(value, dict) for value in payload.values()):
+        raise ValueError("Invalid delivery reservation index")
+    return payload
+
+
+@contextmanager
+def submission_lock() -> Iterator[None]:
+    """Serialize reservation, job creation and enqueue across all API workers."""
+    with index_lock(_reservations_path()):
+        yield
 
 
 def find_delivery(idempotency_key: str) -> dict[str, object] | None:
@@ -54,24 +47,16 @@ def reserve_delivery(
     fingerprint: str,
 ) -> None:
     """Persist one delivery reservation, refusing a duplicate key."""
-    _ensure_store()
-    with open(_reservations_path(), "r+", encoding="utf-8") as handle:
-        portalocker.lock(handle, portalocker.LOCK_EX)
-        try:
-            payload = json.load(handle)
-            records = payload if isinstance(payload, dict) else {}
-            if idempotency_key in records:
-                raise ValueError(f"Delivery reservation '{idempotency_key}' already exists")
-            records[idempotency_key] = {
-                "delivery_job_id": delivery_job_id,
-                "export_id": export_id,
-                "source_job_id": source_job_id,
-                "dry_run": dry_run,
-                "fingerprint": fingerprint,
-            }
-            handle.seek(0)
-            json.dump(records, handle, indent=2)
-            handle.write("\n")
-            handle.truncate()
-        finally:
-            portalocker.unlock(handle)
+    # Caller holds submission_lock through enqueue; a retry can recreate a job
+    # missing after a crash using this already reserved ID.
+    records = _load()
+    if idempotency_key in records:
+        raise ValueError("Delivery reservation already exists")
+    records[idempotency_key] = {
+        "delivery_job_id": delivery_job_id,
+        "export_id": export_id,
+        "source_job_id": source_job_id,
+        "dry_run": dry_run,
+        "fingerprint": fingerprint,
+    }
+    atomic_json(_reservations_path(), records)

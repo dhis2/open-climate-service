@@ -265,10 +265,10 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(execution, "_augment_with_workflows", lambda registry: registry)
 
     class Graph:
-        def __init__(self, graph: Any):
+        def __init__(self: Any, graph: Any):
             pass
 
-        def to_callable(self, registry: Any):
+        def to_callable(self: Any, registry: Any):
             def execute():
                 execution._load_collection_impl("managed-rain")
                 _parse_geometries(
@@ -292,3 +292,36 @@ def test_export_environment_interpolation_rejected_before_caching(monkeypatch: p
     with pytest.raises(ValueError, match="literal"):
         config.get_config()
     assert config._cache is None
+
+
+def test_snapshot_paths_are_normalized(tmp_path: Path):
+    artifact = SimpleNamespace(path=str(tmp_path) + "/./store/", artifact_id="a", source_dataset_id="rain")
+    with capture_execution({}) as evidence:
+        record_snapshot(str(tmp_path / "store"), "snapshot")
+        record_source("rain", artifact)
+    assert evidence.describe()["sources"][0]["snapshot_id"] == "snapshot"
+
+
+@pytest.mark.parametrize("ids", [[None], ["same", "same"]])
+def test_named_dhis2_graph_validates_original_feature_ids(ids: list[str | None]):
+    from open_climate_service.plugins.processes.aggregate_spatial import _parse_geometries
+
+    process = {
+        "process_graph": {
+            "save": {
+                "process_id": "save_result",
+                "arguments": {
+                    "format": "DHIS2JSON",
+                    "options": {"export": "rain"},
+                },
+            }
+        }
+    }
+    features = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "id": value, "geometry": {"type": "Point", "coordinates": [0, 0]}} for value in ids
+        ],
+    }
+    with capture_execution(process), pytest.raises(ValueError, match="Feature .*feature.id"):
+        _parse_geometries(features)

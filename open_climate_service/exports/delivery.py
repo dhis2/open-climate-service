@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 
+from open_climate_service import config
 from open_climate_service.exports.base import DeliveryContext
 from open_climate_service.exports.delivery_input import VerifiedExport, lease_export_input
 from open_climate_service.exports.report import ExportReport
+from open_climate_service.shared.persistence import index_lock
 from open_climate_service.shared.provenance import json_digest
 
 logger = logging.getLogger(__name__)
@@ -56,11 +59,15 @@ class JobDeliveryContext:
         if self._load_cursor is None:
             return None
         cursor = self._load_cursor()
+        if cursor is None:
+            return None
         if not isinstance(cursor, dict):
-            return None
+            raise ValueError("Invalid delivery checkpoint cursor; refusing to resend")
         checkpoints = cursor.get("delivery_checkpoints")
-        if not isinstance(checkpoints, dict):
+        if checkpoints is None:
             return None
+        if not isinstance(checkpoints, dict):
+            raise ValueError("Invalid delivery checkpoints; refusing to resend")
         return checkpoints.get(key)
 
 
@@ -72,6 +79,7 @@ def deliver_named_export(
     is_cancel_requested: Any = None,
     save_cursor: Any = None,
     load_cursor: Any = None,
+    expected_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Send a completed source job's saved payload through its export plugin.
 
@@ -86,7 +94,13 @@ def deliver_named_export(
         save_cursor=save_cursor,
         load_cursor=load_cursor,
     )
-    with lease_export_input(export_id, job_id) as verified:
+    # Serialize imports for this export even when they use different source jobs.
+    with (
+        index_lock(config.get_data_root() / "exports" / "active" / json_digest(export_id)),
+        lease_export_input(export_id, job_id) as verified,
+    ):
+        if expected_manifest_sha256 is None or _manifest_digest(verified) != expected_manifest_sha256:
+            raise ValueError("Source export changed or submission lacks a frozen manifest; submit a new delivery")
         report = _deliver(verified, export_id, dry_run, context)
     if on_progress is not None:
         on_progress(1, 1, "Delivery complete")
@@ -121,37 +135,65 @@ def submit_delivery(
     reused with different content, and 404/409 for invalid source jobs or
     mappings via :func:`lease_export_input`.
     """
-    from open_climate_service.exports.reservations import find_delivery, reserve_delivery
+    from open_climate_service.exports.reservations import find_delivery, reserve_delivery, submission_lock
+    from open_climate_service.jobs import store
     from open_climate_service.jobs.service import get_job_service
 
-    # Verify once under a brief lease to capture the content fingerprint before
-    # enqueuing; the worker re-acquires the lease for the actual send.
-    with lease_export_input(export_id, source_job_id) as verified:
-        connection_id = verified.manifest.target.connection_id if verified.manifest.target else None
-        fingerprint = _fingerprint(export_id, source_job_id, dry_run, verified.manifest.payload_sha256, connection_id)
+    with submission_lock():
+        existing = find_delivery(idempotency_key)
+        if existing is not None:
+            if (existing.get("export_id"), existing.get("source_job_id"), existing.get("dry_run")) != (
+                export_id,
+                source_job_id,
+                dry_run,
+            ):
+                raise HTTPException(status_code=409, detail="Idempotency key reused with different delivery content")
+            # A request retry must work while the worker holds its source lease
+            # or after the source has been deleted. The reserved job is immutable.
+            existing_job = store.get_job_record(str(existing["delivery_job_id"]))
+            if existing_job is not None:
+                from open_climate_service.exports.delivery_input import _verify
+                from open_climate_service.openeo.jobs import store_get_job
 
-    existing = find_delivery(idempotency_key)
-    if existing is not None:
-        if existing.get("fingerprint") == fingerprint:
-            return str(existing["delivery_job_id"]), True
-        raise HTTPException(status_code=409, detail="Idempotency key reused with different delivery content")
+                if store_get_job(source_job_id) is not None:
+                    # Read-only verification needs no exclusive consumer lease:
+                    # this branch returns a job, never sends the bytes it reads.
+                    current_digest = _manifest_digest(_verify(export_id, source_job_id))
+                    if current_digest != existing_job.request.get("expected_manifest_sha256"):
+                        raise HTTPException(
+                            status_code=409, detail="Idempotency key reused with different delivery content"
+                        )
+                return existing_job.job_id, True
 
-    record = get_job_service().submit_callable_job(
-        func=deliver_named_export,
-        label=f"export:{export_id}",
-        request={"export_id": export_id, "job_id": source_job_id, "dry_run": dry_run},
-        job_href_base=f"/exports/{export_id}/jobs",
-    )
-    reserve_delivery(
-        idempotency_key,
-        delivery_job_id=record.job_id,
-        export_id=export_id,
-        source_job_id=source_job_id,
-        dry_run=dry_run,
-        fingerprint=fingerprint,
-    )
-    link_source_job(source_job_id, export_id, record.job_id)
-    return record.job_id, False
+        with lease_export_input(export_id, source_job_id) as verified:
+            digest = _manifest_digest(verified)
+            fingerprint = json_digest({"manifest": digest, "dry_run": dry_run})
+        if existing is not None and existing.get("fingerprint") != fingerprint:
+            raise HTTPException(status_code=409, detail="Idempotency key reused with different delivery content")
+        delivery_id = str(existing["delivery_job_id"]) if existing is not None else str(uuid4())
+        if existing is None:
+            reserve_delivery(
+                idempotency_key,
+                delivery_job_id=delivery_id,
+                export_id=export_id,
+                source_job_id=source_job_id,
+                dry_run=dry_run,
+                fingerprint=fingerprint,
+            )
+        record = get_job_service().submit_callable_job(
+            func=deliver_named_export,
+            label=f"export:{export_id}",
+            request={
+                "export_id": export_id,
+                "job_id": source_job_id,
+                "dry_run": dry_run,
+                "expected_manifest_sha256": digest,
+            },
+            job_href_base=f"/exports/{export_id}/jobs",
+            job_id=delivery_id,
+        )
+        link_source_job(source_job_id, export_id, record.job_id)
+        return record.job_id, existing is not None
 
 
 def link_source_job(source_job_id: str, export_id: str, delivery_job_id: str) -> None:
@@ -183,19 +225,5 @@ def link_source_job(source_job_id: str, export_id: str, delivery_job_id: str) ->
         logger.warning("Could not link delivery '%s' to missing source job '%s'", delivery_job_id, source_job_id)
 
 
-def _fingerprint(
-    export_id: str,
-    source_job_id: str,
-    dry_run: bool,
-    payload_sha256: str,
-    connection_id: str | None,
-) -> str:
-    return json_digest(
-        {
-            "export_id": export_id,
-            "source_job_id": source_job_id,
-            "dry_run": dry_run,
-            "payload_sha256": payload_sha256,
-            "connection_id": connection_id,
-        }
-    )
+def _manifest_digest(verified: VerifiedExport) -> str:
+    return json_digest(verified.manifest.model_dump(mode="json"))

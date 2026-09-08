@@ -102,12 +102,10 @@ def plugin_identity(plugin: BaseExportPlugin) -> PluginIdentity:
 
 
 def target_binding(plugin_id: str, references: dict[str, str]) -> TargetBinding | None:
-    """Resolve only public connection settings, never credentials or a network client."""
+    """Bind a named DHIS2 target for built-in or installed export implementations."""
     connection_id = references.get("connection")
     if connection_id is None:
         return None
-    if plugin_id != "dhis2":
-        raise ValueError("Connection bindings currently support only the DHIS2 plugin")
     from open_climate_service.exports.dhis2 import get_connection_config
 
     parts = urlsplit(get_connection_config(connection_id).url)

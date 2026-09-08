@@ -41,13 +41,18 @@ change its destination or fields; per-request overrides are rejected. Existing
 `DHIS2JSON` calls using `data_element_id`, `org_unit_field`, and `period_type`
 continue to work without a named export.
 
-Each named DHIS2 export currently selects one value series. `select: {}` requires
+Each series mapping selects one value series. `select: {}` requires
 an unambiguous value column. To select a variable from a result with several
 variables, use `select: {variable: precip}`. Additional dimensions such as
-quantile or ensemble member must be selected or reduced upstream. Several datasets
+quantile can be selected with `select: {variable: precip, quantile: 0.1}`;
+other dimensions, such as ensemble member, must be reduced upstream. Several datasets
 can be published through separate single-series exports; no merged cube is required.
 
 The series may also specify `category_option_combo` and `attribute_option_combo`.
+When several series target the same data element, specify each combo consistently
+on every series or omit it on every series. Mixing implicit and explicit defaults
+is rejected because the renderer cannot resolve target metadata without a network
+request. Explicit duplicate destination keys are always rejected.
 All destination and organisation-unit IDs must have DHIS2 UID syntax. Positional
 labels such as `0`, missing IDs, duplicate organisation-unit/period keys, and invalid
 calendar periods are rejected. Zero values are preserved; missing observations are
@@ -144,9 +149,63 @@ alone do not prove aggregation semantics or per-output lineage.
 The delivery-input validator accepts only completed jobs with intact payloads and
 manifests whose mapping, plugin version, target, references, and process graph still
 match. It holds a cross-process lease that prevents job update, rerun, or deletion
-while a future delivery worker consumes the bytes. Older named-export assets remain
+while a delivery worker consumes the bytes. Older named-export assets remain
 downloadable but are not eligible for automatic delivery.
 
-Server-side sending, remote dry runs, import reports, retry/recovery, and multi-series
-mappings remain subsequent work. Downloaded DHIS2 JSON can still be imported by the
-existing client workflow.
+## Deliver a saved export
+
+Configure `connection` on the export, then submit a completed source job:
+
+```http
+POST /exports/rainfall-monthly
+Idempotency-Key: rainfall-job-123-validation
+Content-Type: application/json
+
+{"job_id": "job-123", "dry_run": true}
+```
+
+The response is `202 Accepted` with a delivery job ID and status/report URL. The
+source job also links to that delivery. Inspect `report.outcome`, which distinguishes
+success, dry-run validation, partial imports, rejection, cancellation and unknown
+remote outcomes. A dry run can be rejected; its counts describe validation rather
+than saved writes. Use a new idempotency key to request the actual import with
+`dry_run: false`. Reports are scoped to `/exports/{export_id}/jobs/{delivery_job_id}`.
+
+Reservations are persisted before jobs are enqueued. Repeating a key returns the
+original job; changing its source, manifest or mode is a conflict. After a crash
+between reservation and job creation, repeat the request to create the reserved job.
+The worker checks the exact manifest captured at submission, so rerendering the
+source while delivery is queued requires a new submission. Old queued delivery
+jobs without that binding fail before sending and must be submitted again.
+
+DHIS2 payloads are split into deterministic chunks of at most 1,000 values. Chunk
+intent is saved before POST; completed chunks are reused on recovery. An uncertain
+POST without a task ID is reported as unknown and is never automatically resent.
+Known async tasks are polled through the DHIS2 `DATAVALUE_IMPORT` task summaries
+endpoint. Corrupt or incompatible checkpoints stop recovery. Imports for the same
+export are serialized; different exports may still overlap in their destination
+keys, so operators must coordinate those mappings. `submitted` counts attempted
+values, including uncertain writes, rather than the full planned payload.
+
+Delivery and reports require a writable instance and are closed in read-only mode.
+Writable deployments must put these endpoints behind an operator access boundary;
+OCS does not yet provide per-user authorization. Downloaded JSON remains usable
+through the existing client workflow.
+
+## Map multiple series
+
+Use one entry per output series; a merged raster cube is not required:
+
+```yaml
+series:
+  - select: {variable: temperature}
+    data_element: TEMP0000001
+  - select: {variable: precipitation}
+    data_element: PREC0000001
+```
+
+Replace these example UIDs with target metadata. Wide DataFrames, multi-variable
+xarray aggregates and merged aggregate cubes are supported. Zero is retained and
+missing values are counted separately per series. Direct named DHIS2 graphs check
+original GeoJSON feature IDs before spatial aggregation; the renderer also rejects
+invalid organisation-unit UIDs and duplicate destination keys.

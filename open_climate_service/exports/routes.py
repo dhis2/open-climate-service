@@ -67,6 +67,8 @@ def deliver_export(
 def get_delivery_job(export_id: str, delivery_job_id: str) -> dict[str, Any]:
     """Return one delivery job's status and, when finished, its export report."""
     record = get_job_service().get_job_or_404(delivery_job_id)
+    if record.process_id != f"export:{export_id}" or record.request.get("export_id") != export_id:
+        raise HTTPException(status_code=404, detail="Delivery job not found for this export")
     report: ExportReport | None = None
     if isinstance(record.result, dict):
         try:

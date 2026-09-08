@@ -151,6 +151,7 @@ class JobService:
         request: dict[str, Any],
         max_attempts: int = 1,
         job_href_base: str = "/jobs",
+        job_id: str | None = None,
     ) -> JobRecord:
         """Submit a callable directly as a background job — no YAML registry needed.
 
@@ -171,6 +172,7 @@ class JobService:
             request=safe_request,
             max_attempts=max_attempts,
             job_href_base=job_href_base,
+            job_id=job_id,
         )
 
     def _create_and_enqueue(
@@ -180,8 +182,9 @@ class JobService:
         request: dict[str, Any],
         max_attempts: int,
         job_href_base: str,
+        job_id: str | None = None,
     ) -> JobRecord:
-        job_id = str(uuid4())
+        job_id = job_id or str(uuid4())
         record = JobRecord(
             job_id=job_id,
             process_id=process_id,

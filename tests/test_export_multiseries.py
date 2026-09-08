@@ -15,6 +15,29 @@ from open_climate_service import config
 from open_climate_service.exports.service import render_named_export
 
 
+@pytest.mark.parametrize("field", ["category_option_combo", "attribute_option_combo"])
+def test_implicit_and_explicit_defaults_cannot_evade_duplicates(definition: dict[str, Any], field: str):
+    definition["series"] = [
+        {"select": {"variable": "temperature"}, "data_element": "TEMP0000001"},
+        {"select": {"variable": "temperature"}, "data_element": "TEMP0000001", field: "HllvX50cXC0"},
+    ]
+    with pytest.raises(ValueError, match="resolve defaults"):
+        _render(pd.DataFrame({"geometry": ["DiszpKrYNg8"], "t": ["202501"], "temperature": [1]}), definition)
+
+
+def test_quantile_selector_does_not_treat_coordinate_as_value(definition: dict[str, Any]):
+    series: dict[str, Any] = {"select": {"quantile": 0.1}, "data_element": "TEMP0000001"}
+    definition["series"] = [series]
+    frame = pd.DataFrame({"geometry": ["DiszpKrYNg8"], "t": ["202501"], "quantile": [0.1], "temperature": [3]})
+    assert json.loads(_render(frame, definition).content)["dataValues"][0]["value"] == "3"
+    series["select"] = {"variable": "quantile", "quantile": 0.1}
+    with pytest.raises(ValueError, match="Selected variable"):
+        _render(frame, definition)
+    series["select"] = {"quantile": 0.9}
+    with pytest.raises(ValueError, match="not present"):
+        _render(frame, definition)
+
+
 @pytest.fixture
 def definition(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     definition: dict[str, Any] = {

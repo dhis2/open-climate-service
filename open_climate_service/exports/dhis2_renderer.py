@@ -80,6 +80,16 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             raise ValueError("Organisation unit and period fields must be distinct")
         if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max"):
             raise ValueError("aggregation must be mean, sum, min, or max; it declares upstream computation")
+        # Default combo UIDs belong to target metadata, which pure rendering does
+        # not fetch. Avoid treating an omitted combo as distinct from an explicit
+        # one when several series target the same data element.
+        for element in {entry["data_element"] for entry in validated_series}:
+            group = [entry for entry in validated_series if entry["data_element"] == element]
+            for field in ("category_option_combo", "attribute_option_combo"):
+                if any(field in entry for entry in group) and not all(field in entry for entry in group):
+                    raise ValueError(
+                        f"Specify {field} on every series for data element '{element}' to resolve defaults"
+                    )
         return {**mapping, "period_type": kind, "series": validated_series}
 
     def render(self, data: Any, mapping: dict[str, Any]) -> RenderedExport:
@@ -222,7 +232,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         if variable is not None:
             if not isinstance(variable, str):
                 raise ValueError("select.variable must be a string")
-            if variable not in frame.columns:
+            if variable not in self._candidate_value_fields(frame, value_columns, org_field, period_field):
                 raise ValueError(f"Selected variable '{variable}' is not present in the result")
             return variable
         fields = self._candidate_value_fields(frame, value_columns, org_field, period_field)
@@ -240,6 +250,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         if value_columns is not None:
             return [column for column in value_columns if column in frame.columns]
         excluded = {org_field, period_field, "geometry", "spatial_ref", "index", "band", "bands"}
+        excluded.add("quantile")
         return [
             str(column) for column in frame.columns if column not in excluded and not str(column).startswith("level_")
         ]
@@ -286,7 +297,6 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         if not isinstance(body, dict) or not isinstance(body.get("dataValues"), list):
             raise ValueError("DHIS2 delivery payload must be a dataValueSet")
         values = body["dataValues"]
-        submitted = len(values)
         chunks = self._chunk_values(values)
 
         reports: list[ExportReport] = []
@@ -326,7 +336,6 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             payload_sha256=payload_sha256,
             created_at=created_at,
             finished_at=finished_at,
-            submitted=submitted,
             cancelled_early=cancelled_early,
             message=message,
         )
@@ -353,9 +362,47 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         digest = hashlib.sha256(chunk_payload).hexdigest()
         checkpoint = self._load_chunk_checkpoint(context, index, digest)
         if checkpoint is not None:
+            if checkpoint.connection_id != target or checkpoint.dry_run != dry_run:
+                raise ValueError("Delivery checkpoint target or mode changed")
+            if checkpoint.outcome == ExportOutcome.UNKNOWN and checkpoint.remote_task_ids:
+                checkpoint = self._poll_task(
+                    client,
+                    checkpoint.remote_task_ids[0],
+                    target=target,
+                    dry_run=dry_run,
+                    submitted=len(chunk_values),
+                    payload_sha256=digest,
+                    created_at=checkpoint.created_at,
+                    context=context,
+                )
+                self._save_chunk_checkpoint(context, index, digest, checkpoint)
             return checkpoint
+        # Commit intent before POST. A process death at any later point must not
+        # turn an uncertain remote write into a fresh chunk on recovery.
+        self._save_chunk_checkpoint(
+            context,
+            index,
+            digest,
+            ExportReport(
+                plugin_id=self.id,
+                connection_id=target,
+                dry_run=dry_run,
+                outcome=ExportOutcome.UNKNOWN,
+                payload_sha256=digest,
+                submitted=len(chunk_values),
+                created_at=created_at,
+                finished_at=created_at,
+            ),
+        )
         report = self._submit_chunk(
-            client, target, chunk_values, dry_run=dry_run, created_at=created_at, chunk_sha256=digest
+            client,
+            target,
+            chunk_values,
+            dry_run=dry_run,
+            created_at=created_at,
+            chunk_sha256=digest,
+            context=context,
+            index=index,
         )
         self._save_chunk_checkpoint(context, index, digest, report)
         return report
@@ -365,13 +412,16 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         if context is None:
             return None
         state = context.load_checkpoint(self._chunk_checkpoint_key(index))
-        if not isinstance(state, dict) or state.get("digest") != digest:
+        if state is None:
             return None
-        if state.get("status") == "completed" and isinstance(state.get("report"), dict):
-            try:
-                return ExportReport.model_validate(state["report"])
-            except Exception:
-                return None
+        # Checkpoint providers can be external plugins without runtime type checks.
+        if not isinstance(state, dict) or state.get("digest") != digest:  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise ValueError("Delivery checkpoint is corrupt or chunk boundaries changed; refusing to resend")
+        if state.get("status") == "completed":
+            report = ExportReport.model_validate(state.get("report"))
+            if report.payload_sha256 != digest or report.plugin_id != self.id:
+                raise ValueError("Delivery checkpoint report does not match the chunk")
+            return report
         if state.get("status") == "submitted_unknown":
             # A previous POST timed out without a reconcilable remote task ID.
             # Do not replay; record the uncertainty so the overall report is honest.
@@ -389,7 +439,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 created_at=str(state.get("created_at") or utc_now().isoformat()),
                 finished_at=str(state.get("finished_at") or utc_now().isoformat()),
             )
-        return None
+        raise ValueError("Unrecognized delivery checkpoint state; refusing to resend")
 
     def _save_chunk_checkpoint(
         self, context: DeliveryContext | None, index: int, digest: str, report: ExportReport
@@ -425,6 +475,8 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         dry_run: bool,
         created_at: str,
         chunk_sha256: str,
+        context: DeliveryContext | None = None,
+        index: int = 0,
     ) -> ExportReport:
         """POST one bounded chunk and reconcile its response, polling async tasks."""
         from open_climate_service.shared.time import utc_now
@@ -437,6 +489,19 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         try:
             response = client.post("/api/dataValueSets", json=chunk_body, params=params)
         except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            error_payload = getattr(exc, "payload", None)
+            if isinstance(status_code, int) and 400 <= status_code < 500 and isinstance(error_payload, dict):
+                return build_dhis2_report(
+                    status_code,
+                    error_payload,
+                    plugin_id=self.id,
+                    connection_id=target,
+                    dry_run=dry_run,
+                    payload_sha256=chunk_sha256,
+                    submitted=submitted,
+                    created_at=created_at,
+                )
             # The POST may have reached DHIS2 before failing (e.g. timeout).
             # Record an unknown outcome rather than fabricating a rejection, and
             # never auto-replay this chunk.
@@ -468,6 +533,22 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                     created_at=created_at,
                     finished_at=utc_now().isoformat(),
                 )
+            self._save_chunk_checkpoint(
+                context,
+                index,
+                chunk_sha256,
+                ExportReport(
+                    plugin_id=self.id,
+                    connection_id=target,
+                    dry_run=dry_run,
+                    outcome=ExportOutcome.UNKNOWN,
+                    payload_sha256=chunk_sha256,
+                    submitted=submitted,
+                    remote_task_ids=[task_id],
+                    created_at=created_at,
+                    finished_at=utc_now().isoformat(),
+                ),
+            )
             return self._poll_task(
                 client,
                 task_id,
@@ -476,6 +557,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 submitted=submitted,
                 payload_sha256=chunk_sha256,
                 created_at=created_at,
+                context=context,
             )
 
         return build_dhis2_report(
@@ -499,6 +581,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         submitted: int,
         payload_sha256: str,
         created_at: str,
+        context: DeliveryContext | None = None,
     ) -> ExportReport:
         """Poll a submitted async import task with bounded backoff."""
         import time
@@ -507,9 +590,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
 
         summary: dict[str, Any] = {}
         for attempt in range(max(0, self.max_poll_attempts)):
+            if context is not None and context.is_cancel_requested():
+                break
             time.sleep(min(30.0, self.poll_backoff_base * (2**attempt)))
             try:
-                response = client.get(f"/api/system/tasks/{task_id}")
+                response = client.get(f"/api/system/taskSummaries/DATAVALUE_IMPORT/{task_id}")
             except Exception:
                 continue
             summary = _response_json(response)
@@ -544,11 +629,16 @@ class Dhis2ExportPlugin(BaseExportPlugin):
 
     @staticmethod
     def _remote_task_id(summary: dict[str, Any]) -> str | None:
-        value = summary.get("id") or summary.get("taskId")
-        return value if isinstance(value, str) and value else None
+        nested = summary.get("response")
+        task = nested if isinstance(nested, dict) else summary
+        value = task.get("id") or task.get("taskId")
+        return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]+", value) else None
 
     @staticmethod
     def _is_async_acceptance(status_code: int, summary: dict[str, Any]) -> bool:
+        nested = summary.get("response")
+        if isinstance(nested, dict) and nested.get("jobType") == "DATAVALUE_IMPORT":
+            return 200 <= status_code < 300
         if status_code == 202:
             return True
         status = summary.get("status")
@@ -578,6 +668,7 @@ def build_dhis2_report(
     from open_climate_service.shared.time import utc_now
 
     finished_at = utc_now().isoformat()
+    summary = _extract_import_summary(summary)
     status = summary.get("status")
     message = summary.get("message") or summary.get("httpStatus")
     import_count = summary.get("importCount") or {}
@@ -611,20 +702,16 @@ def build_dhis2_report(
         finished_at=finished_at,
     )
 
-    if dry_run:
-        # A dry run reached DHIS2 validation; the summary describes what would
-        # happen, not persisted writes.
-        return ExportReport(outcome=ExportOutcome.DRY_RUN, message=message, **base)
-
     if not 200 <= status_code < 300:
         return ExportReport(outcome=ExportOutcome.REJECTED, message=message or f"HTTP {status_code}", **base)
 
-    if status == "ERROR":
+    if status in {"ERROR", "FAILED"}:
         return ExportReport(outcome=ExportOutcome.REJECTED, message=message, **base)
     if status == "WARNING" or conflicts:
         return ExportReport(outcome=ExportOutcome.PARTIAL, message=message, **base)
     if status == "SUCCESS":
-        return ExportReport(outcome=ExportOutcome.SUCCESS, message=message, **base)
+        outcome = ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS
+        return ExportReport(outcome=outcome, message=message, **base)
     # A 2xx without a recognizable import summary cannot be trusted as success.
     return ExportReport(outcome=ExportOutcome.UNKNOWN, message="Unrecognized import summary", **base)
 
@@ -636,7 +723,7 @@ def _extract_import_summary(summary: dict[str, Any]) -> dict[str, Any]:
     or ``taskSummary`` in different DHIS2 versions; a synchronous summary may be
     returned directly. Keep the remote task ID visible on whichever shape wins.
     """
-    for key in ("importSummary", "summary", "taskSummary"):
+    for key in ("importSummary", "summary", "taskSummary", "response"):
         nested = summary.get(key)
         if isinstance(nested, dict):
             result = dict(nested)
@@ -649,10 +736,16 @@ def _extract_import_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _response_status(response: Any) -> int:
+    # The supported DHIS2 client returns decoded JSON after checking HTTP status.
+    if isinstance(response, dict):
+        status = response.get("httpStatusCode", 200)
+        return status if isinstance(status, int) else 200
     return response.status_code if isinstance(getattr(response, "status_code", None), int) else 0
 
 
 def _response_json(response: Any) -> dict[str, Any]:
+    if isinstance(response, dict):
+        return response
     try:
         payload = response.json()
     except Exception:
