@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from copy import deepcopy
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from uuid import uuid4
 from open_climate_service import config
 from open_climate_service.exports.base import BaseExportPlugin, RenderedExport
 from open_climate_service.exports.registry import load_export_plugins
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -153,11 +156,35 @@ def write_named_export(
 
 
 def read_export_metadata(path: Path) -> dict[str, Any] | None:
-    """Return saved file metadata only for the matching result asset."""
+    """Return usable display metadata; delivery separately validates its manifest."""
     metadata_path = path.parent / ".export.json"
-    if not metadata_path.is_file():
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return None
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    if not isinstance(metadata, dict) or metadata.get("filename") != path.name:
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        logger.warning("Could not read export metadata '%s'; using result-file defaults", metadata_path)
+        return None
+    if not isinstance(metadata, dict) or any(
+        not isinstance(metadata.get(field), str) or not metadata[field].strip()
+        for field in ("filename", "format", "media_type")
+    ):
+        logger.warning("Invalid export metadata fields in '%s'; using result-file defaults", metadata_path)
+        return None
+    media_type = metadata["media_type"]
+    manifest = metadata.get("manifest")
+    if any(ord(character) < 32 or ord(character) > 126 for character in media_type) or (
+        "manifest" in metadata
+        and (
+            not isinstance(manifest, str)
+            or not manifest.strip()
+            or manifest in {".", ".."}
+            or "/" in manifest
+            or "\\" in manifest
+        )
+    ):
+        logger.warning("Invalid export metadata fields in '%s'; using result-file defaults", metadata_path)
+        return None
+    if metadata["filename"] != path.name:
         return None
     return metadata

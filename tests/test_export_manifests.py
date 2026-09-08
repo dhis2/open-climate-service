@@ -132,12 +132,14 @@ def test_changed_bindings_are_conflicts(saved: Path, monkeypatch: pytest.MonkeyP
     assert error.value.status_code == 409
 
 
-@pytest.mark.parametrize("change", ["payload", "manifest", "metadata", "missing", "legacy", "path", "version"])
+@pytest.mark.parametrize("change", ["payload", "manifest", "metadata", "missing", "legacy", "path", "version", "corrupt"])
 def test_corrupt_missing_and_legacy_assets_are_rejected(saved: Path, change: str):
     metadata_path = saved.parent / ".export.json"
     metadata = json.loads(metadata_path.read_text())
     if change == "payload":
         saved.write_bytes(saved.read_bytes() + b" ")
+    elif change == "corrupt":
+        metadata_path.write_text("{ this is not valid json", encoding="utf-8")
     elif change == "missing":
         saved.unlink()
     elif change == "legacy":
