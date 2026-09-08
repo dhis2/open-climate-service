@@ -63,6 +63,10 @@ def _load_config() -> dict[str, Any]:
 
         # Do this before substitution, including when a secret contains YAML syntax.
         parse_connections(literal["dhis2_connections"])
+    if isinstance(literal, dict) and "exports" in literal:
+        from open_climate_service.exports.manifest import validate_public_mapping
+
+        validate_public_mapping(literal["exports"])
     loaded = yaml.safe_load(_substitute_env_vars(text))
     if loaded is not None and not isinstance(loaded, dict):
         raise ValueError(f"CLIMATE_SERVICE_CONFIG must be a YAML mapping at the top level: {path}")
@@ -73,6 +77,9 @@ def _load_config() -> dict[str, Any]:
             raise ValueError("dhis2_connections requires literal definitions in YAML valid before interpolation")
         if literal["dhis2_connections"] != loaded["dhis2_connections"]:
             raise ValueError("dhis2_connections does not support environment interpolation; use token_env references")
+    if loaded is not None and "exports" in loaded:
+        if not isinstance(literal, dict) or literal.get("exports") != loaded["exports"]:
+            raise ValueError("exports requires literal definitions in YAML valid before interpolation")
     _cache = dict(loaded or {})
     return _cache
 

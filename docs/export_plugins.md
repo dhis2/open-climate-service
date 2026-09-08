@@ -61,11 +61,13 @@ monthly, since they would produce duplicate destination keys. Explicit incompati
 renderer cannot prove that an arbitrary input value was aggregated correctly.
 
 The optional `dataset`, `org_units`, and `connection` references, and the optional
-`aggregation` declaration, describe intended input/delivery configuration. This
-phase does not resolve those references or verify the computation against them.
-They do not trigger any work. A connection is not required to render a payload.
-Use [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)
-when writing a separate operator integration that needs a client.
+`aggregation` declaration, describe intended input/delivery configuration. They
+do not trigger any work. Batch exports bind these declarations to a manifest and
+check an observed dataset reference when execution provenance contains one. A
+connection is not required to render or download a payload, but a bound connection
+is required for later server-side delivery. Use
+[named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)
+for that binding.
 
 ## Write a render-only plugin
 
@@ -124,15 +126,27 @@ are a dot followed by lowercase letters or digits; Zarr directories are excluded
 Media types use `type/subtype` without parameters. Plugin code is operator-installed
 Python code and must be trusted by the deployment.
 
-## Saved results and subsequent phases
+## Saved results and delivery eligibility
 
-Batch jobs write `export.<extension>` and a small `.export.json` file containing
-the format, media type, and counts. Assets retain their media type even if plugin
-configuration later changes. Synchronous rendering returns the payload directly
-and remains available in read-only mode.
+Each batch render writes a fresh payload generation and a versioned JSON manifest,
+then atomically replaces `.export.json` as the pointer to that generation. The
+manifest records payload and mapping digests, renderer identity and version, record
+counts and periods, the source job, public configuration references, a credential-free
+target fingerprint, and execution provenance available from OCS processes. The
+payload and manifest are both exposed as job result assets. Synchronous rendering
+still returns the payload directly and remains available in read-only mode.
 
-The file metadata is not a delivery manifest. Source snapshots, feature versions,
-frozen mapping/target bindings, payload digests, retention, and delivery eligibility
-belong to the next phase. Server-side sending, dry runs against DHIS2, import reports,
-retry/recovery, and multi-series mappings are not implemented by this rendering
-phase. Downloaded DHIS2 JSON can still be imported by the existing client workflow.
+Execution provenance records observed managed artifacts, Icechunk snapshot IDs,
+and hashes of inline spatial features where those inputs pass through native OCS
+processes. The manifest explicitly lists evidence that is unavailable; declarations
+alone do not prove aggregation semantics or per-output lineage.
+
+The delivery-input validator accepts only completed jobs with intact payloads and
+manifests whose mapping, plugin version, target, references, and process graph still
+match. It holds a cross-process lease that prevents job update, rerun, or deletion
+while a future delivery worker consumes the bytes. Older named-export assets remain
+downloadable but are not eligible for automatic delivery.
+
+Server-side sending, remote dry runs, import reports, retry/recovery, and multi-series
+mappings remain subsequent work. Downloaded DHIS2 JSON can still be imported by the
+existing client workflow.

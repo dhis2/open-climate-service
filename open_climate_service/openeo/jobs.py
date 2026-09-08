@@ -17,6 +17,7 @@ import portalocker
 from fastapi import HTTPException
 
 from open_climate_service import config as api_config
+from open_climate_service.exports.retention import result_lease
 from open_climate_service.exports.tabular import (
     _build_dhis2_json_payload as _build_dhis2_json_payload,
 )
@@ -324,50 +325,53 @@ class OpenEOJobService:
         return record
 
     def update_job(self, job_id: str, body: OpenEOJobUpdate) -> OpenEOJobRecord:
-        record = self.get_job_or_404(job_id)
-        if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
-            raise HTTPException(status_code=400, detail="Cannot update a job that is queued or running")
-        updates: dict[str, Any] = {}
-        if body.title is not None:
-            updates["title"] = body.title
-        if body.description is not None:
-            updates["description"] = body.description
-        if body.process is not None:
-            if not isinstance(body.process.get("process_graph"), dict):
-                raise HTTPException(status_code=422, detail="process.process_graph must be an object")
-            updates["process"] = body.process
-        if body.plan is not None:
-            updates["plan"] = body.plan
-        if body.budget is not None:
-            updates["budget"] = body.budget
-        if updates:
-            updates["updated"] = utc_now()
-            return store_update_job(job_id, lambda r: r.model_copy(update=updates))
-        return record
+        with result_lease(job_id):
+            record = self.get_job_or_404(job_id)
+            if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+                raise HTTPException(status_code=400, detail="Cannot update a job that is queued or running")
+            updates: dict[str, Any] = {}
+            if body.title is not None:
+                updates["title"] = body.title
+            if body.description is not None:
+                updates["description"] = body.description
+            if body.process is not None:
+                if not isinstance(body.process.get("process_graph"), dict):
+                    raise HTTPException(status_code=422, detail="process.process_graph must be an object")
+                updates["process"] = body.process
+            if body.plan is not None:
+                updates["plan"] = body.plan
+            if body.budget is not None:
+                updates["budget"] = body.budget
+            if updates:
+                updates["updated"] = utc_now()
+                return store_update_job(job_id, lambda r: r.model_copy(update=updates))
+            return record
 
     def delete_job(self, job_id: str) -> None:
-        record = self.get_job_or_404(job_id)
-        if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
-            raise HTTPException(status_code=400, detail="Cannot delete a running job; cancel it first")
-        store_delete_job(job_id)
-        import shutil
+        with result_lease(job_id):
+            record = self.get_job_or_404(job_id)
+            if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+                raise HTTPException(status_code=400, detail="Cannot delete a running job; cancel it first")
+            store_delete_job(job_id)
+            import shutil
 
-        job_dir = _JOBS_DIR / job_id
-        if job_dir.exists():
-            shutil.rmtree(job_dir, ignore_errors=True)
+            job_dir = _JOBS_DIR / job_id
+            if job_dir.exists():
+                shutil.rmtree(job_dir, ignore_errors=True)
 
     def start_job(self, job_id: str) -> None:
         """Queue a job for processing (POST /jobs/{id}/results)."""
-        record = self.get_job_or_404(job_id)
-        if record.status == OpenEOJobStatus.RUNNING:
-            raise HTTPException(status_code=400, detail="Job is already running")
-        if record.status == OpenEOJobStatus.QUEUED:
-            return
-        store_update_job(
-            job_id,
-            lambda r: r.model_copy(update={"status": OpenEOJobStatus.QUEUED, "updated": utc_now()}),
-        )
-        self._enqueue(job_id)
+        with result_lease(job_id):
+            record = self.get_job_or_404(job_id)
+            if record.status == OpenEOJobStatus.RUNNING:
+                raise HTTPException(status_code=400, detail="Job is already running")
+            if record.status == OpenEOJobStatus.QUEUED:
+                return
+            store_update_job(
+                job_id,
+                lambda r: r.model_copy(update={"status": OpenEOJobStatus.QUEUED, "updated": utc_now()}),
+            )
+            self._enqueue(job_id)
 
     def cancel_job(self, job_id: str) -> None:
         """Request cancellation (DELETE /jobs/{id}/results)."""
@@ -506,15 +510,17 @@ class OpenEOJobService:
         # Unwrap format envelope from save_result
         fmt = "ZARR"
         options: dict[str, Any] = {}
+        provenance: dict[str, Any] | None = None
         if isinstance(result, SaveResultEnvelope):
             fmt = result.format
             options = result.options
+            provenance = result.provenance
             result = result.data
 
         if "export" in options:
             from open_climate_service.exports.service import write_named_export
 
-            return write_named_export(result, results_dir, fmt, options)
+            return write_named_export(result, results_dir, fmt, options, job_id=job_id, provenance=provenance)
 
         # Resolve DataArray → Dataset for raster formats
         if isinstance(result, xr.DataArray):
@@ -1235,7 +1241,7 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
 
         metadata = read_export_metadata(Path(output_path))
         if metadata is not None:
-            return {
+            export_assets = {
                 "result": {
                     "href": f"/jobs/{record.id}/results/{metadata['filename']}",
                     "type": metadata["media_type"],
@@ -1243,6 +1249,14 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
                     "roles": ["data"],
                 }
             }
+            if "manifest" in metadata:
+                export_assets["manifest"] = {
+                    "href": f"/jobs/{record.id}/results/{metadata['manifest']}",
+                    "type": "application/json",
+                    "title": "Export manifest",
+                    "roles": ["metadata"],
+                }
+            return export_assets
     if output_path.startswith("managed://"):
         dataset_id = output_path[len("managed://") :]
         assets: dict[str, Any] = {

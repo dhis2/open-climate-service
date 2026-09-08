@@ -12,6 +12,7 @@ class RenderedExport:
     content: bytes
     record_count: int
     skipped_count: int = 0
+    periods: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if type(self.content) is not bytes:
@@ -33,6 +34,9 @@ class BaseExportPlugin(ABC):
     format: str
     extension: str
     media_type: str
+    # Renderer authors bump this when changing payload semantics. An unversioned
+    # renderer may produce files but cannot supply a verified delivery input.
+    version: str | None = None
 
     @abstractmethod
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:

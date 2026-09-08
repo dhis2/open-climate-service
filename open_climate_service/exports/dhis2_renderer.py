@@ -26,6 +26,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     format = "DHIS2JSON"
     extension = ".json"
     media_type = "application/json"
+    version = "1"
 
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
         allowed = {"series", "period_type", "org_unit_field", "period_field", "aggregation"}
@@ -129,6 +130,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             content=json.dumps(payload, allow_nan=False).encode(),
             record_count=len(values),
             skipped_count=len(frame) - len(values),
+            periods=tuple(sorted({value["period"] for value in values})),
         )
 
 

@@ -228,8 +228,10 @@ def test_sync_and_batch_external_export(
     assert response.content == b"installed"
     assert response.headers["content-type"] == "application/x-example"
     # Historical asset metadata does not depend on the current plugin definition.
+    assets = _result_assets(record)
+    assert "manifest" in assets
     config.get_config()["exports"] = []
-    assert _result_assets(record) == {"result": asset}
+    assert _result_assets(record) == assets
 
 
 def test_sync_named_dhis2_in_read_only_mode(

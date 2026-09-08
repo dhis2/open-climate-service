@@ -5,16 +5,28 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from uuid import uuid4
 
 from open_climate_service import config
 from open_climate_service.exports.base import BaseExportPlugin, RenderedExport
 from open_climate_service.exports.registry import load_export_plugins
 
 
-def render_named_export(data: Any, fmt: str, options: dict[str, Any]) -> tuple[BaseExportPlugin, RenderedExport]:
-    """Render a declared export; per-request mapping overrides are not accepted."""
+@dataclass(frozen=True)
+class ResolvedExport:
+    """Invocation-local mapping and source/target references."""
+
+    export_id: str
+    plugin: BaseExportPlugin
+    mapping: dict[str, Any]
+    references: dict[str, str]
+
+
+def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
+    """Resolve and validate a mapping without rendering or resolving a target."""
     export_id = options.get("export")
     if not isinstance(export_id, str) or not export_id.strip() or set(options) != {"export"}:
         raise ValueError("Named exports require options containing only a non-empty 'export' ID")
@@ -43,38 +55,101 @@ def render_named_export(data: Any, fmt: str, options: dict[str, Any]) -> tuple[B
         raise ValueError(f"Unknown export plugin '{plugin_id}'")
     if plugin.format != fmt:
         raise ValueError(f"Export '{export_id}' requires format '{plugin.format}', received '{fmt}'")
-    # Source references are declarations only in this slice. Execution provenance
-    # and binding to a delivery target are part of the subsequent manifest phase.
+    references: dict[str, str] = {}
     for field in ("dataset", "org_units", "connection"):
         value = definition.pop(field, None)
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"Export {field} must be a non-empty reference string")
+        if value is not None:
+            references[field] = value.strip()
+    from open_climate_service.exports.manifest import validate_public_mapping
+
+    validate_public_mapping(definition)
     mapping = plugin.validate_mapping(definition)
-    rendered = plugin.render(data, mapping)
+    validate_public_mapping(mapping)
+    return ResolvedExport(export_id, plugin, deepcopy(mapping), references)
+
+
+def render_named_export(data: Any, fmt: str, options: dict[str, Any]) -> tuple[BaseExportPlugin, RenderedExport]:
+    """Render a declared export without resolving a connection or credential."""
+    resolved = resolve_named_export(fmt, options)
+    return resolved.plugin, _render(data, resolved)
+
+
+def _render(data: Any, resolved: ResolvedExport) -> RenderedExport:
+    rendered = resolved.plugin.render(data, deepcopy(resolved.mapping))
     # External Python plugins are not necessarily type-checked.
     if not isinstance(rendered, RenderedExport):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise TypeError("Export plugin render() must return RenderedExport")
-    return plugin, rendered
+    return rendered
 
 
-def write_named_export(data: Any, directory: Path, fmt: str, options: dict[str, Any]) -> str:
-    """Write the payload and file metadata after rendering succeeds.
+def write_named_export(
+    data: Any,
+    directory: Path,
+    fmt: str,
+    options: dict[str, Any],
+    *,
+    job_id: str,
+    provenance: dict[str, Any] | None = None,
+) -> str:
+    """Freeze a resolved invocation and publish its payload and versioned manifest."""
+    import hashlib
 
-    This metadata describes a downloadable file, not a delivery manifest. It does
-    not establish source provenance, freeze a target, or authorize later delivery.
-    """
-    plugin, rendered = render_named_export(data, fmt, options)
-    path = directory / f"export{plugin.extension}"
-    path.write_bytes(rendered.content)
-    metadata = {
-        "filename": path.name,
-        "media_type": plugin.media_type,
-        "format": plugin.format,
-        "record_count": rendered.record_count,
-        "skipped_count": rendered.skipped_count,
-    }
-    (directory / ".export.json").write_text(json.dumps(metadata), encoding="utf-8")
-    return str(path)
+    from open_climate_service.exports.manifest import (
+        ExportManifest,
+        plugin_identity,
+        publish_manifest,
+        target_binding,
+        validate_public_mapping,
+    )
+    from open_climate_service.shared.provenance import json_digest
+    from open_climate_service.shared.time import utc_now
+
+    resolved = resolve_named_export(fmt, options)
+    identity = plugin_identity(resolved.plugin)
+    target = target_binding(resolved.plugin.id, resolved.references)
+    evidence = (
+        deepcopy(provenance)
+        if provenance is not None
+        else {
+            "scope": "unavailable",
+            "sources": [],
+            "features": [],
+            "missing": ["execution_provenance"],
+        }
+    )
+    validate_public_mapping(evidence)
+    declared = resolved.references.get("dataset")
+    sources_value = evidence.get("sources", [])
+    if not isinstance(sources_value, list) or not all(isinstance(source, dict) for source in sources_value):
+        raise ValueError("Export provenance sources must be a list of mappings")
+    sources = cast(list[dict[str, Any]], sources_value)
+    if (
+        declared is not None
+        and sources
+        and not any(declared in (source.get("collection_id"), source.get("source_dataset_id")) for source in sources)
+    ):
+        raise ValueError("Declared export dataset was not observed during execution")
+    rendered = _render(data, resolved)
+    manifest = ExportManifest(
+        source_job_id=job_id,
+        export_id=resolved.export_id,
+        created_at=utc_now().isoformat(),
+        filename=f"export-{uuid4().hex}{identity.extension}",
+        payload_sha256=hashlib.sha256(rendered.content).hexdigest(),
+        payload_size=len(rendered.content),
+        record_count=rendered.record_count,
+        skipped_count=rendered.skipped_count,
+        periods=sorted(set(rendered.periods)) if rendered.periods is not None else None,
+        plugin=identity,
+        mapping=resolved.mapping,
+        mapping_sha256=json_digest(resolved.mapping),
+        references=resolved.references,
+        target=target,
+        provenance=evidence,
+    )
+    return publish_manifest(directory, manifest, rendered.content)
 
 
 def read_export_metadata(path: Path) -> dict[str, Any] | None:

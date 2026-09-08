@@ -17,6 +17,10 @@ def _parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
     """
     from shapely.geometry import shape
 
+    from open_climate_service.shared.provenance import record_features
+
+    record_features(geometries)
+
     if isinstance(geometries, dict):
         gtype = geometries.get("type", "")
         if gtype == "FeatureCollection":
