@@ -51,10 +51,28 @@ def _load_config() -> dict[str, Any]:
         return {}
     if not path.exists():
         raise FileNotFoundError(f"CLIMATE_SERVICE_CONFIG not found: {path}")
-    text = _substitute_env_vars(path.read_text(encoding="utf-8"))
-    loaded = yaml.safe_load(text)
+    text = path.read_text(encoding="utf-8")
+    try:
+        literal = yaml.safe_load(text)
+    except yaml.YAMLError:
+        # Existing configurations may interpolate YAML syntax (for example bbox
+        # members). Preserve that behavior when named connections are not used.
+        literal = None
+    if isinstance(literal, dict) and "dhis2_connections" in literal:
+        from open_climate_service.exports.dhis2_config import parse_connections
+
+        # Do this before substitution, including when a secret contains YAML syntax.
+        parse_connections(literal["dhis2_connections"])
+    loaded = yaml.safe_load(_substitute_env_vars(text))
     if loaded is not None and not isinstance(loaded, dict):
         raise ValueError(f"CLIMATE_SERVICE_CONFIG must be a YAML mapping at the top level: {path}")
+    if loaded is not None and "dhis2_connections" in loaded:
+        # Validate the literal definitions before caching anything. In particular,
+        # token_env: ${TOKEN} must not expand a credential into cached configuration.
+        if not isinstance(literal, dict) or "dhis2_connections" not in literal:
+            raise ValueError("dhis2_connections requires literal definitions in YAML valid before interpolation")
+        if literal["dhis2_connections"] != loaded["dhis2_connections"]:
+            raise ValueError("dhis2_connections does not support environment interpolation; use token_env references")
     _cache = dict(loaded or {})
     return _cache
 
