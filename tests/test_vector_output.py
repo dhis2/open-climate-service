@@ -134,8 +134,44 @@ def test_a_vector_format_with_no_usable_geometry_raises(tmp_path: Path) -> None:
     them with a file their reader could not open and no reason logged above debug.
     """
     result = _result().drop_vars(GEOMETRY_WKT_COORD)
-    with pytest.raises(Exception):  # noqa: B017 -- shapely's parse error type is not part of the contract
+    # ValueError specifically: it is what the sync route turns into a 400. Shapely's own parse
+    # error would surface as a 500 and blame the server for a cube that has no shapes.
+    with pytest.raises(ValueError, match="no usable geometry"):
         jobs._write_raster(result, tmp_path, "PARQUET")
+
+
+def test_csv_needs_no_shapes(tmp_path: Path) -> None:
+    """CSV is a vector format by listing only: it never carries geometry, so must not demand it."""
+    result = _result().drop_vars(GEOMETRY_WKT_COORD)
+    columns = _write(result, tmp_path, "CSV").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert "geometry" in columns
+    assert "t2m" in columns
+
+
+def test_a_null_geometry_is_rejected_rather_than_borrowed(tmp_path: Path) -> None:
+    """`pd.factorize` codes a null as -1, and `parsed[-1]` is the *last* polygon, not a missing one."""
+    result = _result()
+    wkt = result[GEOMETRY_WKT_COORD].values.astype(object)
+    wkt[0] = None
+    result = result.assign_coords({GEOMETRY_WKT_COORD: ("geometry", wkt)})
+    with pytest.raises(ValueError, match="no geometry"):
+        jobs._write_raster(result, tmp_path, "PARQUET")
+
+
+def test_a_custom_target_dimension_is_still_a_vector_cube(tmp_path: Path) -> None:
+    """`aggregate_spatial(target_dimension="regions")` names the dimension; the cube is no less vector for it.
+
+    The writer used to recognise a vector cube by the name `geometry` alone, so PARQUET on a
+    `regions` cube reported it as a raster with no geometry.
+    """
+    result = aggregate_spatial(_grid(), _districts(), _mean, target_dimension="regions")
+    assert "regions" in result.dims
+
+    frame = gpd.read_parquet(_write(result, tmp_path, "PARQUET"))
+    assert sorted(frame.geom_type.unique()) == ["Polygon"]
+    # The label column keeps the dimension's name: nothing else is competing for `regions`.
+    assert sorted(set(frame["regions"])) == ["MW.N", "MW.S"]
+    assert "geometry_id" not in frame.columns
 
 
 # --- the carrier must not leak into tabular output ----------------------------------------
