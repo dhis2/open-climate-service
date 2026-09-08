@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from open_climate_service.exports.base import BaseExportPlugin, RenderedExport
+from open_climate_service.exports.report import ExportOutcome, ExportReport
 from open_climate_service.exports.tabular import (
     _build_dhis2_json_payload,
     _is_nullish,
@@ -27,6 +28,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     extension = ".json"
     media_type = "application/json"
     version = "1"
+    supports_delivery = True
 
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
         allowed = {"series", "period_type", "org_unit_field", "period_field", "aggregation"}
@@ -132,6 +134,135 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             skipped_count=len(frame) - len(values),
             periods=tuple(sorted({value["period"] for value in values})),
         )
+
+    def send(self, payload: bytes, target: Any, *, dry_run: bool = False) -> ExportReport:
+        """POST the rendered dataValueSet and summarize the import result."""
+        import hashlib
+        from contextlib import closing
+
+        from open_climate_service.exports.dhis2 import get_connection
+        from open_climate_service.shared.time import utc_now
+
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError("DHIS2 delivery requires a named connection")
+        created_at = utc_now().isoformat()
+        payload_sha256 = hashlib.sha256(payload).hexdigest()
+        try:
+            body = json.loads(payload)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("DHIS2 delivery payload is not valid JSON") from exc
+        if not isinstance(body, dict) or not isinstance(body.get("dataValues"), list):
+            raise ValueError("DHIS2 delivery payload must be a dataValueSet")
+        submitted = len(body["dataValues"])
+
+        with closing(get_connection(target)) as client:
+            params: dict[str, str] = {"importStrategy": "CREATE_AND_UPDATE"}
+            if dry_run:
+                params["dryRun"] = "true"
+            try:
+                response = client.post("/api/dataValueSets", json=body, params=params)
+            except Exception as exc:
+                # The POST may have reached DHIS2 before failing (e.g. timeout).
+                # Record an unknown outcome rather than fabricating a rejection.
+                return ExportReport(
+                    plugin_id=self.id,
+                    connection_id=target,
+                    dry_run=dry_run,
+                    outcome=ExportOutcome.UNKNOWN,
+                    message=f"Transport error before the import result could be read: {type(exc).__name__}",
+                    payload_sha256=payload_sha256,
+                    submitted=submitted,
+                    created_at=created_at,
+                    finished_at=utc_now().isoformat(),
+                )
+        return build_dhis2_report(
+            _response_status(response),
+            _response_json(response),
+            plugin_id=self.id,
+            connection_id=target,
+            dry_run=dry_run,
+            payload_sha256=payload_sha256,
+            submitted=submitted,
+            created_at=created_at,
+        )
+
+
+def build_dhis2_report(
+    status_code: int,
+    summary: dict[str, Any],
+    *,
+    plugin_id: str,
+    connection_id: str,
+    dry_run: bool,
+    payload_sha256: str,
+    submitted: int,
+    created_at: str,
+) -> ExportReport:
+    """Translate a DHIS2 dataValueSets import response into an ExportReport."""
+    from open_climate_service.shared.time import utc_now
+
+    finished_at = utc_now().isoformat()
+    status = summary.get("status")
+    message = summary.get("message") or summary.get("httpStatus")
+    import_count = summary.get("importCount") or {}
+    if not isinstance(import_count, dict):
+        import_count = {}
+    conflicts = summary.get("conflicts") or []
+    if not isinstance(conflicts, list):
+        conflicts = []
+    remote_task_ids: list[str] = []
+    task_id = summary.get("id") or summary.get("taskId")
+    if isinstance(task_id, str) and task_id:
+        remote_task_ids.append(task_id)
+
+    def count(key: str) -> int:
+        value = import_count.get(key, 0)
+        return value if isinstance(value, int) else 0
+
+    base: dict[str, Any] = dict(
+        plugin_id=plugin_id,
+        connection_id=connection_id,
+        dry_run=dry_run,
+        payload_sha256=payload_sha256,
+        submitted=submitted,
+        imported=count("imported"),
+        updated=count("updated"),
+        ignored=count("ignored"),
+        deleted=count("deleted"),
+        conflicts=conflicts,
+        remote_task_ids=remote_task_ids,
+        created_at=created_at,
+        finished_at=finished_at,
+    )
+
+    if dry_run:
+        # A dry run reached DHIS2 validation; the summary describes what would
+        # happen, not persisted writes.
+        return ExportReport(outcome=ExportOutcome.DRY_RUN, message=message, **base)
+
+    if not 200 <= status_code < 300:
+        return ExportReport(outcome=ExportOutcome.REJECTED, message=message or f"HTTP {status_code}", **base)
+
+    if status == "ERROR":
+        return ExportReport(outcome=ExportOutcome.REJECTED, message=message, **base)
+    if status == "WARNING" or conflicts:
+        return ExportReport(outcome=ExportOutcome.PARTIAL, message=message, **base)
+    if status == "SUCCESS":
+        return ExportReport(outcome=ExportOutcome.SUCCESS, message=message, **base)
+    # A 2xx without a recognizable import summary cannot be trusted as success.
+    return ExportReport(outcome=ExportOutcome.UNKNOWN, message="Unrecognized import summary", **base)
+
+
+def _response_status(response: Any) -> int:
+    return response.status_code if isinstance(getattr(response, "status_code", None), int) else 0
+
+
+def _response_json(response: Any) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _uid(value: Any, field: str) -> str:

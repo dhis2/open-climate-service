@@ -1,8 +1,10 @@
-"""Public contract for pure export renderers."""
+"""Public contract for export renderers and optional delivery."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+
+from open_climate_service.exports.report import ExportReport
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ class BaseExportPlugin(ABC):
     # Renderer authors bump this when changing payload semantics. An unversioned
     # renderer may produce files but cannot supply a verified delivery input.
     version: str | None = None
+    # Render-only plugins leave this False; the delivery endpoint refuses them.
+    supports_delivery: bool = False
 
     @abstractmethod
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
@@ -45,3 +49,12 @@ class BaseExportPlugin(ABC):
     @abstractmethod
     def render(self, data: Any, mapping: dict[str, Any]) -> RenderedExport:
         """Serialize a computed result using a validated mapping."""
+
+    def send(self, payload: bytes, target: Any, *, dry_run: bool = False) -> ExportReport:
+        """Deliver a rendered payload and report what the far end accepted.
+
+        Delivery plugins override this and set ``supports_delivery = True``. The
+        default raises so a render-only plugin fails loudly instead of being
+        silently treated as a no-op delivery.
+        """
+        raise NotImplementedError(f"Export plugin '{self.id}' does not support delivery")
