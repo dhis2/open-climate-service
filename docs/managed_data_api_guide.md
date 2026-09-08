@@ -469,6 +469,18 @@ Expected planning response:
 `append` here means Open Climate Service reuses the planner's source-available delta and
 writes only missing periods to the existing Icechunk store. A rollback snapshot protects
 the previously committed store until normalization and artifact registration succeed.
+Progress counts the new periods in this append, excluding already committed history.
+
+If a complete store has lost its artifact record, repeating `/ingest` reconstructs the
+record from the store without querying or fetching historical source data. Recovery
+validates and normalizes the store and honors the request's publication setting.
+
+Interrupted directory rollback can leave a rejected replacement at `<store>.failed`.
+The next ingest restores a missing target from `<store>.retired` and removes the
+rejected copy once the target exists. If rollback itself fails, the job reports that
+failure and preserves the recovery branch and snapshot; inspect the reported store
+paths before retrying. Snapshot reset is skipped if the original repository could
+not be restored.
 
 Where these timestamps come from:
 

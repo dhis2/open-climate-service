@@ -1492,3 +1492,67 @@ def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(
     # And the delta landed on top of the history rather than replacing it.
     assert (target / "history").read_text(encoding="utf-8") == "2026-01-01,2026-01-02,2026-01-03"
     assert not retired.exists()
+
+
+@pytest.mark.parametrize("restored", [False, True])
+def test_recover_interrupted_rollback_removes_rejected_store(tmp_path: Path, restored: bool) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+
+    target = tmp_path / "ds.icechunk"
+    retired = tmp_path / "ds.icechunk.retired"
+    failed = tmp_path / "ds.icechunk.failed"
+    original = target if restored else retired
+    original.mkdir()
+    (original / "data").write_text("original", encoding="utf-8")
+    failed.mkdir()
+    (failed / "data").write_text("rejected", encoding="utf-8")
+
+    assert recover_interrupted_swap(target) is True
+    assert (target / "data").read_text(encoding="utf-8") == "original"
+    assert not retired.exists()
+    assert not failed.exists()
+    assert recover_interrupted_swap(target) is False
+
+
+def test_interrupted_rollback_preserves_copies_if_restore_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+
+    target = tmp_path / "ds.icechunk"
+    retired = tmp_path / "ds.icechunk.retired"
+    failed = tmp_path / "ds.icechunk.failed"
+    retired.mkdir()
+    failed.mkdir()
+
+    def fail_rename(self: Path, destination: Path) -> Path:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(Path, "rename", fail_rename)
+    with pytest.raises(OSError, match="rename failed"):
+        recover_interrupted_swap(target)
+    assert retired.exists()
+    assert failed.exists()
+    assert not target.exists()
+
+
+def test_rollback_refuses_to_claim_success_without_retained_store(tmp_path: Path) -> None:
+    from open_climate_service.ingestions.services import _rollback_store_swap
+
+    target = tmp_path / "ds.icechunk"
+    target.mkdir()
+    with pytest.raises(FileNotFoundError, match="retained store .* is missing"):
+        _rollback_store_swap(target)
+    assert target.exists()
+
+
+def test_recovery_does_not_publish_a_rejected_store_without_original(tmp_path: Path) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+
+    target = tmp_path / "ds.icechunk"
+    failed = tmp_path / "ds.icechunk.failed"
+    failed.mkdir()
+    with pytest.raises(RuntimeError, match="only the rejected .failed store remains"):
+        recover_interrupted_swap(target)
+    assert failed.exists()
+    assert not target.exists()

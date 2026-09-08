@@ -91,7 +91,7 @@ _icechunk_artifact_cache: dict[str, tuple[float, "ArtifactRecord"]] = {}
 
 @dataclass(frozen=True)
 class _StreamingMaterializationPlan:
-    """Write shape selected before a streaming ingest mutates its store."""
+    """Cumulative bounds and periods to fetch, selected before store mutation."""
 
     action: SyncAction
     start: str
@@ -315,16 +315,15 @@ def create_artifact(
 
 def _period_order_key(period: str, period_type: str) -> str:
     """Return a lexically sortable key for one normalized period id."""
-    normalized = normalize_period_string(period, period_type)
     if period_type == "climatology":
         try:
-            return f"{int(normalized):03d}"
+            return f"{int(period):03d}"
         except ValueError as exc:
             raise HTTPException(
                 status_code=409,
-                detail=f"Source returned invalid climatology period '{period}'",
+                detail=f"Invalid climatology period '{period}'",
             ) from exc
-    return normalized
+    return period
 
 
 def _normalize_ordered_periods(
@@ -335,12 +334,13 @@ def _normalize_ordered_periods(
         normalized = [normalize_period_string(period, period_type) for period in periods]
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=f"{source} returned an invalid period sequence: {exc}") from exc
-    keys = [_period_order_key(period, period_type) for period in normalized]
-    if require_ordered and (len(set(normalized)) != len(normalized) or keys != sorted(keys)):
-        raise HTTPException(
-            status_code=409,
-            detail=f"{source} periods must be unique and in ascending order; refusing to mutate the store",
-        )
+    if require_ordered:
+        keys = [_period_order_key(period, period_type) for period in normalized]
+        if len(set(normalized)) != len(normalized) or keys != sorted(keys):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{source} periods must be unique and in ascending order; refusing to mutate the store",
+            )
     return normalized
 
 
@@ -498,7 +498,7 @@ def _plan_streaming_materialization(
             action=SyncAction.APPEND,
             start=current_start,
             end=delta[-1],
-            periods=[*committed, *delta],
+            periods=delta,
             has_committed_periods=True,
         )
 
@@ -608,10 +608,18 @@ def _create_streaming_artifact(
             periods=periods,
         )
         if plan.action == SyncAction.NO_OP:
-            existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
-            if publish and existing.publication.status != PublicationStatus.PUBLISHED:
-                return publish_artifact_record(existing.artifact_id)
-            return existing
+            try:
+                existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                # Committed data may outlive its registration after a crash or
+                # loss of the index. Validate and register it without refetching.
+                logger.warning("Re-registering committed store '%s' without an artifact record", store_path)
+            else:
+                if publish and existing.publication.status != PublicationStatus.PUBLISHED:
+                    return publish_artifact_record(existing.artifact_id)
+                return existing
         materialization_scope = request_scope.model_copy(update={"start": plan.start, "end": plan.end})
 
         ingest_path = store_path
@@ -634,23 +642,24 @@ def _create_streaming_artifact(
             rollback_snapshot = snapshot
             rollback_branch = branch
 
-        plugin_handed_to_orchestrator = True
-        result = run_streaming_ingest_sync(
-            plugin=plugin,
-            params=params,
-            dataset=dataset,
-            bbox=bbox,
-            start=plan.start,
-            end=plan.end,
-            store_path=ingest_path,
-            period_type=str(dataset["period_type"]),
-            on_progress=on_progress,
-            is_cancel_requested=is_cancel_requested,
-            save_cursor=save_cursor,
-            periods=plan.periods,
-        )
-        if result.periods_written == 0 and not ingest_path.exists():
-            raise HTTPException(status_code=409, detail="Source has no data for the requested temporal scope")
+        if plan.action != SyncAction.NO_OP:
+            plugin_handed_to_orchestrator = True
+            result = run_streaming_ingest_sync(
+                plugin=plugin,
+                params=params,
+                dataset=dataset,
+                bbox=bbox,
+                start=plan.start,
+                end=plan.end,
+                store_path=ingest_path,
+                period_type=str(dataset["period_type"]),
+                on_progress=on_progress,
+                is_cancel_requested=is_cancel_requested,
+                save_cursor=save_cursor,
+                periods=plan.periods,
+            )
+            if result.periods_written == 0 and not ingest_path.exists():
+                raise HTTPException(status_code=409, detail="Source has no data for the requested temporal scope")
 
         coverage_data = get_data_coverage_for_paths(dataset, icechunk_path=str(ingest_path.resolve()))
         if not coverage_data.get("has_data", True):
@@ -719,7 +728,6 @@ def _create_streaming_artifact(
         )
         stored_record = _upsert_artifact_record(
             record,
-            publish=publish,
             overwrite=overwrite,
         )
         store_committed = True
@@ -743,11 +751,13 @@ def _create_streaming_artifact(
         return stored_record
     finally:
         try:
+            rollback_error: Exception | None = None
             if published_swap_pending and not store_committed:
                 try:
                     _rollback_store_swap(store_path)
                     published_swap_pending = False
-                except Exception:
+                except Exception as exc:
+                    rollback_error = exc
                     logger.error(
                         "Could not restore the previous store for '%s' after artifact registration failed",
                         store_path,
@@ -766,12 +776,19 @@ def _create_streaming_artifact(
                         close_plugin()
                     except Exception:
                         logger.warning("Could not close ingestion plugin after planning failure", exc_info=True)
-            if rollback_repo is not None and rollback_branch is not None and rollback_snapshot is not None:
+            if (
+                rollback_error is None
+                and rollback_repo is not None
+                and rollback_branch is not None
+                and rollback_snapshot is not None
+            ):
                 try:
                     if not store_committed:
                         rollback_repo.reset_branch("main", rollback_snapshot)
                     rollback_repo.delete_branch(rollback_branch)
-                except Exception:
+                except Exception as exc:
+                    if not store_committed:
+                        rollback_error = exc
                     logger.error(
                         "Could not %s append transaction for '%s'",
                         "roll back" if not store_committed else "clean up",
@@ -787,6 +804,12 @@ def _create_streaming_artifact(
                     # Cleanup is best-effort: the published store is still intact and the next
                     # overwrite removes this path before reuse. Do not mask the ingest failure.
                     logger.warning("Could not remove replacement store '%s'", replacement_path, exc_info=True)
+            if rollback_error is not None:
+                raise RuntimeError(
+                    f"Ingestion failed and rollback could not complete for '{store_path}'. "
+                    f"Retained recovery data and branch '{rollback_branch}' at snapshot '{rollback_snapshot}'; "
+                    "inspect the store and its .retired/.failed paths before retrying."
+                ) from rollback_error
         finally:
             # Releasing the in-process writer lock must not depend on filesystem cleanup.
             lock.release()
@@ -813,19 +836,26 @@ def recover_interrupted_swap(target: Path) -> bool:
     reader looks for. Called before the store is opened, so the next sync heals it rather
     than reporting an unreadable dataset.
 
+    An interrupted rollback also leaves its rejected replacement at ``.failed``.
+    Remove that copy only after the original store has been restored.
+
     Returns True when a recovery was performed.
     """
     retired = _retired_path(target)
-    if target.exists() or not retired.is_dir():
-        return False
-    retired.rename(target)
-    logger.warning(
-        "Recovered '%s' from '%s': a previous store swap was interrupted between its two "
-        "renames, leaving the published path missing.",
-        target.name,
-        retired.name,
-    )
-    return True
+    failed = target.with_name(f"{target.name}.failed")
+    recovered = False
+    if not target.exists() and retired.is_dir():
+        retired.rename(target)
+        recovered = True
+        logger.warning("Recovered '%s' from '%s' after an interrupted swap", target.name, retired.name)
+    # A rollback interrupted before or after restoring the retired store leaves
+    # its rejected replacement here. Delete it only once a usable target exists.
+    if target.exists() and failed.exists():
+        _remove_store_path(failed)
+        recovered = True
+    if not target.exists() and failed.exists():
+        raise RuntimeError(f"Cannot recover '{target}': only the rejected .failed store remains")
+    return recovered
 
 
 def _swap_store(staging: Path, target: Path, *, retain_previous: bool = False) -> None:
@@ -865,7 +895,7 @@ def _rollback_store_swap(target: Path) -> None:
     """Restore the retained store when replacement metadata cannot be persisted."""
     retired = _retired_path(target)
     if not retired.exists():
-        return
+        raise FileNotFoundError(f"Cannot roll back '{target}': retained store '{retired}' is missing")
     failed = target.with_name(f"{target.name}.failed")
     _remove_store_path(failed)
     target.rename(failed)
@@ -1002,7 +1032,7 @@ def register_artifact_record(record: ArtifactRecord, *, publish: bool) -> Artifa
     record's metadata — name, coverage, paths — rather than silently keeping the
     stale record, while preserving its artifact id and publication state.
     """
-    stored = _upsert_artifact_record(record, publish=publish, overwrite=True)
+    stored = _upsert_artifact_record(record, overwrite=True)
     if publish and stored.publication.status != PublicationStatus.PUBLISHED:
         return publish_artifact_record(stored.artifact_id)
     return stored
@@ -1385,11 +1415,7 @@ def _save_records(records: list[ArtifactRecord]) -> None:
     ARTIFACTS_INDEX_PATH.write_text(_encode_records(records), encoding="utf-8")
 
 
-def _store_artifact_record(
-    record: ArtifactRecord,
-    *,
-    publish: bool,
-) -> ArtifactRecord:
+def _store_artifact_record(record: ArtifactRecord) -> ArtifactRecord:
     """Persist a newly created artifact record while avoiding lost updates."""
 
     def mutate(records: list[ArtifactRecord]) -> ArtifactRecord:
@@ -1410,12 +1436,11 @@ def _store_artifact_record(
 def _upsert_artifact_record(
     record: ArtifactRecord,
     *,
-    publish: bool,
     overwrite: bool,
 ) -> ArtifactRecord:
     """Persist a new or replacement artifact record for the same logical request scope."""
     if not overwrite:
-        return _store_artifact_record(record, publish=publish)
+        return _store_artifact_record(record)
 
     def mutate(records: list[ArtifactRecord]) -> ArtifactRecord:
         existing = _find_artifact_by_request_scope(
@@ -1459,19 +1484,6 @@ def _mutate_records(mutation: Callable[[list[ArtifactRecord]], ArtifactRecord]) 
         os.fsync(handle.fileno())
         portalocker.unlock(handle)
         return result
-
-
-def _find_existing_artifact(
-    *,
-    dataset_id: str,
-    request_scope: ArtifactRequestScope,
-) -> ArtifactRecord | None:
-    """Return an existing artifact for an identical logical request when possible."""
-    return _find_existing_artifact_in_records(
-        records=_load_records(),
-        dataset_id=dataset_id,
-        request_scope=request_scope,
-    )
 
 
 def _normalize_request_period(value: str, *, period_type: str, field_name: str) -> str:
@@ -1602,38 +1614,6 @@ def _validate_download_scope(
         raise HTTPException(status_code=400, detail="download_end must be less than or equal to end")
 
 
-def _find_existing_artifact_in_records(
-    *,
-    records: list[ArtifactRecord],
-    dataset_id: str,
-    request_scope: ArtifactRequestScope,
-) -> ArtifactRecord | None:
-    """Return an existing artifact for an identical logical request from a provided record set."""
-    for record in reversed(records):
-        if not _artifact_storage_exists(record):
-            logger.warning(
-                "Ignoring stale artifact '%s' because backing storage is missing",
-                record.artifact_id,
-            )
-            continue
-        if record.dataset_id != dataset_id:
-            continue
-        if record.request_scope != request_scope:
-            continue
-        if not _artifact_coverage_matches_request_scope(record):
-            logger.warning(
-                "Ignoring existing artifact '%s' because coverage %s..%s does not match request scope %s..%s",
-                record.artifact_id,
-                record.coverage.temporal.start,
-                record.coverage.temporal.end,
-                record.request_scope.start,
-                record.request_scope.end,
-            )
-            continue
-        return record
-    return None
-
-
 def _find_artifact_by_request_scope(
     *,
     records: list[ArtifactRecord],
@@ -1642,9 +1622,9 @@ def _find_artifact_by_request_scope(
 ) -> ArtifactRecord | None:
     """Return the latest materialized record for the same operation request.
 
-    Unlike the API reuse lookup above, persistence must allow cumulative coverage
-    to extend beyond a finite incremental request. The caller compares coverage
-    when deduplicating and replaces the record explicitly for overwrite semantics.
+    Persistence allows cumulative coverage to extend beyond a finite incremental
+    request. The caller compares coverage when deduplicating and replaces the record
+    explicitly for overwrite semantics.
     """
     for record in reversed(records):
         if record.dataset_id != dataset_id or record.request_scope != request_scope:
@@ -1652,11 +1632,6 @@ def _find_artifact_by_request_scope(
         if _artifact_storage_exists(record):
             return record
     return None
-
-
-def _artifact_coverage_matches_request_scope(record: ArtifactRecord) -> bool:
-    """Return whether an existing artifact is safe to reuse for its request scope."""
-    return _temporal_coverage_matches_request_scope(record.coverage.temporal, record.request_scope)
 
 
 def _materialized_records(records: list[ArtifactRecord]) -> list[ArtifactRecord]:
