@@ -372,8 +372,8 @@ curl -s -o thumb.png "http://127.0.0.1:9000/datasets/chirps3_precipitation_daily
 
 A thumbnail is written at the end of each ingest and sync run, so a published dataset normally
 has one. The endpoint 404s when it does not — a dataset not yet ingested, or a render that
-failed or found nothing to draw — and that is a "no preview" answer rather than a server fault.
-The STAC collection advertises the `thumbnail` asset only when the image exists.
+failed or found nothing to draw. The STAC collection advertises the `thumbnail` asset only when
+the image exists.
 
 ## 10. Access published STAC collections
 
