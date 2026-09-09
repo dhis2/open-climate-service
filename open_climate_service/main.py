@@ -20,6 +20,7 @@ from open_climate_service.openeo.jobs import get_openeo_job_service
 from open_climate_service.read_only import read_only_middleware
 from open_climate_service.scheduler import routes as scheduler_routes
 from open_climate_service.scheduler.service import get_scheduler_service
+from open_climate_service.shared import urls
 from open_climate_service.stac import routes as stac_routes
 from open_climate_service.system import routes as system_routes
 
@@ -106,7 +107,12 @@ def create_app() -> FastAPI:
         from open_climate_service.main import create_app
         app = create_app()
     """
-    _app = FastAPI(lifespan=_lifespan)
+    # `root_path` from the environment here rather than only in `cli.py`, so a deployment
+    # prefix applies under `make run` and bare uvicorn as well as the `climate-service` entry
+    # point. Reading the base URL once at boot surfaces an unusable value in the startup log,
+    # instead of on the first request that builds a link.
+    _app = FastAPI(lifespan=_lifespan, root_path=urls.configured_root_path())
+    urls.configured_base()
 
     # Registered *before* CORS so it ends up innermost: Starlette applies the most recently
     # added middleware outermost, so CORS wraps this and a 403 still carries the headers a
@@ -170,7 +176,8 @@ def create_app() -> FastAPI:
 
         # Extra CORS + PNA headers for Zarr inspector origins on /zarr paths.
         allowed_zarr_origin = origin if origin in _zarr_browser_access_origins() else None
-        if allowed_zarr_origin and (request.url.path == "/zarr" or request.url.path.startswith("/zarr/")):
+        path = urls.route_path(request)
+        if allowed_zarr_origin and (path == "/zarr" or path.startswith("/zarr/")):
             response.headers["Access-Control-Allow-Origin"] = allowed_zarr_origin
             _append_vary_value(response, "Origin")
             response.headers.setdefault("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
