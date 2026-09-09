@@ -128,8 +128,8 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
     dataset_href = absolute_url(request, f"/datasets/{dataset_id}")
     zarr_href = absolute_url(request, f"/zarr/{dataset_id}")
     # Only when the file is actually there: a collection that advertises a thumbnail a client
-    # then 404s on is worse than one that advertises none. A render that found nothing to draw
-    # leaves a published dataset without one, so absence is normal rather than a fault.
+    # then 404s on is worse than one that advertises none. A render that failed or found
+    # nothing to draw leaves an otherwise complete collection without the asset.
     thumbnail_href = (
         absolute_url(request, f"/datasets/{dataset_id}/thumbnail.png") if thumbnail_path(dataset_id).is_file() else None
     )

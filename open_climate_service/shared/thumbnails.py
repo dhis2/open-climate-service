@@ -314,11 +314,10 @@ def write_dataset_thumbnail(
 
     Nothing here removes an existing thumbnail. A run that fails to render, or whose
     representative slice turns out to be entirely missing, leaves the previous image in place
-    rather than deleting it, so the published thumbnail can be a sync run or more stale. That
-    is deliberate: an all-missing slice is nearly always a transient gap at the step nearest
-    now, not a store that has become blank, and a slightly old picture still does the job the
-    image is there for — recognising the layer, and catching a flipped grid or a wrong extent.
-    Deleting it would trade a stale thumbnail for none at all.
+    rather than deleting it, so the published thumbnail can be a run or more stale. That is
+    deliberate: the image is there to identify the layer and to catch a flipped grid or a wrong
+    extent, and an older slice still does that, so deleting would trade a stale thumbnail for
+    none at all.
     """
     import logging
     import os

@@ -352,9 +352,9 @@ def test_a_failing_render_leaves_the_published_thumbnail_untouched(
 
 
 def test_an_all_missing_slice_keeps_the_previous_thumbnail(tmp_path: Path) -> None:
-    """Deliberate, and the counterpart to the test above. An all-missing representative slice
-    is nearly always a transient gap at the step nearest now, not a store that has gone blank,
-    so the old picture still identifies the layer. Deleting it would trade stale for nothing."""
+    """Deliberate, and the counterpart to the test above. The image is there to identify the
+    layer and to catch a flipped grid or a wrong extent, which an older slice still does, so
+    deleting on a slice with nothing to draw would trade a stale thumbnail for none at all."""
     published = write_dataset_thumbnail(_store(tmp_path, _daily_cube(2)), DATASET, now=GENERATED_AT)
     assert published is not None
     good = published.read_bytes()
