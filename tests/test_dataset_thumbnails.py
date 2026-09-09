@@ -28,7 +28,8 @@ from open_climate_service.data_manager.services import downloader
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.shared import thumbnails
 from open_climate_service.shared.thumbnails import (
-    THUMBNAIL_MAX_PIXELS,
+    THUMBNAIL_LONG_SIDE_PIXELS,
+    declared_midpoint,
     render_png,
     representative_slice,
     resolve_colormap,
@@ -89,7 +90,7 @@ def _rendered_reference(arr: Any, tmp_path: Path) -> bytes:
         tmp_path / "reference.png",
         colormap="blues",
         clim=stretch_range(arr.values),
-        max_pixels=THUMBNAIL_MAX_PIXELS,
+        long_side=THUMBNAIL_LONG_SIDE_PIXELS,
     )
     return reference.read_bytes()
 
@@ -101,7 +102,7 @@ def _rendered_declared_range(arr: Any, tmp_path: Path) -> bytes:
         tmp_path / "declared.png",
         colormap="blues",
         clim=(0.0, 20.0),
-        max_pixels=THUMBNAIL_MAX_PIXELS,
+        long_side=THUMBNAIL_LONG_SIDE_PIXELS,
     ).read_bytes()
 
 
@@ -168,24 +169,63 @@ def test_the_nearest_step_is_chosen_by_dtype_not_by_a_declared_period_type(tmp_p
 # -- size --------------------------------------------------------------------------------
 
 
-def test_the_thumbnail_is_capped_at_the_stac_recommended_size(tmp_path: Path) -> None:
-    """STAC best practice for the `thumbnail` role is under 600x600. A store is routinely far
-    larger than that, so the cap has to be applied rather than assumed."""
+def _rendered_size(path: Path) -> tuple[int, int]:
     from matplotlib import image as mpimg
 
+    height, width = mpimg.imread(path).shape[:2]
+    return height, width
+
+
+def test_a_store_larger_than_the_target_is_scaled_down(tmp_path: Path) -> None:
+    """STAC best practice for the `thumbnail` role is under 600x600, and a store is routinely
+    far larger, so the size has to be applied rather than assumed."""
     big = xr.Dataset(
         {"precip": (("y", "x"), np.random.default_rng(0).random((1200, 800), dtype="float32"))},
         coords={"y": np.linspace(10.0, 0.0, 1200), "x": np.linspace(0.0, 8.0, 800)},
     )
-    store = _store(tmp_path, big, t_dim=None)
 
-    written = write_dataset_thumbnail(store, DATASET, now=GENERATED_AT)
+    written = write_dataset_thumbnail(_store(tmp_path, big, t_dim=None), DATASET, now=GENERATED_AT)
 
     assert written is not None
-    height, width = mpimg.imread(written).shape[:2]
-    assert max(height, width) <= THUMBNAIL_MAX_PIXELS
-    # The aspect ratio survives the cap: 1200x800 scaled by 600/1200 is 600x400.
-    assert (height, width) == (600, 400)
+    # The aspect ratio survives: 1200x800 scaled by 512/1200 is 512x341.
+    assert _rendered_size(written) == (THUMBNAIL_LONG_SIDE_PIXELS, 341)
+
+
+def test_a_store_coarser_than_the_target_is_scaled_up(tmp_path: Path) -> None:
+    """Both directions. A 32x16 forecast grid left at its own size is a postage stamp in any
+    client that does not scale it, and mush in any client that does — we control the CSS in
+    neither STAC Browser nor a DHIS2 app, so the resolution is decided here instead."""
+    coarse = xr.Dataset(
+        {"precip": (("y", "x"), np.random.default_rng(0).random((16, 32), dtype="float32"))},
+        coords={"y": np.linspace(10.0, 0.0, 16), "x": np.linspace(0.0, 20.0, 32)},
+    )
+
+    written = write_dataset_thumbnail(_store(tmp_path, coarse, t_dim=None), DATASET, now=GENERATED_AT)
+
+    assert written is not None
+    # 32x16 enlarged by 512/32 is 512x256, and the aspect ratio is unchanged.
+    assert _rendered_size(written) == (256, THUMBNAIL_LONG_SIDE_PIXELS)
+
+
+def test_an_enlarged_thumbnail_keeps_its_cell_boundaries(tmp_path: Path) -> None:
+    """Nearest-neighbour, not a smooth blow-up: a coarse dataset should look coarse. A 2x2
+    field enlarged 256x either has four flat quadrants or it has been interpolated."""
+    tiny = xr.Dataset(
+        {"precip": (("y", "x"), np.array([[0.0, 1.0], [2.0, 3.0]], dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+
+    written = write_dataset_thumbnail(_store(tmp_path, tiny, t_dim=None), DATASET, now=GENERATED_AT)
+
+    assert written is not None
+    from matplotlib import image as mpimg
+
+    image = mpimg.imread(written)
+    half = THUMBNAIL_LONG_SIDE_PIXELS // 2
+    # Each quadrant is one source cell, so it is a single colour throughout.
+    for row, col in ((0, 0), (0, half), (half, 0), (half, half)):
+        quadrant = image[row + 10 : row + half - 10, col + 10 : col + half - 10]
+        assert np.allclose(quadrant, quadrant[0, 0]), "an enlarged cell was interpolated"
 
 
 # -- failure is not an ingest failure -----------------------------------------------------
@@ -291,6 +331,73 @@ def test_the_stretch_resists_a_single_outlier() -> None:
 
     assert high < 11.0, f"one outlier took the whole range: {(low, high)}"
     assert (low, high) != (float(field.min()), float(field.max()))
+
+
+@pytest.mark.parametrize(
+    "declared,midpoint",
+    [
+        ([-5.0, 5.0], 0.0),  # temperature anomaly
+        ([-30.0, 30.0], 0.0),  # temperature in Celsius, where zero is freezing
+        ([-3, 3], 0.0),  # SPI
+        ([0.0, 20.0], None),  # precipitation
+        ([0, 4000], None),  # elevation, which pairs Spectral_r with a one-sided range
+        ([-0.1, 1.0], None),  # NDVI: negative, but not symmetric
+        ([-1.0, 1.5], None),
+        (None, None),
+        ("nonsense", None),
+    ],
+)
+def test_only_a_zero_symmetric_declared_range_names_a_midpoint(declared: Any, midpoint: float | None) -> None:
+    """The signal for "this quantity diverges about zero" is the declared range, not the
+    colormap: `copernicus_dem_elevation` uses the diverging Spectral_r over [0, 4000] and must
+    not be centred, and across the shipped templates the split by range is exact."""
+    assert declared_midpoint(declared) == midpoint
+
+
+def test_a_diverging_scale_keeps_zero_at_its_midpoint(tmp_path: Path) -> None:
+    """Blue means below normal. Stretched to its own extremes, an anomaly slice that happens
+    to be entirely positive would still render half blue and invert that meaning."""
+    all_positive = np.linspace(0.5, 4.0, 100).astype("float32")
+
+    low, high = stretch_range(all_positive, midpoint=0.0) or (0.0, 0.0)
+
+    assert low == -high, "the range is not symmetric about zero"
+    assert low < 0.0 < high
+    # Every value sits in the upper half, so nothing renders on the "below" side of the scale.
+    assert float(all_positive.min()) > 0.0
+
+
+def test_a_sequential_scale_is_not_centred(tmp_path: Path) -> None:
+    """Centring a one-sided quantity would throw away half the colour scale on values that
+    cannot occur — no rainfall is below zero."""
+    rain = np.linspace(0.0, 4.0, 100).astype("float32")
+
+    assert stretch_range(rain, midpoint=None) != stretch_range(rain, midpoint=0.0)
+    low, _ = stretch_range(rain, midpoint=None) or (0.0, 0.0)
+    assert low >= 0.0
+
+
+def test_an_anomaly_store_renders_centred_on_zero(tmp_path: Path) -> None:
+    """Through the entry point, since the midpoint has to be read off the template's declared
+    range and reach the render — the wiring is the part that can silently not happen."""
+    anomaly = xr.Dataset(
+        {"precip": (("y", "x"), np.array([[0.5, 1.0], [2.0, 4.0]], dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+    store = _store(tmp_path, anomaly, t_dim=None)
+    diverging = {**DATASET, "display": {"colormap": "rdbu_r", "range": [-5.0, 5.0]}}
+
+    written = write_dataset_thumbnail(store, diverging, now=GENERATED_AT)
+
+    assert written is not None
+    expected = render_png(
+        anomaly["precip"],
+        tmp_path / "centred.png",
+        colormap="rdbu_r",
+        clim=stretch_range(anomaly["precip"].values, midpoint=0.0),
+        long_side=THUMBNAIL_LONG_SIDE_PIXELS,
+    ).read_bytes()
+    assert written.read_bytes() == expected
 
 
 # -- when it is generated ------------------------------------------------------------------

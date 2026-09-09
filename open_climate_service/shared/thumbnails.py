@@ -9,8 +9,8 @@ Both callers render the same way and differ only in what they are for, so the di
 one parameter rather than two renderers:
 
 * an openEO ``PNG`` result is a *data product* — it keeps the cube's own pixel dimensions;
-* a STAC thumbnail is an *icon* — it is capped at :data:`THUMBNAIL_MAX_PIXELS`, which is the
-  STAC best-practice size for the role ("low resolution, restricted spatial extent").
+* a STAC thumbnail is an *icon* — its longest side is rendered at
+  :data:`THUMBNAIL_LONG_SIDE_PIXELS` whatever the store's resolution.
 """
 
 from __future__ import annotations
@@ -21,9 +21,20 @@ from typing import Any
 
 from open_climate_service import config as api_config
 
-# STAC best practice for the `thumbnail` role is "less than 600x600 pixels". The longest
-# side is scaled to this and the other follows, so the aspect ratio is never distorted.
-THUMBNAIL_MAX_PIXELS = 600
+# The longest side is rendered at this size and the other follows, so the aspect ratio is
+# never distorted. Every thumbnail therefore has the same longest side whatever the store's
+# resolution, which is what makes a gallery of them line up.
+#
+# Both directions, not just down. Pixel dimensions do not limit how large a client displays
+# the file — CSS does — but we do not control the CSS in STAC Browser or a DHIS2 app, and
+# their default smoothing turns a coarse grid into mush when it is blown up from 32x16.
+# Upscaling here with nearest-neighbour keeps the cell boundaries crisp, which is also the
+# honest picture of a coarse dataset, and costs a couple of KB: flat blocks compress well.
+#
+# 512 rather than 600: STAC best practice for the role is "less than 600x600 pixels", and a
+# square store rendered at an exact 600 long side would sit on that boundary rather than
+# inside it.
+THUMBNAIL_LONG_SIDE_PIXELS = 512
 
 _DEFAULT_COLORMAP = "viridis"
 
@@ -115,7 +126,7 @@ def render_png(
     *,
     colormap: str | None = None,
     clim: tuple[float, float] | None = None,
-    max_pixels: int | None = None,
+    long_side: int | None = None,
 ) -> Path:
     """Render a 2-D DataArray to a styled PNG at *path*, and return that path.
 
@@ -123,9 +134,10 @@ def render_png(
     used, which is right for a one-off render and wrong for comparing two of them, so
     callers that have a declared display range should pass it.
 
-    ``max_pixels`` caps the longest side and produces an image of exactly the computed size.
-    Left as None, the figure is sized from the data at 150 dpi with a minimum of 4x3 inches
-    and a tight bounding box — the openEO ``PNG`` result behaviour, kept as it was.
+    ``long_side`` renders the longest side at exactly that many pixels, scaling up as well as
+    down, with the other side following so the aspect ratio holds. Left as None, the figure is
+    sized from the data at 150 dpi with a minimum of 4x3 inches and a tight bounding box — the
+    openEO ``PNG`` result behaviour, kept as it was.
     """
     import matplotlib
 
@@ -160,16 +172,18 @@ def render_png(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if max_pixels is None:
+    if long_side is None:
         dpi = 150
         fig, ax = plt.subplots(figsize=(max(4, width / dpi), max(3, height / dpi)), dpi=dpi)
         save_kwargs: dict[str, Any] = {"bbox_inches": "tight"}
     else:
         # Exact output dimensions: the axes fill the figure, and no tight bounding box is
         # applied, because trimming would make the final pixel size unpredictable and the
-        # cap is a promise about the published file rather than about the figure.
+        # size is a promise about the published file rather than about the figure. The scale
+        # is not clamped to 1, so a store coarser than the target is enlarged rather than left
+        # tiny; `interpolation="nearest"` below keeps the enlargement blocky rather than blurred.
         dpi = 100
-        scale = min(1.0, max_pixels / max(height, width))
+        scale = long_side / max(height, width)
         fig, ax = plt.subplots(
             figsize=(max(1, round(width * scale)) / dpi, max(1, round(height * scale)) / dpi), dpi=dpi
         )
@@ -180,7 +194,7 @@ def render_png(
         fig.patch.set_alpha(0)
         ax.imshow(data, origin="upper", cmap=cmap, norm=norm, interpolation="nearest")
         ax.axis("off")
-        if max_pixels is None:
+        if long_side is None:
             fig.tight_layout(pad=0)
         fig.savefig(path, dpi=dpi, transparent=True, pad_inches=0, **save_kwargs)
     finally:
@@ -196,8 +210,34 @@ def render_png(
 _STRETCH_PERCENTILES = (2.0, 98.0)
 
 
-def stretch_range(data: Any) -> tuple[float, float] | None:
+def declared_midpoint(declared: Any) -> float | None:
+    """Zero when *declared* is a display range symmetric about it, else None.
+
+    A template that declares ``[-5, 5]`` or ``[-30, 30]`` is saying the quantity diverges
+    about zero — an anomaly, or a temperature in Celsius where zero is freezing — and pairs
+    that range with a diverging colormap. One that declares ``[0, 20]`` or ``[0, 4000]`` is
+    saying the opposite. Across the Nepal and Norway instances that split is exact, so the
+    declaration is a better signal than a hardcoded list of diverging colormap names: it also
+    gets ``copernicus_dem_elevation`` right, which pairs the diverging ``Spectral_r`` with a
+    ``[0, 4000]`` range and must *not* be centred.
+    """
+    if not isinstance(declared, (list, tuple)) or len(declared) != 2:
+        return None
+    try:
+        low, high = float(declared[0]), float(declared[1])
+    except (TypeError, ValueError):
+        return None
+    return 0.0 if low < 0.0 and high == -low else None
+
+
+def stretch_range(data: Any, *, midpoint: float | None = None) -> tuple[float, float] | None:
     """The value range a thumbnail should span for *data*, or None if there is nothing to show.
+
+    ``midpoint`` keeps a diverging scale honest. Stretched to its own extremes, a slice of an
+    anomaly field that happens to be entirely positive would still render half blue, so blue
+    would no longer mean "below normal" — the one thing the colour is there to say. Given a
+    midpoint the range is made symmetric about it instead, so the neutral colour always lands
+    on the neutral value and only the *span* varies with the slice.
 
     Scaled to the slice rather than to the template's declared ``display.range``. The declared
     range is chosen so a dataset's *layers* are comparable with each other in the viewer, and
@@ -226,6 +266,9 @@ def stretch_range(data: Any) -> tuple[float, float] | None:
         low, high = float(finite.min()), float(finite.max())
     if high <= low:
         low, high = low - 0.5, low + 0.5
+    if midpoint is not None:
+        half = max(abs(low - midpoint), abs(high - midpoint)) or 0.5
+        return midpoint - half, midpoint + half
     return low, high
 
 
@@ -267,7 +310,7 @@ def write_dataset_thumbnail(
         display = dataset.get("display")
         display = display if isinstance(display, dict) else {}
         chosen = representative_slice(ds[variable], now=now)
-        clim = stretch_range(chosen.values)
+        clim = stretch_range(chosen.values, midpoint=declared_midpoint(display.get("range")))
         if clim is None:
             logger.warning("Every value in the slice chosen for '%s' is missing; no thumbnail", dataset_id)
             return None
@@ -276,7 +319,7 @@ def write_dataset_thumbnail(
             thumbnail_path(dataset_id),
             colormap=display.get("colormap"),
             clim=clim,
-            max_pixels=THUMBNAIL_MAX_PIXELS,
+            long_side=THUMBNAIL_LONG_SIDE_PIXELS,
         )
     except Exception:
         logger.warning("Could not render a thumbnail for '%s'; publishing without one", dataset_id, exc_info=True)
