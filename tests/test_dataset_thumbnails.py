@@ -1,0 +1,422 @@
+"""Dataset thumbnails: which slice is rendered, when, and how it reaches STAC (CLIM-1076).
+
+A thumbnail is what makes a bad ingest visible — a flipped grid, a wrong extent, a unit
+error all look identical in metadata. So the tests here assert the *content* of the image
+(which slice it shows) rather than only that a file appeared, by rendering the expected
+slice independently and comparing bytes.
+
+The two timing tests are a pair, and neither is sufficient alone: one asserts the renderer
+is never reached during a multi-period sync, the other that one ingest produces exactly one
+render. Together they pin "once per run, at the end" rather than "per commit", which is a
+distinction invisible in the published result — only the final image survives either way.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+import xarray as xr
+from fastapi.testclient import TestClient
+
+from open_climate_service.data_manager.services import downloader
+from open_climate_service.ingestions import services as ingestion_services
+from open_climate_service.shared import thumbnails
+from open_climate_service.shared.thumbnails import (
+    THUMBNAIL_MAX_PIXELS,
+    render_png,
+    representative_slice,
+    resolve_colormap,
+    thumbnail_path,
+    write_dataset_thumbnail,
+)
+
+# A date the tests pin so "nearest to now" is a fixed answer rather than a moving one.
+GENERATED_AT = datetime(2026, 3, 1, tzinfo=UTC)
+
+DATASET = {"id": "thumb_dataset", "variable": "precip", "display": {"colormap": "blues", "range": [0.0, 10.0]}}
+
+
+@pytest.fixture(autouse=True)
+def _data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Point the data root at a temp dir so thumbnails never land in the developer's own."""
+    root = tmp_path / "data"
+    monkeypatch.setattr(thumbnails.api_config, "get_data_root", lambda: root)
+    return root
+
+
+def _store(tmp_path: Path, ds: xr.Dataset, *, t_dim: str | None = "t") -> Path:
+    """Write *ds* to a real Icechunk store, so the read path under test is the real one."""
+    path = tmp_path / "thumb.icechunk"
+    downloader.write_to_icechunk_store(ds, path, t_dim=t_dim, commit_message="test")
+    return path
+
+
+def _daily_cube(values: list[float], start: str = "2026-01-01") -> xr.Dataset:
+    """One distinct constant value per step, so the rendered slice is identifiable."""
+    times = pd.date_range(start, periods=len(values), freq="D")
+    data = np.array([[[v, v], [v, v]] for v in values], dtype="float32")
+    return xr.Dataset(
+        {"precip": (("t", "y", "x"), data)},
+        coords={"t": times, "y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+
+
+def _rendered_reference(arr: Any, tmp_path: Path) -> bytes:
+    """The bytes the thumbnail should have, rendered from the slice we expect it to show."""
+    reference = render_png(
+        arr,
+        tmp_path / "reference.png",
+        colormap="blues",
+        clim=(0.0, 10.0),
+        max_pixels=THUMBNAIL_MAX_PIXELS,
+    )
+    return reference.read_bytes()
+
+
+# -- which slice -----------------------------------------------------------------------
+
+
+def test_a_datetime_store_renders_the_step_nearest_the_generation_date(tmp_path: Path) -> None:
+    """Nearest to now, not the last step. The store here runs past the generation date, the
+    way a forecast does, so the two answers differ and the last step would be wrong."""
+    # Steps at 60, 30 and 1 days before, and 30 days after, the pinned generation date.
+    cube = _daily_cube([1.0, 2.0, 3.0, 4.0], start="2025-12-31")
+    cube = cube.assign_coords(
+        t=pd.to_datetime(["2025-12-31", "2026-01-30", "2026-02-28", "2026-03-31"]),
+    )
+    store = _store(tmp_path, cube)
+
+    written = write_dataset_thumbnail(store, DATASET, now=GENERATED_AT)
+
+    assert written is not None
+    # 2026-02-28 is one day before the generation date; 2026-03-31 is thirty after.
+    assert written.read_bytes() == _rendered_reference(cube["precip"].isel(t=2), tmp_path)
+
+
+def test_a_climatology_renders_its_first_slice(tmp_path: Path) -> None:
+    """A climatology's axis is an ordinal dayofyear, not a datetime, so there is no "nearest
+    to today" without inventing a mapping. Index 0 is the answer, and it does not drift."""
+    doy = xr.Dataset(
+        {"precip": (("dayofyear", "y", "x"), np.array([[[v, v], [v, v]] for v in (7.0, 8.0, 9.0)], dtype="float32"))},
+        coords={"dayofyear": [1, 2, 3], "y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+    store = _store(tmp_path, doy, t_dim=None)
+
+    written = write_dataset_thumbnail(store, DATASET, now=GENERATED_AT)
+
+    assert written is not None
+    assert written.read_bytes() == _rendered_reference(doy["precip"].isel(dayofyear=0), tmp_path)
+
+
+def test_a_store_with_no_non_spatial_axis_renders_its_grid(tmp_path: Path) -> None:
+    flat = xr.Dataset(
+        {"precip": (("y", "x"), np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+    store = _store(tmp_path, flat, t_dim=None)
+
+    written = write_dataset_thumbnail(store, DATASET, now=GENERATED_AT)
+
+    assert written is not None
+    assert written.read_bytes() == _rendered_reference(flat["precip"], tmp_path)
+
+
+def test_the_nearest_step_is_chosen_by_dtype_not_by_a_declared_period_type(tmp_path: Path) -> None:
+    """An ordinal axis of plain integers resolves to index 0 even when the numbers look like
+    years. The coordinate's dtype cannot disagree with the data; a declared period_type can."""
+    ordinal = xr.DataArray(
+        np.array([[[1.0]], [[2.0]]], dtype="float32"),
+        dims=("year", "y", "x"),
+        coords={"year": [2020, 2026], "y": [0.5], "x": [1.5]},
+    )
+
+    assert representative_slice(ordinal, now=GENERATED_AT).item() == 1.0
+
+
+# -- size --------------------------------------------------------------------------------
+
+
+def test_the_thumbnail_is_capped_at_the_stac_recommended_size(tmp_path: Path) -> None:
+    """STAC best practice for the `thumbnail` role is under 600x600. A store is routinely far
+    larger than that, so the cap has to be applied rather than assumed."""
+    from matplotlib import image as mpimg
+
+    big = xr.Dataset(
+        {"precip": (("y", "x"), np.random.default_rng(0).random((1200, 800), dtype="float32"))},
+        coords={"y": np.linspace(10.0, 0.0, 1200), "x": np.linspace(0.0, 8.0, 800)},
+    )
+    store = _store(tmp_path, big, t_dim=None)
+
+    written = write_dataset_thumbnail(store, DATASET, now=GENERATED_AT)
+
+    assert written is not None
+    height, width = mpimg.imread(written).shape[:2]
+    assert max(height, width) <= THUMBNAIL_MAX_PIXELS
+    # The aspect ratio survives the cap: 1200x800 scaled by 600/1200 is 600x400.
+    assert (height, width) == (600, 400)
+
+
+# -- failure is not an ingest failure -----------------------------------------------------
+
+
+def test_a_failing_render_does_not_fail_the_ingest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dataset is not less ingested for being unrecognisable. The callers rely on this
+    function never raising rather than each wrapping it, so the guarantee is tested here."""
+    store = _store(tmp_path, _daily_cube([1.0, 2.0]))
+
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("no renderer today")
+
+    monkeypatch.setattr(thumbnails, "render_png", explode)
+
+    assert write_dataset_thumbnail(store, DATASET, now=GENERATED_AT) is None
+    assert not thumbnail_path("thumb_dataset").exists()
+
+
+def test_an_unreadable_store_does_not_fail_the_ingest(tmp_path: Path) -> None:
+    assert write_dataset_thumbnail(tmp_path / "not-a-store.icechunk", DATASET) is None
+
+
+# -- colormaps ----------------------------------------------------------------------------
+
+
+def test_every_built_in_template_colormap_resolves_to_itself() -> None:
+    """The whole-catalogue guard. Template colormap names are written for the viewer, which
+    matches case-insensitively; matplotlib does not, so `blues`, `rdbu_r` and `reds` all
+    raise when passed straight to it — 18 of the 27 built-in templates. Falling back to the
+    default would render every one of them in the wrong colours while still "working"."""
+    from open_climate_service.data_registry.services import datasets as registry
+
+    declared = {
+        str(template["display"]["colormap"])
+        for template in registry.list_datasets()
+        if isinstance(template.get("display"), dict) and template["display"].get("colormap")
+    }
+    assert declared, "no template declares a colormap"
+
+    unresolved = {name for name in declared if resolve_colormap(name).name.lower() != name.lower()}
+    assert not unresolved, f"colormaps that fell back to the default instead of resolving: {unresolved}"
+
+
+def test_an_unknown_colormap_falls_back_instead_of_raising() -> None:
+    assert resolve_colormap("not-a-colormap").name == "viridis"
+    assert resolve_colormap(None).name == "viridis"
+
+
+# -- when it is generated ------------------------------------------------------------------
+
+
+def test_a_multi_period_sync_never_reaches_the_renderer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Half of "once per run, at the end". A streaming sync commits per period, so a renderer
+    reached from the commit path would run once per period — a few hundred times on a
+    historical backfill, all but the last discarded."""
+    from open_climate_service.streaming import orchestrator as streaming_orchestrator
+
+    renders: list[Any] = []
+    monkeypatch.setattr(thumbnails, "render_png", lambda *a, **k: renders.append(a))
+
+    class _Plugin:
+        max_concurrency = 1
+        commit_batch_size = 1
+
+        async def periods(self, start: str, end: str) -> list[str]:
+            _ = start, end
+            return ["2026-01-01", "2026-01-02", "2026-01-03"]
+
+        async def fetch_period(self, period_id: str, bbox: list[float], **params: Any) -> xr.Dataset:
+            _ = bbox, params
+            return xr.Dataset(
+                {"precip": (("t", "y", "x"), np.array([[[float(period_id[-2:])]]], dtype="float32"))},
+                coords={"t": [np.datetime64(period_id, "D")], "y": [0.0], "x": [1.0]},
+            )
+
+    store_path = tmp_path / "streaming.zarr"
+    monkeypatch.setattr(streaming_orchestrator, "is_store_empty", lambda path: not path.exists())
+
+    result = streaming_orchestrator.run_streaming_ingest_sync(
+        plugin=_Plugin(),
+        params={},
+        bbox=[0.0, 0.0, 1.0, 1.0],
+        start="2026-01-01",
+        end="2026-01-03",
+        store_path=store_path,
+        period_type="daily",
+    )
+
+    assert result.periods_written == 3
+    assert renders == [], "the renderer was reached from the per-commit path"
+
+
+def test_one_ingest_produces_exactly_one_render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other half. Driven through `create_artifact`, the entry point, so it covers the
+    wiring rather than the helper: a render that never gets called would pass a test of
+    `write_dataset_thumbnail` alone."""
+    store_path = tmp_path / "thumb_dataset.icechunk"
+    dataset: dict[str, object] = {
+        "id": "thumb_dataset",
+        "name": "Thumb dataset",
+        "variable": "precip",
+        "period_type": "daily",
+        "display": {"colormap": "blues", "range": [0.0, 10.0]},
+        "ingestion": {"plugin": "example.Plugin", "params": {}},
+    }
+
+    def fake_sync(**kwargs: object) -> object:
+        # Stand in for a three-period sync: the store the finalisation sees is the finished one.
+        downloader.write_to_icechunk_store(_daily_cube([1.0, 2.0, 3.0]), store_path, commit_message="test")
+        return SimpleNamespace(periods_written=3)
+
+    renders: list[Any] = []
+    real_render = thumbnails.render_png
+
+    def counting_render(*args: Any, **kwargs: Any) -> Any:
+        renders.append(args)
+        return real_render(*args, **kwargs)
+
+    monkeypatch.setattr(thumbnails, "render_png", counting_render)
+    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params: object())
+    monkeypatch.setattr(ingestion_services.downloader, "get_icechunk_path", lambda _: store_path)
+    monkeypatch.setattr(ingestion_services, "run_streaming_ingest_sync", fake_sync)
+    monkeypatch.setattr(ingestion_services, "_find_existing_artifact", lambda **_: None)
+    monkeypatch.setattr(ingestion_services, "_upsert_artifact_record", lambda record, **_: record)
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_data_coverage_for_paths",
+        lambda dataset_arg, **_: {
+            "coverage": {
+                "temporal": {"start": "2026-01-01", "end": "2026-01-03"},
+                "spatial": {"xmin": 10.0, "ymin": 0.0, "xmax": 12.0, "ymax": 2.0},
+            }
+        },
+    )
+
+    ingestion_services.create_artifact(
+        dataset=dataset,
+        start="2026-01-01",
+        end="2026-01-03",
+        bbox=[10.0, 0.0, 12.0, 2.0],
+        country_code=None,
+        overwrite=True,
+        publish=False,
+    )
+
+    assert len(renders) == 1
+    assert thumbnail_path("thumb_dataset").is_file()
+
+
+# -- how it reaches a client ----------------------------------------------------------------
+
+
+def _published_artifact() -> Any:
+    from open_climate_service.ingestions.schemas import (
+        ArtifactCoverage,
+        ArtifactFormat,
+        ArtifactPublication,
+        ArtifactRecord,
+        ArtifactRequestScope,
+        CoverageSpatial,
+        CoverageTemporal,
+        PublicationStatus,
+    )
+
+    return ArtifactRecord(
+        artifact_id="a1",
+        dataset_id="thumb_dataset",
+        dataset_name="Thumb dataset",
+        variable="precip",
+        period_type="daily",
+        format=ArtifactFormat.ICECHUNK,
+        path="/tmp/thumb_dataset.icechunk",
+        asset_paths=["/tmp/thumb_dataset.icechunk"],
+        variables=["precip"],
+        request_scope=ArtifactRequestScope(start="2026-01-01", end="2026-01-03"),
+        coverage=ArtifactCoverage(
+            temporal=CoverageTemporal(start="2026-01-01", end="2026-01-03"),
+            spatial=CoverageSpatial(xmin=10.0, ymin=0.0, xmax=12.0, ymax=2.0),
+        ),
+        created_at=datetime(2026, 1, 3, tzinfo=UTC),
+        publication=ArtifactPublication(
+            status=PublicationStatus.PUBLISHED,
+            collection_id="thumb_dataset",
+            published_at=datetime(2026, 1, 3, tzinfo=UTC),
+        ),
+    )
+
+
+@pytest.fixture
+def _published(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One published artifact, with the store-reading parts of the build stubbed.
+
+    The assertions here are about the assets a collection advertises, not about the cube
+    metadata xstac derives, so opening a real Icechunk store would only add a fixture to
+    maintain. `_minimal_collection` mirrors what xstac returns.
+    """
+    from open_climate_service.stac import services as stac_services
+
+    stac_services._clear_xstac_collection_cache()
+    monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=[_published_artifact()]))
+    monkeypatch.setattr(stac_services.registry_datasets, "get_dataset", lambda _: {"period_type": "daily"})
+    monkeypatch.setattr(
+        stac_services,
+        "_build_collection_with_xstac",
+        lambda **_: {
+            "type": "Collection",
+            "id": "thumb_dataset",
+            "extent": {"spatial": {"bbox": [[0, 0, 0, 0]]}, "temporal": {"interval": [[None, None]]}},
+            "cube:dimensions": {"time": {"type": "temporal", "extent": ["2026-01-01", "2026-01-03"]}},
+            "cube:variables": {"precip": {"type": "data", "dimensions": ["time", "y", "x"]}},
+            "assets": {"zarr": {}},
+        },
+    )
+    monkeypatch.setattr(stac_services, "_zarr_asset_metadata", lambda _: {})
+
+
+def _write_a_thumbnail() -> Path:
+    path = thumbnail_path("thumb_dataset")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n fake but on disk")
+    return path
+
+
+def test_the_collection_advertises_the_thumbnail_as_a_stac_role(client: TestClient, _published: None) -> None:
+    """`thumbnail` is a standardised STAC asset role on a Collection, so no extension is
+    needed and a STAC client picks the image up unaided."""
+    _write_a_thumbnail()
+
+    payload = client.get("/stac/collections/thumb_dataset").json()
+
+    asset = payload["assets"]["thumbnail"]
+    assert asset["roles"] == ["thumbnail"]
+    assert asset["type"] == "image/png"
+    assert asset["href"].endswith("/datasets/thumb_dataset/thumbnail.png")
+    # The href leaves the process, so it names an origin rather than being a bare path.
+    assert asset["href"].startswith("http")
+
+
+def test_the_collection_omits_the_thumbnail_when_there_is_none(client: TestClient, _published: None) -> None:
+    """Advertising an asset a client then 404s on is worse than advertising none, and absence
+    is normal: thumbnails are not backfilled, so a store never rewritten never gains one."""
+    payload = client.get("/stac/collections/thumb_dataset").json()
+
+    assert "thumbnail" not in payload["assets"]
+    assert "zarr" in payload["assets"]
+
+
+def test_the_route_serves_the_thumbnail(client: TestClient) -> None:
+    written = _write_a_thumbnail()
+
+    response = client.get("/datasets/thumb_dataset/thumbnail.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content == written.read_bytes()
+
+
+def test_the_route_404s_when_a_dataset_has_no_thumbnail(client: TestClient) -> None:
+    assert client.get("/datasets/thumb_dataset/thumbnail.png").status_code == 404
