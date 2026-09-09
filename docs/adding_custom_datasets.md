@@ -92,7 +92,7 @@ plugin import surface), alongside `BaseDatasetPlugin`.
 Open it with `chunks=None`, not `chunks={}`:
 
 ```python
-ds = xr.open_zarr(url, chunks=None)   # lazy, but no dask graph
+ds = xr.open_zarr(url, chunks=None)  # lazy, but no dask graph
 ```
 
 `chunks=None` is still lazy — xarray defers to zarr's own indexing, which range-reads only the
@@ -114,8 +114,8 @@ higher than the store's layout suggests. Compare the two before deciding:
 
 ```python
 a = zarr.open_group(url, mode="r")["temperature_2m"]
-a.chunks   # (1, 31, 64, 17, 16)      — what chunks={} would hand to dask
-a.shards   # (1, 31, 192, 374, 368)   — the actual storage unit, or None
+a.chunks  # (1, 31, 64, 17, 16)      — what chunks={} would hand to dask
+a.shards  # (1, 31, 192, 374, 368)   — the actual storage unit, or None
 ```
 
 If you do want dask, chunk explicitly to something coarse enough for the work at hand rather
@@ -186,7 +186,7 @@ class MyForecastPlugin(BaseDatasetPlugin):
     time_dim = "reference_time"
 
     async def periods(self, start: str, end: str) -> list[str]:
-        return ["2026-03-01"]          # issue times
+        return ["2026-03-01"]  # issue times
 
     def fetch_period(self, period_id, bbox, **params):
         # one run: (reference_time=1, lead_time=N, y, x)
