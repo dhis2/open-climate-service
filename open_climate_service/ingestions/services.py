@@ -10,7 +10,7 @@ import os
 import shutil
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -98,6 +98,7 @@ class _StreamingMaterializationPlan:
     end: str
     periods: list[str] | None
     has_committed_periods: bool
+    committed_periods: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -361,12 +362,17 @@ def _validate_source_periods(
     available = _normalize_ordered_periods(periods, period_type=period_type, source="Ingestion plugin")
     if not available:
         raise HTTPException(status_code=409, detail=f"Source has no data for the requested {scope}")
-    if available[0] != start:
+    # Climatology plugins enumerate ordinal day-of-year values while the API and
+    # management UI use date-shaped dataset bounds. Those bounds describe the
+    # reference climate interval, not the ordinal materialization axis.
+    if period_type != "climatology" and available[0] != start:
         raise HTTPException(
             status_code=409,
             detail=f"Source cannot materialize the requested {scope} from {start}; first available is {available[0]}",
         )
-    if _period_order_key(available[-1], period_type) > _period_order_key(end, period_type):
+    if period_type != "climatology" and _period_order_key(available[-1], period_type) > _period_order_key(
+        end, period_type
+    ):
         raise HTTPException(
             status_code=409,
             detail=f"Source returned period {available[-1]} beyond the requested {scope} ending {end}",
@@ -416,10 +422,11 @@ def _plan_streaming_materialization(
         )
         return _StreamingMaterializationPlan(
             action=SyncAction.REMATERIALIZE,
-            start=start,
+            start=available[0] if period_type == "climatology" else start,
             end=available[-1],
             periods=available,
             has_committed_periods=bool(committed),
+            committed_periods=committed,
         )
 
     if not committed:
@@ -432,11 +439,19 @@ def _plan_streaming_materialization(
         )
         return _StreamingMaterializationPlan(
             action=SyncAction.APPEND,
-            start=start,
+            start=available[0] if period_type == "climatology" else start,
             end=available[-1],
             periods=available,
             has_committed_periods=False,
+            committed_periods=committed,
         )
+
+    if period_type == "climatology" and (not start.isdigit() or not end.isdigit()):
+        # Date-shaped request bounds describe the reference interval, while the
+        # committed store is indexed by ordinal day. A complete climatology is
+        # immutable under this ingestion policy.
+        start = min(committed, key=lambda value: _period_order_key(value, period_type))
+        end = max(committed, key=lambda value: _period_order_key(value, period_type))
 
     current_start = min(committed, key=lambda value: _period_order_key(value, period_type))
     current_end = max(committed, key=lambda value: _period_order_key(value, period_type))
@@ -454,6 +469,7 @@ def _plan_streaming_materialization(
             end=current_end,
             periods=committed,
             has_committed_periods=True,
+            committed_periods=committed,
         )
 
     # A contiguous store that only needs a forward extension requires the source
@@ -480,6 +496,7 @@ def _plan_streaming_materialization(
                 end=current_end,
                 periods=committed,
                 has_committed_periods=True,
+                committed_periods=committed,
             )
         if delta[0] != expected_start or not _periods_are_contiguous(delta, period_type):
             raise HTTPException(
@@ -500,6 +517,7 @@ def _plan_streaming_materialization(
             end=delta[-1],
             periods=delta,
             has_committed_periods=True,
+            committed_periods=committed,
         )
 
     available = _validate_source_periods(
@@ -522,18 +540,13 @@ def _plan_streaming_materialization(
             ),
         )
 
-    committed_is_prefix = available[: len(committed)] == committed
-    action = (
-        SyncAction.APPEND
-        if committed_is_prefix and materialization_start == current_start
-        else SyncAction.REMATERIALIZE
-    )
     return _StreamingMaterializationPlan(
-        action=action,
+        action=SyncAction.REMATERIALIZE,
         start=materialization_start,
         end=available[-1],
         periods=available,
         has_committed_periods=True,
+        committed_periods=committed,
     )
 
 
@@ -590,6 +603,7 @@ def _create_streaming_artifact(
     published_swap_pending = False
     store_committed = False
     plugin_handed_to_orchestrator = False
+    ingest_completed = False
     try:
         # First thing under the lock, before anything looks at the store. A swap killed between
         # its two renames leaves the published path missing and the data at `.retired`; ingest
@@ -617,9 +631,17 @@ def _create_streaming_artifact(
                 # loss of the index. Validate and register it without refetching.
                 logger.warning("Re-registering committed store '%s' without an artifact record", store_path)
             else:
-                if publish and existing.publication.status != PublicationStatus.PUBLISHED:
-                    return publish_artifact_record(existing.artifact_id)
-                return existing
+                temporal = existing.coverage.temporal
+                if temporal.start == plan.start and temporal.end == plan.end:
+                    if publish and existing.publication.status != PublicationStatus.PUBLISHED:
+                        return publish_artifact_record(existing.artifact_id)
+                    return existing
+                logger.warning(
+                    "Re-registering committed store '%s' because artifact coverage %s..%s is stale",
+                    store_path,
+                    temporal.start,
+                    temporal.end,
+                )
         materialization_scope = request_scope.model_copy(update={"start": plan.start, "end": plan.end})
 
         ingest_path = store_path
@@ -630,7 +652,7 @@ def _create_streaming_artifact(
             replacement_path = store_path.with_name(f"{store_path.name}.replacement")
             _remove_store_path(replacement_path)
             ingest_path = replacement_path
-        elif plan.has_committed_periods:
+        elif plan.action != SyncAction.NO_OP and plan.has_committed_periods:
             # Icechunk commits each fetched period independently. Keep the pre-ingest
             # snapshot reachable so an exception after any commit can restore the public
             # branch instead of leaving a partial append or a stale pyramid behind.
@@ -657,7 +679,9 @@ def _create_streaming_artifact(
                 is_cancel_requested=is_cancel_requested,
                 save_cursor=save_cursor,
                 periods=plan.periods,
+                committed_periods=plan.committed_periods,
             )
+            ingest_completed = True
             if result.periods_written == 0 and not ingest_path.exists():
                 raise HTTPException(status_code=409, detail="Source has no data for the requested temporal scope")
 
@@ -701,7 +725,7 @@ def _create_streaming_artifact(
         )
         if plan.has_committed_periods and not normalization.completed:
             raise RuntimeError(f"Could not normalize '{dataset['id']}'; the dataset update was rolled back")
-        if normalization.swapped and ingest_path == store_path:
+        if normalization.swapped and ingest_path == store_path and plan.has_committed_periods:
             # Pyramid normalization replaced the published repository but retained
             # the previous one until its matching artifact record is durable. From
             # here, rollback first restores that repository and then resets its main
@@ -732,14 +756,6 @@ def _create_streaming_artifact(
         )
         store_committed = True
         if published_swap_pending:
-            try:
-                _finalize_store_swap(store_path)
-                published_swap_pending = False
-            except Exception:
-                # The record and replacement are already durable. Retaining the old
-                # directory is only a cleanup leak; restoring it would make the record
-                # point at stale data. A later run may retry the cleanup.
-                logger.warning("Could not remove retired store '%s' after commit", store_path, exc_info=True)
             # A swapped-out repository either disappeared with successful cleanup or
             # remains only as a retired fallback. Never try to operate on its temporary
             # branch through the newly published repository path.
@@ -783,7 +799,7 @@ def _create_streaming_artifact(
                 and rollback_snapshot is not None
             ):
                 try:
-                    if not store_committed:
+                    if not store_committed and ingest_completed:
                         rollback_repo.reset_branch("main", rollback_snapshot)
                     rollback_repo.delete_branch(rollback_branch)
                 except Exception as exc:
@@ -855,6 +871,19 @@ def recover_interrupted_swap(target: Path) -> bool:
         recovered = True
     if not target.exists() and failed.exists():
         raise RuntimeError(f"Cannot recover '{target}': only the rejected .failed store remains")
+    if target.exists() and (target / "repo").exists():
+        try:
+            repo = open_or_create_repo(target)
+            stale_branches = [branch for branch in repo.list_branches() if branch.startswith("ocs-ingest-rollback-")]
+            for branch in stale_branches:
+                repo.delete_branch(branch)
+            if stale_branches:
+                recovered = True
+                logger.warning("Removed %d stale ingest rollback branch(es) from '%s'", len(stale_branches), target)
+        except Exception:
+            # Swap recovery must remain usable for older or partially damaged
+            # repositories whose branch metadata cannot be inspected.
+            logger.warning("Could not clean stale ingest rollback branches from '%s'", target, exc_info=True)
     return recovered
 
 

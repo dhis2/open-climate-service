@@ -21,6 +21,7 @@ from open_climate_service.ingestions.schemas import (
     SyncKind,
     SyncResponse,
 )
+from open_climate_service.shared.time import next_period_string
 
 
 def _artifact(
@@ -818,7 +819,7 @@ def test_default_target_end_rejects_unsupported_period_type() -> None:
 
 
 def test_next_period_start_preserves_hourly_period_format() -> None:
-    result = sync_engine._next_period_start("2026-04-21T13", period_type="hourly")
+    result = next_period_string("2026-04-21T13", "hourly")
 
     assert result == "2026-04-21T14"
 
@@ -832,13 +833,13 @@ def test_default_weekly_target_end_uses_iso_week_format(monkeypatch: pytest.Monk
 
 
 def test_next_period_start_preserves_weekly_period_format() -> None:
-    result = sync_engine._next_period_start("2026-W17", period_type="weekly")
+    result = next_period_string("2026-W17", "weekly")
 
     assert result == "2026-W18"
 
 
 def test_next_period_start_rolls_weekly_period_across_iso_year_boundary() -> None:
-    result = sync_engine._next_period_start("2020-W53", period_type="weekly")
+    result = next_period_string("2020-W53", "weekly")
 
     assert result == "2021-W01"
 
@@ -1394,6 +1395,20 @@ def test_recover_interrupted_swap_is_a_no_op_for_a_brand_new_dataset(tmp_path: P
     from open_climate_service.ingestions.services import recover_interrupted_swap
 
     assert recover_interrupted_swap(tmp_path / "never-existed.icechunk") is False
+
+
+def test_recover_interrupted_swap_removes_stale_ingest_rollback_branches(tmp_path: Path) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    target = tmp_path / "ds.icechunk"
+    repo = open_or_create_repo(target)
+    snapshot = repo.lookup_branch("main")
+    repo.create_branch("ocs-ingest-rollback-first", snapshot)
+    repo.create_branch("ocs-ingest-rollback-second", snapshot)
+
+    assert recover_interrupted_swap(target) is True
+    assert repo.list_branches() == {"main"}
 
 
 def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(

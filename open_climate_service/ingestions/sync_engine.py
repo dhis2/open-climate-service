@@ -102,7 +102,7 @@ def plan_sync(
         target_end = _default_target_end(period_type=period_type)
 
     if sync_kind == SyncKind.TEMPORAL:
-        next_period_start = _next_period_start(current_end, period_type=period_type)
+        next_period_start = next_period_string(current_end, period_type)
         if next_period_start > target_end:
             return SyncDetail(
                 source_dataset_id=latest_artifact.dataset_id,
@@ -368,18 +368,6 @@ def _query_available_periods(
     params: dict[str, Any] = source_dataset.get("ingestion", {}).get("params") or {}
     plugin = instantiate_plugin(plugin_path, params)
     return asyncio.run(plugin.periods(start, target_end))
-
-
-def _next_period_start(latest_period_end: str, *, period_type: str) -> str:
-    """Return the next dataset-native period after a covered temporal end value.
-
-    This helper is part of sync planning because temporal datasets need to know
-    whether another period could exist beyond the current materialized coverage.
-    """
-    try:
-        return next_period_string(latest_period_end, period_type)
-    except ValueError as exc:
-        raise ValueError(f"Unsupported period_type '{period_type}' for sync") from exc
 
 
 def _default_target_end(*, period_type: str) -> str:

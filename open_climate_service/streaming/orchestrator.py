@@ -154,6 +154,7 @@ async def run_streaming_ingest(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, Any]], None] | None = None,
     periods: list[str] | None = None,
+    committed_periods: list[str] | None = None,
 ) -> StreamingIngestResult:
     """Stream one dataset into a flat Zarr v3 store one period at a time.
 
@@ -178,11 +179,21 @@ async def run_streaming_ingest(
 
     all_periods = periods if periods is not None else await plugin.periods(start, end)
     if not all_periods:
+        close_plugin = getattr(plugin, "close", None)
+        if callable(close_plugin):
+            close_plugin()
         return StreamingIngestResult(store_path=store_path, period_type=period_type, periods_written=0)
 
-    committed = read_committed_period_ids(store_path, period_type, time_dim=time_dim)
+    committed = (
+        set(committed_periods)
+        if committed_periods is not None
+        else read_committed_period_ids(store_path, period_type, time_dim=time_dim)
+    )
     pending = [period for period in all_periods if period not in committed]
     if not pending:
+        close_plugin = getattr(plugin, "close", None)
+        if callable(close_plugin):
+            close_plugin()
         return StreamingIngestResult(store_path=store_path, period_type=period_type, periods_written=0)
 
     if on_progress:
@@ -193,6 +204,9 @@ async def run_streaming_ingest(
     elif is_store_empty(store_path):
         is_first_write = True
     else:
+        close_plugin = getattr(plugin, "close", None)
+        if callable(close_plugin):
+            close_plugin()
         raise RuntimeError(
             f"Existing store at {store_path} holds data whose committed periods could not be read, so it is "
             "neither safe to append to nor safe to overwrite. Inspect the store, or remove it to re-ingest "
@@ -361,6 +375,7 @@ def run_streaming_ingest_sync(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, Any]], None] | None = None,
     periods: list[str] | None = None,
+    committed_periods: list[str] | None = None,
 ) -> StreamingIngestResult:
     """Synchronous wrapper for threaded job execution.
 
@@ -389,5 +404,6 @@ def run_streaming_ingest_sync(
             is_cancel_requested=is_cancel_requested,
             save_cursor=save_cursor,
             periods=periods,
+            committed_periods=committed_periods,
         )
     )

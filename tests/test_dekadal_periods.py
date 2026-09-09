@@ -183,25 +183,25 @@ def test_dekad_bounds_tile_the_month_without_gap_or_overlap() -> None:
 
 def test_next_period_start_steps_by_the_covered_dekads_own_length() -> None:
     """A fixed +10 days would land mid-month for every 11-day and 8-day third dekad."""
-    from open_climate_service.ingestions.sync_engine import _next_period_start
+    from open_climate_service.shared.time import next_period_string
 
-    assert _next_period_start("2026-01-01", period_type="dekadal") == "2026-01-11"
-    assert _next_period_start("2026-01-11", period_type="dekadal") == "2026-01-21"
+    assert next_period_string("2026-01-01", "dekadal") == "2026-01-11"
+    assert next_period_string("2026-01-11", "dekadal") == "2026-01-21"
     # 11-day third dekad: 21 Jan + 11 = 1 Feb, not 31 Jan.
-    assert _next_period_start("2026-01-21", period_type="dekadal") == "2026-02-01"
+    assert next_period_string("2026-01-21", "dekadal") == "2026-02-01"
     # 8-day third dekad in a common February.
-    assert _next_period_start("2026-02-21", period_type="dekadal") == "2026-03-01"
+    assert next_period_string("2026-02-21", "dekadal") == "2026-03-01"
     # 9-day third dekad in a leap February.
-    assert _next_period_start("2024-02-21", period_type="dekadal") == "2024-03-01"
+    assert next_period_string("2024-02-21", "dekadal") == "2024-03-01"
 
 
 def test_next_period_start_never_repeats_or_skips_a_dekad_across_a_year() -> None:
-    from open_climate_service.ingestions.sync_engine import _next_period_start
+    from open_climate_service.shared.time import next_period_string
 
     expected = dekad_period_ids("2026-01-01", "2026-12-31")
     walked = [expected[0]]
     while len(walked) < len(expected):
-        walked.append(_next_period_start(walked[-1], period_type="dekadal"))
+        walked.append(next_period_string(walked[-1], "dekadal"))
     assert walked == expected
 
 

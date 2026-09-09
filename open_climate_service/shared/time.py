@@ -38,7 +38,7 @@ _NON_TEMPORAL_PERIOD_TYPES = frozenset({"climatology"})
 # Period types a dataset template may declare. Deliberately *not* derived from
 # _PERIOD_TYPE_ISO_STEP: that map exists to give STAC a step for whatever is already in a
 # store, and includes "quarterly", which none of datetime_to_period_string,
-# normalize_period_string, numpy_datetime_to_period_string, _next_period_start or
+# normalize_period_string, numpy_datetime_to_period_string, next_period_string or
 # _default_target_end implement. Deriving the two from one set would advertise quarterly as
 # registerable and then fail at ingest, so they are kept apart.
 SUPPORTED_PERIOD_TYPES = (
