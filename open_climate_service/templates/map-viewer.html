@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Map viewer — {{ name }}</title>
-    <link href="https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <link href="https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
       *,
       *::before,
@@ -249,7 +249,7 @@
       // worker is a real sibling URL (`./maplibre-gl-worker.mjs`) resolved from
       // import.meta.url, and esm.sh's transformed build doesn't serve it (404), which
       // blanks the map. unpkg serves the worker + shared chunk siblings with CORS.
-      import * as maplibregl from "https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.mjs";
+      import * as maplibregl from "https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
       import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.6.1";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
 

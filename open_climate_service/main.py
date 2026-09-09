@@ -2,7 +2,7 @@
 
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -69,7 +69,7 @@ def _append_vary_value(response: Response, value: str) -> None:
 
 
 @asynccontextmanager
-async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
     from open_climate_service.plugins_diagnostics import log_plugin_loading
 

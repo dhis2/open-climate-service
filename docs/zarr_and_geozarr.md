@@ -274,9 +274,7 @@ SDK usage:
 ```python
 import icechunk, xarray as xr
 
-repo = icechunk.Repository.open(
-    icechunk.http_storage("https://host/icechunk/era5land_precipitation_daily")
-)
+repo = icechunk.Repository.open(icechunk.http_storage("https://host/icechunk/era5land_precipitation_daily"))
 ds = xr.open_zarr(repo.readonly_session("main").store, zarr_format=3, consolidated=False)
 ```
 
