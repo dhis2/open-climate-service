@@ -343,7 +343,7 @@ Both endpoints are advertised as `assets` in the STAC collection:
 }
 ```
 
-The `thumbnail` asset is present **only when the image exists** — see section 9.
+The `thumbnail` asset is present only when the image exists — see section 9.
 
 A **pyramided** store advertises one extra media type parameter:
 
@@ -370,26 +370,9 @@ missing values transparent.
 curl -s -o thumb.png "http://127.0.0.1:9000/datasets/chirps3_precipitation_daily/thumbnail.png"
 ```
 
-**A 404 is a normal state, not an error.** Thumbnails are written at the end of a sync run and
-are never backfilled, so a store that has not been rewritten since the feature landed has none,
-possibly permanently. A client should render "no preview" rather than an error for a 404 here.
-
-The STAC collection advertises the `thumbnail` asset **only when the file is on disk**, so a
-client that follows a published `assets.thumbnail.href` does not meet the 404. Code against the
-asset's presence; call the route directly only if you are prepared for the miss.
-
-Other properties worth knowing before you build on it:
-
-- **It can be one sync run stale.** A run that aborts before finalisation, fails to render, or
-  finds its representative slice entirely missing leaves the previous image in place. The next
-  successful run corrects it.
-- **It is not a map layer.** Each thumbnail is contrast-stretched to its own slice rather than
-  to the template's `display.range`, so two thumbnails do not share a scale and neither matches
-  the viewer's rendering of the same layer. It is for recognising a dataset, not for reading a
-  value off. (A range declared symmetric about zero does keep zero at the midpoint, so a
-  diverging colormap still means what it says.)
-- **Which slice**: the step nearest the generation date on a datetime axis; the first step on an
-  ordinal axis such as a climatology's `dayofyear` or `month`.
+Thumbnails are written at the end of a sync run and are never backfilled, so a 404 here is a
+normal state rather than an error. The STAC collection advertises the `thumbnail` asset only
+when the image exists.
 
 ## 10. Access published STAC collections
 
