@@ -1219,7 +1219,7 @@ def test_merge_cubes_wrapper_rejects_misaligned_predictor_indexes() -> None:
     )
 
     climate = merge(cube1=precipitation, cube2=temperature)
-    with pytest.raises(ValueError, match="cannot align objects with join='exact'"):
+    with pytest.raises(ValueError, match="different labels on index 't'"):
         merge(cube1=climate, cube2=population)
 
 
@@ -1290,7 +1290,7 @@ def test_merge_cubes_wrapper_uses_upstream_coordinate_tolerance(offset: float) -
     stacked = merge(cube1=cube, cube2=cube.rename("t2m").copy(deep=True))
     third = cube.rename("population").assign_coords(x=cube.x + offset)
     if offset > 1e-6:
-        with pytest.raises(ValueError, match="cannot align objects with join='exact'"):
+        with pytest.raises(ValueError, match="different labels on index 'x'"):
             merge(cube1=stacked, cube2=third)
     else:
         result = merge(cube1=stacked, cube2=third)
@@ -1298,28 +1298,22 @@ def test_merge_cubes_wrapper_uses_upstream_coordinate_tolerance(offset: float) -
 
 
 @pytest.mark.parametrize("grouped", [False, True])
-def test_merge_cubes_wrapper_delegates_disjoint_resolver_and_context(grouped: bool) -> None:
+def test_merge_cubes_wrapper_rejects_resolver_when_extending_group(grouped: bool) -> None:
     from open_climate_service.openeo.execution import _make_named_merge_cubes
 
     cube = xr.DataArray([[1.0], [2.0]], dims=("__cubes__", "t"), coords={"__cubes__": ["precip", "t2m"], "t": [0]})
     other = xr.DataArray([3.0], dims="t", coords={"t": [0]}, name="population")
     if grouped:
         other = other.expand_dims(__cubes__=["population"])
-    captured: dict[str, Any] = {}
-    reduced = other.sum()
-
-    def original(**kwargs: Any) -> xr.DataArray:
-        captured.update(kwargs)
-        return reduced
-
     resolver = object()
     context = {"scale": 2}
-    result = _make_named_merge_cubes(original)(cube1=cube, cube2=other, overlap_resolver=resolver, context=context)
-    assert captured == {"cube1": cube, "cube2": other, "overlap_resolver": resolver, "context": context}
-    assert result is reduced
+    with pytest.raises(ValueError, match="only supported on the initial"):
+        _make_named_merge_cubes(lambda **kwargs: other)(
+            cube1=cube, cube2=other, overlap_resolver=resolver, context=context
+        )
 
 
-def test_merge_cubes_wrapper_delegates_overlapping_labels_and_resolver() -> None:
+def test_merge_cubes_wrapper_rejects_resolver_for_overlapping_stacked_labels() -> None:
     from open_climate_service.openeo.execution import _make_named_merge_cubes
 
     cube = xr.DataArray(
@@ -1329,19 +1323,120 @@ def test_merge_cubes_wrapper_delegates_overlapping_labels_and_resolver() -> None
         name="precip",
     )
     other = cube.rename("other")
-    captured: dict[str, Any] = {}
-
-    def original(**kwargs: Any) -> xr.DataArray:
-        captured.update(kwargs)
-        return cube
-
     resolver = object()
-    result = _make_named_merge_cubes(original)(cube1=cube, cube2=other, overlap_resolver=resolver)
-    assert captured["cube1"] is cube
-    assert captured["cube2"] is other
-    assert captured["overlap_resolver"] is resolver
-    assert result is cube
-    assert list(result["__cubes__"].values) == ["precip", "t2m"]
+    with pytest.raises(ValueError, match="only supported on the initial"):
+        _make_named_merge_cubes(lambda **kwargs: cube)(cube1=cube, cube2=other, overlap_resolver=resolver)
+
+
+def test_merge_cubes_registry_passes_context_and_overlap_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    import openeo_processes_dask.process_implementations as implementations
+
+    import open_climate_service.openeo.execution as execution
+
+    captured: dict[str, Any] = {}
+    expected = xr.DataArray([3.0], dims="t", coords={"t": [0]})
+
+    def original(
+        cube1: Any,
+        cube2: Any,
+        overlap_resolver: Any = None,
+        context: Any = None,
+    ) -> xr.DataArray:
+        captured.update(overlap_resolver=overlap_resolver, context=context)
+        return expected
+
+    monkeypatch.setattr(implementations, "merge_cubes", original)
+    monkeypatch.setattr(execution, "_registry", None)
+    merge = execution._build_process_registry()["merge_cubes"].implementation
+    resolver = object()
+    context = {"scale": 2}
+
+    result = merge(
+        cube1=xr.DataArray([1.0], dims="t", coords={"t": [0]}),
+        cube2=xr.DataArray([2.0], dims="t", coords={"t": [0]}),
+        overlap_resolver=resolver,
+        context=context,
+    )
+
+    assert result is expected
+    assert captured == {"overlap_resolver": resolver, "context": context}
+
+
+def test_merge_cubes_wrapper_accepts_equivalent_datetime_units() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    daily = xr.DataArray(
+        [1.0, 2.0],
+        dims="t",
+        coords={"t": np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]")},
+        name="precip",
+    )
+    stacked = merge(cube1=daily, cube2=daily.rename("t2m"))
+    population = xr.DataArray(
+        [3.0, 4.0],
+        dims="t",
+        coords={"t": np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[s]")},
+        name="population",
+    )
+
+    result = merge(cube1=stacked, cube2=population)
+
+    assert list(result["__cubes__"].values) == ["precip", "t2m", "population"]
+
+
+@pytest.mark.parametrize("right_scalar", [None, "EPSG:3857"])
+def test_merge_cubes_wrapper_ignores_non_index_scalar_coordinate_differences(right_scalar: str | None) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0], dims="t", coords={"t": [0], "spatial_ref": "EPSG:4326"}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = xr.DataArray([2.0], dims="t", coords={"t": [0]}, name="population")
+    if right_scalar is not None:
+        third = third.assign_coords(spatial_ref=right_scalar)
+
+    result = merge(cube1=stacked, cube2=third)
+
+    assert result.coords["spatial_ref"].item() == "EPSG:4326"
+
+
+def test_merge_cubes_wrapper_accepts_matching_unsorted_duplicate_index() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0, 2.0, 3.0], dims="t", coords={"t": [1, 0, 1]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+
+    result = merge(cube1=stacked, cube2=cube.rename("population"))
+
+    xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
+
+
+def test_merge_cubes_wrapper_preserves_same_variable_dataset_type_and_attrs() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    first = xr.Dataset({"temperature": ("t", [1.0])}, coords={"t": [0]}, attrs={"source": "first"})
+    second = xr.Dataset({"temperature": ("t", [2.0])}, coords={"t": [0]}, attrs={"source": "second"})
+
+    result = merge(cube1=first, cube2=second)
+
+    assert isinstance(result, xr.Dataset)
+    assert result.attrs == first.attrs
+
+
+@pytest.mark.parametrize("kind", ["unnamed", "duplicate"])
+def test_merge_cubes_wrapper_reports_invalid_third_predictor_name(kind: str) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0], dims="t", coords={"t": [0]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = cube.rename(None if kind == "unnamed" else "precip")
+
+    with pytest.raises(ValueError, match="distinct name|labels must be distinct"):
+        merge(cube1=stacked, cube2=third)
 
 
 def test_dhis2_period_string_accepts_existing_monthly_string() -> None:

@@ -207,8 +207,9 @@ Distinct variable names are retained as predictor labels, including single-varia
 datasets returned by spatial aggregation. Additional predictors must have matching
 dimensions and coordinate labels. Label ordering is aligned automatically, and
 floating coordinates use the upstream tolerance of `1e-6`; genuinely different
-periods or locations must be aligned before merging. A supplied overlap resolver
-and its context, or overlapping predictor labels, use the upstream merge behavior.
+periods or locations must be aligned before merging. An overlap resolver and its
+context are supported on the initial two-cube merge. They are not supported when
+extending an already stacked named-predictor group.
 
 ```bash
 # Monthly precipitation totals as NetCDF
