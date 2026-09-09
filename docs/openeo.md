@@ -131,6 +131,7 @@ job.start_job()
 
 # Poll until finished
 import time
+
 while (status := job.status()) not in ("finished", "error"):
     print("status:", status)
     time.sleep(2)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any, Callable
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
@@ -11,7 +10,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from open_climate_service.openeo import collections as collections_service
 from open_climate_service.openeo import processes as processes_service
 from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.capabilities import build_capabilities
 from open_climate_service.openeo.jobs import get_openeo_job_service
 from open_climate_service.openeo.schemas import (
     OpenEOJobCreate,
@@ -22,6 +20,7 @@ from open_climate_service.openeo.schemas import (
     WorkflowListResponse,
     WorkflowRecord,
 )
+from open_climate_service.shared.urls import absolute_base
 
 capabilities_router = APIRouter(tags=["openEO"])
 collections_router = APIRouter(tags=["openEO"])
@@ -31,23 +30,10 @@ udp_router = APIRouter(tags=["openEO"])
 result_router = APIRouter(tags=["openEO"])
 
 
-# ---------------------------------------------------------------------------
-# Capabilities  GET /
-# (registered without prefix in main.py so it overlays the system route)
-# ---------------------------------------------------------------------------
-
-
-def get_openeo_capabilities(request: Request) -> JSONResponse:
-    """Return openEO capabilities when the client requests JSON."""
-    base_url = _abs_base(request)
-    caps = build_capabilities(base_url)
-    return JSONResponse(caps.model_dump())
-
-
 @capabilities_router.get("/.well-known/openeo")
 def well_known_openeo(request: Request) -> dict[str, Any]:
     """OpenEO service discovery — lets clients find the versioned API URL."""
-    base_url = _abs_base(request)
+    base_url = absolute_base(request)
     return {
         "versions": [
             {
@@ -192,7 +178,7 @@ def get_collection(collection_id: str, request: Request) -> dict[str, Any]:
 def list_processes(request: Request) -> dict[str, Any]:
     """Return all available openEO processes."""
     procs = processes_service.list_openeo_processes()
-    base_url = _abs_base(request)
+    base_url = absolute_base(request)
     return {
         "processes": procs,
         "links": [{"rel": "self", "href": f"{base_url}/processes", "type": "application/json"}],
@@ -559,13 +545,6 @@ def delete_workflow(process_graph_id: str) -> Response:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _abs_base(request: Request) -> str:
-    base_url = os.getenv("CLIMATE_SERVICE_BASE_URL")
-    if base_url:
-        return base_url.rstrip("/")
-    return str(request.base_url).rstrip("/")
 
 
 def _reserved_process_ids() -> set[str]:

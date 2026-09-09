@@ -358,15 +358,17 @@ from openeo import connect
 
 conn = connect("http://127.0.0.1:9000")
 
-result = conn.execute({
-    "process_graph": {
-        "1": {
-            "process_id": "monthly_precipitation",
-            "arguments": { "collection_id": "chirps3_precipitation_daily" },
-            "result": True
+result = conn.execute(
+    {
+        "process_graph": {
+            "1": {
+                "process_id": "monthly_precipitation",
+                "arguments": {"collection_id": "chirps3_precipitation_daily"},
+                "result": True,
+            }
         }
     }
-})
+)
 ```
 
 ### JavaScript (openEO JS client)

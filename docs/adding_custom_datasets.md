@@ -32,6 +32,7 @@ concurrency, store commits, artifact registration, and publication.
 import xarray as xr
 from open_climate_service.streaming import BaseDatasetPlugin, daily_period_ids, normalize_period
 
+
 class ENACTSRainfallPlugin(BaseDatasetPlugin):
     async def periods(self, start: str, end: str) -> list[str]:
         """Return the ordered list of period ids available between start and end."""
@@ -99,6 +100,7 @@ class SeNorgePlugin(BaseDatasetPlugin):
 
     def fetch_period(self, period_id, bbox, **params):
         import rioxarray  # noqa: F401  # activates the .rio accessor for write_crs
+
         ds = read_source(period_id).rio.write_crs(self.crs)
         return normalize_period(ds, variable="tg", bbox=bbox)
 ```
@@ -221,9 +223,9 @@ Your plugin clips to what it actually publishes:
 
 ```python
 async def periods(self, start: str, end: str) -> list[str]:
-    base = date.fromisoformat(start[:10])           # core resolves this to today
+    base = date.fromisoformat(start[:10])  # core resolves this to today
     days = [(base + timedelta(days=i)).isoformat() for i in range(self.max_lead_days)]
-    return [d for d in days if d <= end[:10]]       # clip to the requested window
+    return [d for d in days if d <= end[:10]]  # clip to the requested window
 ```
 
 Note `end` stays a plain `str`, so there is no missing-value case to handle.

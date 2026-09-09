@@ -314,9 +314,7 @@ curl -s http://127.0.0.1:9000/zarr/chirps3_precipitation_daily/zarr.json | jq
 ```python
 import icechunk, xarray as xr
 
-repo = icechunk.Repository.open(
-    icechunk.http_storage("http://127.0.0.1:9000/icechunk/chirps3_precipitation_daily")
-)
+repo = icechunk.Repository.open(icechunk.http_storage("http://127.0.0.1:9000/icechunk/chirps3_precipitation_daily"))
 ds = xr.open_zarr(repo.readonly_session("main").store, zarr_format=3, consolidated=False)
 ```
 

@@ -25,8 +25,8 @@ The client and `[xarray]` extras install with `pip` on any platform.
 from open_climate_service import ClimateService
 
 service = ClimateService("https://my-instance.example.org")
-datasets = service.datasets()                  # discover published collections
-ds = service.open_dataset(datasets[0]["id"])   # open as xarray (needs the [xarray] extra)
+datasets = service.datasets()  # discover published collections
+ds = service.open_dataset(datasets[0]["id"])  # open as xarray (needs the [xarray] extra)
 ```
 
 ## Run a server
