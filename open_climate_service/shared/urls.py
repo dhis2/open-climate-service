@@ -44,35 +44,51 @@ class ConfiguredBase(NamedTuple):
     path: str
 
 
+_UNUSABLE = (
+    "%s=%r is not a usable absolute URL (needs a scheme and a host); "
+    "falling back to the request origin, so absolute URLs will name the internal address"
+)
+_HAS_QUERY = "%s=%r carries a query string or fragment; ignoring them, since a path is appended to this value"
+
+_warned_base_urls: set[str] = set()
+
+
+def _forget_base_url_warnings() -> None:
+    """Forget which values have been warned about, so a test starts from silence."""
+    _warned_base_urls.clear()
+
+
 @functools.lru_cache(maxsize=8)
+def _split_configured_base(raw: str) -> tuple[ConfiguredBase, str]:
+    """Split the raw value, and name the problem with it rather than reporting it.
+
+    Pure and cached, so it is only ever memoisation. Reporting lives in
+    `_parse_configured_base`, because a warning emitted from inside a cache appears or not
+    depending on whether the entry survived, which is not something a caller can reason about.
+    """
+    value = raw.strip()
+    if not value:
+        return ConfiguredBase("", ""), ""
+    split = urllib.parse.urlsplit(value)
+    if not split.scheme or not split.netloc:
+        return ConfiguredBase("", ""), _UNUSABLE
+    base = ConfiguredBase(f"{split.scheme}://{split.netloc}", split.path.rstrip("/"))
+    return base, (_HAS_QUERY if split.query or split.fragment else "")
+
+
 def _parse_configured_base(raw: str) -> ConfiguredBase:
     """Parse `CLIMATE_SERVICE_BASE_URL`, refusing a value with no scheme or no host.
 
     Parsed rather than trimmed so that every consumer reads the value the same way and a query
     string or fragment cannot end up in the middle of a link. A schemeless value would give
     links a browser resolves as relative paths, so it is refused and the request origin is
-    used instead, with a warning. Cached on the raw string so the warning appears once per
-    distinct value.
+    used instead, with a warning, once per distinct value.
     """
-    value = raw.strip()
-    if not value:
-        return ConfiguredBase("", "")
-    split = urllib.parse.urlsplit(value)
-    if not split.scheme or not split.netloc:
-        logger.warning(
-            "%s=%r is not a usable absolute URL (needs a scheme and a host); "
-            "falling back to the request origin, so absolute URLs will name the internal address",
-            BASE_URL_ENV,
-            value,
-        )
-        return ConfiguredBase("", "")
-    if split.query or split.fragment:
-        logger.warning(
-            "%s=%r carries a query string or fragment; ignoring them, since a path is appended to this value",
-            BASE_URL_ENV,
-            value,
-        )
-    return ConfiguredBase(f"{split.scheme}://{split.netloc}", split.path.rstrip("/"))
+    base, problem = _split_configured_base(raw)
+    if problem and raw not in _warned_base_urls:
+        _warned_base_urls.add(raw)
+        logger.warning(problem, BASE_URL_ENV, raw.strip())
+    return base
 
 
 def configured_base() -> str:

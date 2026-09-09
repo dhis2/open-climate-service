@@ -521,19 +521,26 @@ def test_an_unusable_base_url_is_logged_once(monkeypatch: pytest.MonkeyPatch, ca
     """Silence is how this survives: the links are broken but every response is a 200."""
     import logging
 
-    from open_climate_service.shared.urls import _parse_configured_base, absolute_base
+    from open_climate_service.shared.urls import _split_configured_base, absolute_base
 
     # `startup.py` gives the package logger its own handler and stops propagation, so `caplog`
     # sees nothing until it is let through.
     monkeypatch.setattr(logging.getLogger("open_climate_service"), "propagate", True)
-    _parse_configured_base.cache_clear()
     monkeypatch.setenv(BASE_URL_ENV, "ocs-demo-nepal.dhis2.org")
     with caplog.at_level("WARNING"):
         for _ in range(3):
             absolute_base(_fake_request("http://localhost:9000/", "/stac"))
 
-    assert len(caplog.records) == 1, "cached on the raw value, so one warning per distinct value"
+    assert len(caplog.records) == 1, "warned once per distinct value"
     assert BASE_URL_ENV in caplog.text
+
+    # The parse cache is memoisation, not the deduplicator. Losing it must not repeat an
+    # operator-facing warning, which is what made this assertion depend on execution order.
+    _split_configured_base.cache_clear()
+    with caplog.at_level("WARNING"):
+        absolute_base(_fake_request("http://localhost:9000/", "/stac"))
+
+    assert len(caplog.records) == 1, "still once, even with the parse cache cleared"
 
 
 def test_the_asgi_prefix_ignores_the_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
