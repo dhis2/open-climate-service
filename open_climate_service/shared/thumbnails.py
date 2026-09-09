@@ -190,6 +190,45 @@ def render_png(
     return path
 
 
+# A percentile rather than the raw extremes, because geophysical fields are skewed: one storm
+# cell at 80 mm over a field that is otherwise under 1 mm would push everything else into a
+# single colour, which is the very problem a per-slice stretch is meant to solve.
+_STRETCH_PERCENTILES = (2.0, 98.0)
+
+
+def stretch_range(data: Any) -> tuple[float, float] | None:
+    """The value range a thumbnail should span for *data*, or None if there is nothing to show.
+
+    Scaled to the slice rather than to the template's declared ``display.range``. The declared
+    range is chosen so a dataset's *layers* are comparable with each other in the viewer, and
+    a thumbnail has the opposite job: it has to make one slice recognisable on its own. CHIRPS
+    daily precipitation is the case that decided it — 31 January 2025 over Nepal peaks at
+    0.408 mm against a declared 0-20 mm range, so 2% of the scale, and the whole frame renders
+    as the palest end of the colormap.
+
+    The cost is that two thumbnails no longer share a scale, and neither matches the viewer's
+    rendering of the same layer. For an icon whose job is recognition that is the better
+    trade; for a value read off the image it would not be, and the image is not for that.
+
+    Degenerate slices are handled rather than left to raise: an all-NaN slice returns None
+    (nothing to render), and a constant one is widened so the normalisation cannot divide by
+    zero — it renders as a single flat colour, which is what a constant field looks like.
+    """
+    import numpy as np
+
+    finite = np.asarray(data)[np.isfinite(np.asarray(data))]
+    if finite.size == 0:
+        return None
+    low, high = (float(value) for value in np.percentile(finite, _STRETCH_PERCENTILES))
+    if high <= low:
+        # The percentiles collapse when most of the field shares one value; the extremes still
+        # separate it.
+        low, high = float(finite.min()), float(finite.max())
+    if high <= low:
+        low, high = low - 0.5, low + 0.5
+    return low, high
+
+
 def write_dataset_thumbnail(
     store_path: str | Path,
     dataset: dict[str, Any],
@@ -227,14 +266,13 @@ def write_dataset_thumbnail(
 
         display = dataset.get("display")
         display = display if isinstance(display, dict) else {}
-        raw_range = display.get("range")
-        clim = (
-            (float(raw_range[0]), float(raw_range[1]))
-            if isinstance(raw_range, (list, tuple)) and len(raw_range) == 2
-            else None
-        )
+        chosen = representative_slice(ds[variable], now=now)
+        clim = stretch_range(chosen.values)
+        if clim is None:
+            logger.warning("Every value in the slice chosen for '%s' is missing; no thumbnail", dataset_id)
+            return None
         return render_png(
-            representative_slice(ds[variable], now=now),
+            chosen,
             thumbnail_path(dataset_id),
             colormap=display.get("colormap"),
             clim=clim,

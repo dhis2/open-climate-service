@@ -32,6 +32,7 @@ from open_climate_service.shared.thumbnails import (
     render_png,
     representative_slice,
     resolve_colormap,
+    stretch_range,
     thumbnail_path,
     write_dataset_thumbnail,
 )
@@ -57,10 +58,20 @@ def _store(tmp_path: Path, ds: xr.Dataset, *, t_dim: str | None = "t") -> Path:
     return path
 
 
-def _daily_cube(values: list[float], start: str = "2026-01-01") -> xr.Dataset:
-    """One distinct constant value per step, so the rendered slice is identifiable."""
-    times = pd.date_range(start, periods=len(values), freq="D")
-    data = np.array([[[v, v], [v, v]] for v in values], dtype="float32")
+# One distinct *pattern* per step, not one distinct constant. The thumbnail scales to the
+# slice it renders, so two constant slices produce the same image whatever their values —
+# only a different arrangement survives the normalisation and identifies which step was used.
+_PATTERNS = [
+    [[0.0, 1.0], [2.0, 3.0]],
+    [[3.0, 2.0], [1.0, 0.0]],
+    [[0.0, 3.0], [1.0, 2.0]],
+    [[2.0, 0.0], [3.0, 1.0]],
+]
+
+
+def _daily_cube(steps: int, start: str = "2026-01-01") -> xr.Dataset:
+    times = pd.date_range(start, periods=steps, freq="D")
+    data = np.array(_PATTERNS[:steps], dtype="float32")
     return xr.Dataset(
         {"precip": (("t", "y", "x"), data)},
         coords={"t": times, "y": [1.5, 0.5], "x": [10.5, 11.5]},
@@ -68,15 +79,30 @@ def _daily_cube(values: list[float], start: str = "2026-01-01") -> xr.Dataset:
 
 
 def _rendered_reference(arr: Any, tmp_path: Path) -> bytes:
-    """The bytes the thumbnail should have, rendered from the slice we expect it to show."""
+    """The bytes the thumbnail should have, rendered from the slice we expect it to show.
+
+    Uses the same per-slice stretch as the code under test, because these tests are about
+    *which slice* was chosen; the stretch itself is covered separately below.
+    """
     reference = render_png(
         arr,
         tmp_path / "reference.png",
         colormap="blues",
-        clim=(0.0, 10.0),
+        clim=stretch_range(arr.values),
         max_pixels=THUMBNAIL_MAX_PIXELS,
     )
     return reference.read_bytes()
+
+
+def _rendered_declared_range(arr: Any, tmp_path: Path) -> bytes:
+    """What the thumbnail would have been against the template's declared display range."""
+    return render_png(
+        arr,
+        tmp_path / "declared.png",
+        colormap="blues",
+        clim=(0.0, 20.0),
+        max_pixels=THUMBNAIL_MAX_PIXELS,
+    ).read_bytes()
 
 
 # -- which slice -----------------------------------------------------------------------
@@ -86,7 +112,7 @@ def test_a_datetime_store_renders_the_step_nearest_the_generation_date(tmp_path:
     """Nearest to now, not the last step. The store here runs past the generation date, the
     way a forecast does, so the two answers differ and the last step would be wrong."""
     # Steps at 60, 30 and 1 days before, and 30 days after, the pinned generation date.
-    cube = _daily_cube([1.0, 2.0, 3.0, 4.0], start="2025-12-31")
+    cube = _daily_cube(4, start="2025-12-31")
     cube = cube.assign_coords(
         t=pd.to_datetime(["2025-12-31", "2026-01-30", "2026-02-28", "2026-03-31"]),
     )
@@ -103,7 +129,7 @@ def test_a_climatology_renders_its_first_slice(tmp_path: Path) -> None:
     """A climatology's axis is an ordinal dayofyear, not a datetime, so there is no "nearest
     to today" without inventing a mapping. Index 0 is the answer, and it does not drift."""
     doy = xr.Dataset(
-        {"precip": (("dayofyear", "y", "x"), np.array([[[v, v], [v, v]] for v in (7.0, 8.0, 9.0)], dtype="float32"))},
+        {"precip": (("dayofyear", "y", "x"), np.array(_PATTERNS[:3], dtype="float32"))},
         coords={"dayofyear": [1, 2, 3], "y": [1.5, 0.5], "x": [10.5, 11.5]},
     )
     store = _store(tmp_path, doy, t_dim=None)
@@ -168,7 +194,7 @@ def test_the_thumbnail_is_capped_at_the_stac_recommended_size(tmp_path: Path) ->
 def test_a_failing_render_does_not_fail_the_ingest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A dataset is not less ingested for being unrecognisable. The callers rely on this
     function never raising rather than each wrapping it, so the guarantee is tested here."""
-    store = _store(tmp_path, _daily_cube([1.0, 2.0]))
+    store = _store(tmp_path, _daily_cube(2))
 
     def explode(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("no renderer today")
@@ -207,6 +233,64 @@ def test_every_built_in_template_colormap_resolves_to_itself() -> None:
 def test_an_unknown_colormap_falls_back_instead_of_raising() -> None:
     assert resolve_colormap("not-a-colormap").name == "viridis"
     assert resolve_colormap(None).name == "viridis"
+
+
+def test_a_low_signal_slice_still_shows_its_structure(tmp_path: Path) -> None:
+    """The case that decided per-slice scaling. CHIRPS daily declares a 0-20 mm display range,
+    and 31 January 2025 over Nepal peaks at 0.408 mm — 2% of it — so against the declared range
+    the whole frame renders as the palest end of the colormap and shows nothing at all."""
+    faint = xr.Dataset(
+        {"precip": (("y", "x"), np.array([[0.0, 0.05], [0.2, 0.408]], dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+    store = _store(tmp_path, faint, t_dim=None)
+
+    written = write_dataset_thumbnail(store, DATASET, now=GENERATED_AT)
+
+    assert written is not None
+    # Against the declared 0-20 range every cell would land in the same colour; scaled to the
+    # slice they separate.
+    assert written.read_bytes() != _rendered_declared_range(faint["precip"], tmp_path)
+
+
+def test_a_constant_slice_renders_rather_than_dividing_by_zero(tmp_path: Path) -> None:
+    """A flat field has no range to stretch. It should come out one colour, not raise."""
+    flat = xr.Dataset(
+        {"precip": (("y", "x"), np.full((2, 2), 3.0, dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+    low, high = stretch_range(flat["precip"].values) or (0.0, 0.0)
+    assert low < high
+
+    assert write_dataset_thumbnail(_store(tmp_path, flat, t_dim=None), DATASET) is not None
+
+
+def test_an_all_missing_slice_publishes_without_a_thumbnail(tmp_path: Path) -> None:
+    """Nothing to show is not the same as a failure, and neither is an ingest problem."""
+    empty = xr.Dataset(
+        {"precip": (("y", "x"), np.full((2, 2), np.nan, dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+
+    assert stretch_range(empty["precip"].values) is None
+    assert write_dataset_thumbnail(_store(tmp_path, empty, t_dim=None), DATASET) is None
+
+
+def test_the_stretch_resists_a_single_outlier() -> None:
+    """Raw min/max would hand the whole scale to one storm cell and flatten the rest, which is
+    the problem a per-slice stretch exists to avoid — hence percentiles rather than extremes.
+
+    The field has real structure under the outlier, which is what makes the difference
+    visible: a field that is 99% one value has nothing for either rule to preserve, and there
+    the percentiles collapse and the extremes are used deliberately.
+    """
+    field = np.linspace(0.0, 10.0, 100).astype("float32")
+    field[0] = 500.0
+
+    low, high = stretch_range(field) or (0.0, 0.0)
+
+    assert high < 11.0, f"one outlier took the whole range: {(low, high)}"
+    assert (low, high) != (float(field.min()), float(field.max()))
 
 
 # -- when it is generated ------------------------------------------------------------------
@@ -269,7 +353,7 @@ def test_one_ingest_produces_exactly_one_render(tmp_path: Path, monkeypatch: pyt
 
     def fake_sync(**kwargs: object) -> object:
         # Stand in for a three-period sync: the store the finalisation sees is the finished one.
-        downloader.write_to_icechunk_store(_daily_cube([1.0, 2.0, 3.0]), store_path, commit_message="test")
+        downloader.write_to_icechunk_store(_daily_cube(3), store_path, commit_message="test")
         return SimpleNamespace(periods_written=3)
 
     renders: list[Any] = []
