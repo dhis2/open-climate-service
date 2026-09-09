@@ -187,3 +187,49 @@ def test_an_unresolvable_annotation_does_not_lose_the_process() -> None:
     # one exotic type would publish an untyped contract for the whole process.
     assert data["schema"] == {}
     assert factor["schema"] == {"type": "integer"}
+
+
+def test_an_explicit_schema_decides_whether_the_default_is_published() -> None:
+    """The null/default check must run against the schema that ships, not the inferred one.
+
+    A `parameters=` override replaces the schema after it is inferred, so deciding beforehand
+    contradicts whichever side the override changed. Both directions are wrong in the same way:
+    a narrowed schema would publish a null default it rejects, and a widened one would withhold
+    a null default it admits, leaving an optional parameter with nothing to fall back on.
+    """
+
+    @process(parameters={"target": {"schema": {"type": "string"}}})
+    def narrowed(target: str | None = None) -> None:
+        """An override narrows a nullable annotation."""
+
+    meta = get_process_metadata(narrowed)
+    assert meta is not None
+    (target,) = meta["parameters"]
+    assert target["schema"] == {"type": "string"}
+    assert target["optional"] is True
+    assert "default" not in target
+
+    @process(parameters={"target": {"schema": {"type": ["string", "null"]}}})
+    def widened(target: str = None) -> None:  # type: ignore[assignment]  # pyright: ignore[reportArgumentType]
+        """An override widens a non-nullable annotation."""
+
+    meta = get_process_metadata(widened)
+    assert meta is not None
+    (target,) = meta["parameters"]
+    assert target["schema"] == {"type": ["string", "null"]}
+    assert target["optional"] is True
+    assert target["default"] is None
+
+
+def test_an_override_may_set_the_default_itself() -> None:
+    """An explicit default in the override is the author's, and survives the inferred one."""
+
+    @process(parameters={"target": {"default": "explicit"}})
+    def overridden(target: str = None) -> None:  # type: ignore[assignment]  # pyright: ignore[reportArgumentType]
+        """An override supplies its own default."""
+
+    meta = get_process_metadata(overridden)
+    assert meta is not None
+    (target,) = meta["parameters"]
+    assert target["default"] == "explicit"
+    assert target["optional"] is True

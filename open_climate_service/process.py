@@ -163,16 +163,21 @@ def process(
                 schema = _annotation_to_schema(ann)
                 if schema:
                     p["schema"] = schema
+            override = parameters.get(name, {}) if parameters else {}
+            if override:
+                p.update(override)
+            # The default is decided after the override, against the schema that actually
+            # ships. An explicit schema can narrow a nullable annotation or widen a
+            # non-nullable one, and deciding beforehand would contradict either.
             if param.default is not inspect.Parameter.empty:
-                p["optional"] = True
-                # A nullable annotation now carries "null" in its schema, so a None default
-                # no longer contradicts it and can be published as-is. The check remains for
-                # a parameter annotated non-nullable but defaulting to None, where emitting
-                # default=None would still mismatch the declared type.
-                if param.default is not None or not p.get("schema") or "null" in _schema_types(p.get("schema")):
+                p.setdefault("optional", True)
+                # A schema carrying "null" admits a None default, so it is published as-is.
+                # A non-nullable one would be contradicted by it, so the default is withheld.
+                # An explicit default in the override always wins.
+                if "default" not in override and (
+                    param.default is not None or not p.get("schema") or "null" in _schema_types(p.get("schema"))
+                ):
                     p["default"] = param.default
-            if parameters and name in parameters:
-                p.update(parameters[name])
             params.append(p)
 
         meta: dict[str, Any] = {
