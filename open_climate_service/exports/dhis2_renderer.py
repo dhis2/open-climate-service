@@ -53,6 +53,7 @@ def _is_retryable_transport_error(exc: BaseException) -> bool:
         # is safe to replay.
         if isinstance(exc, requests.exceptions.ConnectTimeout):
             return True
+        pre_send_types: tuple[Any, ...]
         try:
             urllib3_exceptions = importlib.import_module("urllib3.exceptions")
             pre_send_types = (
