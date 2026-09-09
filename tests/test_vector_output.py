@@ -18,6 +18,8 @@ import pandas as pd
 import pytest
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
+import xvec  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .xvec
+from shapely.geometry import box
 
 from open_climate_service.openeo import jobs
 from open_climate_service.plugins.processes.aggregate_spatial import aggregate_spatial
@@ -113,6 +115,42 @@ def test_geojson_output_carries_the_geometry_too(tmp_path: Path) -> None:
     written = _write(_result(), tmp_path, "GEOJSON")
     assert written.suffix == ".geojson"
     assert sorted(gpd.read_file(written).geom_type.unique()) == ["Polygon"]
+
+
+def _projected_cube() -> xr.Dataset:
+    """Two 1 km squares in UTM 33N, carried the way an xvec cube carries shapes.
+
+    `aggregate_spatial` cannot produce this -- its shapes are the request's GeoJSON, which RFC
+    7946 fixes to WGS 84 -- but `_vector_frame` also accepts a cube holding shapely geometries on
+    the geometry dimension directly, and `_vector_crs` reads the CRS off its GeometryIndex.
+    """
+    return xr.Dataset(
+        {"t2m": (("geometry", "t"), np.array([[1.0, 2.0], [3.0, 4.0]]))},
+        coords={
+            "geometry": [box(500000, 6000000, 501000, 6001000), box(501000, 6000000, 502000, 6001000)],
+            "t": pd.date_range("2024-01-01", periods=2),
+        },
+    ).xvec.set_geom_indexes("geometry", crs="EPSG:32633")
+
+
+def test_geojson_output_is_reprojected_to_wgs84(tmp_path: Path) -> None:
+    """RFC 7946 fixes GeoJSON to WGS 84, and the format has no CRS field to say otherwise.
+
+    Written as-is, a projected cube produced a .geojson of eastings and northings that every
+    reader takes for degrees.
+    """
+    frame = gpd.read_file(_write(_projected_cube(), tmp_path, "GEOJSON"))
+
+    assert frame.crs is not None and frame.crs.to_epsg() == 4326
+    assert [round(float(v), 3) for v in frame.total_bounds] == [15.0, 54.148, 15.031, 54.157]
+
+
+def test_geoparquet_output_keeps_the_native_crs(tmp_path: Path) -> None:
+    """The other half of the rule: GeoParquet records the CRS, so the coordinates stay as they are."""
+    frame = gpd.read_parquet(_write(_projected_cube(), tmp_path, "PARQUET"))
+
+    assert frame.crs is not None and frame.crs.to_epsg() == 32633
+    assert [float(v) for v in frame.total_bounds] == [500000.0, 6000000.0, 502000.0, 6001000.0]
 
 
 @pytest.mark.parametrize(("fmt", "suffix"), [("ZARR", ".zarr"), ("NETCDF", ".nc"), ("CSV", ".csv")])

@@ -1491,13 +1491,27 @@ def _vector_frame(ds: Any, geom_dim: str) -> Any:
     return gpd.GeoDataFrame(attributes, geometry=geoms, crs=crs)
 
 
+def _as_wgs84(gdf: Any) -> Any:
+    """The frame reprojected to WGS 84, for GeoJSON only.
+
+    RFC 7946 fixes GeoJSON coordinates to WGS 84, and the format carries no CRS of its own to
+    say otherwise, so a projected frame written straight out reads as degrees and lands off the
+    coast of Africa. GeoParquet is the opposite case -- it records the CRS in its metadata, so a
+    projected cube keeps its native coordinates there and loses no precision to a round trip.
+    """
+    crs = getattr(gdf, "crs", None)
+    if crs is None or crs.to_epsg() == 4326:
+        return gdf
+    return gdf.to_crs("EPSG:4326")
+
+
 def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
     """Write a GeoDataFrame to disk in the requested format. Returns the output path."""
     ext, _ = _VECTOR_FORMATS.get(fmt, (".geojson", "application/geo+json"))
 
     if ext == ".geojson":
         path = str(results_dir / "result.geojson")
-        gdf.to_file(path, driver="GeoJSON")
+        _as_wgs84(gdf).to_file(path, driver="GeoJSON")
         return path
 
     if ext == ".parquet":
@@ -1519,7 +1533,7 @@ def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
 
     # Fallback to GeoJSON
     path = str(results_dir / "result.geojson")
-    gdf.to_file(path, driver="GeoJSON")
+    _as_wgs84(gdf).to_file(path, driver="GeoJSON")
     return path
 
 

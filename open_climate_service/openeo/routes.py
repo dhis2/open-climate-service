@@ -399,6 +399,7 @@ def execute_synchronous(
     from open_climate_service.openeo.execution import SaveResultEnvelope
     from open_climate_service.openeo.jobs import (
         _VECTOR_FORMATS,
+        _as_wgs84,
         _write_dataset_tabular_export,
         _write_raster,
         _write_tabular_export,
@@ -467,9 +468,10 @@ def execute_synchronous(
                 frame = pd.DataFrame(result.drop(columns="geometry", errors="ignore"))
                 return _json_tabular_payload_response(frame, options)
             if fmt == "GEOJSON":
-                if result.crs is not None and result.crs.to_epsg() != 4326:
-                    result = result.to_crs("EPSG:4326")
-                return Response(content=result.to_json(), media_type="application/geo+json")
+                # Same rule as the file writers, from the same helper: this response is GeoJSON
+                # too, and the two paths reprojecting by different rules is how one of them ends
+                # up shipping eastings as longitudes.
+                return Response(content=_as_wgs84(result).to_json(), media_type="application/geo+json")
             if fmt in _VECTOR_FORMATS:
                 with tempfile.TemporaryDirectory() as tmp:
                     from pathlib import Path
