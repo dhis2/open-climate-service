@@ -1,7 +1,7 @@
 """Cross-process leases protecting job results during consumption."""
 
 import re
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 import portalocker
@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 
 @contextmanager
-def result_lease(job_id: str) -> Iterator[None]:
+def result_lease(job_id: str) -> Generator[None]:
     """Exclude deletion, updates, reruns, and other consumers until release.
 
     The lock file lives outside the job directory so deletion cannot unlink the

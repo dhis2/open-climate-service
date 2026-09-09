@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +26,7 @@ class VerifiedExport:
 
 
 @contextmanager
-def lease_export_input(export_id: str, job_id: str) -> Iterator[VerifiedExport]:
+def lease_export_input(export_id: str, job_id: str) -> Generator[VerifiedExport]:
     """Check job status, integrity, mapping, renderer, and target under a lease.
 
     This is not authorization or delivery. The future operator endpoint must apply

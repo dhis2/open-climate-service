@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -26,7 +26,7 @@ def _load() -> dict[str, dict[str, object]]:
 
 
 @contextmanager
-def submission_lock() -> Iterator[None]:
+def submission_lock() -> Generator[None]:
     """Serialize reservation, job creation and enqueue across all API workers."""
     with index_lock(_reservations_path()):
         yield

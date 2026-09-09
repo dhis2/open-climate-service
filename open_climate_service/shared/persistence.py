@@ -3,7 +3,7 @@
 import json
 import os
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ import portalocker
 
 
 @contextmanager
-def index_lock(path: Path) -> Iterator[None]:
+def index_lock(path: Path) -> Generator[None]:
     """Lock before opening the index; replacement must not replace the lock inode."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path.with_suffix(path.suffix + ".lock"), "a", encoding="utf-8") as handle:
@@ -28,7 +28,7 @@ class AlreadyLocked(Exception):
 
 
 @contextmanager
-def try_index_lock(path: Path) -> Iterator[None]:
+def try_index_lock(path: Path) -> Generator[None]:
     """Acquire the index lock without blocking; raise ``AlreadyLocked`` if held."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = portalocker.Lock(

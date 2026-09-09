@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -53,7 +53,7 @@ _current: ContextVar[ExecutionEvidence | None] = ContextVar("ocs_execution_evide
 
 
 @contextmanager
-def capture_execution(process: dict[str, Any]) -> Iterator[ExecutionEvidence]:
+def capture_execution(process: dict[str, Any]) -> Generator[ExecutionEvidence]:
     """Isolate observations between simultaneous graph executions."""
     try:
         digest = json_digest(process)
