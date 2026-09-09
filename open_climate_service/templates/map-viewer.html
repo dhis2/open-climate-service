@@ -590,20 +590,20 @@
         selector = {};
         for (const d of dimStates) selector[d.key] = indexSelection(d.index);
 
-        // The CRS code alone is enough now. From 0.8.0 ZarrLayer resolves a code through
+        // The CRS code alone is enough here. From 0.8.0 ZarrLayer resolves a code through
         // proj4's own registry, which carries every UTM zone among others, so a projected
         // store no longer needs a proj4 definition handed to it. That retires both the
         // `open_climate_service:proj4` hint we used to publish and the epsg.io fetch that
         // backed it up (CLIM-833) — one fewer non-standard field, and no third-party
         // request on the render path.
         //
-        // What this does *not* rely on is carbonplan/zarr-layer#61, which would bundle a
-        // full EPSG database and is still open. So the guarantee is "any code proj4 ships a
-        // definition for", not "any EPSG code". That covers all four CRSes in use across our
-        // instances — EPSG:4326, EPSG:3857, EPSG:32633, EPSG:32645 — but a store in, say, a
-        // national grid outside proj4's defs would fall back to an inferred CRS and land in
-        // the wrong place. ZarrLayer warns when that happens; #61 is what would remove the
-        // caveat entirely.
+        // proj4's registry does not cover *every* EPSG code — carbonplan/zarr-layer#61,
+        // which would bundle a full database, is still open — so a code alone would leave a
+        // national grid (EPSG:27700, EPSG:2154) unresolved. Passing one here is harmless
+        // rather than fatal: ZarrLayer keeps no override for a code it cannot resolve, and
+        // falls back to reading the store's own `proj:wkt2` / `proj:projjson`, which both
+        // write paths publish beside `proj:code` (shared/crs.py, store_crs_attrs). The
+        // store, not the reader's lookup table, is what has to know the CRS.
         let nativeCrs = collection["proj:code"] ?? "EPSG:4326";
         // CRS84 aliases (CRS84, OGC:CRS84, CRS:84, or a CRS84 URI) are geographic WGS84,
         // normalised so `crs` is a code ZarrLayer recognises directly. Separators are

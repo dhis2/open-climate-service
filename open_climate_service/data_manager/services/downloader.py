@@ -12,6 +12,7 @@ from topozarr import CoarseningMethod
 from topozarr.coarsen import create_pyramid
 
 from open_climate_service import config as api_config
+from open_climate_service.shared.crs import store_crs_attrs
 from open_climate_service.shared.geozarr import check_grid_description, grid_geometry, write_gdal_geotransform
 from open_climate_service.shared.raster_contract import prepare_for_publication
 
@@ -354,6 +355,14 @@ def write_to_icechunk_store(
     # at the write boundary — rather than relying on every plugin to get it right (CLIM-821).
     prepared = prepare_for_publication(ds, fallback_crs=crs, x_dim=x_dim, y_dim=y_dim)
     ds, crs = prepared.dataset, prepared.crs
+    # Onto the cube itself, not only the root attrs written below, because a client reads the
+    # `proj:` convention from the innermost source that declares any of it: the data array,
+    # then the level-0 group, and only then the root. `prepare_for_publication` puts a bare
+    # `proj:code` on the cube, and the pyramid path writes each level group from it — so a
+    # definition written at the root alone would sit behind a level-0 `proj:code` that
+    # shadows it, and an unresolvable code would stay unresolvable. Both levels agree now.
+    crs_attrs = store_crs_attrs(crs)
+    ds = ds.assign_attrs(crs_attrs)
     if t_dim is not None and t_dim != "t":
         # The caller named the temporal dim as it arrived; normalisation has renamed it, so the
         # rest of this function (root time coordinate, chunking) must follow the new name.
@@ -377,6 +386,9 @@ def write_to_icechunk_store(
         bbox = geometry["bbox"]
         shape = tuple(geometry["shape"])
     geozarr_attrs = create_geozarr_attrs(dimensions=dims, crs=crs, bbox=bbox, shape=shape)
+    # `create_geozarr_attrs` reduces an EPSG input to `proj:code`, which describes the store
+    # only to a reader that can look the code up. Overwrite with the full `proj:` set.
+    geozarr_attrs.update(crs_attrs)
     if geometry is not None:
         # The affine is what a client places the raster with; without it, viewers infer a grid
         # from the coordinate arrays and assume EPSG:4326 while doing so, which puts every

@@ -289,14 +289,18 @@ def _add_crs_render_hints(*, template: pystac.Collection, ds: xr.Dataset, store_
     A client reprojecting Zarr on the fly needs to resolve the store's CRS. We used to hand
     it a proj4 string under ``open_climate_service:proj4`` because zarr-layer 0.6.1 accepted
     only its two built-in codes or an explicit proj4 definition. From 0.8.0 it resolves a
-    code through proj4's own registry, so that non-standard field and the viewer's epsg.io
-    fallback are both retired (CLIM-833) and only standard fields remain.
+    code through proj4's own registry, and a code proj4 does not ship through the full
+    definition the store publishes for itself (``shared/crs.py``, ``store_crs_attrs``) — so
+    that non-standard field and the viewer's epsg.io fallback are both retired (CLIM-833)
+    and only standard fields remain.
 
     Three fields are emitted:
 
     * ``proj:wkt2`` — the STAC Projection-extension standard, lossless CRS
-      representation. It is the same information GeoZarr already carries in the CF
-      ``spatial_ref`` grid-mapping's ``crs_wkt`` attribute.
+      representation. It is the same information the store already carries, in the CF
+      ``spatial_ref`` grid-mapping's ``crs_wkt`` attribute and in its own ``proj:wkt2``
+      root attribute (``shared/crs.py``, ``store_crs_attrs``); this is the copy a client
+      that reads the catalogue and never opens the Zarr can see.
     * ``proj:projjson`` — the same CRS as PROJJSON. Also a STAC Projection-extension
       standard (and the GeoZarr ``proj:`` convention), but a JSON object a JS/STAC
       client can consume directly instead of parsing WKT2.

@@ -18,6 +18,7 @@ from typing import Any
 
 from geozarr_toolkit import create_geozarr_attrs
 
+from open_climate_service.shared.crs import store_crs_attrs
 from open_climate_service.shared.geozarr import check_grid_description, grid_geometry, write_gdal_geotransform
 from open_climate_service.stac.media_types import is_multiscales_convention
 from open_climate_service.streaming.protocol import GridSpec
@@ -237,13 +238,15 @@ def write_geozarr_attrs(store: Any, *, spec: GridSpec, bbox: list[float]) -> Non
         bbox=bbox,
         shape=spec.shape,
     )
-    crs_code = f"EPSG:{spec.crs}"
-    attrs["proj:code"] = crs_code
+    # `create_geozarr_attrs` records an EPSG input as `proj:code` and nothing else, which
+    # only describes the store to a reader that can look the code up. Overwrite with the full
+    # `proj:` set so the store carries its own definition — see store_crs_attrs.
+    attrs.update(store_crs_attrs(f"EPSG:{spec.crs}"))
     # Native-CRS extent, in the GeoZarr `spatial:bbox` convention. Direct-Zarr clients
-    # (GDAL/QGIS, zarr-layer) read the CRS from the CF grid-mapping (`crs_wkt`) / `proj:`
-    # convention that create_geozarr_attrs already writes, and the extent from here or the
-    # coordinate arrays — no non-standard `proj4`/`bounds` attrs required. The STAC hints
-    # (proj:wkt2, proj:projjson, proj:bbox) in stac/services.py serve other STAC clients.
+    # (GDAL/QGIS, zarr-layer) read the CRS from the CF grid-mapping (`crs_wkt`) / the `proj:`
+    # convention above, and the extent from here or the coordinate arrays — no non-standard
+    # `proj4`/`bounds` attrs required. stac/services.py publishes the same CRS fields plus
+    # `proj:bbox` on the collection, for clients that read the catalogue and not the store.
     attrs["spatial:bbox"] = bbox
     if geometry is not None:
         # The affine is what a client actually places the raster with. Without it, viewers
