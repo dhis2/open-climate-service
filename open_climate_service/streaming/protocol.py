@@ -121,3 +121,10 @@ class IngestionPlugin(Protocol):
         natively-async sources; the orchestrator awaits or threads it accordingly.
         """
         ...
+
+
+def close_ingestion_plugin(plugin: IngestionPlugin) -> None:
+    """Close an ingestion plugin when it exposes an optional close hook."""
+    close = getattr(plugin, "close", None)
+    if callable(close):
+        close()

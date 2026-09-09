@@ -61,7 +61,7 @@ from open_climate_service.shared.time import (
     utc_today,
 )
 from open_climate_service.streaming.orchestrator import run_streaming_ingest_sync
-from open_climate_service.streaming.protocol import IngestionPlugin
+from open_climate_service.streaming.protocol import IngestionPlugin, close_ingestion_plugin
 from open_climate_service.streaming.store import (
     open_or_create_repo,
     read_committed_period_ids_ordered,
@@ -385,6 +385,18 @@ def _validate_source_periods(
     return available
 
 
+def _no_op_streaming_plan(committed: list[str], current_start: str, current_end: str) -> _StreamingMaterializationPlan:
+    """Build the common plan for reusing an already complete store."""
+    return _StreamingMaterializationPlan(
+        action=SyncAction.NO_OP,
+        start=current_start,
+        end=current_end,
+        periods=committed,
+        has_committed_periods=True,
+        committed_periods=committed,
+    )
+
+
 def _plan_streaming_materialization(
     *,
     plugin: IngestionPlugin,
@@ -412,7 +424,7 @@ def _plan_streaming_materialization(
         source="Committed store",
         require_ordered=False,
     )
-    if overwrite:
+    if overwrite or not committed:
         available = _validate_source_periods(
             periods if periods is not None else asyncio.run(plugin.periods(start, end)),
             start=start,
@@ -421,7 +433,7 @@ def _plan_streaming_materialization(
             scope="temporal scope",
         )
         return _StreamingMaterializationPlan(
-            action=SyncAction.REMATERIALIZE,
+            action=SyncAction.REMATERIALIZE if overwrite else SyncAction.APPEND,
             start=available[0] if period_type == "climatology" else start,
             end=available[-1],
             periods=available,
@@ -429,7 +441,10 @@ def _plan_streaming_materialization(
             committed_periods=committed,
         )
 
-    if not committed:
+    if period_type == "climatology" and (not start.isdigit() or not end.isdigit()):
+        # Date-shaped bounds describe the reference interval. Ask the source for
+        # the ordinal materialization scope so a partial store cannot define its
+        # own target and incorrectly appear complete.
         available = _validate_source_periods(
             periods if periods is not None else asyncio.run(plugin.periods(start, end)),
             start=start,
@@ -437,21 +452,8 @@ def _plan_streaming_materialization(
             period_type=period_type,
             scope="temporal scope",
         )
-        return _StreamingMaterializationPlan(
-            action=SyncAction.APPEND,
-            start=available[0] if period_type == "climatology" else start,
-            end=available[-1],
-            periods=available,
-            has_committed_periods=False,
-            committed_periods=committed,
-        )
-
-    if period_type == "climatology" and (not start.isdigit() or not end.isdigit()):
-        # Date-shaped request bounds describe the reference interval, while the
-        # committed store is indexed by ordinal day. A complete climatology is
-        # immutable under this ingestion policy.
-        start = min(committed, key=lambda value: _period_order_key(value, period_type))
-        end = max(committed, key=lambda value: _period_order_key(value, period_type))
+        start, end = available[0], available[-1]
+        periods = available
 
     current_start = min(committed, key=lambda value: _period_order_key(value, period_type))
     current_end = max(committed, key=lambda value: _period_order_key(value, period_type))
@@ -463,14 +465,7 @@ def _plan_streaming_materialization(
     # Reuse the current artifact without asking a rolling source to enumerate
     # historical periods that it may no longer expose.
     if materialization_start == current_start and materialization_end == current_end and committed_is_contiguous:
-        return _StreamingMaterializationPlan(
-            action=SyncAction.NO_OP,
-            start=current_start,
-            end=current_end,
-            periods=committed,
-            has_committed_periods=True,
-            committed_periods=committed,
-        )
+        return _no_op_streaming_plan(committed, current_start, current_end)
 
     # A contiguous store that only needs a forward extension requires the source
     # to enumerate the missing delta, not reproduce committed history. Reuse a
@@ -490,14 +485,7 @@ def _plan_streaming_materialization(
             if _period_order_key(period, period_type) >= _period_order_key(expected_start, period_type)
         ]
         if not delta:
-            return _StreamingMaterializationPlan(
-                action=SyncAction.NO_OP,
-                start=current_start,
-                end=current_end,
-                periods=committed,
-                has_committed_periods=True,
-                committed_periods=committed,
-            )
+            return _no_op_streaming_plan(committed, current_start, current_end)
         if delta[0] != expected_start or not _periods_are_contiguous(delta, period_type):
             raise HTTPException(
                 status_code=409,
@@ -632,7 +620,10 @@ def _create_streaming_artifact(
                 logger.warning("Re-registering committed store '%s' without an artifact record", store_path)
             else:
                 temporal = existing.coverage.temporal
-                if temporal.start == plan.start and temporal.end == plan.end:
+                coverage_is_current = str(dataset["period_type"]) == "climatology" or (
+                    temporal.start == plan.start and temporal.end == plan.end
+                )
+                if coverage_is_current:
                     if publish and existing.publication.status != PublicationStatus.PUBLISHED:
                         return publish_artifact_record(existing.artifact_id)
                     return existing
@@ -679,7 +670,7 @@ def _create_streaming_artifact(
                 is_cancel_requested=is_cancel_requested,
                 save_cursor=save_cursor,
                 periods=plan.periods,
-                committed_periods=plan.committed_periods,
+                committed_periods=plan.committed_periods if ingest_path == store_path else [],
             )
             ingest_completed = True
             if result.periods_written == 0 and not ingest_path.exists():
@@ -786,12 +777,10 @@ def _create_streaming_artifact(
                 except Exception:
                     logger.warning("Could not clean up retired store '%s'", store_path, exc_info=True)
             if not plugin_handed_to_orchestrator:
-                close_plugin = getattr(plugin, "close", None)
-                if callable(close_plugin):
-                    try:
-                        close_plugin()
-                    except Exception:
-                        logger.warning("Could not close ingestion plugin after planning failure", exc_info=True)
+                try:
+                    close_ingestion_plugin(plugin)
+                except Exception:
+                    logger.warning("Could not close ingestion plugin after planning failure", exc_info=True)
             if (
                 rollback_error is None
                 and rollback_repo is not None
@@ -801,7 +790,14 @@ def _create_streaming_artifact(
                 try:
                     if not store_committed and ingest_completed:
                         rollback_repo.reset_branch("main", rollback_snapshot)
-                    rollback_repo.delete_branch(rollback_branch)
+                    try:
+                        rollback_repo.delete_branch(rollback_branch)
+                    except Exception as exc:
+                        # Recovery may already have removed the temporary ref. The
+                        # snapshot reset above is the operation that restores data;
+                        # an absent cleanup ref must not mask the original failure.
+                        if "ref not found" not in str(exc).lower():
+                            raise
                 except Exception as exc:
                     if not store_committed:
                         rollback_error = exc
@@ -965,11 +961,6 @@ def _maybe_build_pyramid(
     roll back instead.
     """
     from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
-
-    # Belt and braces: `_create_streaming_artifact` already heals this under the lock before
-    # ingest, which is the call that matters. Kept because this function is also entered
-    # directly, and because it is idempotent — a present target makes it a no-op.
-    recover_interrupted_swap(store_path)
 
     try:
         ds = open_icechunk_dataset(store_path)

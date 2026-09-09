@@ -31,7 +31,7 @@ from open_climate_service.shared.raster_contract import (
     prepare_for_publication,
     spatial_coords_match,
 )
-from open_climate_service.streaming.protocol import GridSpec, IngestionPlugin
+from open_climate_service.streaming.protocol import GridSpec, IngestionPlugin, close_ingestion_plugin
 from open_climate_service.streaming.store import (
     committed_data_group,
     is_store_empty,
@@ -179,9 +179,7 @@ async def run_streaming_ingest(
 
     all_periods = periods if periods is not None else await plugin.periods(start, end)
     if not all_periods:
-        close_plugin = getattr(plugin, "close", None)
-        if callable(close_plugin):
-            close_plugin()
+        close_ingestion_plugin(plugin)
         return StreamingIngestResult(store_path=store_path, period_type=period_type, periods_written=0)
 
     committed = (
@@ -191,9 +189,7 @@ async def run_streaming_ingest(
     )
     pending = [period for period in all_periods if period not in committed]
     if not pending:
-        close_plugin = getattr(plugin, "close", None)
-        if callable(close_plugin):
-            close_plugin()
+        close_ingestion_plugin(plugin)
         return StreamingIngestResult(store_path=store_path, period_type=period_type, periods_written=0)
 
     if on_progress:
@@ -204,9 +200,7 @@ async def run_streaming_ingest(
     elif is_store_empty(store_path):
         is_first_write = True
     else:
-        close_plugin = getattr(plugin, "close", None)
-        if callable(close_plugin):
-            close_plugin()
+        close_ingestion_plugin(plugin)
         raise RuntimeError(
             f"Existing store at {store_path} holds data whose committed periods could not be read, so it is "
             "neither safe to append to nor safe to overwrite. Inspect the store, or remove it to re-ingest "
@@ -340,9 +334,7 @@ async def run_streaming_ingest(
             task.cancel()
         if tasks_to_cancel:
             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-        close_plugin = getattr(plugin, "close", None)
-        if callable(close_plugin):
-            close_plugin()
+        close_ingestion_plugin(plugin)
 
     # Prune intermediate ingest snapshots: each period commit created one snapshot;
     # only the final HEAD state needs to be retained.  expire_snapshots marks older

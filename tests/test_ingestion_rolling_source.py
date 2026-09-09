@@ -182,3 +182,72 @@ def test_forward_append_progress_counts_only_new_periods(
     ingest("2026-01-03", report)
     assert at_fetch == [(0, 1)]
     assert progress[-1] == (1, 1)
+
+
+def test_overwrite_rematerializes_existing_store(
+    rolling_store: tuple[_RollingPlugin, dict[str, object], Path],
+) -> None:
+    plugin, dataset, store_path = rolling_store
+    services.create_artifact(
+        dataset=dataset,
+        start="2026-01-01",
+        end="2026-01-02",
+        bbox=[1.0, 2.0, 3.0, 4.0],
+        country_code=None,
+        overwrite=False,
+        publish=False,
+    )
+    plugin.available.append("2026-01-03")
+    plugin.fetched.clear()
+
+    artifact = services.create_artifact(
+        dataset=dataset,
+        start="2026-01-01",
+        end="2026-01-03",
+        bbox=[1.0, 2.0, 3.0, 4.0],
+        country_code=None,
+        overwrite=True,
+        publish=False,
+    )
+
+    assert plugin.fetched == plugin.available
+    assert artifact.coverage.temporal == CoverageTemporal(start="2026-01-01", end="2026-01-03")
+    with open_icechunk_dataset(store_path) as stored:
+        assert stored["precip"][:, 0, 0].values.tolist() == [1.0, 2.0, 3.0]
+
+
+def test_append_record_failure_restores_existing_store(
+    rolling_store: tuple[_RollingPlugin, dict[str, object], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin, dataset, store_path = rolling_store
+    initial = services.create_artifact(
+        dataset=dataset,
+        start="2026-01-01",
+        end="2026-01-02",
+        bbox=[1.0, 2.0, 3.0, 4.0],
+        country_code=None,
+        overwrite=False,
+        publish=False,
+    )
+    plugin.available.append("2026-01-03")
+
+    def fail_record(*args: object, **kwargs: object) -> None:
+        raise OSError("record write failed")
+
+    monkeypatch.setattr(services, "_upsert_artifact_record", fail_record)
+    with pytest.raises(OSError, match="record write failed"):
+        services.create_artifact(
+            dataset=dataset,
+            start="2026-01-01",
+            end="2026-01-03",
+            bbox=[1.0, 2.0, 3.0, 4.0],
+            country_code=None,
+            overwrite=False,
+            publish=False,
+        )
+
+    assert services._load_records()[-1].artifact_id == initial.artifact_id
+    repo = services.open_or_create_repo(store_path)
+    assert not [branch for branch in repo.list_branches() if branch.startswith("ocs-ingest-rollback-")]
+    with open_icechunk_dataset(store_path) as stored:
+        assert stored["precip"][:, 0, 0].values.tolist() == [1.0, 2.0]

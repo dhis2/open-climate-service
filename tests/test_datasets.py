@@ -600,6 +600,33 @@ def test_plan_streaming_materialization_accepts_date_bounds_for_climatology(
     assert plan.periods == [str(day) for day in range(1, 367)]
 
 
+def test_plan_streaming_materialization_completes_partial_climatology_for_date_bounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    available = [str(day) for day in range(1, 367)]
+    plugin = _PeriodsPlugin(available)
+    monkeypatch.setattr(
+        services,
+        "read_committed_period_ids_ordered",
+        lambda *args, **kwargs: [str(day) for day in range(1, 201)],
+    )
+
+    plan = services._plan_streaming_materialization(
+        plugin=plugin,
+        store_path=tmp_path / "normal.icechunk",
+        start="1991-01-01",
+        end="2020-12-31",
+        period_type="climatology",
+        overwrite=False,
+        periods=None,
+    )
+
+    assert plan.action == services.SyncAction.APPEND
+    assert (plan.start, plan.end) == ("1", "366")
+    assert plan.periods == [str(day) for day in range(201, 367)]
+    assert plugin.calls == [("1991-01-01", "2020-12-31")]
+
+
 def test_plan_streaming_materialization_rejects_source_gap(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
