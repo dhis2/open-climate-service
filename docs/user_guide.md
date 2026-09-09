@@ -52,8 +52,8 @@ for link in service.datasets():
     print(link["id"], "—", link["title"])
 
 # List the processes and reusable workflows the instance exposes
-service.processes()    # standard openEO processes
-service.workflows()    # stored workflows / UDPs (e.g. aggregate_to_dhis2_json)
+service.processes()  # standard openEO processes
+service.workflows()  # stored workflows / UDPs (e.g. aggregate_to_dhis2_json)
 
 # Run a process graph synchronously. JSON results (e.g. a DHIS2 dataValueSet) come
 # back as a dict; file results (CSV, GeoJSON, GeoTIFF) come back as bytes.

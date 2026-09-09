@@ -51,12 +51,15 @@ precip = conn.load_collection(
     temporal_extent=["2000-01-01", "2023-12-31"],
 )
 
-spi3 = precip.process("spi", arguments={
-    "pr": precip,
-    "window": 3,
-    "cal_start": "2000-01-01",
-    "cal_end": "2020-12-31",
-})
+spi3 = precip.process(
+    "spi",
+    arguments={
+        "pr": precip,
+        "window": 3,
+        "cal_start": "2000-01-01",
+        "cal_end": "2020-12-31",
+    },
+)
 
 job = spi3.save_result("Zarr").create_job()
 job.start_and_wait()
@@ -125,13 +128,16 @@ tmax.process("tx_days_above", arguments={"tasmax": tmax, "thresh": "35 degC", "f
 
 ```python
 # Annual count of heat waves (≥3 consecutive days with Tmax>35°C and Tmin>20°C)
-tmax.process("heat_wave_frequency", arguments={
-    "tasmin": tmin,
-    "tasmax": tmax,
-    "thresh_tasmin": "20 degC",
-    "thresh_tasmax": "35 degC",
-    "freq": "YS",
-})
+tmax.process(
+    "heat_wave_frequency",
+    arguments={
+        "tasmin": tmin,
+        "tasmax": tmax,
+        "thresh_tasmin": "20 degC",
+        "thresh_tasmax": "35 degC",
+        "freq": "YS",
+    },
+)
 ```
 
 ---
@@ -189,6 +195,7 @@ The auto-registered xclim processes can be overridden per-instance by placing a 
 import xarray as xr
 import xclim.indicators.atmos as xclim_atmos
 from open_climate_service.process import process
+
 
 @process(summary="Consecutive dry days (Rwanda threshold)")
 def cdd(pr: xr.DataArray, thresh: str = "0.5 mm/day", freq: str = "MS") -> xr.DataArray:

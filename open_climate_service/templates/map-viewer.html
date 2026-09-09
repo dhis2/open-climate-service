@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Map viewer — {{ name }}</title>
-    <link href="https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <link href="https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
       *,
       *::before,
@@ -200,7 +200,7 @@
   <body>
     <div class="layout">
       <header>
-        <h1><a href="{{ base }}/">{{ name }}</a></h1>
+        <h1><a href="{{ mount }}/">{{ name }}</a></h1>
         <span class="subtitle">Map viewer</span>
       </header>
 
@@ -249,7 +249,7 @@
       // worker is a real sibling URL (`./maplibre-gl-worker.mjs`) resolved from
       // import.meta.url, and esm.sh's transformed build doesn't serve it (404), which
       // blanks the map. unpkg serves the worker + shared chunk siblings with CORS.
-      import * as maplibregl from "https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.mjs";
+      import * as maplibregl from "https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
       import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.6.1";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
 
@@ -575,7 +575,7 @@
       async function fitToExtent() {
         if (!map || mapUnavailable || viewPinnedByLayer) return;
         try {
-          const res = await fetch("{{ base }}/extent");
+          const res = await fetch("{{ mount }}/extent");
           if (!res.ok) return;
           const extent = await res.json();
           const [xmin, ymin, xmax, ymax] = extent.bbox;
@@ -623,7 +623,7 @@
 
       async function loadCatalog() {
         try {
-          const res = await fetch("{{ base }}/collections");
+          const res = await fetch("{{ mount }}/collections");
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const body = await res.json();
           const collections = body.collections ?? [];
@@ -634,7 +634,7 @@
             return;
           }
           for (const col of collections) {
-            const href = `{{ base }}/collections/${col.id}`;
+            const href = `{{ mount }}/collections/${col.id}`;
             const opt = document.createElement("option");
             opt.value = href;
             opt.textContent = col.title ?? col.id;
