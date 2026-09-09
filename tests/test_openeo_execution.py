@@ -1263,8 +1263,10 @@ def test_merge_cubes_wrapper_does_not_broadcast_missing_predictor_axes(missing: 
         merge(cube1=climate, cube2=population)
 
 
-@pytest.mark.parametrize("dimension, labels", [("geometry", ["B", "A"]), ("y", [2.0, 1.0])])
-@pytest.mark.parametrize("noise", [0.0, 1e-9])
+@pytest.mark.parametrize(
+    "dimension, labels, noise",
+    [("geometry", ["B", "A"], 0.0), ("y", [2.0, 1.0], 0.0), ("y", [2.0, 1.0], 1e-9)],
+)
 def test_merge_cubes_wrapper_aligns_reordered_predictors(dimension: str, labels: list[Any], noise: float) -> None:
     from open_climate_service.openeo.execution import _build_process_registry
 
@@ -1297,6 +1299,29 @@ def test_merge_cubes_wrapper_uses_upstream_coordinate_tolerance(offset: float) -
         xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
 
 
+@pytest.mark.parametrize("extra_side", ["stacked", "third"])
+def test_merge_cubes_wrapper_rejects_extra_index_labels(extra_side: str) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0, 2.0], dims="geometry", coords={"geometry": ["A", "B"]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = cube.rename("population")
+    extra = xr.DataArray(
+        [1.0, 2.0, 3.0],
+        dims="geometry",
+        coords={"geometry": ["A", "B", "C"]},
+        name="population",
+    )
+    if extra_side == "stacked":
+        stacked = merge(cube1=extra.rename("precip"), cube2=extra.rename("t2m"))
+    else:
+        third = extra
+
+    with pytest.raises(ValueError, match="different labels on index 'geometry'"):
+        merge(cube1=stacked, cube2=third)
+
+
 @pytest.mark.parametrize("grouped", [False, True])
 def test_merge_cubes_wrapper_rejects_resolver_when_extending_group(grouped: bool) -> None:
     from open_climate_service.openeo.execution import _make_named_merge_cubes
@@ -1311,21 +1336,6 @@ def test_merge_cubes_wrapper_rejects_resolver_when_extending_group(grouped: bool
         _make_named_merge_cubes(lambda **kwargs: other)(
             cube1=cube, cube2=other, overlap_resolver=resolver, context=context
         )
-
-
-def test_merge_cubes_wrapper_rejects_resolver_for_overlapping_stacked_labels() -> None:
-    from open_climate_service.openeo.execution import _make_named_merge_cubes
-
-    cube = xr.DataArray(
-        [[1.0], [2.0]],
-        dims=("__cubes__", "t"),
-        coords={"__cubes__": ["precip", "t2m"], "t": [0]},
-        name="precip",
-    )
-    other = cube.rename("other")
-    resolver = object()
-    with pytest.raises(ValueError, match="only supported on the initial"):
-        _make_named_merge_cubes(lambda **kwargs: cube)(cube1=cube, cube2=other, overlap_resolver=resolver)
 
 
 def test_merge_cubes_registry_passes_context_and_overlap_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1399,6 +1409,28 @@ def test_merge_cubes_wrapper_ignores_non_index_scalar_coordinate_differences(rig
     result = merge(cube1=stacked, cube2=third)
 
     assert result.coords["spatial_ref"].item() == "EPSG:4326"
+
+
+def test_merge_cubes_wrapper_preserves_shared_auxiliary_and_drops_right_only_auxiliary() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray(
+        [1.0, 2.0],
+        dims="geometry",
+        coords={"geometry": ["A", "B"], "name": ("geometry", ["Alpha", "Beta"])},
+        name="precip",
+    )
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = cube.rename("population").assign_coords(
+        name=("geometry", ["Other A", "Other B"]),
+        source_name=("geometry", ["one", "two"]),
+    )
+
+    result = merge(cube1=stacked, cube2=third)
+
+    assert result.coords["name"].values.tolist() == ["Alpha", "Beta"]
+    assert "source_name" not in result.coords
 
 
 def test_merge_cubes_wrapper_accepts_matching_unsorted_duplicate_index() -> None:

@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
 import xarray as xr
 from fastapi import HTTPException, Request
 
@@ -127,10 +128,7 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
             return None
         return cube.expand_dims({cube_axis: [str(cube.name)]})
 
-    def _append_disjoint_predictors(cube1: xr.DataArray, cube2: xr.DataArray) -> xr.DataArray | None:
-        if cube_axis not in cube1.dims and cube_axis not in cube2.dims:
-            return None
-
+    def _append_disjoint_predictors(cube1: xr.DataArray, cube2: xr.DataArray) -> xr.DataArray:
         left = _with_cube_axis(cube1)
         right = _with_cube_axis(cube2)
         if left is None or right is None:
@@ -154,10 +152,10 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
         for dim in dimensions:
             left_index = left.indexes[dim]
             right_index = right.indexes[dim]
+            if len(left_index) != len(right_index):
+                raise ValueError(f"Named predictors have different labels on index '{dim}'")
             if left_index.equals(right_index):
                 continue
-            if not right_index.is_unique:
-                raise ValueError(f"Named predictor index '{dim}' cannot be reordered because it has duplicate labels")
             positions = right_index.get_indexer(left_index)
             if (positions < 0).any():
                 left_values = left_index.to_numpy()
@@ -167,9 +165,23 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
                     and left_values.dtype.kind == "f"
                     and right_values.dtype.kind == "f"
                 ):
-                    positions = abs(left_values[:, None] - right_values[None, :]).argmin(axis=1)
-                    if (abs(left_values - right_values[positions]) >= FLOAT_TOLERANCE).any():
-                        raise ValueError(f"Named predictors have different labels on index '{dim}'")
+                    if (abs(left_values - right_values) < FLOAT_TOLERANCE).all():
+                        positions = np.arange(len(left_index))
+                    else:
+                        if not right_index.is_unique:
+                            raise ValueError(
+                                f"Named predictor index '{dim}' cannot be reordered because it has duplicate labels"
+                            )
+                        order = np.argsort(right_values)
+                        sorted_right = right_index.take(order)
+                        nearest = sorted_right.get_indexer(
+                            left_index,
+                            method="nearest",
+                            tolerance=FLOAT_TOLERANCE,
+                        )
+                        if (nearest < 0).any():
+                            raise ValueError(f"Named predictors have different labels on index '{dim}'")
+                        positions = order[nearest]
                 else:
                     raise ValueError(f"Named predictors have different labels on index '{dim}'")
             if len(set(positions.tolist())) != len(left_index):
@@ -179,24 +191,21 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
             # floating-point noise should use the left cube's canonical labels.
             right = right.assign_coords({dim: left[dim]})
 
-        # Scalar/non-index coordinates are metadata, not row alignment keys.
-        # Keep the left value on conflict and omit right-only scalar metadata,
-        # matching upstream's compat="override" behavior.
-        left_non_indexes = [name for name in left.coords if name not in left.indexes and name != cube_axis]
-        right_non_indexes = [name for name in right.coords if name not in right.indexes and name != cube_axis]
-        left_metadata = {name: left.coords[name] for name in left_non_indexes}
-        left = left.drop_vars(left_non_indexes)
-        right = right.drop_vars(right_non_indexes)
+        # Right-only auxiliary coordinates cannot describe the merged group and
+        # make concat reject otherwise aligned predictors. Shared auxiliaries,
+        # including dimensioned coordinates, keep the left value on conflict.
+        right_only_auxiliary = [
+            name for name in right.coords if name not in right.indexes and name != cube_axis and name not in left.coords
+        ]
+        right = right.drop_vars(right_only_auxiliary)
         appended: xr.DataArray = xr.concat(
             [left, right],
             dim=cube_axis,
             join="exact",
             coords="minimal",
             compat="override",
-        ).chunk({cube_axis: -1})
-        if left_metadata:
-            appended = appended.assign_coords(left_metadata)
-        return appended
+        )
+        return appended.chunk({dim: -1 if dim == cube_axis else "auto" for dim in appended.dims})
 
     def _named_merge_cubes(
         cube1: Any,
@@ -210,9 +219,7 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
         if array1 is not None and array2 is not None and (cube_axis in array1.dims or cube_axis in array2.dims):
             if overlap_resolver is not None:
                 raise ValueError("An overlap resolver is only supported on the initial named predictor merge")
-            appended = _append_disjoint_predictors(array1, array2)
-            if appended is not None:
-                return appended
+            return _append_disjoint_predictors(array1, array2)
 
         # Distinct single-variable Datasets are the aggregate_spatial predictor
         # case. Do not promote same-variable Datasets or any ordinary merge.
@@ -238,8 +245,6 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
             and array1.name
             and array2.name
             and array1.name != array2.name
-            and cube_axis not in array1.dims
-            and cube_axis not in array2.dims
             and isinstance(merged, xr.DataArray)
             and cube_axis in merged.dims
         ):
