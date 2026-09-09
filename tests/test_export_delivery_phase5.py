@@ -64,6 +64,9 @@ class FakeContext:
     def load_checkpoint(self: Any, key: str) -> dict[str, Any] | None:
         return self.checkpoints.get(key)
 
+    def delete_checkpoint(self: Any, key: str) -> None:
+        self.checkpoints.pop(key, None)
+
 
 def _values(count: int) -> list[dict[str, Any]]:
     return [
@@ -273,6 +276,52 @@ def test_send_records_unknown_on_transport_timeout(monkeypatch: pytest.MonkeyPat
     assert report.outcome == ExportOutcome.UNKNOWN
     assert report.remote_task_ids == []
     assert report.submitted == 3
+
+
+def test_send_raises_and_clears_checkpoint_on_connect_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from open_climate_service.exports import dhis2 as dhis2_module
+
+    plugin = _plugin(max_chunk_size=1000)
+    values = _values(3)
+    client = FakeClient()
+
+    def post(path: str, json: Any, params: Any) -> FakeResponse:
+        raise httpx.ConnectError("connection refused")
+
+    client.post_handler = post
+    monkeypatch.setattr(dhis2_module, "get_connection", lambda target: client)
+
+    context = FakeContext()
+    with pytest.raises(Exception, match="connection refused"):
+        plugin.send(_payload(values), "hmis", context=context)
+
+    # Nothing reached DHIS2, so the intent checkpoint must be cleared for a retry.
+    assert context.checkpoints.get("chunk:0") is None
+
+
+def test_send_keeps_unknown_checkpoint_on_ambiguous_requests_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import requests
+
+    from open_climate_service.exports import dhis2 as dhis2_module
+
+    plugin = _plugin(max_chunk_size=1000)
+    client = FakeClient()
+
+    def post(path: str, json: Any, params: Any) -> FakeResponse:
+        raise requests.exceptions.ConnectionError("connection reset while reading response")
+
+    client.post_handler = post
+    monkeypatch.setattr(dhis2_module, "get_connection", lambda target: client)
+
+    context = FakeContext()
+    report = plugin.send(_payload(_values(3)), "hmis", context=context)
+
+    assert report.outcome == ExportOutcome.UNKNOWN
+    assert context.checkpoints["chunk:0"]["report"]["outcome"] == ExportOutcome.UNKNOWN
 
 
 def test_send_polls_async_import_task(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -537,6 +586,42 @@ def test_pinned_client_response_contract(monkeypatch: pytest.MonkeyPatch, status
     report = _plugin().send(_payload(_values(1)), "hmis")
     assert report.outcome == outcome
     assert len(requests) == 1
+
+
+def test_warning_summary_is_partial_not_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from open_climate_service import config
+
+    pytest.importorskip("dhis2_client")
+    monkeypatch.setattr(
+        config,
+        "_cache",
+        {
+            "dhis2_connections": [
+                {"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "REVIEW_TEST_TOKEN"},
+            ]
+        },
+    )
+    monkeypatch.setenv("REVIEW_TEST_TOKEN", "test-token")
+
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            409,
+            json={
+                "response": {
+                    "status": "WARNING",
+                    "importCount": {"imported": 999},
+                    "conflicts": [{"object": "value"}],
+                }
+            },
+        )
+
+    original = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(handler)))
+    report = _plugin(max_chunk_size=1000).send(_payload(_values(1)), "hmis")
+    assert report.outcome == ExportOutcome.PARTIAL
+    assert report.imported == 999
 
 
 def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

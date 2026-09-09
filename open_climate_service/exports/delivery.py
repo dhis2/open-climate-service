@@ -11,8 +11,8 @@ from fastapi import HTTPException
 from open_climate_service import config
 from open_climate_service.exports.base import DeliveryContext
 from open_climate_service.exports.delivery_input import VerifiedExport, lease_export_input
-from open_climate_service.exports.report import ExportReport
-from open_climate_service.shared.persistence import index_lock
+from open_climate_service.exports.report import ExportOutcome, ExportReport
+from open_climate_service.shared.persistence import AlreadyLocked, try_index_lock
 from open_climate_service.shared.provenance import json_digest
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,20 @@ class JobDeliveryContext:
             raise ValueError("Invalid delivery checkpoints; refusing to resend")
         return checkpoints.get(key)
 
+    def delete_checkpoint(self, key: str) -> None:
+        """Remove one chunk checkpoint so the chunk can be retried."""
+        if self._load_cursor is None or self._save_cursor is None:
+            return
+        cursor = self._load_cursor()
+        if not isinstance(cursor, dict):
+            return
+        checkpoints = cursor.get("delivery_checkpoints")
+        if not isinstance(checkpoints, dict) or key not in checkpoints:
+            return
+        checkpoints = dict(checkpoints)
+        checkpoints.pop(key, None)
+        self._save_cursor({**cursor, "delivery_checkpoints": checkpoints})
+
 
 def deliver_named_export(
     export_id: str,
@@ -95,15 +109,25 @@ def deliver_named_export(
         load_cursor=load_cursor,
     )
     # Serialize imports for this export even when they use different source jobs.
-    with (
-        index_lock(config.get_data_root() / "exports" / "active" / json_digest(export_id)),
-        lease_export_input(export_id, job_id) as verified,
-    ):
-        if expected_manifest_sha256 is None or _manifest_digest(verified) != expected_manifest_sha256:
-            raise ValueError("Source export changed or submission lacks a frozen manifest; submit a new delivery")
-        report = _deliver(verified, export_id, dry_run, context)
+    # Acquisition is non-blocking: a second delivery for the same export must fail
+    # fast rather than pin a worker thread for the full send.
+    active_lock = config.get_data_root() / "exports" / "active" / json_digest(export_id)
+    try:
+        with (
+            try_index_lock(active_lock),
+            lease_export_input(export_id, job_id) as verified,
+        ):
+            if expected_manifest_sha256 is None or _manifest_digest(verified) != expected_manifest_sha256:
+                raise ValueError("Source export changed or submission lacks a frozen manifest; submit a new delivery")
+            report = _deliver(verified, export_id, dry_run, context)
+    except AlreadyLocked:
+        raise HTTPException(status_code=409, detail="A delivery for this export is already in progress") from None
     if on_progress is not None:
         on_progress(1, 1, "Delivery complete")
+    if report.outcome == ExportOutcome.CANCELLED:
+        from open_climate_service.jobs.models import JobCancelledError
+
+        raise JobCancelledError("Export delivery was cancelled")
     return report.model_dump(mode="json")
 
 

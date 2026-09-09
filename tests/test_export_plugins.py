@@ -188,13 +188,13 @@ def test_installed_plugin_discovery_and_instance_precedence(
     assert load_export_plugins()["example"].render(None, {}).content == b"local"
 
 
-def test_broken_plugin_is_not_silently_ignored(definition: dict[str, Any], tmp_path: Path):
+def test_broken_plugin_is_skipped(definition: dict[str, Any], tmp_path: Path):
     local = tmp_path / "exports"
     local.mkdir()
     (local / "broken.py").write_text("plugin = object()\n")
     config.get_config()["plugins_dir"] = str(tmp_path)
-    with pytest.raises(ValueError, match="BaseExportPlugin"):
-        load_export_plugins()
+    plugins = load_export_plugins()
+    assert set(plugins) == {"dhis2"}
 
 
 def test_sync_and_batch_external_export(

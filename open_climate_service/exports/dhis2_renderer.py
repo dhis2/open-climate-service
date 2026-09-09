@@ -19,6 +19,65 @@ from open_climate_service.exports.tabular import (
 )
 
 
+class _RetryableTransportError(Exception):
+    """A connection failure that occurred before the request reached DHIS2."""
+
+
+def _is_retryable_transport_error(exc: BaseException) -> bool:
+    """Return True for failures that occur before the request is sent.
+
+    A refused connection, DNS failure, or connect timeout never reached DHIS2, so
+    the chunk can be safely retried. Read/write timeouts happen after the request
+    may have reached the server and stay ``unknown``.
+    """
+    import importlib
+    from types import ModuleType
+
+    httpx: ModuleType | None = None
+    try:
+        httpx = importlib.import_module("httpx")
+    except ImportError:
+        pass
+    if httpx is not None and isinstance(exc, (httpx.ConnectError, httpx.PoolTimeout, httpx.UnsupportedProtocol)):
+        return True
+    requests: ModuleType | None = None
+    try:
+        requests = importlib.import_module("requests")
+    except ImportError:
+        pass
+    if requests is not None:
+        # ``ConnectionError`` is intentionally too broad here: requests also
+        # uses it for response-side failures such as a connection reset after a
+        # POST may have been processed. Only its connect-timeout subtype, or a
+        # urllib3 exception explicitly identifying connection establishment,
+        # is safe to replay.
+        if isinstance(exc, requests.exceptions.ConnectTimeout):
+            return True
+        try:
+            urllib3_exceptions = importlib.import_module("urllib3.exceptions")
+            pre_send_types = (
+                urllib3_exceptions.NewConnectionError,
+                urllib3_exceptions.NameResolutionError,
+            )
+        except (ImportError, AttributeError):
+            pre_send_types = ()
+        pending: list[BaseException] = [exc]
+        seen: set[int] = set()
+        while pending:
+            candidate = pending.pop()
+            if id(candidate) in seen:
+                continue
+            seen.add(id(candidate))
+            if pre_send_types and isinstance(candidate, pre_send_types):
+                return True
+            pending.extend(item for item in candidate.args if isinstance(item, BaseException))
+            if candidate.__cause__ is not None:
+                pending.append(candidate.__cause__)
+            if candidate.__context__ is not None:
+                pending.append(candidate.__context__)
+    return False
+
+
 class Dhis2ExportPlugin(BaseExportPlugin):
     """Map prepared aggregate series to DHIS2 data elements."""
 
@@ -394,16 +453,22 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 finished_at=created_at,
             ),
         )
-        report = self._submit_chunk(
-            client,
-            target,
-            chunk_values,
-            dry_run=dry_run,
-            created_at=created_at,
-            chunk_sha256=digest,
-            context=context,
-            index=index,
-        )
+        try:
+            report = self._submit_chunk(
+                client,
+                target,
+                chunk_values,
+                dry_run=dry_run,
+                created_at=created_at,
+                chunk_sha256=digest,
+                context=context,
+                index=index,
+            )
+        except _RetryableTransportError:
+            # Nothing reached DHIS2, so drop the intent checkpoint to allow a
+            # retry, then propagate.
+            self._delete_chunk_checkpoint(context, index)
+            raise
         self._save_chunk_checkpoint(context, index, digest, report)
         return report
 
@@ -466,6 +531,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     def _chunk_checkpoint_key(index: int) -> str:
         return f"chunk:{index}"
 
+    def _delete_chunk_checkpoint(self, context: DeliveryContext | None, index: int) -> None:
+        """Remove a chunk checkpoint so it can be retried after a transport error."""
+        if context is not None:
+            context.delete_checkpoint(self._chunk_checkpoint_key(index))
+
     def _submit_chunk(
         self,
         client: Any,
@@ -502,6 +572,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                     submitted=submitted,
                     created_at=created_at,
                 )
+            if _is_retryable_transport_error(exc):
+                # The request never reached DHIS2 (refused connection, DNS failure,
+                # or connect timeout). Raise so the chunk is not checkpointed as
+                # submitted and the caller can retry.
+                raise _RetryableTransportError(str(exc)) from exc
             # The POST may have reached DHIS2 before failing (e.g. timeout).
             # Record an unknown outcome rather than fabricating a rejection, and
             # never auto-replay this chunk.
@@ -583,24 +658,28 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         created_at: str,
         context: DeliveryContext | None = None,
     ) -> ExportReport:
-        """Poll a submitted async import task with bounded backoff."""
+        """Poll a submitted async import task with bounded backoff.
+
+        The first status check happens immediately after acceptance; the backoff
+        applies between subsequent attempts.
+        """
         import time
 
         from open_climate_service.shared.time import utc_now
 
-        summary: dict[str, Any] = {}
         for attempt in range(max(0, self.max_poll_attempts)):
             if context is not None and context.is_cancel_requested():
                 break
-            time.sleep(min(30.0, self.poll_backoff_base * (2**attempt)))
             try:
                 response = client.get(f"/api/system/taskSummaries/DATAVALUE_IMPORT/{task_id}")
+                status_code = _response_status(response)
+                summary = _response_json(response)
             except Exception:
-                continue
-            summary = _response_json(response)
-            if self._task_is_terminal(summary):
+                status_code = None
+                summary = {}
+            if status_code is not None and self._task_is_terminal(summary):
                 report = build_dhis2_report(
-                    _response_status(response),
+                    status_code,
                     _extract_import_summary(summary),
                     plugin_id=self.id,
                     connection_id=target,
@@ -612,6 +691,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 if report.remote_task_ids == []:
                     report = report.model_copy(update={"remote_task_ids": [task_id]})
                 return report
+            time.sleep(min(30.0, self.poll_backoff_base * (2**attempt)))
 
         # The task never reached a terminal state within the poll budget.
         return ExportReport(
@@ -702,9 +782,9 @@ def build_dhis2_report(
         finished_at=finished_at,
     )
 
-    if not 200 <= status_code < 300:
-        return ExportReport(outcome=ExportOutcome.REJECTED, message=message or f"HTTP {status_code}", **base)
-
+    # Classify by the import summary first: DHIS2 2.38+ reports a partially
+    # successful import as HTTP 409 with status WARNING and real importCount
+    # figures. Only fall back to the HTTP code when no summary status is present.
     if status in {"ERROR", "FAILED"}:
         return ExportReport(outcome=ExportOutcome.REJECTED, message=message, **base)
     if status == "WARNING" or conflicts:
@@ -712,6 +792,8 @@ def build_dhis2_report(
     if status == "SUCCESS":
         outcome = ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS
         return ExportReport(outcome=outcome, message=message, **base)
+    if not 200 <= status_code < 300:
+        return ExportReport(outcome=ExportOutcome.REJECTED, message=message or f"HTTP {status_code}", **base)
     # A 2xx without a recognizable import summary cannot be trusted as success.
     return ExportReport(outcome=ExportOutcome.UNKNOWN, message="Unrecognized import summary", **base)
 

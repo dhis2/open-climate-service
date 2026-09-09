@@ -23,6 +23,29 @@ def index_lock(path: Path) -> Iterator[None]:
             portalocker.unlock(handle)
 
 
+class AlreadyLocked(Exception):
+    """Raised by :func:`try_index_lock` when the lock is already held."""
+
+
+@contextmanager
+def try_index_lock(path: Path) -> Iterator[None]:
+    """Acquire the index lock without blocking; raise ``AlreadyLocked`` if held."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = portalocker.Lock(
+        path.with_suffix(path.suffix + ".lock"),
+        timeout=0,
+        flags=portalocker.LOCK_EX | portalocker.LOCK_NB,
+    )
+    try:
+        lock.acquire()
+    except portalocker.exceptions.LockException as exc:
+        raise AlreadyLocked(str(path)) from exc
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def atomic_json(path: Path, value: Any) -> None:
     """Flush contents and directory entries before returning to the caller."""
     temporary: str | None = None
@@ -31,7 +54,9 @@ def atomic_json(path: Path, value: Any) -> None:
             dir=path.parent, prefix=".index-", mode="w", encoding="utf-8", delete=False
         ) as handle:
             temporary = handle.name
-            json.dump(value, handle, allow_nan=False)
+            # Keep parity with the previous store: a completed job whose result
+            # carries NaN must still persist rather than failing the write.
+            json.dump(value, handle, allow_nan=True)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)

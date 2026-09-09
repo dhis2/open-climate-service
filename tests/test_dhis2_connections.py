@@ -124,6 +124,40 @@ def test_legacy_yaml_fragment_interpolation_without_connections(connection_file:
     assert config.get_config()["extent"]["bbox"] == [-13.5, 6.9, -10.1, 10.0]
 
 
+def test_exports_can_be_added_to_config_with_yaml_fragment_interpolation(
+    connection_file: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("WEST", "-13.5")
+    connection_file.write_text(
+        "extent:\n"
+        "  bbox: [${WEST}, 6.9, -10.1, 10.0]\n"
+        "exports:\n"
+        "  - id: rainfall\n"
+        "    plugin: dhis2\n"
+        "    period_type: monthly\n"
+        "    series:\n"
+        "      - data_element: BXgDHhPdFVU\n"
+        "dhis2_connections:\n"
+        "  - id: hmis\n"
+        "    url: https://hmis.example.org/dhis\n"
+        "    token_env: TEST_DHIS2_TOKEN\n"
+    )
+    loaded = config.get_config()
+    assert loaded["extent"]["bbox"] == [-13.5, 6.9, -10.1, 10.0]
+    assert loaded["exports"][0]["id"] == "rainfall"
+
+
+@pytest.mark.parametrize("block", ["exports", "dhis2_connections"])
+def test_protected_config_block_rejects_inline_interpolation(
+    connection_file: Path, monkeypatch: pytest.MonkeyPatch, block: str
+) -> None:
+    monkeypatch.setenv("PROTECTED_CONFIG", "[]")
+    connection_file.write_text(f"{block}: ${{PROTECTED_CONFIG}}\n")
+
+    with pytest.raises(ValueError, match=rf"{block} does not support environment interpolation"):
+        config.get_config()
+
+
 def test_unknown_connection(connection_file: Path):
     with pytest.raises(ValueError, match="Unknown DHIS2 connection"):
         get_connection("unknown")

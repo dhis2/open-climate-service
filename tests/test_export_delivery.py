@@ -118,6 +118,13 @@ def test_build_dhis2_report_outcomes() -> None:
     rejected = build(200, {"status": "ERROR", "message": "no such data element"})
     assert rejected.outcome == ExportOutcome.REJECTED
 
+    partial_http = build(
+        409,
+        {"status": "WARNING", "importCount": {"imported": 999}, "conflicts": [{"object": "value"}]},
+    )
+    assert partial_http.outcome == ExportOutcome.PARTIAL
+    assert partial_http.imported == 999
+
     http_rejected = build(400, {"message": "bad request"})
     assert http_rejected.outcome == ExportOutcome.REJECTED
 
@@ -137,6 +144,35 @@ def test_deliver_named_export_calls_plugin_send(saved: Path, fake_send: list[dic
     assert fake_send[0]["target"] == "hmis"
     assert fake_send[0]["dry_run"] is True
     assert fake_send[0]["payload"] == saved.read_bytes()
+
+
+def test_deliver_named_export_raises_job_cancelled_when_cancelled(saved: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.jobs.models import JobCancelledError
+
+    def send(
+        self: Dhis2ExportPlugin,
+        payload: bytes,
+        target: Any,
+        *,
+        dry_run: bool = False,
+        context: Any = None,
+    ) -> ExportReport:
+        return ExportReport(
+            plugin_id=self.id,
+            connection_id=target,
+            dry_run=dry_run,
+            outcome=ExportOutcome.CANCELLED,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            submitted=len(payload),
+            created_at=utc_now().isoformat(),
+            finished_at=utc_now().isoformat(),
+        )
+
+    monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
+    with lease_export_input("rain", "source") as verified:
+        digest = json_digest(verified.manifest.model_dump(mode="json"))
+    with pytest.raises(JobCancelledError):
+        deliver_named_export("rain", "source", dry_run=False, expected_manifest_sha256=digest)
 
 
 def test_submit_delivery_deduplicates_by_idempotency_key(saved: Path, monkeypatch: pytest.MonkeyPatch) -> None:

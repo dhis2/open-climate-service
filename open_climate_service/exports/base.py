@@ -49,6 +49,10 @@ class DeliveryContext(Protocol):
         """Return a previously saved chunk checkpoint, or None."""
         ...
 
+    def delete_checkpoint(self, key: str) -> None:
+        """Remove a previously saved chunk checkpoint so it can be retried."""
+        ...
+
 
 class BaseExportPlugin(ABC):
     """Render a computed result without network calls or delivery side effects.

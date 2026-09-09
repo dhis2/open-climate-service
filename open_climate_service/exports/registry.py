@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import logging
 import re
 import sys
 from pathlib import Path
@@ -12,9 +13,11 @@ from types import ModuleType
 from open_climate_service import config, plugin_discovery
 from open_climate_service.exports.base import BaseExportPlugin
 
+logger = logging.getLogger(__name__)
+
 
 def load_export_plugins() -> dict[str, BaseExportPlugin]:
-    """Load renderers in precedence order, failing explicitly on broken plugins."""
+    """Load renderers in precedence order, skipping broken plugins."""
     from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
     builtin = Dhis2ExportPlugin()
@@ -45,13 +48,21 @@ def load_export_plugins() -> dict[str, BaseExportPlugin]:
 
 
 def _register(found: dict[str, BaseExportPlugin], name: str) -> None:
+    """Register one plugin module, skipping broken or invalid plugins.
+
+    A malformed third-party export plugin must not take down discovery endpoints
+    such as ``GET /file_formats`` that every openEO client hits on connect. Log
+    the problem and skip, like the process plugin loader does.
+    """
     try:
         module = importlib.import_module(name)
     except Exception as exc:
-        raise ValueError(f"Could not load export plugin module '{name}'") from exc
+        logger.warning("Skipping export plugin module '%s': %s", name, exc)
+        return
     plugin = getattr(module, "plugin", None)
     if not isinstance(plugin, BaseExportPlugin):
-        raise ValueError(f"Export module '{name}' must expose a BaseExportPlugin instance as 'plugin'")
+        logger.warning("Skipping export module '%s': missing 'plugin' BaseExportPlugin instance", name)
+        return
     for field, pattern in (
         ("id", r"[A-Za-z0-9][A-Za-z0-9_-]*"),
         ("format", r"[A-Z][A-Z0-9_]*"),
@@ -60,7 +71,9 @@ def _register(found: dict[str, BaseExportPlugin], name: str) -> None:
     ):
         value = getattr(plugin, field, None)
         if not isinstance(value, str) or not re.fullmatch(pattern, value):
-            raise ValueError(f"Export plugin '{name}' has an invalid {field}")
+            logger.warning("Skipping export plugin '%s': invalid %s", name, field)
+            return
     if plugin.extension == ".zarr":
-        raise ValueError("Export renderers produce files, not Zarr directories")
+        logger.warning("Skipping export plugin '%s': renderers produce files, not Zarr directories", name)
+        return
     found[plugin.id] = plugin

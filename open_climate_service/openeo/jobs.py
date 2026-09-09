@@ -325,6 +325,8 @@ class OpenEOJobService:
         return record
 
     def update_job(self, job_id: str, body: OpenEOJobUpdate) -> OpenEOJobRecord:
+        # 404 first so an arbitrary or malformed ID never creates a lease file.
+        self.get_job_or_404(job_id)
         with result_lease(job_id):
             record = self.get_job_or_404(job_id)
             if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
@@ -348,6 +350,10 @@ class OpenEOJobService:
             return record
 
     def delete_job(self, job_id: str) -> None:
+        # 404 first so an arbitrary or malformed ID never creates a lease file.
+        record = self.get_job_or_404(job_id)
+        if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+            raise HTTPException(status_code=400, detail="Cannot delete a running job; cancel it first")
         with result_lease(job_id):
             record = self.get_job_or_404(job_id)
             if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
@@ -358,9 +364,13 @@ class OpenEOJobService:
             job_dir = _JOBS_DIR / job_id
             if job_dir.exists():
                 shutil.rmtree(job_dir, ignore_errors=True)
+        # The lease file lives outside the job directory; remove it now the job is gone.
+        (_JOBS_DIR / ".export-locks" / f"{job_id}.lock").unlink(missing_ok=True)
 
     def start_job(self, job_id: str) -> None:
         """Queue a job for processing (POST /jobs/{id}/results)."""
+        # 404 first so an arbitrary or malformed ID never creates a lease file.
+        self.get_job_or_404(job_id)
         with result_lease(job_id):
             record = self.get_job_or_404(job_id)
             if record.status == OpenEOJobStatus.RUNNING:
@@ -517,6 +527,16 @@ class OpenEOJobService:
             provenance = result.provenance
             result = result.data
 
+        # Resolve a lazy dask_geopandas GeoDataFrame before any tabular path,
+        # including named exports, so a lazy frame never reaches a renderer.
+        try:
+            import dask_geopandas
+
+            if isinstance(result, dask_geopandas.GeoDataFrame):
+                result = result.compute()
+        except ImportError:
+            pass
+
         if "export" in options:
             from open_climate_service.exports.service import write_named_export
 
@@ -537,15 +557,6 @@ class OpenEOJobService:
             if fmt in _TABULAR_EXPORT_FORMATS:
                 return _write_dataset_tabular_export(result, results_dir, fmt, options)
             return _write_raster(result, results_dir, fmt)
-
-        # Tabular: resolve dask_geopandas → GeoDataFrame
-        try:
-            import dask_geopandas
-
-            if isinstance(result, dask_geopandas.GeoDataFrame):
-                result = result.compute()
-        except ImportError:
-            pass
 
         try:
             import geopandas as gpd

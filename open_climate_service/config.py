@@ -52,36 +52,57 @@ def _load_config() -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"CLIMATE_SERVICE_CONFIG not found: {path}")
     text = path.read_text(encoding="utf-8")
-    try:
-        literal = yaml.safe_load(text)
-    except yaml.YAMLError:
-        # Existing configurations may interpolate YAML syntax (for example bbox
-        # members). Preserve that behavior when named connections are not used.
-        literal = None
-    if isinstance(literal, dict) and "dhis2_connections" in literal:
-        from open_climate_service.exports.dhis2_config import parse_connections
-
-        # Do this before substitution, including when a secret contains YAML syntax.
-        parse_connections(literal["dhis2_connections"])
-    if isinstance(literal, dict) and "exports" in literal:
-        from open_climate_service.exports.manifest import validate_public_mapping
-
-        validate_public_mapping(literal["exports"])
+    # Named connections and export mappings are validated as literal definitions.
+    # Reject environment interpolation inside only these two blocks before
+    # substitution, so a secret that happens to contain YAML syntax can never
+    # break parsing or be cached, while existing interpolation elsewhere (for
+    # example bbox: [${MINX}, ${MINY}]) keeps working.
+    for block in ("dhis2_connections", "exports"):
+        if _block_uses_interpolation(text, block):
+            raise ValueError(f"{block} does not support environment interpolation; use literal values")
     loaded = yaml.safe_load(_substitute_env_vars(text))
     if loaded is not None and not isinstance(loaded, dict):
         raise ValueError(f"CLIMATE_SERVICE_CONFIG must be a YAML mapping at the top level: {path}")
     if loaded is not None and "dhis2_connections" in loaded:
-        # Validate the literal definitions before caching anything. In particular,
-        # token_env: ${TOKEN} must not expand a credential into cached configuration.
-        if not isinstance(literal, dict) or "dhis2_connections" not in literal:
-            raise ValueError("dhis2_connections requires literal definitions in YAML valid before interpolation")
-        if literal["dhis2_connections"] != loaded["dhis2_connections"]:
-            raise ValueError("dhis2_connections does not support environment interpolation; use token_env references")
+        from open_climate_service.exports.dhis2_config import parse_connections
+
+        parse_connections(loaded["dhis2_connections"])
     if loaded is not None and "exports" in loaded:
-        if not isinstance(literal, dict) or literal.get("exports") != loaded["exports"]:
-            raise ValueError("exports requires literal definitions in YAML valid before interpolation")
+        from open_climate_service.exports.manifest import validate_public_mapping
+
+        validate_public_mapping(loaded["exports"])
     _cache = dict(loaded or {})
     return _cache
+
+
+def _block_uses_interpolation(text: str, key: str) -> bool:
+    """Return True when the top-level ``key`` block contains ``${...}`` tokens.
+
+    Interpolation is disallowed inside ``dhis2_connections`` and ``exports``
+    because those definitions are validated as literals and a substituted secret
+    must never be cached. The scan stops at the next top-level key, so
+    interpolation in other blocks remains supported.
+    """
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        if not re.match(rf"^{re.escape(key)}\s*:", lines[index]):
+            index += 1
+            continue
+        # The value may be written on the key line itself, for example
+        # ``exports: ${EXPORTS}`` or as an inline YAML collection.
+        if "${" in lines[index]:
+            return True
+        index += 1
+        while index < len(lines):
+            candidate = lines[index]
+            if candidate and candidate[0] not in (" ", "\t"):
+                break
+            if "${" in candidate:
+                return True
+            index += 1
+        break
+    return False
 
 
 DEFAULT_CRS = "EPSG:4326"
