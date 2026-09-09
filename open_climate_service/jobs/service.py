@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -121,6 +121,11 @@ class JobService:
         self._executor = executor or ThreadProcessExecutor(max_workers=max_workers)
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
+        self._event_consumer: Callable[[list[JobEvent]], None] | None = None
+
+    def set_event_consumer(self, consumer: Callable[[list[JobEvent]], None] | None) -> None:
+        """Register the process-local consumer for newly persisted domain events."""
+        self._event_consumer = consumer
 
     def shutdown(self) -> None:
         """Stop the executor without waiting for outstanding work."""
@@ -360,7 +365,7 @@ class JobService:
                 else:
                     result = execution_result
                     events = []
-                store.mutate_job_record(
+                completed = store.mutate_job_record(
                     job_id,
                     lambda current: current.model_copy(
                         update={
@@ -377,6 +382,11 @@ class JobService:
                         }
                     ),
                 )
+                if completed.events and self._event_consumer is not None:
+                    try:
+                        self._event_consumer(completed.events)
+                    except Exception:
+                        logger.exception("Failed to consume events for completed job %s", job_id)
                 return
             except JobCancelledError:
                 store.mutate_job_record(

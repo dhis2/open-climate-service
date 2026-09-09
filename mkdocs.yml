@@ -81,6 +81,7 @@ nav:
       - Climate indices: climate_indices.md
       - Workflows: workflows.md
       - Scheduled dataset synchronization: scheduled_sync.md
+      - Dataset-update workflow automation: workflow_automation.md
       - Import to DHIS2 and Chap: importing_to_dhis2.md
       - GeoLibre plugin: geolibre_plugin.md
       - Adding custom datasets: adding_custom_datasets.md

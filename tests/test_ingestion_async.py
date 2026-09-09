@@ -311,6 +311,8 @@ def test_successful_job_persists_result_and_events_atomically(monkeypatch: pytes
 
     monkeypatch.setattr("open_climate_service.jobs.store.mutate_job_record", mutate)
     service = JobService()
+    consume = MagicMock()
+    service.set_event_consumer(consume)
     submitted = service.submit_callable_job(func=_fake_event_job_callable, label="sync", request={})
 
     service._execute_job(submitted.job_id)
@@ -322,6 +324,7 @@ def test_successful_job_persists_result_and_events_atomically(monkeypatch: pytes
     assert completed.events[0].event_id == f"{submitted.job_id}:0"
     assert completed.events[0].type == "dataset.updated"
     assert completed.events[0].time == completed.finished_at
+    consume.assert_called_once_with(completed.events)
 
 
 @pytest.mark.parametrize("action", [SyncAction.APPEND, SyncAction.REMATERIALIZE])

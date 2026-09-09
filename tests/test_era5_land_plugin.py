@@ -12,7 +12,9 @@ from open_climate_service.plugins.datasets.era5_land import (
     ERA5LandEDHDailyPlugin,
     ERA5LandMonthlyPlugin,
     ERA5LandMonthlyPrecipitationPlugin,
+    ERA5LandPrecipDailyPlugin,
     ERA5LandPrecipitationPlugin,
+    _collapse_expver,
     _daily_availability_cutoff,
     _edh_open_zarr,
     _era5land_monthly_product_type,
@@ -211,6 +213,12 @@ def test_era5_land_monthly_fetch_renames_coords_and_converts_temperature(
     # fetch_period now does the CDS download inline, then renames + converts. Mock the
     # client + open_dataset so the real fetch_period runs against the raw netCDF.
     monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", lambda: MagicMock())
+    # The year batch clamps to what CDS publishes; pin it so the test does not reach the
+    # catalogue (CLIM-956).
+    monkeypatch.setattr(
+        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        lambda: date(2026, 7, 1),
+    )
     monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
     ds = plugin.fetch_period("2024-01", [-1.0, 8.0, 31.0, 10.0])
 
@@ -342,6 +350,10 @@ def test_edh_open_zarr_injects_api_key_in_url(monkeypatch: pytest.MonkeyPatch) -
         return MagicMock()
 
     monkeypatch.setenv("EDH_API_KEY", "mytoken")
+    # `_edh_open_zarr` also probes the store's Zarr version on open. Stubbed, or this unit
+    # test reaches the real EDH host: the probe swallows its own failures, so it would still
+    # pass while depending on DNS and spending up to two 15-second timeouts.
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._edh_is_zarr_v3", lambda _url: True)
     with patch("open_climate_service.plugins.datasets.era5_land.xr.open_zarr", fake_open_zarr):
         _edh_open_zarr("https://api.earthdatahub.destine.eu/era5/test.zarr")
 
@@ -417,3 +429,269 @@ def test_auxiliary_cleanup_honours_a_declared_grid_mapping() -> None:
     out = _drop_auxiliary_variables(ds, "t2m")
 
     assert "my_crs" in out.variables
+
+
+def _expver_nc(variable: str) -> xr.Dataset:
+    """A CDS download straddling the ERA5/ERA5T boundary.
+
+    Each ``expver`` slice is NaN where the other supplies data, which is how CDS returns a
+    request spanning the boundary: 1 is final, 5 is preliminary ERA5T.
+    """
+    final = np.array([[[1.0]], [[np.nan]]], dtype=np.float32)
+    preliminary = np.array([[[np.nan]], [[5.0]]], dtype=np.float32)
+    return xr.Dataset(
+        {variable: (("valid_time", "expver", "latitude", "longitude"), np.stack([final, preliminary], axis=1))},
+        coords={
+            "valid_time": np.array(["2026-05-01", "2026-06-01"], dtype="datetime64[ns]"),
+            "expver": [1, 5],
+            "latitude": [9.0],
+            "longitude": [30.0],
+        },
+    )
+
+
+def test_collapse_expver_prefers_final_and_fills_from_preliminary() -> None:
+    """Final ERA5 wins where it has data; ERA5T fills the recent months it does not cover."""
+    collapsed = _collapse_expver(_expver_nc("t2m"))
+
+    assert "expver" not in collapsed.dims
+    assert "expver" not in collapsed.coords
+    np.testing.assert_allclose(collapsed["t2m"].values.ravel(), [1.0, 5.0])
+    assert collapsed["t2m"].dtype == np.float32
+
+
+def test_collapse_expver_passes_through_a_cube_without_expver() -> None:
+    plain = _expver_nc("t2m").sel(expver=1, drop=True)
+
+    assert _collapse_expver(plain).identical(plain)
+
+
+def test_collapse_expver_drops_a_scalar_expver_coordinate() -> None:
+    """A single-version download carries expver as a coordinate, not a dimension."""
+    scalar = _expver_nc("t2m").sel(expver=5)
+    assert "expver" in scalar.coords
+
+    assert "expver" not in _collapse_expver(scalar).coords
+
+
+def test_monthly_fetch_collapses_expver_so_the_cube_stays_three_dimensional(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A synced month straddling the ERA5T boundary must not double the array (CLIM-923).
+
+    Left in place, the extra dimension reached the store and broke aggregation with a mask
+    half the size of the data. ``_drop_auxiliary_variables`` does not catch it: that keeps
+    every dimension by design.
+    """
+    plugin = ERA5LandMonthlyPlugin(variable="t2m")
+    raw_ds = _expver_nc("t2m")
+    raw_ds["t2m"] = raw_ds["t2m"] + 273.15  # kelvin, as CDS delivers it
+
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", lambda: MagicMock())
+    # The year batch clamps to what CDS publishes; pin it so the test does not reach the
+    # catalogue (CLIM-956).
+    monkeypatch.setattr(
+        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        lambda: date(2026, 7, 1),
+    )
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
+    ds = plugin.fetch_period("2026-06", [-1.0, 8.0, 31.0, 10.0])
+
+    assert set(ds.dims) == {"t", "y", "x"}
+    assert list(ds.data_vars) == ["t2m"]
+    # One month, not the whole batch. The fixture holds May (final, 1.0) and June
+    # (preliminary, 5.0); asking for June must yield June. The collapse itself is asserted
+    # across both slices by test_collapse_expver_prefers_final_and_fills_from_preliminary.
+    np.testing.assert_allclose(ds["t2m"].values.ravel(), [5.0], atol=1e-3)
+
+
+def test_monthly_fetch_drops_auxiliary_coordinates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``number`` is a scalar ensemble coordinate that otherwise persists as a phantom band."""
+    plugin = ERA5LandMonthlyPlugin(variable="t2m")
+    raw_ds = xr.Dataset(
+        {"t2m": (("valid_time", "latitude", "longitude"), np.array([[[300.0]]], dtype=np.float32))},
+        coords={
+            "valid_time": np.array(["2026-06-01"], dtype="datetime64[ns]"),
+            "latitude": [9.0],
+            "longitude": [30.0],
+            "number": 0,
+        },
+    )
+
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", lambda: MagicMock())
+    # The year batch clamps to what CDS publishes; pin it so the test does not reach the
+    # catalogue (CLIM-956).
+    monkeypatch.setattr(
+        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        lambda: date(2026, 7, 1),
+    )
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
+    ds = plugin.fetch_period("2026-06", [-1.0, 8.0, 31.0, 10.0])
+
+    assert "number" not in ds.coords
+    assert "number" not in ds.variables
+
+
+def test_precip_daily_edh_branch_delegates_so_the_parent_cleaning_applies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The override used to skip its parent's cleaning entirely (CLIM-923)."""
+    plugin = ERA5LandPrecipDailyPlugin()
+    dirty = xr.Dataset(
+        {"tp": (("t", "y", "x"), np.array([[[2.0]]], dtype=np.float32))},
+        coords={
+            "t": np.array(["2026-06-01"], dtype="datetime64[ns]"),
+            "y": [9.0],
+            "x": [30.0],
+            "number": 0,
+        },
+    )
+
+    monkeypatch.setattr(type(plugin), "_latest_available", lambda self: "2026-12-31")
+    monkeypatch.setattr(type(plugin), "_fetch_daily_sync", lambda self, period_id, bbox: dirty)
+    ds = plugin.fetch_period("2026-06-01", [-1.0, 8.0, 31.0, 10.0])
+
+    assert "number" not in ds.variables
+    assert list(ds.data_vars) == ["tp"]
+
+
+def test_hourly_fetch_keeps_its_time_coordinate_after_cleaning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hourly plugin selects a scalar timestamp, which demotes `t` to a coordinate.
+
+    Cleaning after that selection would drop `t` along with the auxiliary coordinates, since
+    it is no longer a dimension — losing the period's own timestamp. The cleaning therefore
+    runs on the cached monthly cube instead.
+    """
+    plugin = ERA5LandCDSHourlyPlugin(variable="t2m")
+
+    def fake_fetch_month(self: object, year: int, month: int, bbox: tuple[float, float, float, float]) -> xr.Dataset:
+        from open_climate_service.plugins.datasets.era5_land import _drop_auxiliary_variables
+
+        ds = xr.Dataset(
+            {"t2m": (("t", "y", "x"), np.array([[[20.0]]], dtype=np.float32))},
+            coords={
+                "t": np.array(["2026-01-01T00"], dtype="datetime64[h]").astype("datetime64[ns]"),
+                "y": [9.0],
+                "x": [30.0],
+                "number": 0,
+            },
+        )
+        return _drop_auxiliary_variables(ds, "t2m")
+
+    monkeypatch.setattr(ERA5LandCDSHourlyPlugin, "_fetch_month", fake_fetch_month)
+    ds = plugin.fetch_period("2026-01-01T00", [-1.0, 8.0, 31.0, 10.0])
+
+    assert "t" in ds.coords
+    assert "number" not in ds.variables
+
+
+# --- year batching (CLIM-956) -----------------------------------------------------------
+
+
+def _yearly_nc(variable: str, months: list[int], year: int = 2003) -> xr.Dataset:
+    """A CDS response covering several months, valued so each month is identifiable."""
+    times = np.array([f"{year:04d}-{m:02d}-01" for m in months], dtype="datetime64[ns]")
+    values = np.array([[[273.15 + m]] for m in months], dtype=np.float32)
+    return xr.Dataset(
+        {variable: (("valid_time", "latitude", "longitude"), values)},
+        coords={"valid_time": times, "latitude": [9.0], "longitude": [30.0]},
+    )
+
+
+def _capture_cds(monkeypatch: pytest.MonkeyPatch, year: int = 2003) -> list[dict]:
+    """Record every CDS request and answer it with exactly the months it asked for."""
+    submitted: list[dict] = []
+
+    def fake_client() -> MagicMock:
+        client = MagicMock()
+
+        def submit(_collection: str, params: dict) -> MagicMock:
+            submitted.append(params)
+            return MagicMock()
+
+        client.submit.side_effect = submit
+        return client
+
+    def fake_open(*_a: object, **_k: object) -> xr.Dataset:
+        months = [int(m) for m in submitted[-1]["month"]]
+        return _yearly_nc("t2m", months, year)
+
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", fake_client)
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", fake_open)
+    monkeypatch.setattr(
+        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        lambda: date(2026, 7, 1),
+    )
+    return submitted
+
+
+def test_a_year_of_months_costs_one_cds_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The point of CLIM-956: request cost is queue and dispatch, not data.
+
+    Measured live, a 12-month request took 34.4 s against 28.7 s for a single month — 2.9 s
+    per month rather than 28.7. Twelve requests per year was paying that overhead twelve times.
+    """
+    submitted = _capture_cds(monkeypatch)
+    plugin = ERA5LandMonthlyPlugin(variable="t2m")
+
+    for month in range(1, 13):
+        plugin.fetch_period(f"2003-{month:02d}", [-1.0, 8.0, 31.0, 10.0])
+
+    assert len(submitted) == 1, f"{len(submitted)} CDS requests for one year"
+    assert submitted[0]["month"] == [f"{m:02d}" for m in range(1, 13)]
+
+
+def test_each_month_gets_its_own_values_from_the_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Batching must not smear months together — the whole risk of serving from a cache."""
+    _capture_cds(monkeypatch)
+    plugin = ERA5LandMonthlyPlugin(variable="t2m")
+
+    for month in (1, 6, 12):
+        ds = plugin.fetch_period(f"2003-{month:02d}", [-1.0, 8.0, 31.0, 10.0])
+        assert ds.sizes["t"] == 1
+        assert np.datetime_as_string(ds["t"].values[0], unit="M") == f"2003-{month:02d}"
+        np.testing.assert_allclose(ds["t2m"].values.ravel(), [float(month)], atol=1e-3)
+
+
+def test_a_changed_extent_refetches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cache is keyed on bbox too, or a second country would silently reuse the first."""
+    submitted = _capture_cds(monkeypatch)
+    plugin = ERA5LandMonthlyPlugin(variable="t2m")
+
+    plugin.fetch_period("2003-01", [-1.0, 8.0, 31.0, 10.0])
+    plugin.fetch_period("2003-01", [80.0, 26.0, 88.0, 30.0])
+
+    assert len(submitted) == 2
+
+
+def test_a_partial_year_asks_only_for_published_months(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Requesting an unpublished month is an error at CDS, not an empty result."""
+    submitted = _capture_cds(monkeypatch, year=2026)
+    plugin = ERA5LandMonthlyPlugin(variable="t2m")
+
+    plugin.fetch_period("2026-03", [-1.0, 8.0, 31.0, 10.0])
+
+    assert submitted[0]["month"] == [f"{m:02d}" for m in range(1, 8)], "asked past the cutoff"
+
+
+def test_a_year_spanning_the_product_type_boundary_is_split(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Accumulated variables switch product mid-year, so a whole-year request would be wrong.
+
+    `_era5land_monthly_product_type` works around a CDS defect in `tp` for September 2022 to
+    February 2024. Batching a whole year across that boundary would silently return the buggy
+    product for part of it — the very thing the workaround exists to prevent.
+    """
+    submitted = _capture_cds(monkeypatch, year=2022)
+
+    def fake_open(*_a: object, **_k: object) -> xr.Dataset:
+        return _yearly_nc("tp", [int(m) for m in submitted[-1]["month"]], 2022)
+
+    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", fake_open)
+    plugin = ERA5LandMonthlyPlugin(variable="tp")
+
+    plugin.fetch_period("2022-10", [-1.0, 8.0, 31.0, 10.0])
+
+    assert len(submitted) == 2, "the year was not split at the product-type boundary"
+    by_product = {params["product_type"][0]: [int(m) for m in params["month"]] for params in submitted}
+    assert by_product["monthly_averaged_reanalysis"] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert by_product["monthly_averaged_reanalysis_by_hour_of_day"] == [9, 10, 11, 12]

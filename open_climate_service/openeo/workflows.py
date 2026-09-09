@@ -20,13 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_workflow_dir() -> Path:
-    data_dir = api_config.get_data_dir()
-    if data_dir is not None:
-        return data_dir / "process_graphs"
-    import os
-
-    xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return xdg_data / "climate-service" / "process_graphs"
+    return api_config.get_data_root() / "process_graphs"
 
 
 WORKFLOW_DIR = _resolve_workflow_dir()

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -451,11 +450,7 @@ def _is_plugin_backed(source_dataset: dict[str, Any]) -> bool:
 
 def _artifact_storage_roots() -> tuple[Path, ...]:
     """Return the trusted local roots that may contain managed artifact stores."""
-    data_dir = api_config.get_data_dir()
-    if data_dir is not None:
-        return ((data_dir / "downloads").resolve(),)
-    xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return ((xdg_data / "climate-service" / "downloads").resolve(),)
+    return (api_config.get_download_root().resolve(),)
 
 
 def _resolve_local_artifact_path(raw_path: str | None) -> tuple[Path | None, str | None]:

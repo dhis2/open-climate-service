@@ -26,6 +26,7 @@ from open_climate_service.data_accessor.services.accessor import get_data_covera
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
+from open_climate_service.ingestions.artifact_paths import decode_record_paths, encode_record_paths
 from open_climate_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
@@ -112,12 +113,7 @@ class _IcechunkSession:
 
 
 def _resolve_artifacts_dir() -> Path:
-
-    data_dir = api_config.get_data_dir()
-    if data_dir is not None:
-        return data_dir / "artifacts"
-    xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return xdg_data / "climate-service" / "artifacts"
+    return api_config.get_data_root() / "artifacts"
 
 
 ARTIFACTS_DIR = _resolve_artifacts_dir()
@@ -346,6 +342,7 @@ def _create_streaming_artifact(
             status_code=409,
             detail=f"An ingest or sync is already running for dataset '{dataset['id']}'. Wait for it to finish.",
         )
+    replacement_path: Path | None = None
     try:
         # First thing under the lock, before anything looks at the store. A swap killed between
         # its two renames leaves the published path missing and the data at `.retired`; ingest
@@ -354,11 +351,14 @@ def _create_streaming_artifact(
         # `.retired`. Healing before any inspection makes the next sync an ordinary append.
         recover_interrupted_swap(store_path)
 
+        ingest_path = store_path
         if overwrite and store_path.exists():
-            if store_path.is_dir():
-                shutil.rmtree(store_path)
-            else:
-                store_path.unlink()
+            # Build overwrite data beside the published store. Fetching is the least reliable
+            # part of ingestion, so the current data must remain readable until the replacement
+            # has been fetched, validated, and normalized successfully.
+            replacement_path = store_path.with_name(f"{store_path.name}.replacement")
+            _remove_store_path(replacement_path)
+            ingest_path = replacement_path
 
         result = run_streaming_ingest_sync(
             plugin=plugin,
@@ -367,17 +367,17 @@ def _create_streaming_artifact(
             bbox=bbox,
             start=start,
             end=end,
-            store_path=store_path,
+            store_path=ingest_path,
             period_type=str(dataset["period_type"]),
             on_progress=on_progress,
             is_cancel_requested=is_cancel_requested,
             save_cursor=save_cursor,
             periods=periods,
         )
-        if result.periods_written == 0 and not store_path.exists():
+        if result.periods_written == 0 and not ingest_path.exists():
             raise HTTPException(status_code=409, detail="Source has no data for the requested temporal scope")
 
-        coverage_data = get_data_coverage_for_paths(dataset, icechunk_path=str(store_path.resolve()))
+        coverage_data = get_data_coverage_for_paths(dataset, icechunk_path=str(ingest_path.resolve()))
         if not coverage_data.get("has_data", True):
             raise HTTPException(
                 status_code=409,
@@ -414,7 +414,9 @@ def _create_streaming_artifact(
                 )
             request_scope = request_scope.model_copy(update={"end": scope_temporal.end})
 
-        _maybe_build_pyramid(store_path, dataset)
+        _maybe_build_pyramid(ingest_path, dataset)
+        if replacement_path is not None:
+            _swap_store(replacement_path, store_path)
 
         record = ArtifactRecord(
             artifact_id=str(uuid4()),
@@ -440,11 +442,31 @@ def _create_streaming_artifact(
             return publish_artifact_record(stored_record.artifact_id)
         return stored_record
     finally:
-        lock.release()
+        try:
+            if replacement_path is not None:
+                # Failed fetches and validations leave only a disposable partial replacement. A
+                # successful swap has already moved this path away, making cleanup a no-op.
+                try:
+                    _remove_store_path(replacement_path)
+                except Exception:
+                    # Cleanup is best-effort: the published store is still intact and the next
+                    # overwrite removes this path before reuse. Do not mask the ingest failure.
+                    logger.warning("Could not remove replacement store '%s'", replacement_path, exc_info=True)
+        finally:
+            # Releasing the in-process writer lock must not depend on filesystem cleanup.
+            lock.release()
 
 
 def _retired_path(target: Path) -> Path:
     return target.with_name(f"{target.name}.retired")
+
+
+def _remove_store_path(path: Path) -> None:
+    """Remove a disposable store path whether it is a directory, file, or symlink."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
 
 
 def recover_interrupted_swap(target: Path) -> bool:
@@ -975,16 +997,26 @@ def _get_icechunk_store_path_or_404(
     raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
 
 
+def _decode_record(item: dict[str, object]) -> ArtifactRecord:
+    """Rebuild a record from its stored form, applying schema and path migrations."""
+    return ArtifactRecord.model_validate(decode_record_paths(_upgrade_legacy_record(item)))
+
+
+def _encode_records(records: list[ArtifactRecord]) -> str:
+    """Serialize records for disk, with store paths in their data-root-relative form."""
+    payload = [encode_record_paths(record.model_dump(mode="json")) for record in records]
+    return f"{json.dumps(payload, indent=2)}\n"
+
+
 def _load_records() -> list[ArtifactRecord]:
     ensure_store()
     raw = json.loads(ARTIFACTS_INDEX_PATH.read_text(encoding="utf-8"))
-    return [ArtifactRecord.model_validate(_upgrade_legacy_record(item)) for item in raw]
+    return [_decode_record(item) for item in raw]
 
 
 def _save_records(records: list[ArtifactRecord]) -> None:
     ensure_store()
-    payload = [record.model_dump(mode="json") for record in records]
-    ARTIFACTS_INDEX_PATH.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+    ARTIFACTS_INDEX_PATH.write_text(_encode_records(records), encoding="utf-8")
 
 
 def _store_artifact_record(
@@ -1054,12 +1086,11 @@ def _mutate_records(mutation: Callable[[list[ArtifactRecord]], ArtifactRecord]) 
         portalocker.lock(handle, portalocker.LOCK_EX)
         handle.seek(0)
         raw = handle.read()
-        records = [ArtifactRecord.model_validate(_upgrade_legacy_record(item)) for item in json.loads(raw or "[]")]
+        records = [_decode_record(item) for item in json.loads(raw or "[]")]
         result = mutation(records)
-        payload = [record.model_dump(mode="json") for record in records]
         handle.seek(0)
         handle.truncate()
-        handle.write(f"{json.dumps(payload, indent=2)}\n")
+        handle.write(_encode_records(records))
         handle.flush()
         os.fsync(handle.fileno())
         portalocker.unlock(handle)
@@ -1312,6 +1343,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         source_dataset_id=latest.source_dataset_id or latest.dataset_id,
         dataset_name=latest.dataset_name,
         short_name=_as_optional_str(source_dataset.get("short_name")),
+        description=_as_optional_text(source_dataset.get("description")),
         variable=latest.variable,
         period_type=_as_optional_str(source_dataset.get("period_type")) or latest.period_type or "unknown",
         units=_as_optional_str(source_dataset.get("units")),
@@ -1369,6 +1401,24 @@ def _dataset_links(dataset_id: str, latest: ArtifactRecord) -> list[DatasetAcces
 
 def _as_optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _as_optional_text(value: object) -> str | None:
+    """A prose field, normalised the way the STAC path normalises it.
+
+    `_as_optional_str` passes a string through untouched, which is right for an identifier but
+    wrong for prose: `description: >-` folded YAML leaves a trailing newline, and a
+    whitespace-only value is a mistake rather than a description. Without this, `/datasets`
+    would publish "   " where the STAC collection falls back to the generated sentence — two
+    public catalogue surfaces disagreeing about the same template field.
+
+    Deliberately not applied to `short_name`, `units` and the rest: widening the change would
+    alter fields this ticket has no reason to touch.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _upgrade_legacy_record(item: dict[str, object]) -> dict[str, object]:

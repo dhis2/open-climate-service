@@ -64,5 +64,7 @@ with an error, without preventing unrelated API routes from starting. Refreshing
 requires replacing an overlapping forward window, not merely appending periods after the
 latest stored timestamp.
 
-Event-driven derived workflows, cross-service orchestration, schedule mutation APIs,
-distributed leader election, and forecast-window refresh are later automation phases.
+Successful update events can drive openEO workflows through instance-owned bindings; see
+[Dataset-update workflow automation](workflow_automation.md). Cross-service orchestration,
+schedule mutation APIs, distributed leader election, and forecast-window refresh remain later
+automation phases.

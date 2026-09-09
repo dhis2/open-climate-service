@@ -112,6 +112,7 @@ Example response:
     "source_dataset_id": "chirps3_precipitation_daily",
     "dataset_name": "Total precipitation (CHIRPS3)",
     "short_name": "Total precipitation",
+    "description": "CHIRPS v3 daily precipitation in mm.",
     "variable": "precip",
     "period_type": "daily",
     "units": "mm",
@@ -224,6 +225,7 @@ Example response:
       "source_dataset_id": "chirps3_precipitation_daily",
       "dataset_name": "Total precipitation (CHIRPS3)",
       "short_name": "Total precipitation",
+      "description": "CHIRPS v3 daily precipitation in mm.",
       "variable": "precip",
       "period_type": "daily",
       "units": "mm",
@@ -267,6 +269,10 @@ Example response:
 What this means:
 
 - `/datasets` is the public native catalog of managed datasets
+- `description` carries the dataset template's own prose, and is `null` when the template
+  declares none. It is where a dataset states what its values actually mean, so it is worth
+  reading before using one: `chirps3_precipitation_monthly` is a mean daily rate rather than a
+  monthly total. The same text is published as the STAC collection `description`.
 - `items` is wrapped in a `kind` envelope for consistency and self-description
 - dataset items contain public metadata and access links only
 - internal artifact ids, filesystem paths, and downloader implementation details are intentionally omitted
@@ -308,9 +314,7 @@ curl -s http://127.0.0.1:9000/zarr/chirps3_precipitation_daily/zarr.json | jq
 ```python
 import icechunk, xarray as xr
 
-repo = icechunk.Repository.open(
-    icechunk.http_storage("http://127.0.0.1:9000/icechunk/chirps3_precipitation_daily")
-)
+repo = icechunk.Repository.open(icechunk.http_storage("http://127.0.0.1:9000/icechunk/chirps3_precipitation_daily"))
 ds = xr.open_zarr(repo.readonly_session("main").store, zarr_format=3, consolidated=False)
 ```
 

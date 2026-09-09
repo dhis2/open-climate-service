@@ -1,7 +1,8 @@
 """Open Climate Service -- Climate and earth observation data API for DHIS2."""
 
+import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -9,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from open_climate_service.automation.service import get_workflow_automation_service
 from open_climate_service.data_registry import routes as dataset_template_routes
 from open_climate_service.extents import routes as extent_routes
 from open_climate_service.ingestions import routes as ingestion_routes
@@ -18,8 +20,11 @@ from open_climate_service.openeo.jobs import get_openeo_job_service
 from open_climate_service.read_only import read_only_middleware
 from open_climate_service.scheduler import routes as scheduler_routes
 from open_climate_service.scheduler.service import get_scheduler_service
+from open_climate_service.shared import urls
 from open_climate_service.stac import routes as stac_routes
 from open_climate_service.system import routes as system_routes
+
+logger = logging.getLogger(__name__)
 
 # Hosted browser tools that read a Zarr store directly over HTTP. They are the reason a local
 # instance needs any cross-origin story at all: each is a public page fetching a store that may
@@ -65,7 +70,7 @@ def _append_vary_value(response: Response, value: str) -> None:
 
 
 @asynccontextmanager
-async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
     from open_climate_service.plugins_diagnostics import log_plugin_loading
 
@@ -74,11 +79,21 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()
     openeo_service.recover_pending_jobs()
+    automation_service = get_workflow_automation_service()
+    automation_service.start()
+    job_service.set_event_consumer(automation_service.consume)
+    try:
+        automation_service.replay()
+    except Exception:
+        # Replay must not take down startup: a partial replay is idempotent and the consumer
+        # above still handles every newly persisted event.
+        logger.exception("Workflow automation replay failed; continuing startup")
     scheduler_service = get_scheduler_service()
     scheduler_service.start()
     try:
         yield
     finally:
+        job_service.set_event_consumer(None)
         scheduler_service.shutdown()
         job_service.shutdown()
         openeo_service.shutdown()
@@ -92,7 +107,12 @@ def create_app() -> FastAPI:
         from open_climate_service.main import create_app
         app = create_app()
     """
-    _app = FastAPI(lifespan=_lifespan)
+    # `root_path` from the environment here rather than only in `cli.py`, so a deployment
+    # prefix applies under `make run` and bare uvicorn as well as the `climate-service` entry
+    # point. Reading the base URL once at boot surfaces an unusable value in the startup log,
+    # instead of on the first request that builds a link.
+    _app = FastAPI(lifespan=_lifespan, root_path=urls.configured_root_path())
+    urls.configured_base()
 
     # Registered *before* CORS so it ends up innermost: Starlette applies the most recently
     # added middleware outermost, so CORS wraps this and a 403 still carries the headers a
@@ -156,7 +176,8 @@ def create_app() -> FastAPI:
 
         # Extra CORS + PNA headers for Zarr inspector origins on /zarr paths.
         allowed_zarr_origin = origin if origin in _zarr_browser_access_origins() else None
-        if allowed_zarr_origin and (request.url.path == "/zarr" or request.url.path.startswith("/zarr/")):
+        path = urls.route_path(request)
+        if allowed_zarr_origin and (path == "/zarr" or path.startswith("/zarr/")):
             response.headers["Access-Control-Allow-Origin"] = allowed_zarr_origin
             _append_vary_value(response, "Origin")
             response.headers.setdefault("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")

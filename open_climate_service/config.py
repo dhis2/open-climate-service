@@ -62,6 +62,7 @@ def _load_config() -> dict[str, Any]:
 DEFAULT_CRS = "EPSG:4326"
 DEFAULT_NAME = "Open Climate Service"
 DEFAULT_ID = "open-climate-service"  # operators should always set id: in climate-service.yaml
+DOWNLOAD_SUBDIR = "downloads"
 
 
 def get_id() -> str:
@@ -143,6 +144,25 @@ def get_data_dir() -> Path | None:
     if not isinstance(raw, (str, Path)):
         raise ValueError(f"data_dir in CLIMATE_SERVICE_CONFIG must be a path string, got {type(raw).__name__}")
     return (config_path.parent / raw).resolve()
+
+
+def get_data_root() -> Path:
+    """Return the effective root for instance data, falling back to XDG when unconfigured.
+
+    ``get_data_dir`` returns None when no config file is present. Every consumer that
+    needs a concrete directory then repeats the same XDG fallback, so it lives here
+    instead. Subdirectories (``downloads``, ``artifacts``, ``jobs``) hang off this root.
+    """
+    data_dir = get_data_dir()
+    if data_dir is not None:
+        return data_dir
+    xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return xdg_data / "climate-service"
+
+
+def get_download_root() -> Path:
+    """Return the directory holding managed artifact stores."""
+    return get_data_root() / DOWNLOAD_SUBDIR
 
 
 def get_utc_offset_hours() -> float:

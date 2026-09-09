@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Map viewer — {{ name }}</title>
-    <link href="https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <link href="https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
       *,
       *::before,
@@ -152,6 +152,17 @@
         white-space: nowrap;
       }
 
+      .meta-description {
+        font-size: 0.78rem;
+        line-height: 1.45;
+        color: #475569;
+        margin: 0.6rem 0 0;
+        /* Caveats run long — RWI's is several sentences — so cap the height and scroll rather
+           than letting one dataset push the legend and controls off the panel. */
+        max-height: 8.5rem;
+        overflow-y: auto;
+      }
+
       .status {
         font-size: 0.8rem;
         color: #64748b;
@@ -189,7 +200,7 @@
   <body>
     <div class="layout">
       <header>
-        <h1><a href="{{ base }}/">{{ name }}</a></h1>
+        <h1><a href="{{ mount }}/">{{ name }}</a></h1>
         <span class="subtitle">Map viewer</span>
       </header>
 
@@ -215,6 +226,7 @@
             <dt>Units</dt>
             <dd id="meta-units">—</dd>
           </dl>
+          <p id="meta-description" class="meta-description hidden"></p>
 
           <div id="legend" class="panel-section hidden">
             <label>Legend</label>
@@ -237,7 +249,7 @@
       // worker is a real sibling URL (`./maplibre-gl-worker.mjs`) resolved from
       // import.meta.url, and esm.sh's transformed build doesn't serve it (404), which
       // blanks the map. unpkg serves the worker + shared chunk siblings with CORS.
-      import * as maplibregl from "https://unpkg.com/maplibre-gl@6.0.0/dist/maplibre-gl.mjs";
+      import * as maplibregl from "https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
       import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.6.1";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
 
@@ -443,6 +455,7 @@
       const datasetMeta = document.getElementById("dataset-meta");
       const metaSource = document.getElementById("meta-source");
       const metaUnits = document.getElementById("meta-units");
+      const metaDescription = document.getElementById("meta-description");
       const legendEl = document.getElementById("legend");
       const legendBar = document.getElementById("legend-bar");
       const legendMin = document.getElementById("legend-min");
@@ -501,7 +514,7 @@
       async function fitToExtent() {
         if (!map || mapUnavailable) return;
         try {
-          const res = await fetch("{{ base }}/extent");
+          const res = await fetch("{{ mount }}/extent");
           if (!res.ok) return;
           const extent = await res.json();
           const [xmin, ymin, xmax, ymax] = extent.bbox;
@@ -511,7 +524,7 @@
 
       async function loadCatalog() {
         try {
-          const res = await fetch("{{ base }}/collections");
+          const res = await fetch("{{ mount }}/collections");
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const body = await res.json();
           const collections = body.collections ?? [];
@@ -522,7 +535,7 @@
             return;
           }
           for (const col of collections) {
-            const href = `{{ base }}/collections/${col.id}`;
+            const href = `{{ mount }}/collections/${col.id}`;
             const opt = document.createElement("option");
             opt.value = href;
             opt.textContent = col.title ?? col.id;
@@ -678,6 +691,20 @@
         metaUnits.textContent = units || "—";
         renderPinnedDims();
         datasetMeta.classList.remove("hidden");
+
+        // The collection description, which is where a dataset states what its values actually
+        // mean (CLIM-973). Shown here because this is where someone picks a layer: RWI is
+        // relative within one country, MODIS LST is surface and not air temperature. Skipped
+        // when it is the generated fallback, which tells a reader nothing the dataset name
+        // does not already.
+        // Compared exactly, not by prefix: the collection title is the same string the
+        // fallback is built from, so a real description that happens to open with those words
+        // ("Published GeoZarr dataset for X - use only within one country") is kept rather
+        // than mistaken for the generated one.
+        const description = collection.description ?? "";
+        const generated = description === `Published GeoZarr dataset for ${collection.title}`;
+        metaDescription.textContent = description;
+        metaDescription.classList.toggle("hidden", !description || generated);
 
         updateLegend(cm, clim, units);
 

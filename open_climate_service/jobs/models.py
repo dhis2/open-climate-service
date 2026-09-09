@@ -8,6 +8,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+DATASET_UPDATED_EVENT_TYPE = "dataset.updated"
+"""Event type persisted when a sync actually appends or rematerializes a dataset."""
+
 
 class JobCancelledError(Exception):
     """Raised by a job implementation when cooperative cancellation is honored."""

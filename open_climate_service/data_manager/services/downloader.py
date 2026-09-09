@@ -1,7 +1,6 @@
 """Write raster datasets to Icechunk stores with GeoZarr conventions."""
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,11 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_download_dir() -> Path:
-    data_dir = api_config.get_data_dir()
-    if data_dir is not None:
-        return data_dir / "downloads"
-    xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return xdg_data / "climate-service" / "downloads"
+    return api_config.get_download_root()
 
 
 DOWNLOAD_DIR = _resolve_download_dir()

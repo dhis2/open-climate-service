@@ -12,15 +12,51 @@ extent:
 
 data_dir: ./data   # required — directory for downloaded NetCDF files and Zarr stores
 
-# plugins_dir: ./plugins/   # optional — plugin root: YAML templates in plugins/datasets/, Python modules importable by dotted path
-# crs: EPSG:4326             # optional — CRS for stored GeoZarr files (default: EPSG:4326); use e.g. EPSG:25833 for UTM33
-# utc_offset_hours: 0        # optional — UTC offset in hours for local-day aggregation in daily_from_hourly datasets (default: 0 = UTC)
-
-# scheduler:                 # optional — operator-managed recurring dataset syncs
+# Operator-managed recurring checks. Each previously ingested dataset may appear once, with its
+# own cadence. Due checks enter the same native job queue; stagger times where practical.
+# scheduler:
 #   enabled: true
 #   timezone: UTC
 #   dataset_sync:
 #     - dataset_id: chirps3_precipitation_daily
-#       cron: "0 6 * * *"
+#       cron: "0 6 * * *"       # every day at 06:00 UTC
 #       publish: true
 #       max_attempts: 3
+#
+#     - dataset_id: era5land_temperature_monthly
+#       cron: "30 6 * * *"      # check daily at 06:30 UTC
+#       publish: true
+#       max_attempts: 3
+#
+#     - dataset_id: worldpop_population_global2_R2025A_100m
+#       cron: "0 7 1 * *"       # first day of each month at 07:00 UTC
+#       publish: true
+#       max_attempts: 3
+
+# Event-driven workflows are separate from cron schedules. Every trigger whose `on_update_of`
+# matches a successful dataset update creates an independent openEO workflow job.
+# automation:
+#   workflow_triggers:
+#     - id: chirps-to-chap
+#       on_update_of: chirps3_precipitation_daily
+#       workflow_id: aggregate_to_chap_csv
+#       arguments:
+#         dataset_id: $event.dataset_id
+#         temporal_extent: [$event.previous_end, $event.current_end]
+#         geometries: {type: FeatureCollection, features: []}
+#         period_type: day
+#       replay_existing: false  # default: do not backfill events predating this trigger
+#
+#     - id: chirps-to-dhis2-json
+#       on_update_of: chirps3_precipitation_daily
+#       workflow_id: aggregate_to_dhis2_json
+#       arguments:
+#         dataset_id: $event.dataset_id
+#         temporal_extent: [$event.previous_end, $event.current_end]
+#         geometries: {type: FeatureCollection, features: []}
+#         data_element_id: BXgDHhPdFVU
+#         period_type: day
+
+# plugins_dir: ./plugins/   # optional — plugin root: YAML templates in plugins/datasets/, Python modules importable by dotted path
+# crs: EPSG:4326             # optional — CRS for stored GeoZarr files (default: EPSG:4326); use e.g. EPSG:25833 for UTM33
+# utc_offset_hours: 0        # optional — UTC offset in hours for local-day aggregation in daily_from_hourly datasets (default: 0 = UTC)

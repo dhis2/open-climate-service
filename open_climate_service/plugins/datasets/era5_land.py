@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import calendar
+import json
+import logging
+import netrc
 import os
 import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import Lock
+from time import monotonic
 from typing import Any, cast
+from urllib.error import HTTPError
 from urllib.parse import urlparse, urlunparse
+from urllib.request import Request, urlopen
 
 import numpy as np
 import xarray as xr
@@ -25,6 +32,8 @@ from open_climate_service.shared.time import (
 from open_climate_service.streaming import BaseDatasetPlugin, cell_pad, monthly_period_ids
 from open_climate_service.transforms.climatology import circular_rolling_mean
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
+
+logger = logging.getLogger(__name__)
 
 # CDS API long-name variables for reanalysis-era5-land-monthly-means
 _CDS_VARIABLE_NAMES: dict[str, str] = {
@@ -106,12 +115,14 @@ class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):
             remote = _CdsClient().submit("reanalysis-era5-land", params)
             remote.download(str(target))
             ds = xr.open_dataset(target, engine="netcdf4").load()
-        ds = ds[[self.variable]]
+        ds = _collapse_expver(ds[[self.variable]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
         ds = ds.rename({"longitude": "x", "latitude": "y", time_dim: "t"})
         if self.variable == "t2m":
             ds = kelvin_to_celsius(ds, {"variable": self.variable})
-        return ds
+        # Cleaned on the cached monthly cube, while `t` is still a dimension. Doing it after
+        # `fetch_period`'s scalar `sel(t=...)` would take the demoted `t` coordinate with it.
+        return _drop_auxiliary_variables(ds, self.variable)
 
 
 class ERA5LandPrecipitationPlugin(ERA5LandCDSHourlyPlugin):
@@ -162,7 +173,7 @@ class ERA5LandDailyTemperaturePlugin(BaseDatasetPlugin):
 
         assert monthly_ds is not None
         timestamp = np.datetime64(period_id, "D").astype("datetime64[ns]")
-        return monthly_ds.sel(t=slice(timestamp, timestamp))
+        return _drop_auxiliary_variables(monthly_ds.sel(t=slice(timestamp, timestamp)), "t2m")
 
     def _fetch_month(self, year: int, month: int, bbox: tuple[float, float, float, float]) -> xr.Dataset:
         xmin, ymin, xmax, ymax = bbox
@@ -188,7 +199,7 @@ class ERA5LandDailyTemperaturePlugin(BaseDatasetPlugin):
             remote.download(str(target))
             ds = xr.open_dataset(target, engine="netcdf4").load()
 
-        ds = ds[["t2m"]]
+        ds = _collapse_expver(ds[["t2m"]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
         ds = ds.rename({"longitude": "x", "latitude": "y", time_dim: "t"})
         return kelvin_to_celsius(ds, {"variable": "t2m"})
@@ -197,9 +208,21 @@ class ERA5LandDailyTemperaturePlugin(BaseDatasetPlugin):
 class ERA5LandMonthlyPlugin(BaseDatasetPlugin):
     """Streaming plugin for monthly ERA5-Land means from the Copernicus CDS.
 
-    Fetches one calendar month at a time from the ``reanalysis-era5-land-monthly-means``
-    dataset via the CDS API (``ecmwf-datastores``). Credentials are read from
-    ``~/.cdsapirc`` or the ``CDSAPI_URL`` / ``CDSAPI_KEY`` environment variables.
+    Fetches a **calendar year** per CDS API call from ``reanalysis-era5-land-monthly-means``
+    and caches it, so the twelve ``fetch_period`` calls for that year share one remote
+    request. Credentials are read from ``~/.cdsapirc`` or the ``CDSAPI_URL`` / ``CDSAPI_KEY``
+    environment variables.
+
+    A CDS request costs almost entirely queue and dispatch rather than data — one month over
+    a country extent is about 30 KB — so twelve months cost barely more than one. Measured
+    against the live API: 28.7 s for a single month against 34.4 s for a year, which is 2.9 s
+    per month rather than 28.7 (CLIM-956). Over a 30-year ingest that is roughly 21 minutes
+    instead of 204.
+
+    ``max_concurrency = 1`` is what keeps the cache safe from concurrent fetches, the same
+    reason it is pinned on :class:`ERA5LandCDSHourlyPlugin`. It is not a throughput limit to
+    raise: batching cuts the request count outright, which is both faster and lighter on CDS
+    than running the same number of requests in parallel.
     """
 
     max_concurrency = 1
@@ -211,6 +234,13 @@ class ERA5LandMonthlyPlugin(BaseDatasetPlugin):
                 f"ERA5LandMonthlyPlugin: unsupported variable {variable!r}; expected one of {list(_CDS_VARIABLE_NAMES)}"
             )
         self.variable = variable
+        self._cache_lock = Lock()
+        self._cached_year: int | None = None
+        self._cached_bbox: tuple[float, float, float, float] | None = None
+        self._cached_ds: xr.Dataset | None = None
+        # Resolved once per plugin, not once per year: it is a catalogue round-trip, and the
+        # answer cannot move backwards during a single ingest.
+        self._cutoff: date | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         cutoff = await asyncio.to_thread(_monthly_availability_cutoff)
@@ -218,13 +248,60 @@ class ERA5LandMonthlyPlugin(BaseDatasetPlugin):
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
         year, month = int(period_id[:4]), int(period_id[5:7])
-        xmin, ymin, xmax, ymax = map(float, bbox)
+        bbox_tuple = cast(tuple[float, float, float, float], tuple(map(float, bbox)))
 
+        with self._cache_lock:
+            if self._cached_year != year or self._cached_bbox != bbox_tuple:
+                self._cached_ds = self._fetch_year(year, bbox_tuple)
+                self._cached_year = year
+                self._cached_bbox = bbox_tuple
+            yearly = self._cached_ds
+
+        assert yearly is not None
+        # Selected by calendar month rather than by an exact timestamp: the store's own
+        # convention for where in the month the stamp sits is CDS's to decide, and matching on
+        # it would break quietly if that ever changed.
+        stamps = yearly["t"].dt
+        wanted = np.flatnonzero(((stamps.year == year) & (stamps.month == month)).values)
+        if wanted.size == 0:
+            raise ValueError(f"CDS returned no ERA5-Land monthly mean for {period_id}")
+        return _drop_auxiliary_variables(yearly.isel(t=wanted), self.variable)
+
+    def _fetch_year(self, year: int, bbox: tuple[float, float, float, float]) -> xr.Dataset:
+        """Fetch every published month of *year* in as few CDS requests as possible.
+
+        Usually one. Months are grouped by product type first, because
+        :func:`_era5land_monthly_product_type` switches product mid-year for accumulated
+        variables between September 2022 and February 2024 — asking for a whole year in one
+        request there would silently return the buggy product for part of it, which is the
+        very thing that workaround exists to avoid.
+        """
+        if self._cutoff is None:
+            self._cutoff = _monthly_availability_cutoff()
+        cutoff = self._cutoff
+        last_month = cutoff.month if year == cutoff.year else 12
+        if year > cutoff.year:
+            raise ValueError(f"ERA5-Land monthly means are not published for {year}")
+
+        by_product: dict[str, list[int]] = {}
+        for month in range(1, last_month + 1):
+            product = _era5land_monthly_product_type(year, month, self.variable)
+            by_product.setdefault(product, []).append(month)
+
+        parts = [self._fetch_months(year, months, product, bbox) for product, months in by_product.items()]
+        if len(parts) == 1:
+            return parts[0]
+        return xr.concat(parts, dim="t").sortby("t")
+
+    def _fetch_months(
+        self, year: int, months: list[int], product_type: str, bbox: tuple[float, float, float, float]
+    ) -> xr.Dataset:
+        xmin, ymin, xmax, ymax = bbox
         params = {
-            "product_type": [_era5land_monthly_product_type(year, month, self.variable)],
+            "product_type": [product_type],
             "variable": [_CDS_VARIABLE_NAMES[self.variable]],
             "year": [str(year)],
-            "month": [str(month).zfill(2)],
+            "month": [str(month).zfill(2) for month in months],
             "time": ["00:00"],
             "area": [ymax, xmin, ymin, xmax],  # N, W, S, E
             "data_format": "netcdf",
@@ -235,9 +312,11 @@ class ERA5LandMonthlyPlugin(BaseDatasetPlugin):
             target = Path(tmp) / "era5land_monthly.nc"
             remote = _CdsClient().submit("reanalysis-era5-land-monthly-means", params)
             remote.download(str(target))
+            # Loaded, not lazy: the framework closes what `fetch_period` returns, and every
+            # month of the year is served from this one object.
             ds = xr.open_dataset(target, engine="netcdf4").load()
 
-        ds = ds[[self.variable]]
+        ds = _collapse_expver(ds[[self.variable]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
         rename_map = {"longitude": "x", "latitude": "y", time_dim: "t"}
         ds = ds.rename({k: v for k, v in rename_map.items() if k in ds})
@@ -349,38 +428,164 @@ def _deaccumulate_tp(tp: xr.DataArray, time_dim: str = "valid_time") -> xr.DataA
 # Earth Data Hub (EDH) plugins — lazy Zarr access, no per-period downloads
 # ---------------------------------------------------------------------------
 
-# Hourly ERA5-Land: Zarr v2
-_EDH_HOURLY_URL = "https://api.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
+# Hourly ERA5-Land, Zarr v3. The store this replaced stopped advancing at 2026-05-31 while the
+# daily store kept moving, because EDH applies updates only to its v3 stores (CLIM-955).
+# Verified identical in every respect that matters to the plugins below: 0-360 longitude, the
+# same latitude range, a `valid_time` axis and the same 50 variables including t2m and tp.
+_EDH_HOURLY_URL = "https://api.earthdatahub.destine.eu/era5/era5-land-v0.zarr"
 # Daily ERA5-Land: new DestinE API, Zarr v3, requires an additional subscription
 _EDH_DAILY_URL = "https://api.earthdatahub.destine.eu/era5/era5-land-daily-utc-v1.zarr"
 _EDH_API_KEY_ENV = "EDH_API_KEY"
 
 
-def _edh_open_zarr(url: str, *, consolidated: bool | None = None) -> xr.Dataset:
+# A confirmed verdict never changes for a given URL, so it is cached for the process.
+_edh_is_v3_cache: dict[str, bool] = {}
+# An *undeterminable* verdict is cached only briefly — a deliberate middle course. Memoising it
+# permanently would let one transient timeout disable the check for the process. Not caching it
+# at all is worse: `_latest_available` reopens the store for every period, so a store fsspec can
+# read while this separate request times out would cost a 15 s probe *per period*. A short TTL
+# bounds the cost and still recovers on its own.
+_EDH_UNKNOWN_TTL_SECONDS = 300.0
+_edh_unknown_until: dict[str, float] = {}
+
+
+def _edh_is_zarr_v3(url: str) -> bool | None:
+    """Whether an EDH store is Zarr v3. None when the question cannot be answered.
+
+    A v3 store answers ``zarr.json``; anything else does not. That single probe is the whole
+    test — OCS reads only v3, so there is nothing to learn from identifying *which* older
+    format a store uses.
+
+    The three-way result matters. A definite 404 means the store is not v3 and the caller
+    should refuse. A timeout or a 5xx means we do not know, and a transient network fault must
+    never be turned into a refusal of a store that reads perfectly well.
+    """
+    cached = _edh_is_v3_cache.get(url)
+    if cached is not None:
+        return cached
+    if monotonic() < _edh_unknown_until.get(url, 0.0):
+        return None  # probed recently and could not tell; do not re-probe per period
+    verdict: bool | None = None
+    try:
+        # The credential-free URL plus an explicit header: `urlopen` does not turn
+        # `user:pass@host` userinfo into Basic Auth the way fsspec does, so probing the
+        # authenticated URL fails for anyone using EDH_API_KEY.
+        request = Request(f"{url}/zarr.json", headers=_edh_auth_header(url))
+        with urlopen(request, timeout=15) as response:  # noqa: S310  # fixed https EDH host
+            document = json.loads(response.read())
+        # Only a document that actually states its format is evidence. A 200 of an unexpected
+        # shape — `[]`, or a proxy's JSON error page — says nothing about the store, so it is
+        # unknown rather than non-v3: refusing on it would break a store that reads fine.
+        declared = document.get("zarr_format") if isinstance(document, dict) else None
+        verdict = declared >= 3 if isinstance(declared, int) else None
+    except HTTPError as error:
+        # 404 is an answer: there is no v3 metadata document here. Any other status is not.
+        verdict = False if error.code == 404 else None
+    except Exception:  # noqa: BLE001 — an unreachable store is unknown, not non-v3
+        verdict = None
+    if verdict is None:
+        _edh_unknown_until[url] = monotonic() + _EDH_UNKNOWN_TTL_SECONDS
+        return None
+    _edh_is_v3_cache[url] = verdict
+    _edh_unknown_until.pop(url, None)
+    return verdict
+
+
+def _require_zarr_v3(url: str, ds: xr.Dataset) -> None:
+    """Refuse a store that is not Zarr v3, closing it first.
+
+    OCS reads only Zarr v3. EDH keeps superseded stores readable and applies updates only to
+    the v3 ones, so an older store does not fail — it silently stops advancing, and an ingest
+    against it reports no new periods, which is indistinguishable from "nothing has been
+    published yet" (the same shape as CLIM-952). Refusing is what makes that visible.
+
+    Only a *confirmed* non-v3 store is refused. An undeterminable probe leaves the store
+    usable, because a network fault is not evidence about the store's format.
+    """
+    if _edh_is_zarr_v3(url) is not False:
+        return
+    latest = ""
+    time_dim = next((name for name in ("valid_time", "time") if name in ds.coords), None)
+    if time_dim and ds.sizes.get(time_dim):
+        try:
+            # A lazy remote read, which can fail on its own. It only sharpens the message.
+            latest = f" Its latest timestamp is {str(ds[time_dim].isel({time_dim: -1}).values)[:16]}."
+        except Exception:  # noqa: BLE001 — enrichment is optional, the refusal is not
+            logger.debug("Could not read the latest timestamp of %s", url, exc_info=True)
+    ds.close()
+    raise RuntimeError(
+        f"Earth Data Hub store {url} is not Zarr v3, and OCS reads only v3 stores. EDH applies "
+        f"updates only to its Zarr v3 stores, so this one no longer advances.{latest} "
+        f"Repoint it at the v3 store for this dataset. See CLIM-955."
+    )
+
+
+def _edh_open_zarr(url: str) -> xr.Dataset:
     """Open an Earth Data Hub Zarr store.
 
     Injects the ``EDH_API_KEY`` environment variable as HTTP Basic Auth
     (username ``edh``, password = key).  Falls back to netrc when the
     variable is not set.
 
-    Pass ``consolidated=True`` for Zarr v2 stores (the hourly ERA5-Land store).
+    Every store OCS pins is Zarr v3, which carries its metadata inline, so nothing here has to
+    say how to find it — the `consolidated` switch that older stores needed is gone with them.
+    `_require_zarr_v3` is what keeps that assumption honest: EDH leaves superseded stores
+    readable, and they fail by going quiet rather than by erroring (CLIM-955).
+    """
+    opened = xr.open_zarr(
+        _edh_authenticated_url(url),
+        storage_options={"client_kwargs": {"trust_env": True}},
+    )
+    _require_zarr_v3(url, opened)
+    return opened  # type: ignore[no-any-return]
+
+
+def _edh_authenticated_url(url: str) -> str:
+    """Inject ``EDH_API_KEY`` as HTTP Basic Auth, leaving netrc to handle it when unset."""
+    token = os.environ.get(_EDH_API_KEY_ENV, "")
+    if not token:
+        return url
+    parts = urlparse(url)
+    return urlunparse(parts._replace(netloc=f"edh:{token}@{parts.netloc}"))
+
+
+def _edh_auth_header(url: str) -> dict[str, str]:
+    """Basic Auth for the plain ``urlopen`` probe, from either credential source.
+
+    Needed because ``urlopen`` authenticates like neither of the paths that work elsewhere:
+    it does not read netrc (fsspec does, via ``trust_env=True``) and it does not turn
+    ``user:pass@host`` userinfo into an Authorization header (fsspec does that too). So both
+    of the documented ways to give OCS an EDH credential leave the probe unauthenticated, it
+    takes a 401, returns None, and the superseded-store warning silently never fires — the
+    exact failure it exists to prevent.
     """
     token = os.environ.get(_EDH_API_KEY_ENV, "")
     if token:
-        parts = urlparse(url)
-        url = urlunparse(parts._replace(netloc=f"edh:{token}@{parts.netloc}"))
-    return xr.open_zarr(  # type: ignore[no-any-return]
-        url,
-        consolidated=consolidated,
-        storage_options={"client_kwargs": {"trust_env": True}},
-    )
+        return _basic_auth("edh", token)
+    try:
+        host = urlparse(url).hostname or ""
+        credentials = netrc.netrc().authenticators(host)
+    except (OSError, netrc.NetrcParseError):
+        return {}
+    if not credentials:
+        return {}
+    login, _, password = credentials
+    # `or "edh"`: the netrc entry EDH documents carries only a password, and Python then
+    # reports an empty login — which would build `:key` here while the EDH_API_KEY path builds
+    # `edh:key`. EDH happens to accept both today, so this is not a live failure, but two auth
+    # paths disagreeing means one of them works only by the service's tolerance.
+    return _basic_auth(login or "edh", password or "")
+
+
+def _basic_auth(login: str, password: str) -> dict[str, str]:
+    encoded = base64.b64encode(f"{login}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {encoded}"}
 
 
 class _ERA5LandEDHBase(BaseDatasetPlugin):
     """Shared cache and region logic for EDH Zarr plugins."""
 
     _edh_url: str  # set by subclass
-    _edh_consolidated: bool | None = None  # True for Zarr v2 stores
     _edh_lon_360: bool = False  # True when longitude is stored 0–360
 
     def __init__(self, variable: str) -> None:
@@ -400,7 +605,7 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
                 return self._cached_region
             self._close_cached_locked()
             xmin, ymin, xmax, ymax = bbox_tuple
-            ds = _edh_open_zarr(self._edh_url, consolidated=self._edh_consolidated)
+            ds = _edh_open_zarr(self._edh_url)
             # Extend the bbox by half a grid step, derived from the axis rather than assumed.
             # This does two jobs: it keeps the cells straddling each bbox edge, which a plain
             # label slice drops because it selects on cell centres, and it avoids
@@ -440,7 +645,7 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
 
     def _latest_available(self) -> str:
         """Return the latest available timestamp from the EDH Zarr store."""
-        ds = _edh_open_zarr(self._edh_url, consolidated=self._edh_consolidated)
+        ds = _edh_open_zarr(self._edh_url)
         try:
             return str(np.datetime64(ds.valid_time.isel(valid_time=-1).values, "h"))
         finally:
@@ -449,6 +654,38 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
 
 _GRID_MAPPING_NAMES = ("spatial_ref", "crs")
 """Scalar coordinates that carry the CRS rather than data, so they must survive the cleanup."""
+
+
+_EXPVER_DIM = "expver"
+
+
+def _collapse_expver(ds: xr.Dataset) -> xr.Dataset:
+    """Merge ERA5's ``expver`` dimension into one series, preferring final over preliminary.
+
+    A CDS request spanning the boundary between final ERA5 (``expver=1``) and preliminary
+    ERA5T (``expver=5``) returns both along an ``expver`` dimension, each slice NaN wherever
+    the other supplies data. Left in place it doubles the array along a dimension the rest of
+    OCS does not model: aggregation then failed with ``boolean index did not match indexed
+    array`` on a mask half the size of the data (CLIM-923).
+
+    ``_drop_auxiliary_variables`` does not remove it — that keeps every dimension by design and
+    only strips scalar coordinates that became phantom variables. Both guards are needed.
+
+    Collapsed at the download boundary rather than on the way out, because a reduction applied
+    first corrupts the result: ``sum("t")`` over the all-NaN slice yields 0.0 rather than
+    propagating the gap.
+
+    Ascending ``expver`` order gives final data precedence without hard-coding 5 as the
+    preliminary value.
+    """
+    if _EXPVER_DIM not in ds.dims:
+        # Also covers the scalar case, where it is a coordinate rather than a dimension.
+        return ds.drop_vars(_EXPVER_DIM, errors="ignore")
+    versions = sorted(ds[_EXPVER_DIM].values.tolist())
+    merged = ds.sel({_EXPVER_DIM: versions[0]}, drop=True)
+    for version in versions[1:]:
+        merged = merged.combine_first(ds.sel({_EXPVER_DIM: version}, drop=True))
+    return merged.astype({name: ds[name].dtype for name in ds.data_vars})
 
 
 def _drop_auxiliary_variables(ds: xr.Dataset, variable: str) -> xr.Dataset:
@@ -551,7 +788,6 @@ class ERA5LandEDHPrecipitationDailyPlugin(_ERA5LandEDHBase):
     """
 
     _edh_url = _EDH_HOURLY_URL
-    _edh_consolidated = True
     _edh_lon_360 = True
     max_concurrency = 4
     commit_batch_size = 30
@@ -633,8 +869,10 @@ class ERA5LandPrecipDailyPlugin(ERA5LandEDHPrecipitationDailyPlugin):
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
         edh_latest = self._latest_available()
         if period_id <= edh_latest[:10]:
-            return self._fetch_daily_sync(period_id, bbox)
-        return self._fetch_cds_daily_sync(period_id, bbox)
+            # Delegate rather than repeat the parent's cleaning, so a future override of this
+            # method cannot silently shed it the way this one did (CLIM-923).
+            return super().fetch_period(period_id, bbox)
+        return _drop_auxiliary_variables(self._fetch_cds_daily_sync(period_id, bbox), self.variable)
 
     def _fetch_cds_daily_sync(self, period_id: str, bbox: list[float]) -> xr.Dataset:
         from open_climate_service import config as api_config
@@ -679,7 +917,6 @@ class ERA5LandTempDailyFromHourlyPlugin(_ERA5LandEDHBase):
     """
 
     _edh_url = _EDH_HOURLY_URL
-    _edh_consolidated = True
     _edh_lon_360 = True
     max_concurrency = 4
     commit_batch_size = 30
@@ -702,8 +939,10 @@ class ERA5LandTempDailyFromHourlyPlugin(_ERA5LandEDHBase):
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
         edh_latest = self._latest_available()
         if period_id <= edh_latest[:10]:
-            return self._fetch_daily_sync(period_id, bbox)
-        return self._fetch_cds_daily_sync(period_id, bbox)
+            cube = self._fetch_daily_sync(period_id, bbox)
+        else:
+            cube = self._fetch_cds_daily_sync(period_id, bbox)
+        return _drop_auxiliary_variables(cube, self.variable)
 
     def _fetch_daily_sync(self, period_id: str, bbox: list[float]) -> xr.Dataset:
         from open_climate_service import config as api_config
@@ -836,7 +1075,8 @@ class ERA5LandNormalsPlugin(BaseDatasetPlugin):
 
     def _fetch_sync(self, period_id: str, bbox: list[float]) -> xr.Dataset:
         clim = self._ensure_climatology(bbox)
-        return clim.sel({_NORMALS_DAYOFYEAR_DIM: [int(period_id)]})
+        selected = clim.sel({_NORMALS_DAYOFYEAR_DIM: [int(period_id)]})
+        return _drop_auxiliary_variables(selected, self.variable)
 
     def _ensure_climatology(self, bbox: list[float]) -> xr.Dataset:
         with self._lock:

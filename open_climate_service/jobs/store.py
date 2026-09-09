@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,11 +13,7 @@ from open_climate_service.jobs.models import JobRecord
 
 
 def _resolve_jobs_dir() -> Path:
-    data_dir = api_config.get_data_dir()
-    if data_dir is not None:
-        return data_dir / "jobs"
-    xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return xdg_data / "climate-service" / "jobs"
+    return api_config.get_data_root() / "jobs"
 
 
 JOBS_DIR = _resolve_jobs_dir()

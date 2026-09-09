@@ -11,7 +11,7 @@ from open_climate_service.data_registry.services import datasets as registry_dat
 from open_climate_service.extents.services import get_extent_or_404
 from open_climate_service.ingestions import services
 from open_climate_service.ingestions.schemas import IngestionResponse, SyncAction
-from open_climate_service.jobs.models import JobEventDraft, JobExecutionResult
+from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEventDraft, JobExecutionResult
 
 
 def execute_ingestion(
@@ -71,7 +71,7 @@ def execute_sync(
     ):
         events.append(
             JobEventDraft(
-                type="dataset.updated",
+                type=DATASET_UPDATED_EVENT_TYPE,
                 source=f"/datasets/{dataset_id}",
                 data={
                     "dataset_id": dataset_id,
