@@ -17,6 +17,11 @@ override-dependencies = [
     "zarr>=3.1.6",
     "pyarrow>=19.0",
     "xarray>=2025.12.0",
+    # Held below 2.5 in the lock rather than capped here: numpy 2.5 works only with
+    # numba >= 0.67 (xclim's run_length imports it, and older numba refuses 2.5 at import,
+    # taking all 176 indicators with it), and it makes netCDF4 1.7.4 — already the latest —
+    # emit a binary-incompatibility warning because its wheel predates those headers.
+    # Neither is fatal; there is just nothing to gain yet. See PR for the measurements.
     "numpy>=2.2",
     "dask>=2024.1.0",
     "dask-geopandas>=0.4",
