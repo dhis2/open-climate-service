@@ -517,23 +517,44 @@ def test_a_base_url_is_parsed_rather_than_trimmed(monkeypatch: pytest.MonkeyPatc
     assert mount_prefix(request) == "/ocs"
 
 
-def test_an_unusable_base_url_is_logged_once(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Silence is how this survives: the links are broken but every response is a 200."""
+def test_an_unusable_base_url_is_logged_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Silence is how this survives: the links are broken but every response is a 200.
+
+    The emissions are counted on the emitting logger with a handler of this test's own, rather
+    than through `caplog`. `caplog` captures at the root, which this package's logger does not
+    propagate to, so asserting through it means monkeypatching `propagate` and then trusting
+    that nothing else in the process has put a second capture in that chain. Counting at the
+    source is the same assertion without that dependency.
+    """
     import logging
 
-    from open_climate_service.shared.urls import _parse_configured_base, absolute_base
+    from open_climate_service.shared.urls import _split_configured_base, absolute_base
 
-    # `startup.py` gives the package logger its own handler and stops propagation, so `caplog`
-    # sees nothing until it is let through.
-    monkeypatch.setattr(logging.getLogger("open_climate_service"), "propagate", True)
-    _parse_configured_base.cache_clear()
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    emitter = logging.getLogger("open_climate_service.shared.urls")
+    handler = _Collect(level=logging.WARNING)
+    emitter.addHandler(handler)
     monkeypatch.setenv(BASE_URL_ENV, "ocs-demo-nepal.dhis2.org")
-    with caplog.at_level("WARNING"):
+    try:
         for _ in range(3):
             absolute_base(_fake_request("http://localhost:9000/", "/stac"))
 
-    assert len(caplog.records) == 1, "cached on the raw value, so one warning per distinct value"
-    assert BASE_URL_ENV in caplog.text
+        assert len(records) == 1, "warned once per distinct value"
+        assert BASE_URL_ENV in records[0].getMessage()
+
+        # The parse cache is memoisation, not the deduplicator. Losing it must not repeat an
+        # operator-facing warning, which is what made this assertion depend on execution order.
+        _split_configured_base.cache_clear()
+        absolute_base(_fake_request("http://localhost:9000/", "/stac"))
+
+        assert len(records) == 1, "still once, even with the parse cache cleared"
+    finally:
+        emitter.removeHandler(handler)
 
 
 def test_the_asgi_prefix_ignores_the_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,6 +8,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from open_climate_service import config as api_config
 from open_climate_service.main import app
 from open_climate_service.openeo import earthkit_processes, xclim_processes
+from open_climate_service.shared import urls
 
 _TEST_CONFIG = """\
 extent:
@@ -36,10 +37,15 @@ def _reset_config_cache() -> Generator[None, None, None]:
     api_config._cache = None
     xclim_processes._cache = None
     earthkit_processes._cache = None
+    # Warnings about an unusable base URL are emitted once per distinct value for the life of
+    # the process, so without this a test asserting on one depends on whether an earlier test
+    # happened to use the same value.
+    urls._forget_base_url_warnings()
     yield
     api_config._cache = None
     xclim_processes._cache = None
     earthkit_processes._cache = None
+    urls._forget_base_url_warnings()
 
 
 @pytest.fixture(autouse=True)
