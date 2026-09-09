@@ -365,7 +365,7 @@
   </head>
   <body>
     <header>
-      <h1><a href="{{ base }}/">{{ name }}</a></h1>
+      <h1><a href="{{ mount }}/">{{ name }}</a></h1>
       <span class="subtitle">Manage</span>
     </header>
 
@@ -388,7 +388,7 @@
         {% elif not templates %}
         <p class="note">No dataset templates found.</p>
         {% else %}
-        <form id="ingest-form" method="post" action="{{ base }}/manage/ingest"
+        <form id="ingest-form" method="post" action="{{ mount }}/manage/ingest"
               onsubmit="runJob(event, this, 'btn-ingest', 'ingest-progress')">
           <div class="form-grid">
             <div class="field span-2">
@@ -475,7 +475,7 @@
             {% set sync_dom_id = "sync-row-" ~ loop.index0 %}
             <tr>
               <td>
-                <a href="{{ base }}/datasets/{{ ds.dataset_id }}">{{ ds.dataset_name }}</a>
+                <a href="{{ mount }}/datasets/{{ ds.dataset_id }}">{{ ds.dataset_name }}</a>
               </td>
               <td>{{ ds.period_type }}</td>
               <td>{{ ds.extent.temporal.start }} – {{ ds.extent.temporal.end }}</td>
@@ -489,7 +489,7 @@
               <td>
                 <form
                   method="post"
-                  action="{{ base }}/manage/sync"
+                  action="{{ mount }}/manage/sync"
                   class="sync-form"
                   data-trigger-id="sync-trigger-{{ sync_dom_id }}"
                   data-progress-id="sync-progress-{{ sync_dom_id }}"

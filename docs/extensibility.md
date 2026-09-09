@@ -47,6 +47,7 @@ Custom processes are Python functions decorated with `@process` and placed in `p
 import xarray as xr
 from open_climate_service.process import process
 
+
 @process(summary="Precipitation anomaly relative to a baseline mean")
 def precip_anomaly(pr: xr.DataArray, baseline: float = 0.0) -> xr.DataArray:
     """Deviation of precipitation from a long-term baseline mean."""
@@ -60,8 +61,7 @@ The `@process` decorator derives the process id (function name), summary, parame
     summary="Precipitation anomaly relative to a baseline mean",
     parameters={"baseline": {"description": "Long-term mean precipitation (kg m-2 s-1)."}},
 )
-def precip_anomaly(pr: xr.DataArray, baseline: float = 0.0) -> xr.DataArray:
-    ...
+def precip_anomaly(pr: xr.DataArray, baseline: float = 0.0) -> xr.DataArray: ...
 ```
 
 A plugin process with the same id as an existing process overrides it. The server must be restarted to pick up new process files. For built-in climate indices, see [Climate indices](climate_indices.md).
@@ -156,18 +156,20 @@ Calling the workflow from any openEO client:
 import openeo
 
 conn = openeo.connect("http://your-instance:9000")
-job = conn.execute_batch_job({
-    "process_graph": {
-        "result": {
-            "process_id": "monthly_rainfall",
-            "arguments": {
-                "collection_id": "chirps_rainfall_daily",
-                "temporal_extent": ["2020-01-01", "2023-12-31"]
-            },
-            "result": true
+job = conn.execute_batch_job(
+    {
+        "process_graph": {
+            "result": {
+                "process_id": "monthly_rainfall",
+                "arguments": {
+                    "collection_id": "chirps_rainfall_daily",
+                    "temporal_extent": ["2020-01-01", "2023-12-31"],
+                },
+                "result": true,
+            }
         }
     }
-})
+)
 ```
 
 Workflow JSON files are loaded on each request to `GET /process_graphs`, so changes on disk take effect without restarting the server. A plugin workflow with the same `id` as a built-in overrides it.

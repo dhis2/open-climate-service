@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.system.schemas import HealthStatus
 
+from .conftest import MountedClientFactory
+
 
 def test_root_returns_html_for_browser_request(client: TestClient) -> None:
     response = client.get("/", headers={"accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
@@ -82,6 +84,26 @@ def test_zarr_route_echoes_origin_for_browser_access(client: TestClient, monkeyp
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "https://inspect.geozarr.org"
+
+
+def test_zarr_browser_headers_survive_a_mount_prefix(
+    mounted_client_factory: MountedClientFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under `ROOT_PATH=/ocs` the request path is `/ocs/zarr/...`; matched against the literal
+    `/zarr`, the per-origin and private-network headers silently stop being added."""
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_dataset_zarr_store_file_or_404",
+        lambda _id, _path, range_header=None: {"zarr_format": 3, "node_type": "group", "attributes": {}},
+    )
+
+    response = mounted_client_factory("/ocs").get(
+        "/zarr/dataset-1/zarr.json", headers={"Origin": "https://inspect.geozarr.org"}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://inspect.geozarr.org"
+    assert response.headers["access-control-allow-private-network"] == "true"
 
 
 def test_zarr_route_does_not_allow_unconfigured_origin(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, TypeVar
@@ -29,6 +28,7 @@ from open_climate_service.shared.time import (
     period_type_to_iso_step,
     resolve_iso_period_step,
 )
+from open_climate_service.shared.urls import absolute_url, self_url
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
 
 CATALOG_TITLE = "Open Climate Service"
@@ -90,8 +90,8 @@ def _get_catalog_id() -> str:
 
 def build_catalog(request: Request) -> dict[str, object]:
     """Build the STAC catalog document."""
-    self_href = str(request.url)
-    catalog_href = _abs_url(request, "/stac/catalog.json")
+    self_href = self_url(request)
+    catalog_href = absolute_url(request, "/stac/catalog.json")
     links = [
         {"rel": "self", "href": self_href, "type": "application/json"},
         {"rel": "root", "href": catalog_href, "type": "application/json"},
@@ -100,7 +100,7 @@ def build_catalog(request: Request) -> dict[str, object]:
         links.append(
             {
                 "rel": "child",
-                "href": _abs_url(request, f"/stac/collections/{dataset_id}"),
+                "href": absolute_url(request, f"/stac/collections/{dataset_id}"),
                 "title": artifact.dataset_name,
                 "type": "application/json",
             }
@@ -122,10 +122,10 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=f"STAC collection '{dataset_id}' not found")
 
     source_dataset = registry_datasets.get_dataset(artifact.dataset_id) or {}
-    collection_href = _abs_url(request, f"/stac/collections/{dataset_id}")
-    catalog_href = _abs_url(request, "/stac/catalog.json")
-    dataset_href = _abs_url(request, f"/datasets/{dataset_id}")
-    zarr_href = _public_zarr_asset_href(request, dataset_id, artifact, source_dataset)
+    collection_href = absolute_url(request, f"/stac/collections/{dataset_id}")
+    catalog_href = absolute_url(request, "/stac/catalog.json")
+    dataset_href = absolute_url(request, f"/datasets/{dataset_id}")
+    zarr_href = absolute_url(request, f"/zarr/{dataset_id}")
 
     template = _build_collection_template(
         dataset_id=dataset_id,
@@ -172,7 +172,7 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
     }
     if artifact.format == ArtifactFormat.ICECHUNK:
         collection_payload["assets"]["icechunk"] = {
-            "href": _abs_url(request, f"/icechunk/{dataset_id}"),
+            "href": absolute_url(request, f"/icechunk/{dataset_id}"),
             "type": "application/octet-stream",
             "title": "Icechunk store (native SDK access)",
             "roles": ["data"],
@@ -555,22 +555,6 @@ def _artifact_store_path(artifact: ArtifactRecord) -> str:
         status_code=500,
         detail=f"Published artifact '{artifact.artifact_id}' has no readable storage path metadata",
     )
-
-
-def _public_zarr_asset_href(
-    request: Request,
-    dataset_id: str,
-    artifact: ArtifactRecord,
-    source_dataset: dict[str, Any],
-) -> str:
-    return _abs_url(request, f"/zarr/{dataset_id}")
-
-
-def _abs_url(request: Request, path: str) -> str:
-    base_url = os.getenv("CLIMATE_SERVICE_BASE_URL")
-    if base_url:
-        return f"{base_url.rstrip('/')}{path}"
-    return f"{str(request.base_url).rstrip('/')}{path}"
 
 
 def _override_time_step(collection: dict[str, Any], step: str | None, *, cadence: Cadence) -> None:
