@@ -23,7 +23,7 @@
   resolution: 5 km x 5 km
   source: CHIRPS v3
   source_url: https://www.chc.ucsb.edu/data/chirps3
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
@@ -68,7 +68,7 @@
   resolution: 5 km x 5 km
   source: CHIRPS v3 (monthly)
   source_url: https://www.chc.ucsb.edu/data/chirps3
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
@@ -95,7 +95,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
@@ -113,7 +113,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
@@ -136,7 +136,7 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
@@ -154,7 +154,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
@@ -172,7 +172,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
@@ -193,7 +193,7 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
-  license: CC0-1.0
+  license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps

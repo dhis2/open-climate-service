@@ -28,14 +28,22 @@ different from "yes" and must not be treated as it.
 
 ## SPDX where it exists, a name and URL where it does not
 
-The three built-in sources happen to cover every case:
+The three built-in sources cover both cases:
 
-    CHIRPS3     CC0-1.0                              SPDX, public domain
+    CHIRPS3     CC-BY-4.0                            SPDX
     WorldPop    CC-BY-4.0                            SPDX
     ERA5-Land   Licence to Use Copernicus Products   bespoke, no SPDX identifier
 
 Forcing the Copernicus licence into a near-miss SPDX identifier would be a false statement
 about what a user may do, so the field accepts a name plus a URL as well.
+
+CHIRPS3 is the reason to read the source page rather than its tone. CHC says CHIRPS3 "is in
+the public domain" and that it has "waived all copyright and related or neighboring rights",
+which reads as CC0 — but the same sentence names the instrument, "licensed under a Creative
+Commons Attribution 4.0 International License". Declaring the public-domain half would drop
+the attribution CC BY keeps, publishing the source as more permissive than its own terms:
+the failure this module exists to prevent, committed on the first dataset it declares. Where
+a page's wording and its named licence disagree, the named licence governs.
 """
 
 from __future__ import annotations

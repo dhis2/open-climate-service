@@ -132,6 +132,40 @@ def test_every_builtin_licence_parses(path: str) -> None:
         )
 
 
+# The obligations each source's own terms impose, read off the source's page and recorded here
+# rather than taken from the template — a test that reads the declaration it is checking
+# asserts nothing. CHIRPS3 is why this table exists: CHC's page says CHIRPS3 "is in the public
+# domain" and that CHC "waived all copyright and related or neighboring rights", wording that
+# reads as CC0, while the same sentence names the instrument as CC BY 4.0. The first
+# declaration shipped CC0-1.0, which drops attribution from CHIRPS3 and everything derived
+# from it. Nothing in the checks above catches that: CC0 parses, and every derived product
+# dropped attribution consistently.
+_REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
+    "chirps3.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
+    "era5_land.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
+}
+
+
+def test_every_shipped_template_has_reviewed_source_terms() -> None:
+    """Guards the guard: a new or renamed template file would otherwise go unchecked, which is
+    the point at which its licence has not been read by anyone."""
+    assert {pathlib.Path(path).name for path in _BUILTIN_TEMPLATES} == set(_REVIEWED_SOURCE_TERMS)
+
+
+@pytest.mark.parametrize("path", _BUILTIN_TEMPLATES, ids=lambda p: pathlib.Path(p).name)
+def test_no_builtin_declares_away_an_obligation_its_source_imposes(path: str) -> None:
+    required = _REVIEWED_SOURCE_TERMS[pathlib.Path(path).name]
+    for template in yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8")):
+        if not isinstance(template, dict) or not template.get("id"):
+            continue
+        obligations = parse_licence(template.get("license")).obligations
+        assert required <= obligations, (
+            f"{template['id']} declares {template.get('license')!r}, dropping "
+            f"{sorted(required - obligations)} required by its source"
+        )
+
+
 def _builtin_licences() -> dict:
     licences = {}
     for path in _BUILTIN_TEMPLATES:
