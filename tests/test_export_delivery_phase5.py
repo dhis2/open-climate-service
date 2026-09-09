@@ -64,9 +64,6 @@ class FakeContext:
     def load_checkpoint(self: Any, key: str) -> dict[str, Any] | None:
         return self.checkpoints.get(key)
 
-    def delete_checkpoint(self: Any, key: str) -> None:
-        self.checkpoints.pop(key, None)
-
 
 def _values(count: int) -> list[dict[str, Any]]:
     return [
@@ -278,27 +275,35 @@ def test_send_records_unknown_on_transport_timeout(monkeypatch: pytest.MonkeyPat
     assert report.submitted == 3
 
 
-def test_send_raises_and_clears_checkpoint_on_connect_error(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("error_type", ["connect_error", "connect_timeout"])
+def test_send_reports_pre_submission_connection_failure(monkeypatch: pytest.MonkeyPatch, error_type: str) -> None:
     import httpx
 
     from open_climate_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000)
-    values = _values(3)
+    values = _values(1001)
     client = FakeClient()
 
     def post(path: str, json: Any, params: Any) -> FakeResponse:
+        if len(client.posts) == 1:
+            return FakeResponse(200, {"status": "SUCCESS", "importCount": {"imported": len(json["dataValues"])}})
+        if error_type == "connect_timeout":
+            raise httpx.ConnectTimeout("connection timed out")
         raise httpx.ConnectError("connection refused")
 
     client.post_handler = post
     monkeypatch.setattr(dhis2_module, "get_connection", lambda target: client)
 
     context = FakeContext()
-    with pytest.raises(Exception, match="connection refused"):
-        plugin.send(_payload(values), "hmis", context=context)
+    report = plugin.send(_payload(values), "hmis", context=context)
 
-    # Nothing reached DHIS2, so the intent checkpoint must be cleared for a retry.
-    assert context.checkpoints.get("chunk:0") is None
+    assert report.outcome == ExportOutcome.REJECTED
+    assert report.chunks == 2
+    assert report.submitted == 1000
+    assert report.imported == 1000
+    assert "Connection failed before submission" in str(report.message)
+    assert context.checkpoints["chunk:1"]["report"]["outcome"] == ExportOutcome.REJECTED
 
 
 def test_send_keeps_unknown_checkpoint_on_ambiguous_requests_connection_error(

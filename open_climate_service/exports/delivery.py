@@ -70,20 +70,6 @@ class JobDeliveryContext:
             raise ValueError("Invalid delivery checkpoints; refusing to resend")
         return checkpoints.get(key)
 
-    def delete_checkpoint(self, key: str) -> None:
-        """Remove one chunk checkpoint so the chunk can be retried."""
-        if self._load_cursor is None or self._save_cursor is None:
-            return
-        cursor = self._load_cursor()
-        if not isinstance(cursor, dict):
-            return
-        checkpoints = cursor.get("delivery_checkpoints")
-        if not isinstance(checkpoints, dict) or key not in checkpoints:
-            return
-        checkpoints = dict(checkpoints)
-        checkpoints.pop(key, None)
-        self._save_cursor({**cursor, "delivery_checkpoints": checkpoints})
-
 
 def deliver_named_export(
     export_id: str,

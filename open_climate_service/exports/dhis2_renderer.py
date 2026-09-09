@@ -30,53 +30,9 @@ def _is_retryable_transport_error(exc: BaseException) -> bool:
     the chunk can be safely retried. Read/write timeouts happen after the request
     may have reached the server and stay ``unknown``.
     """
-    import importlib
-    from types import ModuleType
+    import httpx
 
-    httpx: ModuleType | None = None
-    try:
-        httpx = importlib.import_module("httpx")
-    except ImportError:
-        pass
-    if httpx is not None and isinstance(exc, (httpx.ConnectError, httpx.PoolTimeout, httpx.UnsupportedProtocol)):
-        return True
-    requests: ModuleType | None = None
-    try:
-        requests = importlib.import_module("requests")
-    except ImportError:
-        pass
-    if requests is not None:
-        # ``ConnectionError`` is intentionally too broad here: requests also
-        # uses it for response-side failures such as a connection reset after a
-        # POST may have been processed. Only its connect-timeout subtype, or a
-        # urllib3 exception explicitly identifying connection establishment,
-        # is safe to replay.
-        if isinstance(exc, requests.exceptions.ConnectTimeout):
-            return True
-        pre_send_types: tuple[Any, ...]
-        try:
-            urllib3_exceptions = importlib.import_module("urllib3.exceptions")
-            pre_send_types = (
-                urllib3_exceptions.NewConnectionError,
-                urllib3_exceptions.NameResolutionError,
-            )
-        except (ImportError, AttributeError):
-            pre_send_types = ()
-        pending: list[BaseException] = [exc]
-        seen: set[int] = set()
-        while pending:
-            candidate = pending.pop()
-            if id(candidate) in seen:
-                continue
-            seen.add(id(candidate))
-            if pre_send_types and isinstance(candidate, pre_send_types):
-                return True
-            pending.extend(item for item in candidate.args if isinstance(item, BaseException))
-            if candidate.__cause__ is not None:
-                pending.append(candidate.__cause__)
-            if candidate.__context__ is not None:
-                pending.append(candidate.__context__)
-    return False
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol))
 
 
 class Dhis2ExportPlugin(BaseExportPlugin):
@@ -361,6 +317,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
 
         reports: list[ExportReport] = []
         cancelled_early = False
+        terminal_message: str | None = None
         with closing(get_connection(target)) as client:
             for index, chunk_values in enumerate(chunks):
                 if context is not None and context.is_cancel_requested():
@@ -381,13 +338,15 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 # A rejected chunk is a hard stop: later chunks would fail for the
                 # same reason, and it must remain visible in the merged report.
                 if chunk_report.outcome == ExportOutcome.REJECTED:
+                    terminal_message = chunk_report.message
                     break
 
         finished_at = utc_now().isoformat()
+        message: str | None
         if cancelled_early:
             message = f"Cancelled after {len(reports)} of {len(chunks)} chunks"
         else:
-            message = None
+            message = terminal_message
         return merge_chunk_reports(
             reports,
             plugin_id=self.id,
@@ -465,11 +424,22 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 context=context,
                 index=index,
             )
-        except _RetryableTransportError:
-            # Nothing reached DHIS2, so drop the intent checkpoint to allow a
-            # retry, then propagate.
-            self._delete_chunk_checkpoint(context, index)
-            raise
+        except _RetryableTransportError as exc:
+            # Nothing reached DHIS2. Record the failed attempt so successful
+            # preceding chunks remain visible in the merged delivery report.
+            from open_climate_service.shared.time import utc_now
+
+            report = ExportReport(
+                plugin_id=self.id,
+                connection_id=target,
+                dry_run=dry_run,
+                outcome=ExportOutcome.REJECTED,
+                message=f"Connection failed before submission: {exc}",
+                payload_sha256=digest,
+                submitted=0,
+                created_at=created_at,
+                finished_at=utc_now().isoformat(),
+            )
         self._save_chunk_checkpoint(context, index, digest, report)
         return report
 
@@ -531,11 +501,6 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     @staticmethod
     def _chunk_checkpoint_key(index: int) -> str:
         return f"chunk:{index}"
-
-    def _delete_chunk_checkpoint(self, context: DeliveryContext | None, index: int) -> None:
-        """Remove a chunk checkpoint so it can be retried after a transport error."""
-        if context is not None:
-            context.delete_checkpoint(self._chunk_checkpoint_key(index))
 
     def _submit_chunk(
         self,

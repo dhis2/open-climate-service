@@ -158,6 +158,27 @@ def test_protected_config_block_rejects_inline_interpolation(
         config.get_config()
 
 
+def test_protected_config_block_rejects_interpolation_after_column_zero_comment(
+    connection_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PLUGIN", "dhis2")
+    connection_file.write_text(
+        "exports:\n  - id: rainfall\n# operator note\n    plugin: ${PLUGIN}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exports does not support environment interpolation"):
+        config.get_config()
+
+
+@pytest.mark.parametrize("indicator", ["*connections", "&connections"])
+def test_protected_config_block_rejects_aliases_and_anchors(connection_file: Path, indicator: str) -> None:
+    connection_file.write_text(f"dhis2_connections: {indicator}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dhis2_connections does not support environment interpolation"):
+        config.get_config()
+
+
 def test_unknown_connection(connection_file: Path):
     with pytest.raises(ValueError, match="Unknown DHIS2 connection"):
         get_connection("unknown")

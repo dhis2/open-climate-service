@@ -89,14 +89,18 @@ def _block_uses_interpolation(text: str, key: str) -> bool:
         if not re.match(rf"^{re.escape(key)}\s*:", lines[index]):
             index += 1
             continue
-        # The value may be written on the key line itself, for example
-        # ``exports: ${EXPORTS}`` or as an inline YAML collection.
-        if "${" in lines[index]:
+        # The value may be written on the key line itself. Aliases and anchors
+        # make the protected value depend on YAML outside this block, where the
+        # literal interpolation check cannot safely follow it.
+        value = lines[index].split(":", 1)[1].strip()
+        if "${" in value or value.startswith(("*", "&")):
             return True
         index += 1
         while index < len(lines):
             candidate = lines[index]
-            if candidate and candidate[0] not in (" ", "\t"):
+            # Column-zero comments remain part of the surrounding YAML block.
+            # Stop only at the next ordinary top-level mapping key.
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:", candidate):
                 break
             if "${" in candidate:
                 return True
