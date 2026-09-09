@@ -120,6 +120,28 @@ def representative_slice(arr: Any, *, now: datetime | None = None) -> Any:
     return arr
 
 
+def decimate(arr: Any, *, long_side: int) -> Any:
+    """Stride *arr*'s grid down so its longest side is no more than one stride above *long_side*.
+
+    A thumbnail is drawn at *long_side* pixels whatever the store's resolution, so every source
+    cell beyond one per output pixel is read, held in memory and then thrown away by the
+    render's nearest-neighbour sampling. Reading them is not free: the accessor opens the
+    store's *finest* pyramid level, so a 0.05-degree global field arrives as 7200x3600 — 200 MB
+    of float64 materialised to produce an image 512 px across, on a machine that is otherwise
+    in the middle of finishing a sync. Striding first keeps what is read proportional to what
+    is drawn.
+
+    One stride for both axes, so the aspect ratio survives, and an integer one, so the cells
+    that are kept are real cells: this is the same nearest-neighbour decimation the render
+    would do anyway, moved to before the values are pulled rather than after.
+    """
+    longest = max(arr.sizes.values(), default=0)
+    stride = int(longest // long_side)
+    if stride <= 1:
+        return arr
+    return arr.isel({str(dim): slice(None, None, stride) for dim in arr.dims})
+
+
 def render_png(
     arr: Any,
     path: str | Path,
@@ -285,12 +307,22 @@ def write_dataset_thumbnail(
     PNGs during a historical backfill and keep the last. Rendering here also means rendering
     from the finished store rather than one still being appended to.
 
-    **Never raises.** A store that cannot be previewed publishes without a thumbnail; a
+    **Never raises.** A store that cannot be previewed publishes without a *new* thumbnail; a
     dataset is not less ingested for being unrecognisable, and the alternative is a render
     bug taking down an ingest that otherwise succeeded. The failure is logged with a
     traceback so it is diagnosable rather than silent.
+
+    Nothing here removes an existing thumbnail. A run that fails to render, or whose
+    representative slice turns out to be entirely missing, leaves the previous image in place
+    rather than deleting it, so the published thumbnail can be a sync run or more stale. That
+    is deliberate: an all-missing slice is nearly always a transient gap at the step nearest
+    now, not a store that has become blank, and a slightly old picture still does the job the
+    image is there for — recognising the layer, and catching a flipped grid or a wrong extent.
+    Deleting it would trade a stale thumbnail for none at all.
     """
     import logging
+    import os
+    from contextlib import closing
 
     logger = logging.getLogger(__name__)
     dataset_id = str(dataset.get("id") or "")
@@ -299,28 +331,49 @@ def write_dataset_thumbnail(
     try:
         from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
 
-        ds = open_icechunk_dataset(store_path)
-        variable = str(dataset.get("variable") or "")
-        if variable not in ds.data_vars:
-            variable = str(next(iter(ds.data_vars), ""))
-        if not variable:
-            logger.warning("No data variable to render a thumbnail from for '%s'", dataset_id)
-            return None
+        # Closed as soon as the pixels are in hand, so a sync run does not leave Icechunk and
+        # Zarr backend resources open behind every dataset it touches.
+        with closing(open_icechunk_dataset(store_path)) as ds:
+            variable = str(dataset.get("variable") or "")
+            if variable not in ds.data_vars:
+                variable = str(next(iter(ds.data_vars), ""))
+            if not variable:
+                logger.warning("No data variable to render a thumbnail from for '%s'", dataset_id)
+                return None
+            # Strided before it is read, and read before the store closes: `.load()` pulls the
+            # decimated slice into memory so nothing downstream reaches a closed store.
+            chosen = decimate(representative_slice(ds[variable], now=now), long_side=THUMBNAIL_LONG_SIDE_PIXELS).load()
 
         display = dataset.get("display")
         display = display if isinstance(display, dict) else {}
-        chosen = representative_slice(ds[variable], now=now)
         clim = stretch_range(chosen.values, midpoint=declared_midpoint(display.get("range")))
         if clim is None:
             logger.warning("Every value in the slice chosen for '%s' is missing; no thumbnail", dataset_id)
             return None
-        return render_png(
-            chosen,
-            thumbnail_path(dataset_id),
-            colormap=display.get("colormap"),
-            clim=clim,
-            long_side=THUMBNAIL_LONG_SIDE_PIXELS,
-        )
+
+        # Rendered to a sibling and moved into place, never written over the published file.
+        # That path is served by HTTP, so writing in place would let a request read a
+        # half-written PNG, and a savefig that failed part way would truncate a previously
+        # good thumbnail — the opposite of the leave-the-old-one-alone behaviour above.
+        # `os.replace` within one directory is atomic, so a reader sees the old file or the
+        # new one and never something in between.
+        published = thumbnail_path(dataset_id)
+        published.parent.mkdir(parents=True, exist_ok=True)
+        # `.png` last: matplotlib picks the output format from the extension, so a plain
+        # `.tmp` suffix would be rejected rather than written.
+        pending = published.with_name(f".{published.stem}.{os.getpid()}.tmp.png")
+        try:
+            render_png(
+                chosen,
+                pending,
+                colormap=display.get("colormap"),
+                clim=clim,
+                long_side=THUMBNAIL_LONG_SIDE_PIXELS,
+            )
+            os.replace(pending, published)
+        finally:
+            pending.unlink(missing_ok=True)
+        return published
     except Exception:
         logger.warning("Could not render a thumbnail for '%s'; publishing without one", dataset_id, exc_info=True)
         return None

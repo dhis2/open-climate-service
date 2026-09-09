@@ -29,6 +29,7 @@ from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.shared import thumbnails
 from open_climate_service.shared.thumbnails import (
     THUMBNAIL_LONG_SIDE_PIXELS,
+    decimate,
     declared_midpoint,
     render_png,
     representative_slice,
@@ -228,6 +229,85 @@ def test_an_enlarged_thumbnail_keeps_its_cell_boundaries(tmp_path: Path) -> None
         assert np.allclose(quadrant, quadrant[0, 0]), "an enlarged cell was interpolated"
 
 
+# -- how much is read ---------------------------------------------------------------------
+
+
+def test_a_slice_far_larger_than_the_thumbnail_is_strided_down(tmp_path: Path) -> None:
+    """The accessor opens the *finest* pyramid level, so the slice arrives at full resolution
+    and every cell of it would be materialised for an image 512 px across. Striding bounds
+    that; one shared integer stride keeps the aspect ratio and keeps the kept cells real."""
+    arr = xr.DataArray(
+        np.zeros((1200, 800), dtype="float32"),
+        dims=("y", "x"),
+        coords={"y": np.linspace(10.0, 0.0, 1200), "x": np.linspace(0.0, 8.0, 800)},
+    )
+
+    strided = decimate(arr, long_side=THUMBNAIL_LONG_SIDE_PIXELS)
+
+    # 1200 // 512 is 2, so both axes take every second cell.
+    assert strided.sizes == {"y": 600, "x": 400}
+    assert np.array_equal(strided["y"].values, arr["y"].values[::2])
+
+
+def test_a_slice_no_larger_than_the_thumbnail_is_left_alone(tmp_path: Path) -> None:
+    """Striding a store that is already at or below the target would throw away detail the
+    render can still show, and an upscaled store has none to spare."""
+    arr = xr.DataArray(np.zeros((16, 32), dtype="float32"), dims=("y", "x"))
+
+    assert decimate(arr, long_side=THUMBNAIL_LONG_SIDE_PIXELS) is arr
+
+
+def test_a_thumbnail_never_materialises_more_than_it_draws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The point of the striding, through the entry point rather than at the helper: a sync
+    finishing a large store should not hold the whole finest-level slice to make an icon."""
+    shapes: list[tuple[int, ...]] = []
+    real_render = thumbnails.render_png
+
+    def recording_render(arr: Any, path: Any, **kwargs: Any) -> Any:
+        shapes.append(tuple(arr.shape))
+        return real_render(arr, path, **kwargs)
+
+    monkeypatch.setattr(thumbnails, "render_png", recording_render)
+    big = xr.Dataset(
+        {"precip": (("y", "x"), np.random.default_rng(0).random((1200, 800), dtype="float32"))},
+        coords={"y": np.linspace(10.0, 0.0, 1200), "x": np.linspace(0.0, 8.0, 800)},
+    )
+
+    write_dataset_thumbnail(_store(tmp_path, big, t_dim=None), DATASET, now=GENERATED_AT)
+
+    assert shapes == [(600, 400)]
+
+
+def test_the_store_is_closed_once_the_pixels_are_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sync run touches every dataset it syncs; leaving each one's Icechunk and Zarr backend
+    resources open behind the thumbnail is a leak that only shows up at scale."""
+    from open_climate_service.data_accessor.services import accessor
+
+    closed: list[bool] = []
+    real_open = accessor.open_icechunk_dataset
+
+    class Tracked:
+        """A stand-in, because an xarray Dataset uses __slots__ and cannot be patched in place."""
+
+        def __init__(self, ds: Any) -> None:
+            self._ds = ds
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._ds, name)
+
+        def __getitem__(self, key: Any) -> Any:
+            return self._ds[key]
+
+        def close(self) -> None:
+            closed.append(True)
+            self._ds.close()
+
+    monkeypatch.setattr(accessor, "open_icechunk_dataset", lambda path: Tracked(real_open(path)))
+
+    assert write_dataset_thumbnail(_store(tmp_path, _daily_cube(2)), DATASET, now=GENERATED_AT) is not None
+    assert closed == [True]
+
+
 # -- failure is not an ingest failure -----------------------------------------------------
 
 
@@ -247,6 +327,45 @@ def test_a_failing_render_does_not_fail_the_ingest(tmp_path: Path, monkeypatch: 
 
 def test_an_unreadable_store_does_not_fail_the_ingest(tmp_path: Path) -> None:
     assert write_dataset_thumbnail(tmp_path / "not-a-store.icechunk", DATASET) is None
+
+
+def test_a_failing_render_leaves_the_published_thumbnail_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The published file is served by HTTP, so it is never the file being written. Rendering
+    over it would let a request read a half-written PNG and let a savefig that failed part way
+    truncate a thumbnail that was fine — which is worse than the stale one it replaced."""
+    store = _store(tmp_path, _daily_cube(2))
+    published = write_dataset_thumbnail(store, DATASET, now=GENERATED_AT)
+    assert published is not None
+    good = published.read_bytes()
+
+    def explode(arr: Any, path: Any, **kwargs: Any) -> Any:
+        Path(path).write_bytes(b"\x89PNG truncated")  # a savefig that got part way
+        raise RuntimeError("no renderer today")
+
+    monkeypatch.setattr(thumbnails, "render_png", explode)
+
+    assert write_dataset_thumbnail(store, DATASET, now=GENERATED_AT) is None
+    assert published.read_bytes() == good
+    assert list(published.parent.iterdir()) == [published], "a half-written render was left behind"
+
+
+def test_an_all_missing_slice_keeps_the_previous_thumbnail(tmp_path: Path) -> None:
+    """Deliberate, and the counterpart to the test above. An all-missing representative slice
+    is nearly always a transient gap at the step nearest now, not a store that has gone blank,
+    so the old picture still identifies the layer. Deleting it would trade stale for nothing."""
+    published = write_dataset_thumbnail(_store(tmp_path, _daily_cube(2)), DATASET, now=GENERATED_AT)
+    assert published is not None
+    good = published.read_bytes()
+
+    empty = xr.Dataset(
+        {"precip": (("y", "x"), np.full((2, 2), np.nan, dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+
+    assert write_dataset_thumbnail(_store(tmp_path / "blank", empty, t_dim=None), DATASET) is None
+    assert published.read_bytes() == good
 
 
 # -- colormaps ----------------------------------------------------------------------------
