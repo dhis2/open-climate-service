@@ -52,6 +52,7 @@ from open_climate_service.ingestions.schemas import (
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
+from open_climate_service.shared.licences import DatasetLicence
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
     datetime_to_period_string,
@@ -1739,6 +1740,8 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         resolution=_as_optional_str(source_dataset.get("resolution")),
         source=_as_optional_str(source_dataset.get("source")),
         source_url=_as_optional_str(source_dataset.get("source_url")),
+        license=_licence_for(source_dataset).stac_license,
+        license_url=_licence_for(source_dataset).url,
         extent=latest.coverage,
         last_updated=latest.created_at,
         links=_dataset_links(dataset_id, latest),
@@ -1790,6 +1793,13 @@ def _dataset_links(dataset_id: str, latest: ArtifactRecord) -> list[DatasetAcces
 
 def _as_optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _licence_for(source_dataset: dict[str, Any]) -> "DatasetLicence":
+    """The dataset's parsed licence (CLIM-946), never None — undeclared resolves to `other`."""
+    from open_climate_service.shared.licences import parse_licence
+
+    return parse_licence(source_dataset.get("license"))
 
 
 def _as_optional_text(value: object) -> str | None:

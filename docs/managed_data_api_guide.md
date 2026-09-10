@@ -271,6 +271,12 @@ Example response:
 What this means:
 
 - `/datasets` is the public native catalog of managed datasets
+- `license` is an SPDX identifier, or `other` for a licence that has none — the Copernicus
+  licence, for instance. It is never absent: a dataset whose template declares no licence
+  reports `other` rather than something that reads as permissive. `license_url` points at the
+  licence text where one is known, and the STAC collection carries the same information as a
+  `rel: license` link plus `providers` for attribution.
+
 - `description` carries the dataset template's own prose, and is `null` when the template
   declares none. It is where a dataset states what its values actually mean, so it is worth
   reading before using one: `chirps3_precipitation_monthly` is a mean daily rate rather than a

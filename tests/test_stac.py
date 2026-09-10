@@ -1038,6 +1038,95 @@ def test_cf_extension_is_not_declared_when_no_cf_attrs_are_present(
     assert stac_services.CF_EXTENSION not in payload["stac_extensions"]
 
 
+# -- licence, providers and the licence link (CLIM-946) ------------------------------------
+
+
+def _stub_with_template(monkeypatch: pytest.MonkeyPatch, artifact: ArtifactRecord, template: dict) -> None:
+    """As `_stub_collection_build`, but with a template the test controls."""
+    monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=[artifact]))
+    monkeypatch.setattr(stac_services.registry_datasets, "get_dataset", lambda _: template)
+    monkeypatch.setattr(stac_services, "_build_collection_with_xstac", lambda **_: _minimal_xstac_payload())
+    monkeypatch.setattr(stac_services, "_zarr_asset_metadata", lambda _: {})
+    monkeypatch.setattr(stac_services, "_zarr_open_kwargs", lambda _: {"consolidated": True})
+
+
+def test_collection_publishes_an_spdx_licence(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_with_template(monkeypatch, _artifact(artifact_id="lic1"), {"period_type": "daily", "license": "CC-BY-4.0"})
+    payload = client.get("/stac/collections/chirps3_precipitation_daily").json()
+    assert payload["license"] == "CC-BY-4.0"
+
+
+def test_collection_publishes_other_and_a_licence_link_for_a_bespoke_licence(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Copernicus case. `license` can only say `other`, so without the link a client learns
+    nothing at all about the terms."""
+    _stub_with_template(
+        monkeypatch,
+        _artifact(artifact_id="lic2"),
+        {
+            "period_type": "daily",
+            "license": {
+                "name": "Licence to Use Copernicus Products",
+                "url": "https://apps.ecmwf.int/datasets/licences/copernicus/",
+            },
+        },
+    )
+    payload = client.get("/stac/collections/chirps3_precipitation_daily").json()
+    assert payload["license"] == "other"
+    links = [link for link in payload["links"] if link.get("rel") == "license"]
+    assert len(links) == 1
+    assert links[0]["href"] == "https://apps.ecmwf.int/datasets/licences/copernicus/"
+    assert links[0]["title"] == "Licence to Use Copernicus Products"
+
+
+def test_an_undeclared_licence_publishes_other_and_no_link(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never `various`, which is not a STAC value and reads as "nothing worth mentioning"."""
+    _stub_with_template(monkeypatch, _artifact(artifact_id="lic3"), {"period_type": "daily"})
+    payload = client.get("/stac/collections/chirps3_precipitation_daily").json()
+    assert payload["license"] == "other"
+    assert not [link for link in payload["links"] if link.get("rel") == "license"]
+
+
+def test_an_spdx_licence_needs_no_link(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An SPDX identifier is self-describing; a link would be noise."""
+    _stub_with_template(monkeypatch, _artifact(artifact_id="lic4"), {"period_type": "daily", "license": "CC0-1.0"})
+    payload = client.get("/stac/collections/chirps3_precipitation_daily").json()
+    assert not [link for link in payload["links"] if link.get("rel") == "license"]
+
+
+def test_providers_are_published(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attribution is a licence condition under CC-BY, not a courtesy."""
+    _stub_with_template(
+        monkeypatch,
+        _artifact(artifact_id="lic5"),
+        {
+            "period_type": "daily",
+            "license": "CC-BY-4.0",
+            "providers": [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}],
+        },
+    )
+    payload = client.get("/stac/collections/chirps3_precipitation_daily").json()
+    assert payload["providers"] == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+
+
+def test_malformed_providers_are_dropped_rather_than_published(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`name` is the only field STAC requires, so an entry without one is not a provider."""
+    _stub_with_template(
+        monkeypatch,
+        _artifact(artifact_id="lic6"),
+        {
+            "period_type": "daily",
+            "license": "CC-BY-4.0",
+            "providers": ["not a mapping", {"url": "https://x"}, {"name": "  "}, {"name": "Real"}],
+        },
+    )
+    payload = client.get("/stac/collections/chirps3_precipitation_daily").json()
+    assert payload["providers"] == [{"name": "Real"}]
+
+
 # --- reference_system (CLIM-1004) -------------------------------------------------------
 #
 # The defect was a hardcoded `reference_system=4326` at the xstac call site, so a projected

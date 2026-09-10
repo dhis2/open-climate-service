@@ -225,6 +225,8 @@
             <dd id="meta-source">—</dd>
             <dt>Units</dt>
             <dd id="meta-units">—</dd>
+            <dt>Licence</dt>
+            <dd id="meta-licence">—</dd>
           </dl>
           <p id="meta-description" class="meta-description hidden"></p>
 
@@ -436,6 +438,7 @@
       const metaSource = document.getElementById("meta-source");
       const metaUnits = document.getElementById("meta-units");
       const metaDescription = document.getElementById("meta-description");
+      const metaLicence = document.getElementById("meta-licence");
       const legendEl = document.getElementById("legend");
       const legendBar = document.getElementById("legend-bar");
       const legendMin = document.getElementById("legend-min");
@@ -674,6 +677,24 @@
         // fallback is built from, so a real description that happens to open with those words
         // ("Published GeoZarr dataset for X - use only within one country") is kept rather
         // than mistaken for the generated one.
+        // A user who can see a layer should be able to see what they may do with it
+        // (CLIM-946). `other` is what an undeclared licence publishes, so say "not declared"
+        // rather than showing a word that reads like the name of a licence.
+        const licenceLink = (collection.links ?? []).find((l) => l.rel === "license");
+        const licence = collection.license;
+        const licenceLabel =
+          !licence || licence === "other" ? (licenceLink?.title ?? "not declared") : licence;
+        if (licenceLink?.href) {
+          const anchor = document.createElement("a");
+          anchor.href = licenceLink.href;
+          anchor.target = "_blank";
+          anchor.rel = "noopener noreferrer";
+          anchor.textContent = licenceLabel;
+          metaLicence.replaceChildren(anchor);
+        } else {
+          metaLicence.textContent = licenceLabel;
+        }
+
         const description = collection.description ?? "";
         const generated = description === `Published GeoZarr dataset for ${collection.title}`;
         metaDescription.textContent = description;

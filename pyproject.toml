@@ -68,6 +68,10 @@ xarray = [
 # Full server stack — required to run your own Open Climate Service instance.
 server = [
     "fastapi>=0.100.0",
+    # The SPDX register, for validating and canonicalising a template's declared `license`.
+    # Vendoring the identifier list instead would avoid the dependency but go stale silently;
+    # this package is the one SPDX tooling in Python agrees on, and it is pure Python.
+    "license-expression>=30.4",
     "jinja2>=3.1",
     "starlette>=0.27.0",
     "uvicorn>=0.41.0",
@@ -193,6 +197,12 @@ mypy_path = ["."]
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+# Ships no py.typed marker, so mypy reports `import-untyped` rather than a missing stub;
+# following its source gives real types instead of silencing the import.
+[[tool.mypy.overrides]]
+module = ["license_expression"]
+follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 # Optional, supplied by deployments/plugins; not yet published on PyPI.

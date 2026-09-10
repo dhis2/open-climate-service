@@ -23,6 +23,10 @@
   resolution: 5 km x 5 km
   source: CHIRPS v3
   source_url: https://www.chc.ucsb.edu/data/chirps3
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -64,6 +68,10 @@
   resolution: 5 km x 5 km
   source: CHIRPS v3 (monthly)
   source_url: https://www.chc.ucsb.edu/data/chirps3
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -87,6 +95,10 @@
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -101,6 +113,10 @@
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -120,6 +136,10 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
     range: [-100.0, 100.0]
@@ -134,6 +154,10 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
     range: [-20.0, 20.0]
@@ -148,6 +172,10 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
     # Tighter than the daily ±20: a monthly mean rate averages the extremes away, so a measured
@@ -165,6 +193,10 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
     range: [-100.0, 100.0]

@@ -343,8 +343,11 @@ def test_unrecognised_units_warn_once_per_template(monkeypatch: pytest.MonkeyPat
     for _ in range(3):
         datasets._validate_dataset_template(template, source="counts.yaml")
 
-    assert len(warnings) == 1
-    assert "not a recognised CF/udunits unit" in warnings[0]
+    # Filtered to the units warning: this template also declares no licence, which warns once
+    # too (CLIM-946). Counting every warning would make this test fail whenever another
+    # validation is added, which is not what it is checking.
+    units_warnings = [w for w in warnings if "not a recognised CF/udunits unit" in w]
+    assert len(units_warnings) == 1
 
 
 def test_missing_plugins_dir_serves_built_ins_instead_of_raising(
@@ -439,4 +442,10 @@ def test_concurrent_validation_warns_once(monkeypatch: pytest.MonkeyPatch) -> No
         for f in [pool.submit(datasets._validate_dataset_template, template, source="counts.yaml") for _ in range(8)]:
             f.result()
 
-    assert len(warnings) == 1
+    # Per distinct warning, not in total: this template also warns about its missing licence
+    # (CLIM-946). The property under test is that eight concurrent validations each produce one
+    # warning rather than eight, which is about locking, not about how many checks exist.
+    units_warnings = [w for w in warnings if "not a recognised CF/udunits unit" in w]
+    licence_warnings = [w for w in warnings if "declares no 'license'" in w]
+    assert len(units_warnings) == 1
+    assert len(licence_warnings) == 1
