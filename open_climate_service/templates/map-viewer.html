@@ -275,7 +275,7 @@
       // (carbonplan/zarr-layer#88). CLIM-1006 (CHIRPS3 streaks on the Rwanda instance) was
       // reported against 0.6.1, which never read these attributes, so it is a separate
       // fault and still open.
-      import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.9.0";
+      import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.9.1";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
 
       // Suffix _r means the scale is reversed (matplotlib convention).
@@ -293,15 +293,18 @@
 
       // A true-colour render, or null for the ordinary colormapped case.
       //
-      // The bands are selected by *index*, not by name. zarr-layer resolves a named value
-      // against the dimension's coordinate array, and when it cannot read that array it
-      // silently falls back to index 0 for every non-numeric value — so all three samplers
-      // read the same band and the image renders grey rather than failing. A band axis is
-      // exactly the case where that bites: its coordinate is a Zarr v3 fixed-length UTF-32
-      // string array, which has no v3 specification and which the JS reader does not load.
+      // The bands are selected by *index*, not by name, and no version of the library changes
+      // that: the band coordinate is a Zarr v3 fixed-length UTF-32 string array, which has no
+      // v3 specification and which the JS reader does not load, so a band *name* has nothing
+      // to resolve against. What changed is the failure. 0.6.1 resolved every unreadable name
+      // to index 0, so all three samplers read the same band and the composite rendered grey —
+      // a plausible image of the wrong data. From 0.9.1 (carbonplan/zarr-layer#87) it refuses,
+      // and its message names the remedy this already uses: "the coordinate array could not be
+      // read ... Use { selected: <index>, type: 'index' } to select by array index instead."
       //
-      // The collection already publishes the axis values, so the mapping is resolved here
-      // and passed as `{selected: [...], type: "index"}`, which skips the lookup entirely.
+      // The collection already publishes the axis values, so the mapping is resolved here and
+      // passed as `{selected: [...], type: "index"}` — the form the library documents for a
+      // multi-band selector, and the one whose shader names `bandIdentifier` mirrors.
       function readRgbRender(renders, dimensions) {
         const bands = renders.bands;
         // No `bands` at all is the ordinary colormapped case, not a failure — return null
@@ -348,12 +351,13 @@
         return /^[0-9]/.test(safe) ? `_${safe}` : safe;
       }
 
-      // The identifier zarr-layer declares for one selected band. A named value keeps its
-      // own name; a numeric one — which is what index selection sends — is namespaced by the
-      // dimension, so band 0 of `band` becomes `band_0`. The shader has to match that
-      // exactly, or it fails to compile with "undeclared identifier".
-      function bandIdentifier(dimension, value) {
-        return glslName(typeof value === "string" ? value : `${dimension}_${value}`);
+      // The identifier zarr-layer declares for one selected band. An index selector is
+      // namespaced by its dimension, so band 0 of `band` becomes `band_0`, and the shader has
+      // to match that exactly or it fails to compile with "undeclared identifier". Documented
+      // upstream from 0.9.1 (carbonplan/zarr-layer#87) rather than read off the implementation.
+      // Only indices arrive here — `layerSelector` sends the band axis nothing else.
+      function bandIdentifier(dimension, index) {
+        return glslName(`${dimension}_${index}`);
       }
 
       function rgbFrag(names, rescale) {
@@ -383,10 +387,14 @@
       // from escaping the range the controls were built for. It is not a substitute for the
       // collection publishing `values` on a sparse axis (CLIM-950) — without that the count
       // itself is wrong, and clamping to a wrong count still misses.
+      // Every entry is a selection object rather than a raw index: `selector` holds what
+      // `indexSelection` produced (CLIM-1003), so the clamp reads `.selected` and re-wraps.
+      // Clamping the object itself yields NaN, and a NaN selector reaches the layer silently.
       function layerSelector() {
         const pinned = {};
         for (const d of dimStates) {
-          pinned[d.key] = Math.min(Math.max(0, selector[d.key] ?? 0), Math.max(0, d.count - 1));
+          const index = selector[d.key]?.selected ?? 0;
+          pinned[d.key] = indexSelection(Math.min(Math.max(0, index), Math.max(0, d.count - 1)));
         }
         return rgb ? { ...pinned, [rgb.dimension]: { selected: rgb.indices, type: "index" } } : pinned;
       }
@@ -476,10 +484,11 @@
       // layer load, then fell through to treating a numeric value as the index. That fallback
       // happened to be what we meant, so this worked by accident (CLIM-1003).
       //
-      // Saying it outright drops the wasted coordinate read and the logged failure, and stops
-      // depending on a fallback the library is actively changing: carbonplan/zarr-layer#87
-      // tightens the same resolver, rejecting unresolvable *string* selectors while keeping
-      // numeric ones. Every write to `selector` goes through here so they cannot drift apart.
+      // Saying it outright drops the wasted coordinate read and the logged failure, and no
+      // longer depends on a fallback that has since been removed: carbonplan/zarr-layer#87,
+      // released in 0.9.1, rejects an unresolvable *string* selector instead of silently
+      // returning index 0, and keeps the direct-index behaviour this relies on. Every write to
+      // `selector` goes through here so they cannot drift apart.
       function indexSelection(index) {
         return { selected: index, type: "index" };
       }
