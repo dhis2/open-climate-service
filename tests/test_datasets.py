@@ -2025,6 +2025,9 @@ def test_create_artifact_overwrite_keeps_existing_store_when_replacement_is_inva
 
 
 def test_create_artifact_rejects_missing_plugin_definition() -> None:
+    """A 4xx, not a 5xx (CLIM-912). A template with no `ingestion.plugin` is not broken — half
+    the shipped catalogue is produced by a workflow rather than fetched — so naming one is a
+    client error, and a 500 both misreports it and invites a retry that cannot succeed."""
     dataset: dict[str, object] = {
         "id": "broken_dataset",
         "name": "Broken dataset",
@@ -2044,8 +2047,10 @@ def test_create_artifact_rejects_missing_plugin_definition() -> None:
             publish=False,
         )
 
-    assert exc_info.value.status_code == 500
-    assert exc_info.value.detail == "Dataset 'broken_dataset' does not define ingestion.plugin"
+    assert exc_info.value.status_code == 400
+    assert "cannot be ingested" in str(exc_info.value.detail)
+    assert "broken_dataset" in str(exc_info.value.detail)
+    assert "ingestion.plugin" in str(exc_info.value.detail)
 
 
 def test_create_artifact_rejects_partial_download_scope(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2054,6 +2059,9 @@ def test_create_artifact_rejects_partial_download_scope(monkeypatch: pytest.Monk
         "name": "Total precipitation (CHIRPS3)",
         "variable": "precip",
         "period_type": "daily",
+        # An ingestable template: the scope validation under test runs after the check that
+        # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
+        "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:
@@ -2081,6 +2089,9 @@ def test_create_artifact_rejects_download_scope_outside_request_scope(monkeypatc
         "name": "Total precipitation (CHIRPS3)",
         "variable": "precip",
         "period_type": "daily",
+        # An ingestable template: the scope validation under test runs after the check that
+        # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
+        "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:

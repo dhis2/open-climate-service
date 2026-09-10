@@ -243,6 +243,33 @@ def get_latest_artifact_for_dataset_or_404(dataset_id: str) -> ArtifactRecord:
     return max(artifacts, key=lambda artifact: artifact.created_at)
 
 
+def ensure_ingestable(dataset: dict[str, object]) -> None:
+    """Raise 400 unless *dataset* declares a source to fetch from.
+
+    Called at every entrance to ingestion, not only inside `create_artifact`. The async
+    branch of `POST /ingestions` (`Prefer: respond-async`) enqueues a job and returns 202
+    before `create_artifact` runs, so a check that lived only there turned a client mistake
+    into an accepted job that later failed — with a logged traceback, and with the 400 the
+    caller needed buried in the job record instead of in the response.
+
+    400 rather than 500. The request is well formed and the template is valid; it simply has
+    no upstream, which is a property of the dataset the caller named. A 500 says the server
+    broke and invites a retry that cannot succeed (CLIM-912).
+    """
+    if registry_datasets.is_ingestable(dataset):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Dataset template '{dataset['id']}' cannot be ingested: it declares no "
+            "'ingestion.plugin', so there is no source to fetch from. It is a derived "
+            "product, published by a workflow through 'save_result' rather than ingested — "
+            "run the workflow that produces it (see GET /process_graphs). "
+            "GET /dataset-templates/ reports 'ingestable' for every template."
+        ),
+    )
+
+
 def create_artifact(
     *,
     dataset: dict[str, object],
@@ -267,6 +294,12 @@ def create_artifact(
     streaming engine remains store-authoritative and appends only periods that
     are actually missing from the committed store.
     """
+    # Before any request validation: whether this template can be ingested at all does not
+    # depend on the request, and checking it later meant an operator who picked a workflow
+    # output was first told to supply a start period — advice for a request that could never
+    # have succeeded.
+    ensure_ingestable(dataset)
+
     period_type = str(dataset["period_type"])
     start = _resolve_request_start(start, dataset=dataset, period_type=period_type)
     end = _normalize_optional_request_period(end, period_type=period_type, field_name="end")
@@ -295,25 +328,25 @@ def create_artifact(
         end=end,
         bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None,
     )
+    # Guaranteed non-blank by the `is_ingestable` check above, which is the single definition
+    # of what makes a template ingestable; re-testing it here would let the two drift.
     ingestion = dataset.get("ingestion")
-    plugin_path = ingestion.get("plugin") if isinstance(ingestion, dict) else None
-    if isinstance(plugin_path, str) and plugin_path:
-        return _create_streaming_artifact(
-            dataset=dataset,
-            plugin_path=plugin_path,
-            start=start,
-            end=resolved_download_end,
-            bbox=bbox,
-            country_code=country_code,
-            overwrite=overwrite,
-            publish=publish,
-            request_scope=request_scope,
-            on_progress=on_progress,
-            is_cancel_requested=is_cancel_requested,
-            save_cursor=save_cursor,
-            periods=periods,
-        )
-    raise HTTPException(status_code=500, detail=f"Dataset '{dataset['id']}' does not define ingestion.plugin")
+    plugin_path = str((ingestion or {}).get("plugin", "")).strip() if isinstance(ingestion, dict) else ""
+    return _create_streaming_artifact(
+        dataset=dataset,
+        plugin_path=plugin_path,
+        start=start,
+        end=resolved_download_end,
+        bbox=bbox,
+        country_code=country_code,
+        overwrite=overwrite,
+        publish=publish,
+        request_scope=request_scope,
+        on_progress=on_progress,
+        is_cancel_requested=is_cancel_requested,
+        save_cursor=save_cursor,
+        periods=periods,
+    )
 
 
 def _period_order_key(period: str, period_type: str) -> str:

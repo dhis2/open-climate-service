@@ -253,6 +253,17 @@ Note `end` stays a plain `str`, so there is no missing-value case to handle.
 
 **Honour `end` when it is given.** If your plugin returns periods outside the requested temporal union, ingestion is refused before mutation. That guard catches a plugin that ignores the range rather than silently storing more than was asked for, so a lead-day plugin has to filter rather than ignore.
 
+### Templates that are produced, not ingested
+
+`ingestion.plugin` is what makes a template ingestable, and roughly half the shipped catalogue
+has none: anomalies, normals and change rasters are *produced* by a workflow through
+`save_result` and registered as static templates, so there is nothing upstream to fetch.
+
+`GET /dataset-templates/` reports this as `ingestable` on every template, the `/manage` ingest
+form offers only the ingestable ones, and asking to ingest one that is not returns `400` naming
+the reason. Read the flag rather than inferring it from `sync.kind`: the two are not the same
+question, and `era5land_temperature_daily_normal_1991_2020` is `static` *and* ingestable.
+
 `temporal_direction` is separate from `sync.kind` on purpose: a forecast is still `temporal` for sync (re-run it and you get fresher data); what differs is which way its periods run. It cannot be combined with `sync.kind: static`, which has no upstream to look ahead into.
 
 **How far ahead belongs in the template, not the request.** A source often publishes further out than is useful — 40 days when only 7 verify well. That cap is a property of the dataset, so express it in `ingestion.params` (as `max_lead_days` above) and let your plugin's `periods()` honour it. The request then narrows _within_ that window rather than re-deciding it on every run.
