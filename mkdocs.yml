@@ -87,6 +87,7 @@ nav:
       - Adding custom datasets: adding_custom_datasets.md
       - Extensibility: extensibility.md
       - Installable plugins: installable_plugins.md
+      - Export plugins: export_plugins.md
       - API reference: managed_data_api_guide.md
   - Roadmap: roadmap.md
   - Team: team.md

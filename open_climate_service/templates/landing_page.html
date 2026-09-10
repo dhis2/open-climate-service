@@ -207,7 +207,7 @@
         {% else %}
         <p class="note">
           No extent configured. Set <code>extent:</code> in
-          <code>CLIMATE_SERVICE_CONFIG</code> — see <a href="{{ base }}/docs">API docs</a> for
+          <code>CLIMATE_SERVICE_CONFIG</code> — see <a href="{{ mount }}/docs">API docs</a> for
           details.
         </p>
         {% endif %}
@@ -220,7 +220,7 @@
           {% if not read_only %}
           <li>
             <span class="link-label"
-              ><a href="{{ base }}/manage">Manage</a></span
+              ><a href="{{ mount }}/manage">Manage</a></span
             >
             <span class="link-desc"
               >Ingest and sync datasets without using the API directly</span
@@ -229,7 +229,7 @@
           {% endif %}
           <li>
             <span class="link-label"
-              ><a href="{{ base }}/docs">API documentation</a></span
+              ><a href="{{ mount }}/docs">API documentation</a></span
             >
             <span class="link-desc"
               >Interactive Swagger UI for all endpoints</span
@@ -237,7 +237,7 @@
           </li>
           <li>
             <span class="link-label"
-              ><a href="{{ base }}/map">Map viewer</a></span
+              ><a href="{{ mount }}/map">Map viewer</a></span
             >
             <span class="link-desc"
               >Browse published datasets on an interactive map</span
@@ -245,7 +245,7 @@
           </li>
           <li>
             <span class="link-label"
-              ><a href="{{ base }}/openeo" target="_blank" rel="noopener">openEO Editor</a></span
+              ><a href="{{ mount }}/openeo" target="_blank" rel="noopener">openEO Editor</a></span
             >
             <span class="link-desc"
               >Build and run openEO process graphs in the browser</span
@@ -253,14 +253,14 @@
           </li>
           <li>
             <span class="link-label"
-              ><a href="{{ base }}/stac/catalog.json">STAC Catalog</a></span
+              ><a href="{{ mount }}/stac/catalog.json">STAC Catalog</a></span
             >
             <span class="link-desc"
               >SpatioTemporal Asset Catalog of published datasets</span
             >
           </li>
           <li>
-            <span class="link-label"><a href="{{ base }}/?f=json">Root (JSON)</a></span>
+            <span class="link-label"><a href="{{ mount }}/?f=json">Root (JSON)</a></span>
             <span class="link-desc">This page as a JSON navigation object</span>
           </li>
         </ul>
@@ -284,7 +284,7 @@
             {% for ds in datasets %}
             <tr>
               <td>
-                <a href="{{ base }}/datasets/{{ ds.dataset_id }}"
+                <a href="{{ mount }}/datasets/{{ ds.dataset_id }}"
                   >{{ ds.dataset_name }}</a
                 >
               </td>
@@ -307,11 +307,11 @@
         {% else %}
         <p class="note">
           No datasets ingested yet. Use
-          <a href="{{ base }}/docs#/Ingestions/create_ingestion_ingestions_post"
+          <a href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post"
             >POST /ingestions</a
           >
           to ingest data, or
-          <a href="{{ base }}/docs#/Sync/trigger_sync_sync_post">POST /sync</a>
+          <a href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">POST /sync</a>
           to run an automated sync.
         </p>
         {% endif %}

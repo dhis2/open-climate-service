@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
 import xarray as xr
 from fastapi import HTTPException, Request
 
@@ -89,28 +90,164 @@ def _make_sorted_atp(original_fn: Any) -> Any:
 
 
 def _make_named_merge_cubes(original_fn: Any) -> Any:
-    """Wrap merge_cubes to preserve DataArray names on the ``__cubes__`` axis.
+    """Wrap merge_cubes to preserve and extend named predictor cubes.
 
     The upstream implementation returns a DataArray stacked on a synthetic
     ``__cubes__`` dimension with labels like ``cube1`` / ``cube2``. That loses
     semantic source names like ``tp`` and ``t2m``. Keep the upstream return type
-    unchanged, but relabel ``__cubes__`` to the original DataArray names when
-    both inputs are named and distinct.
-    """
+    unchanged for the initial merge, but relabel ``__cubes__`` to the original
+    DataArray names when both inputs are named and distinct.
 
-    def _named_merge_cubes(cube1: Any, cube2: Any, **kwargs: Any) -> Any:
-        merged = original_fn(cube1=cube1, cube2=cube2, **kwargs)
+    A later ``merge_cubes`` in the same graph receives that already-stacked
+    DataArray plus another predictor. Upstream treats their shared dimensions as
+    an unresolved overlap and raises ``OverlapResolverMissing``. Append predictors
+    with disjoint ``__cubes__`` labels directly when no resolver is supplied.
+    Match upstream's coordinate tolerance and align label order before requiring
+    equal indexes, so temporal or location misalignment is never hidden.
+
+    ``aggregate_spatial`` returns an ``xr.Dataset`` even for one input variable.
+    Distinct single-variable datasets are normalised only when starting a named
+    predictor stack; ordinary Dataset merges retain upstream types and attrs.
+    """
+    from openeo_processes_dask.process_implementations.cubes.merge import NEW_DIM_NAME
+
+    cube_axis = NEW_DIM_NAME
+
+    def _as_named_array(cube: Any) -> xr.DataArray | None:
+        if isinstance(cube, xr.DataArray):
+            return cube
+        if isinstance(cube, xr.Dataset) and len(cube.data_vars) == 1:
+            variable = str(next(iter(cube.data_vars)))
+            return cube[variable]
+        return None
+
+    def _with_cube_axis(cube: xr.DataArray) -> xr.DataArray | None:
+        if cube_axis in cube.dims:
+            return cube if cube_axis in cube.coords else None
+        if not cube.name:
+            return None
+        return cube.expand_dims({cube_axis: [str(cube.name)]})
+
+    def _append_disjoint_predictors(cube1: xr.DataArray, cube2: xr.DataArray) -> xr.DataArray:
+        left = _with_cube_axis(cube1)
+        right = _with_cube_axis(cube2)
+        if left is None or right is None:
+            raise ValueError("Every predictor in a merged group must have a distinct name")
+
+        left_labels = {str(value) for value in left[cube_axis].values.tolist()}
+        right_labels = {str(value) for value in right[cube_axis].values.tolist()}
+        if left_labels & right_labels:
+            raise ValueError("Named predictor labels must be distinct when extending a merged group")
+
+        if set(left.dims) != set(right.dims):
+            raise ValueError("Named predictors must have the same dimensions before merging")
+        if set(left.indexes) != set(right.indexes):
+            raise ValueError("Named predictors must have the same coordinate indexes before merging")
+
+        from openeo_processes_dask.process_implementations.cubes.merge import FLOAT_TOLERANCE
+
+        # Align index objects rather than sorting cube data. The common case of
+        # identical indexes, including unsorted duplicates, stays untouched.
+        dimensions = [dim for dim in left.dims if dim != cube_axis and dim in left.indexes]
+        for dim in dimensions:
+            left_index = left.indexes[dim]
+            right_index = right.indexes[dim]
+            if len(left_index) != len(right_index):
+                raise ValueError(f"Named predictors have different labels on index '{dim}'")
+            if left_index.equals(right_index):
+                continue
+            if not right_index.is_unique:
+                raise ValueError(f"Named predictor index '{dim}' cannot be reordered because it has duplicate labels")
+            positions = right_index.get_indexer(left_index)
+            if (positions < 0).any():
+                left_values = left_index.to_numpy()
+                right_values = right_index.to_numpy()
+                if (
+                    left_values.shape == right_values.shape
+                    and left_values.dtype.kind == "f"
+                    and right_values.dtype.kind == "f"
+                ):
+                    if (abs(left_values - right_values) < FLOAT_TOLERANCE).all():
+                        positions = np.arange(len(left_index))
+                    else:
+                        order = np.argsort(right_values)
+                        sorted_right = right_index.take(order)
+                        nearest = sorted_right.get_indexer(
+                            left_index,
+                            method="nearest",
+                            tolerance=FLOAT_TOLERANCE,
+                        )
+                        if (nearest < 0).any():
+                            raise ValueError(f"Named predictors have different labels on index '{dim}'")
+                        positions = order[nearest]
+                else:
+                    raise ValueError(f"Named predictors have different labels on index '{dim}'")
+            if len(set(positions.tolist())) != len(left_index):
+                raise ValueError(f"Named predictors have different labels on index '{dim}'")
+            right = right.isel({dim: positions})
+            # Equal timestamps with different datetime64 units and tolerated
+            # floating-point noise should use the left cube's canonical labels.
+            right = right.assign_coords({dim: left[dim]})
+
+        # Right-only auxiliary coordinates cannot describe the merged group and
+        # make concat reject otherwise aligned predictors. Shared auxiliaries,
+        # including dimensioned coordinates, keep the left value on conflict.
+        right_only_auxiliary = [
+            name for name in right.coords if name not in right.indexes and name != cube_axis and name not in left.coords
+        ]
+        right = right.drop_vars(right_only_auxiliary)
+        appended: xr.DataArray = xr.concat(
+            [left, right],
+            dim=cube_axis,
+            join="exact",
+            coords="minimal",
+            compat="override",
+        )
+        return appended.chunk({dim: -1 if dim == cube_axis else "auto" for dim in appended.dims})
+
+    def _named_merge_cubes(
+        cube1: Any,
+        cube2: Any,
+        overlap_resolver: Any = None,
+        context: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        array1 = _as_named_array(cube1)
+        array2 = _as_named_array(cube2)
+        if array1 is not None and array2 is not None and (cube_axis in array1.dims or cube_axis in array2.dims):
+            if overlap_resolver is not None:
+                raise ValueError("An overlap resolver is only supported on the initial named predictor merge")
+            return _append_disjoint_predictors(array1, array2)
+
+        # Distinct single-variable Datasets are the aggregate_spatial predictor
+        # case. Do not promote same-variable Datasets or any ordinary merge.
+        promote_datasets = (
+            isinstance(cube1, xr.Dataset)
+            and isinstance(cube2, xr.Dataset)
+            and array1 is not None
+            and array2 is not None
+            and array1.name != array2.name
+        )
+        original_cube1 = array1 if promote_datasets else cube1
+        original_cube2 = array2 if promote_datasets else cube2
+        merged = original_fn(
+            cube1=original_cube1,
+            cube2=original_cube2,
+            overlap_resolver=overlap_resolver,
+            context=context,
+            **kwargs,
+        )
         if (
-            isinstance(cube1, xr.DataArray)
-            and isinstance(cube2, xr.DataArray)
-            and cube1.name
-            and cube2.name
-            and cube1.name != cube2.name
+            array1 is not None
+            and array2 is not None
+            and array1.name
+            and array2.name
+            and array1.name != array2.name
             and isinstance(merged, xr.DataArray)
-            and "__cubes__" in merged.dims
+            and cube_axis in merged.dims
         ):
             try:
-                return merged.assign_coords(__cubes__=[str(cube1.name), str(cube2.name)])
+                return merged.assign_coords({cube_axis: [str(array1.name), str(array2.name)]})
             except Exception as exc:
                 logger.debug("Falling back to default __cubes__ labels after merge_cubes", exc_info=exc)
         return merged
@@ -324,6 +461,9 @@ def _load_collection_impl(
     """Load a published dataset as an openEO data cube (xr.DataArray)."""
     artifact = _get_published_artifact(id)
     ds = _ensure_crs(_open_artifact(artifact))
+    from open_climate_service.shared.provenance import record_source
+
+    record_source(id, artifact)
 
     bbox = _bbox_to_dict(spatial_extent)
     t_extent = _temporal_to_list(temporal_extent)
@@ -402,6 +542,7 @@ class SaveResultEnvelope:
         self.data = data
         self.format = format.upper()
         self.options: dict[str, Any] = options or {}
+        self.provenance: dict[str, Any] | None = None
 
 
 def _save_result_impl(data: Any, format: str = "Zarr", options: dict[str, Any] | None = None) -> Any:
@@ -606,7 +747,13 @@ def run_process_graph(
     registry = _augment_with_workflows(_build_process_registry())
     try:
         graph = OpenEOProcessGraph(process_graph)
-        return graph.to_callable(registry)()
+        from open_climate_service.shared.provenance import capture_execution
+
+        with capture_execution(process) as evidence:
+            result = graph.to_callable(registry)()
+            if isinstance(result, SaveResultEnvelope):
+                result.provenance = evidence.describe()
+            return result
     except HTTPException:
         raise
     except (TypeError, ValueError, KeyError) as exc:

@@ -9,6 +9,7 @@ paths produced four rounds of contradictory fixes.
 """
 
 import glob
+import itertools
 import logging
 import pathlib
 import re
@@ -131,6 +132,40 @@ def test_every_builtin_licence_parses(path: str) -> None:
         )
 
 
+# The obligations each source's own terms impose, read off the source's page and recorded here
+# rather than taken from the template — a test that reads the declaration it is checking
+# asserts nothing. CHIRPS3 is why this table exists: CHC's page says CHIRPS3 "is in the public
+# domain" and that CHC "waived all copyright and related or neighboring rights", wording that
+# reads as CC0, while the same sentence names the instrument as CC BY 4.0. The first
+# declaration shipped CC0-1.0, which drops attribution from CHIRPS3 and everything derived
+# from it. Nothing in the checks above catches that: CC0 parses, and every derived product
+# dropped attribution consistently.
+_REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
+    "chirps3.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
+    "era5_land.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
+}
+
+
+def test_every_shipped_template_has_reviewed_source_terms() -> None:
+    """Guards the guard: a new or renamed template file would otherwise go unchecked, which is
+    the point at which its licence has not been read by anyone."""
+    assert {pathlib.Path(path).name for path in _BUILTIN_TEMPLATES} == set(_REVIEWED_SOURCE_TERMS)
+
+
+@pytest.mark.parametrize("path", _BUILTIN_TEMPLATES, ids=lambda p: pathlib.Path(p).name)
+def test_no_builtin_declares_away_an_obligation_its_source_imposes(path: str) -> None:
+    required = _REVIEWED_SOURCE_TERMS[pathlib.Path(path).name]
+    for template in yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8")):
+        if not isinstance(template, dict) or not template.get("id"):
+            continue
+        obligations = parse_licence(template.get("license")).obligations
+        assert required <= obligations, (
+            f"{template['id']} declares {template.get('license')!r}, dropping "
+            f"{sorted(required - obligations)} required by its source"
+        )
+
+
 def _builtin_licences() -> dict:
     licences = {}
     for path in _BUILTIN_TEMPLATES:
@@ -207,13 +242,81 @@ def test_explicit_obligations_are_used_when_nothing_else_supplies_them() -> None
 # -- valid SPDX identifiers OCS has not reviewed -------------------------------------------
 
 
-def test_a_valid_spdx_identifier_is_preserved_even_when_unreviewed() -> None:
-    """Downgrading BSD-3-Clause to a free-form name and publishing `other` threw away
-    information the catalogue already had. The identifier is kept; only the propagation
-    semantics are marked unknown."""
-    licence = parse_licence("BSD-3-Clause")
-    assert licence.stac_license == "BSD-3-Clause"
+@pytest.mark.parametrize("identifier", ["BSD-3-Clause", "ISC", "Zlib", "EUPL-1.2", "ODC-By-1.0"])
+def test_a_valid_spdx_identifier_is_preserved_even_when_unreviewed(identifier: str) -> None:
+    """The general contract, not one hand-listed example. Identity is SPDX's question and
+    obligations are OCS's; while a single table answered both, every valid identifier nobody
+    had reviewed was demoted to a free-form name and published as `other`. `ODC-By-1.0` is the
+    one that shows the cost — an open-data licence a climate source could plausibly carry."""
+    licence = parse_licence(identifier)
+    assert licence.stac_license == identifier
     assert licence.known is False
+    assert licence.commercial_use is None
+
+
+def test_every_reviewed_identifier_is_a_real_spdx_identifier() -> None:
+    """The two tables must agree on the identifiers they share. A typo in the obligations
+    table would otherwise sit there silently: the licence would parse to no identifier at all
+    and publish as `other`, with its reviewed obligations never consulted."""
+    from open_climate_service.shared.licences import _SPDX_OBLIGATIONS, _canonical_spdx
+
+    assert {identifier: _canonical_spdx(identifier) for identifier in _SPDX_OBLIGATIONS} == {
+        identifier: identifier for identifier in _SPDX_OBLIGATIONS
+    }
+
+
+def test_a_deprecated_identifier_publishes_as_its_current_form() -> None:
+    """SPDX supersedes identifiers; a catalogue should carry the current one. Passing the
+    deprecated spelling straight through would publish an identifier the register no longer
+    lists."""
+    assert parse_licence("GPL-3.0").stac_license == "GPL-3.0-only"
+
+
+@pytest.mark.parametrize(
+    ("declared", "why"),
+    [
+        ("Apache-2.0 OR MIT", "an expression has no single obligation set to compare on"),
+        ("Apache-2.0 AND MIT", "same, for a conjunction"),
+        ("GPL-2.0-only WITH Classpath-exception-2.0", "a WITH clause is not one licence"),
+        ("Classpath-exception-2.0", "an exception is a modifier, not a licence"),
+        ("LicenseRef-scancode-3com-microcode", "ScanCode's vocabulary, not the SPDX register"),
+        ("CC-BY-4", "a near miss is not an identifier"),
+    ],
+)
+def test_what_validates_as_spdx_but_is_not_one_licence_is_refused(declared: str, why: str) -> None:
+    """Validating against the full register widens what is accepted, so the boundary has to be
+    drawn deliberately rather than inherited from the library. Each of these parses cleanly as
+    SPDX and none of them is a single licence this module can carry obligations for."""
+    licence = parse_licence(declared)
+    assert licence.stac_license == STAC_LICENSE_OTHER, why
+    assert licence.known is False
+
+
+def test_an_identifier_is_matched_whatever_its_case() -> None:
+    """`cc-by-4.0` is an easy thing to write in YAML, and rejecting it would be unhelpful."""
+    assert parse_licence("odc-by-1.0").stac_license == "ODC-By-1.0"
+    assert parse_licence("cc-by-4.0").identifier == "CC-BY-4.0"
+
+
+def test_a_string_that_is_neither_an_identifier_nor_a_known_name_is_reported() -> None:
+    """A mistyped identifier is published as `other` with no licence link, and the viewer then
+    shows "not declared" — indistinguishable from declaring nothing, which is the one outcome
+    this module exists to make impossible. Parsing still degrades quietly; the validator is
+    where it has to be said."""
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    problem = licence_declaration_problem("CC-BY-4.O")
+    assert problem is not None
+    assert "CC-BY-4.O" in problem
+
+
+@pytest.mark.parametrize("declared", ["CC-BY-4.0", "cc-by-4.0", "ISC", "Licence to Use Copernicus Products"])
+def test_a_string_that_resolves_to_something_is_not_reported(declared: str) -> None:
+    """An identifier in any case, a valid-but-unreviewed one, and a licence known by name are
+    all fine as plain strings; only an unresolvable one is worth a warning."""
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    assert licence_declaration_problem(declared) is None
 
 
 # -- a name must be the licence, not merely start like it ----------------------------------
@@ -247,6 +350,29 @@ def test_an_identifier_contradicted_by_a_known_name_is_undeclared() -> None:
     `CC0-1.0` beside a link to terms requiring attribution is worse than publishing nothing.
     There is no basis for choosing between them."""
     licence = parse_licence({"id": "CC0-1.0", "name": "Licence to Use Copernicus Products", "url": "https://x"})
+    assert licence is UNDECLARED
+
+
+def test_matching_obligations_do_not_make_two_licences_the_same_one() -> None:
+    """`CC-BY-4.0` and the Copernicus licence both require attribution and are different
+    instruments. Comparing the obligation sets accepted this and published `license: CC-BY-4.0`
+    over a link to Copernicus terms — the field a STAC client reads, disagreeing with the link
+    it usually does not fetch."""
+    licence = parse_licence(
+        {
+            "id": "CC-BY-4.0",
+            "name": "Licence to Use Copernicus Products",
+            "url": "https://apps.ecmwf.int/datasets/licences/copernicus/",
+        }
+    )
+    assert licence is UNDECLARED
+
+
+def test_a_recognised_name_contradicts_even_an_unreviewed_identifier() -> None:
+    """Whether OCS has recorded what `ISC` requires has no bearing on whether it is the
+    Copernicus licence. The check was skipped entirely for identifiers outside the obligations
+    table."""
+    licence = parse_licence({"id": "ISC", "name": "NASA Earth Science Data", "url": "https://x"})
     assert licence is UNDECLARED
 
 
@@ -302,15 +428,55 @@ def test_the_validator_names_the_contradiction_rather_than_calling_it_unreadable
     )
     assert problem is not None
     assert "CC0-1.0" in problem
+    assert "Licence to Use Copernicus Products" in problem
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param({"id": "CC-BY-NC-4.0", "obligations": []}, id="spdx-identifier"),
+        pytest.param(
+            {"name": "Licence to Use Copernicus Products", "url": "https://x", "obligations": ["non-commercial"]},
+            id="recognised-name",
+        ),
+    ],
+)
+def test_ignored_obligations_are_reported_whatever_supplied_the_terms(declared: dict) -> None:
+    """Parametrised over both, because the two were checked in separate places and drifted.
+
+    `parse_licence` ignores an explicit list whenever the identifier *or* the name is one OCS
+    knows, but the validator reported only the identifier case. So Copernicus plus
+    `obligations: [non-commercial]` was read as commercially usable and said nothing — the
+    operator asserted a restriction and OCS silently dropped it, which is the laundering
+    direction.
+    """
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    problem = licence_declaration_problem(declared)
+    assert problem is not None
+    assert "ignored" in problem
+
+
+def test_the_report_names_both_what_was_asked_for_and_what_applies() -> None:
+    """An operator who wrote non-commercial needs to see that attribution is what took effect,
+    not just that something was ignored."""
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    problem = licence_declaration_problem(
+        {"name": "Licence to Use Copernicus Products", "url": "https://x", "obligations": ["non-commercial"]}
+    )
+    assert problem is not None
+    assert "non-commercial" in problem
     assert "attribution" in problem
 
 
-def test_explicit_obligations_beside_an_identifier_are_reported_once() -> None:
-    from open_climate_service.shared.licences import licence_declaration_problem
-
-    problem = licence_declaration_problem({"id": "CC-BY-NC-4.0", "obligations": []})
-    assert problem is not None
-    assert "ignored" in problem
+def test_a_recognised_name_still_outranks_a_contradictory_obligations_list() -> None:
+    """The behaviour is unchanged — the researched terms win. Only the silence is fixed."""
+    licence = parse_licence(
+        {"name": "Licence to Use Copernicus Products", "url": "https://x", "obligations": ["non-commercial"]}
+    )
+    assert licence.obligations == frozenset({ATTRIBUTION})
+    assert licence.commercial_use is True
 
 
 def test_a_sound_declaration_has_nothing_to_report() -> None:
@@ -319,3 +485,172 @@ def test_a_sound_declaration_has_nothing_to_report() -> None:
     assert licence_declaration_problem("CC-BY-4.0") is None
     assert licence_declaration_problem({"id": "CC-BY-4.0", "url": "https://x"}) is None
     assert licence_declaration_problem({"name": "Vendor Terms", "url": "https://x"}) is None
+
+
+def test_conflicting_identifier_aliases_are_named_not_merely_undeclared() -> None:
+    """`id` and `spdx` are aliases, and `declared.get("id") or declared.get("spdx")` picked the
+    first silently: `{id: CC0-1.0, spdx: CC-BY-NC-4.0}` published as CC0 with commercial use
+    allowed.
+
+    Asserted on the *report*, not on the parse result. Resolving a conflict to "no identifier"
+    already reaches UNDECLARED through the no-licence-identity path, so a test that only checked
+    the parse outcome passes with the fix removed — which the matrix row above does, and which
+    is why this exists separately.
+    """
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    problem = licence_declaration_problem({"id": "CC0-1.0", "spdx": "CC-BY-NC-4.0"})
+    assert problem is not None
+    assert "CC0-1.0" in problem
+    assert "CC-BY-NC-4.0" in problem
+    assert "aliases" in problem
+
+
+def test_the_same_licence_under_both_aliases_is_not_a_conflict() -> None:
+    """Case and spelling differences resolve to one canonical identifier."""
+    assert parse_licence({"id": "CC-BY-4.0", "spdx": "cc-by-4.0"}).stac_license == "CC-BY-4.0"
+
+
+# -- the declaration surface -----------------------------------------------------------------
+#
+# Four review rounds each found one more way for two parts of a `license` mapping to disagree
+# while OCS silently picked one: a prefix-matched name, an identifier contradicted by a name,
+# an obligations list beside a recognised name, and an identifier beside a conflicting alias.
+# One defect found four times. Finding them individually does not terminate, so the surface is
+# enumerated instead.
+#
+# The dimensions are semantic, not raw keys. What decides the outcome is the *kind* of value in
+# each of three positions; `url` is carried through and never affects it, which
+# `test_the_url_never_changes_the_outcome` pins rather than assumes.
+
+_IDENTIFIER_CASES: dict[str, dict] = {
+    "absent": {},
+    "recognised": {"id": "CC-BY-4.0"},
+    "unrecognised": {"id": "NotAnSpdx"},
+    "aliases-agree": {"id": "CC-BY-4.0", "spdx": "cc-by-4.0"},
+    "aliases-conflict": {"id": "CC0-1.0", "spdx": "CC-BY-NC-4.0"},
+}
+# "agrees"/"conflicts" are relative to CC-BY-4.0's {attribution}: the Copernicus licence
+# requires the same, NASA's requires nothing.
+_NAME_CASES: dict[str, dict] = {
+    "absent": {},
+    "known-agrees": {"name": "Licence to Use Copernicus Products"},
+    "known-conflicts": {"name": "NASA Earth Science Data"},
+    "unknown": {"name": "Vendor Terms"},
+}
+_OBLIGATION_CASES: dict[str, dict] = {"absent": {}, "present": {"obligations": ["non-commercial"]}}
+
+_ACCEPTED = "accepted"  # a usable licence, nothing to report
+_IGNORED = "ignored"  # usable, but a field was discarded and must be reported
+_UNDECLARED = "undeclared"  # not usable; publishes as `other`
+
+# One entry per (identifier, name, obligations) shape. A shape with no entry fails the
+# completeness guard below, so a new key or value kind cannot be added without deciding what
+# every combination of it does.
+_EXPECTED: dict[tuple[str, str, str], str] = {
+    # No identifier: the name governs, and an explicit list is used only when nothing else
+    # supplies the terms.
+    ("absent", "absent", "absent"): _UNDECLARED,
+    ("absent", "absent", "present"): _UNDECLARED,  # obligations without a licence identity
+    ("absent", "known-agrees", "absent"): _ACCEPTED,
+    ("absent", "known-agrees", "present"): _IGNORED,
+    ("absent", "known-conflicts", "absent"): _ACCEPTED,
+    ("absent", "known-conflicts", "present"): _IGNORED,
+    ("absent", "unknown", "absent"): _ACCEPTED,
+    ("absent", "unknown", "present"): _ACCEPTED,  # the legitimate use of an explicit list
+    # An identifier beside *any* recognised name is a contradiction. The named-licence table
+    # holds licences that have no SPDX identifier, so the two name different instruments —
+    # matching obligations make them compatible, not the same licence.
+    ("recognised", "absent", "absent"): _ACCEPTED,
+    ("recognised", "absent", "present"): _IGNORED,
+    ("recognised", "known-agrees", "absent"): _UNDECLARED,
+    ("recognised", "known-agrees", "present"): _UNDECLARED,
+    ("recognised", "known-conflicts", "absent"): _UNDECLARED,
+    ("recognised", "known-conflicts", "present"): _UNDECLARED,
+    ("recognised", "unknown", "absent"): _ACCEPTED,
+    ("recognised", "unknown", "present"): _IGNORED,
+    # An unrecognised identifier supplies nothing, so the name decides. The string itself is
+    # dropped rather than kept as a name, unlike the plain-string form — a known asymmetry, and
+    # the safe direction, since the result is `other` rather than a guess.
+    ("unrecognised", "absent", "absent"): _UNDECLARED,
+    ("unrecognised", "absent", "present"): _UNDECLARED,
+    ("unrecognised", "known-agrees", "absent"): _ACCEPTED,
+    ("unrecognised", "known-agrees", "present"): _IGNORED,
+    ("unrecognised", "known-conflicts", "absent"): _ACCEPTED,
+    ("unrecognised", "known-conflicts", "present"): _IGNORED,
+    ("unrecognised", "unknown", "absent"): _ACCEPTED,
+    ("unrecognised", "unknown", "present"): _ACCEPTED,
+    # Both aliases naming one licence behaves exactly as one identifier.
+    ("aliases-agree", "absent", "absent"): _ACCEPTED,
+    ("aliases-agree", "absent", "present"): _IGNORED,
+    ("aliases-agree", "known-agrees", "absent"): _UNDECLARED,
+    ("aliases-agree", "known-agrees", "present"): _UNDECLARED,
+    ("aliases-agree", "known-conflicts", "absent"): _UNDECLARED,
+    ("aliases-agree", "known-conflicts", "present"): _UNDECLARED,
+    ("aliases-agree", "unknown", "absent"): _ACCEPTED,
+    ("aliases-agree", "unknown", "present"): _IGNORED,
+    # Aliases naming different licences: undeclared whatever else is present, because there is
+    # no basis for choosing and the wrong choice publishes NC data as permissive.
+    ("aliases-conflict", "absent", "absent"): _UNDECLARED,
+    ("aliases-conflict", "absent", "present"): _UNDECLARED,
+    ("aliases-conflict", "known-agrees", "absent"): _UNDECLARED,
+    ("aliases-conflict", "known-agrees", "present"): _UNDECLARED,
+    ("aliases-conflict", "known-conflicts", "absent"): _UNDECLARED,
+    ("aliases-conflict", "known-conflicts", "present"): _UNDECLARED,
+    ("aliases-conflict", "unknown", "absent"): _UNDECLARED,
+    ("aliases-conflict", "unknown", "present"): _UNDECLARED,
+}
+
+_SHAPES = list(itertools.product(_IDENTIFIER_CASES, _NAME_CASES, _OBLIGATION_CASES))
+
+
+def _declaration(identifier: str, name: str, obligations: str, url: bool = True) -> dict:
+    return {
+        **_IDENTIFIER_CASES[identifier],
+        **_NAME_CASES[name],
+        **_OBLIGATION_CASES[obligations],
+        **({"url": "https://x"} if url else {}),
+    }
+
+
+def _outcome(declaration: dict) -> str:
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    if parse_licence(declaration) is UNDECLARED:
+        return _UNDECLARED
+    return _IGNORED if licence_declaration_problem(declaration) else _ACCEPTED
+
+
+@pytest.mark.parametrize(("identifier", "name", "obligations"), _SHAPES, ids=lambda v: v)
+def test_every_declaration_shape_has_the_decided_outcome(identifier: str, name: str, obligations: str) -> None:
+    expected = _EXPECTED.get((identifier, name, obligations))
+    assert expected is not None, (
+        f"undecided declaration shape: identifier={identifier}, name={name}, obligations={obligations}. "
+        "Decide what it should do and add it to _EXPECTED."
+    )
+    assert _outcome(_declaration(identifier, name, obligations)) == expected
+
+
+def test_the_expectation_table_matches_the_shapes_that_exist() -> None:
+    """Both directions. A missing entry leaves a combination undecided; a stale one describes a
+    shape that can no longer occur, which reads as coverage that is not there."""
+    assert set(_EXPECTED) == set(_SHAPES)
+
+
+def test_the_url_never_changes_the_outcome() -> None:
+    """`url` is carried into the licence link and has no bearing on the terms. Pinned because
+    the enumeration above omits it as a dimension, and that omission is only sound while this
+    holds."""
+    for identifier, name, obligations in _SHAPES:
+        with_url = _outcome(_declaration(identifier, name, obligations, url=True))
+        without = _outcome(_declaration(identifier, name, obligations, url=False))
+        assert with_url == without, f"url changed the outcome for {identifier}/{name}/{obligations}"
+
+
+def test_the_enumerated_keys_are_the_keys_the_parser_accepts() -> None:
+    """Guards the guard. A new key in `parse_licence` with no dimension here would leave its
+    interactions untested while the enumeration still claims to be complete."""
+    accepted_keys = {"id", "spdx", "name", "url", "obligations"}
+    dimensions = (*_IDENTIFIER_CASES.values(), *_NAME_CASES.values(), *_OBLIGATION_CASES.values())
+    covered = {key for case in dimensions for key in case}
+    assert covered | {"url"} == accepted_keys, f"keys with no dimension: {accepted_keys - covered - {'url'}}"

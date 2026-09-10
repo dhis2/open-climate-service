@@ -113,9 +113,19 @@ def wants_json(request: Request) -> bool:
     return json_q >= 0 and (html_q < 0 or json_q >= html_q)
 
 
-def render_maps(base: str) -> str:
-    """Render the map viewer page."""
-    return get_template("map-viewer.html").render(base=base, name=api_config.get_name())
+def render_maps(mount: str) -> str:
+    """Render the map viewer page.
+
+    A mount prefix rather than a base URL, because every link and fetch target in the page is
+    same-origin. A path carries no scheme or host and inherits both from the page, which fixes
+    the mixed-content bug in CLIM-974 without the risk of naming a *different* origin — an
+    operator on a port-forward would otherwise have the viewer fetch the public instance's
+    catalogue. The prefix keeps those paths resolving under `--root-path`.
+
+    Required rather than defaulted: an omitted mount gives links that work unmounted and 404
+    behind a prefix, which is the failure this parameter exists to prevent.
+    """
+    return get_template("map-viewer.html").render(mount=mount, name=api_config.get_name())
 
 
 def _load_extent() -> dict[str, Any] | None:
@@ -155,11 +165,11 @@ def _load_datasets() -> list[Any]:
         return []
 
 
-def render_landing(version: str, base: str) -> str:
+def render_landing(version: str, mount: str) -> str:
     """Render the root landing page with live instance status."""
     return get_template("landing_page.html").render(
         version=version,
-        base=base,
+        mount=mount,
         name=api_config.get_name(),
         extent=_load_extent(),
         datasets=_load_datasets(),
@@ -169,13 +179,13 @@ def render_landing(version: str, base: str) -> str:
     )
 
 
-def render_manage(version: str, base: str, message: str | None = None, error: str | None = None) -> str:
+def render_manage(version: str, mount: str, message: str | None = None, error: str | None = None) -> str:
     """Render the management page."""
     today = date.today().isoformat()
     year_ago = date.today().replace(year=date.today().year - 1).isoformat()
     return get_template("manage.html").render(
         version=version,
-        base=base,
+        mount=mount,
         name=api_config.get_name(),
         extent=_load_extent(),
         templates=_ingestable_templates(),

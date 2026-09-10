@@ -179,7 +179,7 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  variable: precip\n"
         "  period_type: daily\n"
         "  units: mm/d\n"
-        "  license: CC0-1.0\n"
+        "  license: CC-BY-4.0\n"
         "  sync:\n"
         "    kind: temporal\n"
         "  ingestion:\n"

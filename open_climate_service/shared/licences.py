@@ -37,14 +37,22 @@ licence that cannot be compared must be refused.
 
 ## SPDX where it exists, a name and URL where it does not
 
-The three built-in sources happen to cover every case:
+The three built-in sources cover both cases:
 
-    CHIRPS3     CC0-1.0                              SPDX, public domain
+    CHIRPS3     CC-BY-4.0                            SPDX
     WorldPop    CC-BY-4.0                            SPDX
     ERA5-Land   Licence to Use Copernicus Products   bespoke, no SPDX identifier
 
 Forcing the Copernicus licence into a near-miss SPDX identifier would be a false statement
 about what a user may do, so the field accepts a name plus a URL as well.
+
+CHIRPS3 is the reason to read the source page rather than its tone. CHC says CHIRPS3 "is in
+the public domain" and that it has "waived all copyright and related or neighboring rights",
+which reads as CC0 — but the same sentence names the instrument, "licensed under a Creative
+Commons Attribution 4.0 International License". Declaring the public-domain half would drop
+the attribution CC BY keeps, publishing the source as more permissive than its own terms:
+the failure this module exists to prevent, committed on the first dataset it declares. Where
+a page's wording and its named licence disagree, the named licence governs.
 """
 
 from __future__ import annotations
@@ -52,6 +60,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from functools import cache, lru_cache
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -70,10 +79,15 @@ NON_COMMERCIAL = "non-commercial"
 # under the same ND licence, which the licence forbids outright.
 NO_DERIVATIVES = "no-derivatives"
 
-# SPDX identifiers whose terms have been read, with the obligations each imposes. Deliberately
-# a small checked table rather than an attempt at the full SPDX register: an identifier absent
-# here is not an SPDX identifier as far as OCS is concerned, which keeps an unvalidated string
-# out of the published `license` field.
+# SPDX identifiers whose terms have been read, with the obligations each imposes.
+#
+# Semantics only. Whether a string *is* an SPDX identifier is a separate question, answered
+# against the full register in `_canonical_spdx` — this table says what a licence requires, not
+# what exists. Conflating the two published `license: other` for every valid identifier nobody
+# had got around to reviewing: `ISC`, `Zlib`, `EUPL-1.2` and `ODC-By-1.0` among them, the last
+# an open-data licence a climate source could plausibly carry. An identifier absent here is
+# still published under its own name; it is `known=False` that keeps propagation failing closed
+# until someone records what it requires.
 #
 # Commercial use is one obligation among several, not the whole model. Comparing on it alone
 # would let CC0 be derived from CC-BY-4.0 — both permit commercial use — silently dropping
@@ -96,27 +110,6 @@ _SPDX_OBLIGATIONS: dict[str, frozenset[str]] = {
     "CC-BY-NC-ND-4.0": frozenset({ATTRIBUTION, NON_COMMERCIAL, NO_DERIVATIVES}),
     "CC-BY-ND-4.0": frozenset({ATTRIBUTION, NO_DERIVATIVES}),
 }
-# SPDX identifiers that are valid but whose propagation semantics have not been reviewed.
-# Kept separate from `_SPDX_OBLIGATIONS` on purpose: a valid identifier belongs in the STAC
-# `license` field even when OCS cannot yet reason about deriving from it. Downgrading
-# BSD-3-Clause to a free-form name and publishing `other` threw away information the catalogue
-# had — while `known=False` still makes propagation fail closed, which is the safe half.
-_SPDX_UNREVIEWED = frozenset(
-    {
-        "BSD-2-Clause",
-        "BSD-3-Clause",
-        "GPL-3.0-only",
-        "GPL-3.0-or-later",
-        "LGPL-3.0-only",
-        "MPL-2.0",
-        "Unlicense",
-        "CC-BY-2.0",
-        "CC-BY-2.5",
-        "OGL-Canada-2.0",
-    }
-)
-_SPDX_BY_LOWER = {identifier.lower(): identifier for identifier in (*_SPDX_OBLIGATIONS, *_SPDX_UNREVIEWED)}
-
 # Share-alike is not satisfied by carrying "a share-alike obligation" — it requires the same
 # licence, or one the licence itself names as compatible. Without this, ODbL-1.0 and
 # CC-BY-SA-4.0 both reduce to {attribution, share-alike} and each would be accepted in place
@@ -228,41 +221,140 @@ def _obligations_for_name(name: str | None) -> frozenset[str] | None:
     return None
 
 
-def _canonical_spdx(value: str) -> str | None:
-    """The canonical SPDX identifier for `value`, or None if it is not one we recognise.
+@cache
+def _spdx_licensing() -> Any:
+    """The SPDX register, built once.
 
-    Case-insensitive, because `cc-by-4.0` is an easy thing to write in YAML and rejecting it
-    outright would be unhelpful. An unrecognised string is not treated as SPDX at all: it
-    becomes a licence *name*, so the collection publishes `other` rather than an identifier no
-    STAC client can resolve.
+    Deferred and cached because building it materialises a few thousand symbols, and
+    `parse_licence` runs on every STAC and `/datasets` request. The import is deferred too:
+    `license-expression` is a `[server]` dependency, and every importer of this module is
+    server-side, so the base client install stays at httpx + pystac.
     """
-    return _SPDX_BY_LOWER.get(value.strip().lower())
+    from license_expression import get_spdx_licensing
+
+    return get_spdx_licensing()
+
+
+@lru_cache(maxsize=512)
+def _canonical_spdx(value: str) -> str | None:
+    """The canonical SPDX identifier for `value`, or None if it is not one.
+
+    Validated against the **full SPDX register** rather than a table this module maintains by
+    hand. The two questions are separate: whether a string is a licence identifier is SPDX's to
+    answer, while `_SPDX_OBLIGATIONS` answers what that licence requires. A hand-kept allowlist
+    conflated them, so a valid identifier nobody had reviewed was demoted to a free-form name
+    and published as `other` — losing information the catalogue already had, for the ten or so
+    identifiers that happened to be listed against the several hundred that were not.
+
+    Case-insensitive, because `cc-by-4.0` is an easy thing to write in YAML. A deprecated
+    identifier canonicalises to its current form, so `GPL-3.0` publishes as `GPL-3.0-only`.
+
+    Three things that validate as SPDX are still refused, because they are not *one licence*:
+
+    * an **expression** (`Apache-2.0 OR MIT`) — the obligations of a disjunction are not a set
+      this module can compute, and guessing one would be the laundering it exists to prevent;
+    * a bare **exception** (`Classpath-exception-2.0`), which is a modifier, not a licence;
+    * a **`LicenseRef-`** key, which is ScanCode's own vocabulary rather than the register.
+
+    Caching is safe because this is pure — it returns a string and logs nothing. A cache in
+    front of a function that also warned is what made the base-URL warning fire once and then
+    fall silent (CLIM-974); keep it that way.
+    """
+    from license_expression import LicenseSymbol
+
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = _spdx_licensing().parse(text, validate=True, strict=True)
+    except Exception:
+        return None
+    if not isinstance(parsed, LicenseSymbol):
+        return None  # an expression or a `WITH` clause, not a single licence
+    key = str(parsed.key)
+    if parsed.is_exception or key.lower().startswith("licenseref-"):
+        return None
+    return key
+
+
+def _resolve_identifier(declared: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The SPDX identifier a mapping declares, and why it cannot be resolved, if so.
+
+    `id` and `spdx` are accepted as aliases for one field. When both are given and disagree
+    there is no basis for preferring either, and `declared.get("id") or declared.get("spdx")`
+    picked the first silently: `{id: CC0-1.0, spdx: CC-BY-NC-4.0}` published as CC0 with
+    commercial use allowed.
+
+    Compared on the canonical form, so `CC0-1.0` and `cc0-1.0` are one identifier rather than
+    a conflict. Two unrecognised strings are compared case-folded; they resolve to no
+    identifier either way, but saying which two disagreed is more useful than silence.
+    """
+    given = [
+        (key, str(raw).strip()) for key in ("id", "spdx") if isinstance(raw := declared.get(key), str) and raw.strip()
+    ]
+    if not given:
+        return None, None
+    if len(given) == 2:
+        (first_key, first), (second_key, second) = given
+        if (_canonical_spdx(first) or first.lower()) != (_canonical_spdx(second) or second.lower()):
+            return None, (
+                f"declares conflicting licence identifiers: {first_key} {first!r} and "
+                f"{second_key} {second!r}. They are aliases for one field, so there is no basis "
+                f"for choosing between them; the licence is treated as undeclared. Give only one."
+            )
+    return _canonical_spdx(given[0][1]), None
 
 
 def _contradiction(identifier: str | None, name: str | None) -> str | None:
     """Why an identifier and a name cannot both describe this licence, or None.
 
-    An identifier and a name that require different things is a contradiction, not a
-    redundancy. `{id: CC0-1.0, name: <a licence requiring attribution>, url: ...}` would
-    publish `license: CC0-1.0` while the `rel: license` link points at terms that demand
-    credit, and a STAC client reads the field far more often than it fetches the link. There
-    is no basis for picking a winner, so neither is used.
+    An identifier and a *recognised* name is a contradiction, not a redundancy.
+    `_KNOWN_NAMED_LICENCES` is by definition the table of licences that have **no** SPDX
+    identifier — that is the reason it exists — so a declaration naming one of them while also
+    giving an SPDX identifier is naming two different instruments. There is no basis for
+    picking a winner, so neither is used.
 
-    Only a *recognised* name can be shown to disagree. An unrecognised one is left alone: it
-    is a label and a link, the identifier stays authoritative for the terms, and the common
-    `{id, name, url}` spelling of a single licence has to keep working.
+    Compared on *identity*, not on obligations. Equal obligations establish compatibility, not
+    sameness: `CC-BY-4.0` and the Copernicus licence both require attribution and are not the
+    same licence, so comparing the obligation sets accepted
+    `{id: CC-BY-4.0, name: Licence to Use Copernicus Products, url: ...}` and published
+    `license: CC-BY-4.0` over a link to Copernicus terms — a STAC client reads the field far
+    more often than it fetches the link.
+
+    Any identifier, not only a reviewed one. Whether OCS has recorded what `ISC` requires has
+    no bearing on whether it is the Copernicus licence.
+
+    An *unrecognised* name is still left alone: it is a label and a link, the identifier stays
+    authoritative for the terms, and the common `{id, name, url}` spelling of a single licence
+    has to keep working.
     """
-    if identifier is None or identifier not in _SPDX_OBLIGATIONS:
-        return None
-    named = _obligations_for_name(name)
-    if named is None or named == _SPDX_OBLIGATIONS[identifier]:
+    if identifier is None or _obligations_for_name(name) is None:
         return None
     return (
         f"declares SPDX identifier {identifier} together with the name {name!r}, which OCS "
-        f"knows to require {sorted(named) or 'nothing'} rather than "
-        f"{sorted(_SPDX_OBLIGATIONS[identifier]) or 'nothing'}; treating the licence as "
-        f"undeclared. Declare whichever one describes the terms, not both."
+        f"knows as a licence in its own right with no SPDX identifier; the two name different "
+        f"instruments, so the licence is treated as undeclared. Declare whichever one describes "
+        f"the terms, not both."
     )
+
+
+def _declared_semantics(identifier: str | None, name: str | None) -> tuple[frozenset[str], str] | None:
+    """The obligations this declaration resolves to, and what supplied them.
+
+    None when neither the identifier nor the name is one OCS knows, which is the only case
+    where an explicit `obligations` list is consulted.
+
+    Single owner of that precedence rule. `parse_licence` and `licence_declaration_problem`
+    both need to know whether the list was used or ignored, and when each decided it
+    separately they disagreed: a contradictory list beside a recognised *name* was silently
+    discarded while the same list beside an SPDX identifier was reported.
+    """
+    if identifier is not None and identifier in _SPDX_OBLIGATIONS:
+        return _SPDX_OBLIGATIONS[identifier], f"the SPDX identifier {identifier}"
+    named = _obligations_for_name(name)
+    if named is not None:
+        return named, f"the recognised licence name {name!r}"
+    return None
 
 
 def licence_declaration_problem(declared: Any) -> str | None:
@@ -277,10 +369,28 @@ def licence_declaration_problem(declared: Any) -> str | None:
     Returns None when there is nothing specific to say. A declaration that is merely
     unreadable is already reported by the validator's generic message.
     """
+    if isinstance(declared, str):
+        text = declared.strip()
+        if not text:
+            return None  # an empty declaration is the generic "unreadable" case
+        if _canonical_spdx(text) is not None or _obligations_for_name(text) is not None:
+            return None
+        # Nothing downstream shows this string. `license` publishes `other`, the `rel: license`
+        # link needs a URL there is none of, and the viewer falls back to "not declared" — so a
+        # mistyped identifier is indistinguishable from declaring nothing at all, which is the
+        # one outcome this module exists to make impossible.
+        return (
+            f"declares the licence {text!r}, which is neither an SPDX identifier nor a licence "
+            f"name OCS knows. It publishes as 'other' with no licence link, so it cannot be told "
+            f"apart from declaring nothing — a mistyped identifier such as 'CC-BY-4.O' vanishes "
+            f"silently. Use the SPDX identifier if the licence has one, or the mapping form "
+            f"'{{name, url}}' so the collection can at least link to the terms."
+        )
     if not isinstance(declared, dict):
         return None
-    raw_id = declared.get("id") or declared.get("spdx")
-    identifier = _canonical_spdx(str(raw_id)) if isinstance(raw_id, str) and raw_id.strip() else None
+    identifier, conflict = _resolve_identifier(declared)
+    if conflict is not None:
+        return conflict
     raw_name = declared.get("name")
     name = str(raw_name).strip() if isinstance(raw_name, str) and raw_name.strip() else None
 
@@ -288,11 +398,15 @@ def licence_declaration_problem(declared: Any) -> str | None:
     if contradiction is not None:
         return contradiction
 
-    if identifier is not None and identifier in _SPDX_OBLIGATIONS and isinstance(declared.get("obligations"), list):
+    semantics = _declared_semantics(identifier, name)
+    if semantics is not None and isinstance(declared.get("obligations"), list):
+        known_obligations, supplier = semantics
+        declared_obligations = sorted(str(o).strip().lower() for o in declared["obligations"] if str(o).strip())
         return (
-            f"declares explicit 'obligations' alongside the SPDX identifier {identifier}, which "
-            f"already defines its terms; the list is ignored. Remove it, or drop the identifier "
-            f"if the terms genuinely differ."
+            f"declares explicit 'obligations' {declared_obligations} alongside {supplier}, which "
+            f"OCS knows to require {sorted(known_obligations) or 'nothing'}; the list is ignored. "
+            f"Remove it, or give the licence a name of its own if its terms genuinely differ from "
+            f"the licence it is named after."
         )
     return None
 
@@ -337,8 +451,9 @@ def parse_licence(declared: Any) -> DatasetLicence:
         )
 
     if isinstance(declared, dict):
-        raw_id = declared.get("id") or declared.get("spdx")
-        identifier = _canonical_spdx(str(raw_id)) if isinstance(raw_id, str) and raw_id.strip() else None
+        identifier, conflict = _resolve_identifier(declared)
+        if conflict is not None:
+            return UNDECLARED
         raw_name = declared.get("name")
         name = str(raw_name).strip() if isinstance(raw_name, str) and raw_name.strip() else None
         raw_url = declared.get("url")
@@ -347,15 +462,12 @@ def parse_licence(declared: Any) -> DatasetLicence:
         if identifier is None and name is None:
             return UNDECLARED
 
-        # An identifier and a name that require different things is a contradiction, not a
-        # redundancy. `{id: CC0-1.0, name: <a licence requiring attribution>, url: ...}` would
-        # publish `license: CC0-1.0` while the `rel: license` link points at terms that demand
-        # credit, and a STAC client reads the field far more often than it fetches the link.
-        # There is no basis for picking a winner, so neither is used.
-        #
-        # Only a *recognised* name can be shown to disagree. An unrecognised one is left alone:
-        # it is a label and a link, the identifier stays authoritative for the terms, and the
-        # common `{id, name, url}` spelling of a single licence has to keep working.
+        # An identifier plus a *recognised* name is a contradiction, not a redundancy: the
+        # named-licence table holds licences that have no SPDX identifier, so a declaration
+        # giving both names two different instruments. Compared on identity rather than
+        # obligations — see `_contradiction`. An unrecognised name is left alone: it is a label
+        # and a link, the identifier stays authoritative, and the common `{id, name, url}`
+        # spelling of a single licence has to keep working.
         if _contradiction(identifier, name) is not None:
             return UNDECLARED
 
@@ -365,17 +477,14 @@ def parse_licence(declared: Any) -> DatasetLicence:
         # every compatibility check saw no restrictions — laundering by configuration, which is
         # worse than the silence this module replaced.
         raw_obligations = declared.get("obligations")
-        if identifier is not None and identifier in _SPDX_OBLIGATIONS:
-            obligations, known = _SPDX_OBLIGATIONS[identifier], True
+        semantics = _declared_semantics(identifier, name)
+        if semantics is not None:
+            obligations, known = semantics[0], True
+        elif isinstance(raw_obligations, list):
+            obligations = frozenset(str(o).strip().lower() for o in raw_obligations if str(o).strip())
+            known = True
         else:
-            named = _obligations_for_name(name)
-            if named is not None:
-                obligations, known = named, True
-            elif isinstance(raw_obligations, list):
-                obligations = frozenset(str(o).strip().lower() for o in raw_obligations if str(o).strip())
-                known = True
-            else:
-                obligations, known = frozenset(), False
+            obligations, known = frozenset(), False
 
         return DatasetLicence(identifier=identifier, name=name, url=url, obligations=obligations, known=known)
 

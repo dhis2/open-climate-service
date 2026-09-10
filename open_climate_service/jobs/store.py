@@ -6,10 +6,9 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-import portalocker
-
 from open_climate_service import config as api_config
 from open_climate_service.jobs.models import JobRecord
+from open_climate_service.shared.persistence import atomic_json, index_lock
 
 
 def _resolve_jobs_dir() -> Path:
@@ -22,9 +21,9 @@ JOBS_INDEX_PATH = JOBS_DIR / "jobs.json"
 
 def ensure_store() -> None:
     """Create the jobs metadata store if it does not exist."""
-    JOBS_DIR.mkdir(parents=True, exist_ok=True)
-    if not JOBS_INDEX_PATH.exists():
-        JOBS_INDEX_PATH.write_text("[]\n", encoding="utf-8")
+    with index_lock(JOBS_INDEX_PATH):
+        if not JOBS_INDEX_PATH.exists():
+            atomic_json(JOBS_INDEX_PATH, [])
 
 
 def list_job_records() -> list[JobRecord]:
@@ -89,12 +88,9 @@ def _load_records() -> list[dict[str, object]]:
 
 
 def _read_records_from_disk() -> list[dict[str, object]]:
-    with open(JOBS_INDEX_PATH, encoding="utf-8") as handle:
-        portalocker.lock(handle, portalocker.LOCK_SH)
-        try:
+    with index_lock(JOBS_INDEX_PATH):
+        with open(JOBS_INDEX_PATH, encoding="utf-8") as handle:
             payload = json.load(handle)
-        finally:
-            portalocker.unlock(handle)
     if not isinstance(payload, list):
         raise ValueError("jobs.json must contain a list")
     if not all(isinstance(item, dict) for item in payload):
@@ -104,18 +100,22 @@ def _read_records_from_disk() -> list[dict[str, object]]:
 
 def _mutate_records(mutation: Callable[[list[dict[str, object]]], JobRecord]) -> JobRecord:
     ensure_store()
-    with open(JOBS_INDEX_PATH, "r+", encoding="utf-8") as handle:
-        portalocker.lock(handle, portalocker.LOCK_EX)
-        try:
+    with index_lock(JOBS_INDEX_PATH):
+        with open(JOBS_INDEX_PATH, encoding="utf-8") as handle:
             payload = json.load(handle)
-            if not isinstance(payload, list):
-                raise ValueError("jobs.json must contain a list")
-            records = payload
-            result = mutation(records)
-            handle.seek(0)
-            json.dump(records, handle, indent=2)
-            handle.write("\n")
-            handle.truncate()
-            return result
-        finally:
-            portalocker.unlock(handle)
+        if not isinstance(payload, list):
+            raise ValueError("jobs.json must contain a list")
+        records = payload
+        result = mutation(records)
+        _atomic_write_records(records)
+        return result
+
+
+def _atomic_write_records(records: list[dict[str, object]]) -> None:
+    """Replace jobs.json by first flushing a complete temporary copy.
+
+    The in-place rewrite used before could leave a truncated index if the process
+    crashed mid-write. Writing a sibling file and replacing the index atomically
+    keeps delivery checkpoints and idempotency state durable across a crash.
+    """
+    atomic_json(JOBS_INDEX_PATH, records)

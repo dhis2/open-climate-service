@@ -18,7 +18,72 @@ The full runnable script is [`examples/aggregate_and_import_to_dhis2.py`](https:
 
   `open-climate-service` ships the `ClimateService` client; [dhis2-python-client](https://github.com/dhis2/dhis2-python-client) handles the DHIS2 Web API calls.
 
+## Named connections for server-side plugins
+
+Exporters and feature providers running inside an OCS instance can share a named
+DHIS2 connection. Configure it in the file referenced by `CLIMATE_SERVICE_CONFIG`:
+
+```yaml
+dhis2_connections:
+  - id: national-hmis
+    url: https://hmis.example.org/dhis
+    token_env: DHIS2_IMPORT_TOKEN
+    timeout: 30
+    connect_timeout: 10
+    retries: 3
+```
+
+Use the instance URL, including its deployment path if any, without appending
+`/api`. The timeout fields are positive seconds; `retries` is an integer from 0 to
+10. The shown values are defaults. TLS verification is enabled. Connection IDs
+must be unique and contain letters, digits, underscores, or hyphens.
+
+Supply the raw personal access token in the server process's `DHIS2_IMPORT_TOKEN`
+environment variable. Connection fields are literal: use `token_env: DHIS2_IMPORT_TOKEN`,
+not `token_env: ${DHIS2_IMPORT_TOKEN}`. Embedded credentials, token/password fields,
+and URLs with query strings or fragments are rejected. Configuration using this
+section must be valid YAML before environment substitution; quote placeholders in
+other sections when necessary. Existing interpolation outside this section remains
+available.
+
+The client is optional and is supplied by the deployment or integration plugin.
+It is not yet available on PyPI. The connection accessor was tested against
+`dhis2-python-client` revision `41d696ad59f5ac09fce282ead80df32e451e7ff1` (0.3.1).
+For an instance managed with uv, add it to that instance's project:
+
+```bash
+uv add "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git@41d696ad59f5ac09fce282ead80df32e451e7ff1"
+```
+
+An independently installed provider can use the public accessor without reading
+OCS configuration or handling credentials itself:
+
+```python
+from contextlib import closing
+
+from open_climate_service.exports.dhis2 import get_connection
+
+with closing(get_connection("national-hmis")) as dhis2:
+    org_units = dhis2.get_org_units_geojson(level=2)
+```
+
+Each call creates a client and resolves the current token. The caller must close
+the client; `contextlib.closing` also closes it if the operation fails. Creating a
+client sends no network requests. A new call picks up token rotation, while an
+already open client retains its original token. `get_connection_config(id)` returns
+only non-secret settings and works without the optional client or a configured token.
+
+The tested client retries GET responses with server errors; it does not
+automatically replay POST requests or retry transport exceptions. Delivery jobs
+will own import recovery and reports. This connection helper does not introduce
+an export endpoint, bypass read-only guards, or authorize operations: the calling
+operator command or future HTTP route remains responsible for those controls.
+
 ## 1. Fetch organisation units from DHIS2
+
+For reusable destination mappings and pure rendering through `save_result`, see
+[Export plugins and named mappings](export_plugins.md). The client-driven workflow
+below remains supported.
 
 Pull the org unit boundaries as GeoJSON. Each feature's `id` is the org unit UID, which the workflow uses as the `orgUnit`.
 

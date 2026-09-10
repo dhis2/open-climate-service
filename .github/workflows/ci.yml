@@ -10,18 +10,23 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Create .env from example
         run: cp .env.example .env
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "latest"
+          # v10 defaults enable-cache to auto (v4 defaulted to false) and stops
+          # pruning the cache before saving. Installing from a cold cache takes
+          # 2-4s here, while saving the unpruned cache costs ~7s and 354 MB of
+          # the repo's shared 10 GB budget, so caching is a net loss.
+          enable-cache: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

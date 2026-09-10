@@ -9,7 +9,6 @@ import re
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -18,6 +17,31 @@ import portalocker
 from fastapi import HTTPException
 
 from open_climate_service import config as api_config
+from open_climate_service.exports.retention import result_lease
+from open_climate_service.exports.tabular import (
+    _NON_VALUE_FIELDS as _NON_VALUE_FIELDS,
+)
+from open_climate_service.exports.tabular import (
+    _build_dhis2_json_payload as _build_dhis2_json_payload,
+)
+from open_climate_service.exports.tabular import (
+    _format_dhis2_timestamp as _format_dhis2_timestamp,
+)
+from open_climate_service.exports.tabular import (
+    _is_nullish as _is_nullish,
+)
+from open_climate_service.exports.tabular import (
+    _optional_str_option as _optional_str_option,
+)
+from open_climate_service.exports.tabular import (
+    _select_dhis2_value_field as _select_dhis2_value_field,
+)
+from open_climate_service.exports.tabular import (
+    _to_dhis2_period_string as _to_dhis2_period_string,
+)
+from open_climate_service.exports.tabular import (
+    _to_dhis2_value_string as _to_dhis2_value_string,
+)
 from open_climate_service.openeo.schemas import (
     OpenEOJobCreate,
     OpenEOJobListResponse,
@@ -27,7 +51,9 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobUpdate,
 )
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
+from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
 
 _T = TypeVar("_T")
@@ -307,50 +333,63 @@ class OpenEOJobService:
         return record
 
     def update_job(self, job_id: str, body: OpenEOJobUpdate) -> OpenEOJobRecord:
-        record = self.get_job_or_404(job_id)
-        if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
-            raise HTTPException(status_code=400, detail="Cannot update a job that is queued or running")
-        updates: dict[str, Any] = {}
-        if body.title is not None:
-            updates["title"] = body.title
-        if body.description is not None:
-            updates["description"] = body.description
-        if body.process is not None:
-            if not isinstance(body.process.get("process_graph"), dict):
-                raise HTTPException(status_code=422, detail="process.process_graph must be an object")
-            updates["process"] = body.process
-        if body.plan is not None:
-            updates["plan"] = body.plan
-        if body.budget is not None:
-            updates["budget"] = body.budget
-        if updates:
-            updates["updated"] = utc_now()
-            return store_update_job(job_id, lambda r: r.model_copy(update=updates))
-        return record
+        # 404 first so an arbitrary or malformed ID never creates a lease file.
+        self.get_job_or_404(job_id)
+        with result_lease(job_id):
+            record = self.get_job_or_404(job_id)
+            if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+                raise HTTPException(status_code=400, detail="Cannot update a job that is queued or running")
+            updates: dict[str, Any] = {}
+            if body.title is not None:
+                updates["title"] = body.title
+            if body.description is not None:
+                updates["description"] = body.description
+            if body.process is not None:
+                if not isinstance(body.process.get("process_graph"), dict):
+                    raise HTTPException(status_code=422, detail="process.process_graph must be an object")
+                updates["process"] = body.process
+            if body.plan is not None:
+                updates["plan"] = body.plan
+            if body.budget is not None:
+                updates["budget"] = body.budget
+            if updates:
+                updates["updated"] = utc_now()
+                return store_update_job(job_id, lambda r: r.model_copy(update=updates))
+            return record
 
     def delete_job(self, job_id: str) -> None:
+        # 404 first so an arbitrary or malformed ID never creates a lease file.
         record = self.get_job_or_404(job_id)
         if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
             raise HTTPException(status_code=400, detail="Cannot delete a running job; cancel it first")
-        store_delete_job(job_id)
-        import shutil
+        with result_lease(job_id):
+            record = self.get_job_or_404(job_id)
+            if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+                raise HTTPException(status_code=400, detail="Cannot delete a running job; cancel it first")
+            store_delete_job(job_id)
+            import shutil
 
-        job_dir = _JOBS_DIR / job_id
-        if job_dir.exists():
-            shutil.rmtree(job_dir, ignore_errors=True)
+            job_dir = _JOBS_DIR / job_id
+            if job_dir.exists():
+                shutil.rmtree(job_dir, ignore_errors=True)
+        # The lease file lives outside the job directory; remove it now the job is gone.
+        (_JOBS_DIR / ".export-locks" / f"{job_id}.lock").unlink(missing_ok=True)
 
     def start_job(self, job_id: str) -> None:
         """Queue a job for processing (POST /jobs/{id}/results)."""
-        record = self.get_job_or_404(job_id)
-        if record.status == OpenEOJobStatus.RUNNING:
-            raise HTTPException(status_code=400, detail="Job is already running")
-        if record.status == OpenEOJobStatus.QUEUED:
-            return
-        store_update_job(
-            job_id,
-            lambda r: r.model_copy(update={"status": OpenEOJobStatus.QUEUED, "updated": utc_now()}),
-        )
-        self._enqueue(job_id)
+        # 404 first so an arbitrary or malformed ID never creates a lease file.
+        self.get_job_or_404(job_id)
+        with result_lease(job_id):
+            record = self.get_job_or_404(job_id)
+            if record.status == OpenEOJobStatus.RUNNING:
+                raise HTTPException(status_code=400, detail="Job is already running")
+            if record.status == OpenEOJobStatus.QUEUED:
+                return
+            store_update_job(
+                job_id,
+                lambda r: r.model_copy(update={"status": OpenEOJobStatus.QUEUED, "updated": utc_now()}),
+            )
+            self._enqueue(job_id)
 
     def cancel_job(self, job_id: str) -> None:
         """Request cancellation (DELETE /jobs/{id}/results)."""
@@ -489,10 +528,27 @@ class OpenEOJobService:
         # Unwrap format envelope from save_result
         fmt = "ZARR"
         options: dict[str, Any] = {}
+        provenance: dict[str, Any] | None = None
         if isinstance(result, SaveResultEnvelope):
             fmt = result.format
             options = result.options
+            provenance = result.provenance
             result = result.data
+
+        # Resolve a lazy dask_geopandas GeoDataFrame before any tabular path,
+        # including named exports, so a lazy frame never reaches a renderer.
+        try:
+            import dask_geopandas
+
+            if isinstance(result, dask_geopandas.GeoDataFrame):
+                result = result.compute()
+        except ImportError:
+            pass
+
+        if "export" in options:
+            from open_climate_service.exports.service import write_named_export
+
+            return write_named_export(result, results_dir, fmt, options, job_id=job_id, provenance=provenance)
 
         # Resolve DataArray → Dataset for raster formats
         if isinstance(result, xr.DataArray):
@@ -509,15 +565,6 @@ class OpenEOJobService:
             if fmt in _TABULAR_EXPORT_FORMATS:
                 return _write_dataset_tabular_export(result, results_dir, fmt, options)
             return _write_raster(result, results_dir, fmt)
-
-        # Tabular: resolve dask_geopandas → GeoDataFrame
-        try:
-            import dask_geopandas
-
-            if isinstance(result, dask_geopandas.GeoDataFrame):
-                result = result.compute()
-        except ImportError:
-            pass
 
         try:
             import geopandas as gpd
@@ -716,6 +763,14 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
         crs=crs,
         pyramid_method=downloader.resampling_method_from_template(template),
         commit_message=f"Published from openEO job: {dataset_id}",
+    )
+
+    # A derived product is a published dataset and appears in the same lists, so it gets a
+    # thumbnail on the same terms. One write, so this is already the once-per-run render the
+    # streaming path has to arrange deliberately. Never raises.
+    write_dataset_thumbnail(
+        store_path,
+        {**template, "id": dataset_id, "variable": variable},
     )
 
     record = ArtifactRecord(
@@ -1410,6 +1465,27 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
     output_path = usage.get("output_path")
     if not output_path or not isinstance(output_path, str):
         return {}
+    if not output_path.startswith("managed://"):
+        from open_climate_service.exports.service import read_export_metadata
+
+        metadata = read_export_metadata(Path(output_path))
+        if metadata is not None:
+            export_assets = {
+                "result": {
+                    "href": f"/jobs/{record.id}/results/{metadata['filename']}",
+                    "type": metadata["media_type"],
+                    "title": f"{metadata['format']} export",
+                    "roles": ["data"],
+                }
+            }
+            if "manifest" in metadata:
+                export_assets["manifest"] = {
+                    "href": f"/jobs/{record.id}/results/{metadata['manifest']}",
+                    "type": "application/json",
+                    "title": "Export manifest",
+                    "roles": ["metadata"],
+                }
+            return export_assets
     if output_path.startswith("managed://"):
         dataset_id = output_path[len("managed://") :]
         assets: dict[str, Any] = {
@@ -1524,20 +1600,27 @@ _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
 
 def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     """Write an xr.Dataset to disk in the requested format. Returns the output path."""
-    # aggregate_spatial returns a Dataset with a 'geometry' dimension — convert
-    # to GeoDataFrame so GEOJSON/PARQUET/CSV produce tabular vector output.
-    if "geometry" in getattr(ds, "dims", {}):
-        try:
-            import geopandas as gpd
-            from shapely import wkt as shapely_wkt
-
-            df = ds.to_dataframe().reset_index()
-            # geometry column may contain Shapely objects or WKT strings
-            geoms = df["geometry"].apply(lambda g: g if hasattr(g, "geom_type") else shapely_wkt.loads(str(g)))
-            gdf = gpd.GeoDataFrame(df.drop(columns=["geometry"]), geometry=geoms, crs="EPSG:4326")
-            return _write_vector(gdf, results_dir, fmt if fmt in _VECTOR_FORMATS else "GEOJSON")
-        except Exception:
-            logger.debug("geometry→GeoDataFrame conversion failed", exc_info=True)
+    # aggregate_spatial returns a vector datacube. A format that carries geometry gets the real
+    # shapes written out, rather than a table that has to be joined back to a boundary file.
+    geom_dim = _vector_dim(ds)
+    if geom_dim is not None:
+        # CSV is listed as a vector format but carries no shapes, so it must not demand them: a
+        # cube with feature ids and no geometry is still a perfectly good table.
+        if fmt in _VECTOR_FORMATS and fmt != "CSV":
+            try:
+                frame = _vector_frame(ds, geom_dim)
+            except Exception as exc:
+                # Only the geometry conversion is described this way. A failure writing the file --
+                # a full disk, a driver problem -- is a different thing and keeps its own error.
+                # Re-raised as ValueError: that is what the sync route turns into a 400, and a
+                # cube without shapes is the caller's problem, not the server's.
+                raise ValueError(f"Cannot write {fmt}: the vector datacube has no usable geometry ({exc})") from exc
+            # Outside the try, so a write failure still cannot fall through to a raster writer: a
+            # request for GeoParquet coming back as a Zarr directory is worse than an error.
+            return _write_vector(frame, results_dir, fmt)
+        # A raster or tabular format was asked for, so honour it — but the WKT companion
+        # coordinate is neither wanted nor writeable there.
+        ds = ds.drop_vars(GEOMETRY_WKT_COORD, errors="ignore")
 
     if fmt not in _RASTER_FORMATS:
         # Defaulting an unwritable format to Zarr wrote a `result.zarr` directory and called it
@@ -1594,7 +1677,7 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
         path = str(results_dir / "result.csv")
         df = ds.to_dataframe().reset_index()
         # Drop internal Zarr artefacts (spatial_ref, index) that add noise for consumers
-        drop = [c for c in df.columns if c in ("spatial_ref", "index") or c.startswith("level_")]
+        drop = [c for c in df.columns if c in ("spatial_ref", "index", GEOMETRY_WKT_COORD) or c.startswith("level_")]
         df.drop(columns=drop, errors="ignore").to_csv(path, index=False)
         return path
 
@@ -1604,13 +1687,99 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     raise ValueError(f"Unsupported raster format '{fmt}'. Known formats: {known}")
 
 
+def _vector_dim(ds: Any) -> str | None:
+    """The dimension a vector datacube's features live on, or None for a raster cube.
+
+    Found through the `geometry_wkt` carrier first, because `aggregate_spatial` names the
+    dimension after its `target_dimension` argument — a cube aggregated onto `regions` is just as
+    much a vector cube as one aggregated onto `geometry`. The name is the fallback for a cube from
+    elsewhere that carries shapes on `geometry` directly.
+    """
+    coords = getattr(ds, "coords", {})
+    if GEOMETRY_WKT_COORD in coords:
+        dims = coords[GEOMETRY_WKT_COORD].dims
+        if len(dims) == 1:
+            return str(dims[0])
+    if "geometry" in getattr(ds, "dims", {}):
+        return "geometry"
+    return None
+
+
+def _vector_crs(ds: Any, geom_dim: str) -> Any:
+    """The CRS the cube's shapes are in.
+
+    An xvec cube declares it on the GeometryIndex of its geometry coordinate. The `geometry_wkt`
+    carrier from `aggregate_spatial` has none to declare: its shapes are the GeoJSON the request
+    supplied, which RFC 7946 fixes to WGS 84.
+    """
+    index = getattr(ds, "xindexes", {}).get(geom_dim)
+    crs = getattr(index, "crs", None)
+    return crs if crs is not None else "EPSG:4326"
+
+
+def _vector_frame(ds: Any, geom_dim: str) -> Any:
+    """Build a GeoDataFrame from a vector datacube, keeping the feature labels as a column.
+
+    Geometry comes from the `geometry_wkt` companion coordinate that `aggregate_spatial`
+    attaches. A cube from elsewhere may instead carry WKT or shapely objects directly on the
+    geometry dimension, so that is tried second — and if neither yields geometry, this raises
+    rather than inventing an empty column, because a caller asking for GeoParquet is asking for
+    the shapes.
+    """
+    import geopandas as gpd
+    import pandas as pd
+    from shapely import wkt as shapely_wkt
+
+    crs = _vector_crs(ds, geom_dim)
+    frame = ds.to_dataframe().reset_index()
+
+    def _as_geometry(value: Any) -> Any:
+        if hasattr(value, "geom_type"):
+            return value
+        return shapely_wkt.loads(str(value))
+
+    source = GEOMETRY_WKT_COORD if GEOMETRY_WKT_COORD in frame.columns else geom_dim
+    # A flattened vector cube has one row per (feature, timestep), so the same handful of polygons
+    # repeat once per step: a daily year over 500 districts is 182,500 rows carrying 500 distinct
+    # shapes. Parse each distinct value once and fan it back out, rather than paying WKT parsing per
+    # row — for large boundaries that is the dominant cost of writing the file.
+    codes, uniques = pd.factorize(frame[source])
+    # factorize codes a null as -1, and `parsed[-1]` is the last polygon, not a missing one: a
+    # feature without geometry would silently be written with its neighbour's shape.
+    if (codes < 0).any():
+        raise ValueError(f"{int((codes < 0).sum())} rows have no geometry in '{source}'")
+    parsed = [_as_geometry(value) for value in uniques]
+    geoms = [parsed[code] for code in codes]
+    attributes = frame.drop(columns=[c for c in (GEOMETRY_WKT_COORD, geom_dim) if c in frame.columns])
+    # The label survives as a plain column: it is the feature id every consumer joins on. It keeps
+    # the dimension's name unless that is `geometry`, which the shapes now occupy.
+    if source != geom_dim:
+        label_column = "geometry_id" if geom_dim == "geometry" else geom_dim
+        attributes.insert(0, label_column, frame[geom_dim])
+    return gpd.GeoDataFrame(attributes, geometry=geoms, crs=crs)
+
+
+def _as_wgs84(gdf: Any) -> Any:
+    """The frame reprojected to WGS 84, for GeoJSON only.
+
+    RFC 7946 fixes GeoJSON coordinates to WGS 84, and the format carries no CRS of its own to
+    say otherwise, so a projected frame written straight out reads as degrees and lands off the
+    coast of Africa. GeoParquet is the opposite case -- it records the CRS in its metadata, so a
+    projected cube keeps its native coordinates there and loses no precision to a round trip.
+    """
+    crs = getattr(gdf, "crs", None)
+    if crs is None or crs.to_epsg() == 4326:
+        return gdf
+    return gdf.to_crs("EPSG:4326")
+
+
 def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
     """Write a GeoDataFrame to disk in the requested format. Returns the output path."""
     ext, _ = _VECTOR_FORMATS.get(fmt, (".geojson", "application/geo+json"))
 
     if ext == ".geojson":
         path = str(results_dir / "result.geojson")
-        gdf.to_file(path, driver="GeoJSON")
+        _as_wgs84(gdf).to_file(path, driver="GeoJSON")
         return path
 
     if ext == ".parquet":
@@ -1620,12 +1789,19 @@ def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
 
     if ext == ".csv":
         path = str(results_dir / "result.csv")
-        gdf.drop(columns="geometry", errors="ignore").to_csv(path, index=False)
+        # CSV drops the shapes, so nothing is competing for the name: the label column goes back to
+        # `geometry`, which is what it is called on the cube, what a CSV of a vector cube contained
+        # before, and what the tabular exports default `location_field` to. Only the formats that
+        # actually carry geometry need the label to stand aside under `geometry_id`.
+        flat = gdf.drop(columns="geometry", errors="ignore")
+        if "geometry_id" in flat.columns:
+            flat = flat.rename(columns={"geometry_id": "geometry"})
+        flat.to_csv(path, index=False)
         return path
 
     # Fallback to GeoJSON
     path = str(results_dir / "result.geojson")
-    gdf.to_file(path, driver="GeoJSON")
+    _as_wgs84(gdf).to_file(path, driver="GeoJSON")
     return path
 
 
@@ -1687,16 +1863,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
     # label dimension. Pivot that long form to one CHAP value column per cube.
     if "__cubes__" in frame.columns:
         cube_field = "__cubes__"
-        non_value_fields = {
-            location_field,
-            period_field,
-            cube_field,
-            "geometry",
-            "spatial_ref",
-            "index",
-            "band",
-            "bands",
-        }
+        non_value_fields = {location_field, period_field, cube_field, *_NON_VALUE_FIELDS}
         candidate_value_fields = [
             str(c) for c in frame.columns if c not in non_value_fields and not str(c).startswith("level_")
         ]
@@ -1747,16 +1914,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
 
 
 def _select_chap_value_fields(frame: Any, location_field: str, period_field: str) -> list[str]:
-    excluded = {
-        location_field,
-        period_field,
-        "__cubes__",
-        "geometry",
-        "spatial_ref",
-        "index",
-        "band",
-        "bands",
-    }
+    excluded = {location_field, period_field, "__cubes__", *_NON_VALUE_FIELDS}
     candidates = [str(c) for c in frame.columns if c not in excluded and not str(c).startswith("level_")]
     if not candidates:
         raise ValueError("CHAPCSV export requires at least one value column")
@@ -1770,251 +1928,25 @@ def _write_dhis2_json(df: Any, results_dir: Any, options: dict[str, Any]) -> str
     return path
 
 
-def _build_dhis2_json_payload(df: Any, options: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
-    import pandas as pd
-
-    data_element_id = _required_str_option(options, "data_element_id")
-    org_unit_field = _required_str_option(options, "org_unit_field")
-    period_field = _optional_str_option(options, "period_field") or "t"
-    period_type = _optional_str_option(options, "period_type")
-    category_option_combo = _optional_str_option(options, "category_option_combo")
-
-    frame = pd.DataFrame(df).copy()
-    if org_unit_field not in frame.columns:
-        raise ValueError(f"Missing org unit field '{org_unit_field}' in aggregated result")
-    if period_field not in frame.columns:
-        raise ValueError(f"Missing period field '{period_field}' in aggregated result")
-
-    value_field = _select_dhis2_value_field(frame, org_unit_field, period_field)
-
-    data_values: list[dict[str, str]] = []
-    for record in frame.to_dict(orient="records"):
-        value = record.get(value_field)
-        if _is_nullish(value):
-            continue
-
-        org_unit = record.get(org_unit_field)
-        if _is_nullish(org_unit):
-            raise ValueError(f"Null org unit value in field '{org_unit_field}'")
-
-        period_value = record.get(period_field)
-        if _is_nullish(period_value):
-            raise ValueError(f"Null period value in field '{period_field}'")
-
-        item = {
-            "dataElement": data_element_id,
-            "orgUnit": str(org_unit),
-            "period": _to_dhis2_period_string(period_value, period_type),
-            "value": _to_dhis2_value_string(value),
-        }
-        if category_option_combo is not None:
-            item["categoryOptionCombo"] = category_option_combo
-        data_values.append(item)
-
-    return {"dataValues": data_values}
-
-
-def _required_str_option(options: dict[str, Any], key: str) -> str:
-    value = _optional_str_option(options, key)
-    if value is None:
-        raise ValueError(f"Missing required export option '{key}'")
-    return value
-
-
-def _optional_str_option(options: dict[str, Any], key: str) -> str | None:
-    raw = options.get(key)
-    if raw is None:
-        return None
-    value = str(raw).strip()
-    return value or None
-
-
-def _select_dhis2_value_field(frame: Any, org_unit_field: str, period_field: str) -> str:
-    excluded = {
-        org_unit_field,
-        period_field,
-        "geometry",
-        "spatial_ref",
-        "index",
-        "band",
-        "bands",
-    }
-    candidates = [str(c) for c in frame.columns if c not in excluded and not str(c).startswith("level_")]
-    if len(candidates) != 1:
-        raise ValueError(
-            "DHIS2JSON export requires exactly one value column after excluding "
-            f"'{org_unit_field}' and '{period_field}', found {candidates}"
-        )
-    return candidates[0]
-
-
-def _is_nullish(value: Any) -> bool:
-    import numpy as np
-    import pandas as pd
-
-    result = pd.isna(value)
-    if isinstance(result, (bool, np.bool_)):
-        return bool(result)
-    if isinstance(result, np.ndarray):
-        if result.ndim == 0:
-            return bool(result.item())
-        raise ValueError("Array-like values are not supported in tabular export cells")
-    if hasattr(result, "shape") and getattr(result, "shape", ()) not in [(), None]:
-        raise ValueError("Array-like values are not supported in tabular export cells")
-    if hasattr(result, "item"):
-        return bool(result.item())
-    return bool(result)
-
-
-def _normalise_period_type(period_type: str | None) -> str | None:
-    if period_type is None:
-        return None
-    value = period_type.strip().lower()
-    aliases = {
-        "day": "daily",
-        "daily": "daily",
-        "week": "weekly",
-        "weekly": "weekly",
-        "month": "monthly",
-        "monthly": "monthly",
-        "quarter": "quarterly",
-        "quarterly": "quarterly",
-        "year": "yearly",
-        "yearly": "yearly",
-    }
-    kind = aliases.get(value)
-    if kind is None:
-        raise ValueError(f"Unsupported period_type '{period_type}'")
-    return kind
-
-
-def _direct_dhis2_period_string(value: str) -> str | None:
-    patterns = (
-        re.compile(r"^\d{8}$"),
-        re.compile(r"^\d{6}$"),
-        re.compile(r"^\d{4}$"),
-        re.compile(r"^\d{4}W\d{2}$"),
-        re.compile(r"^\d{4}Q[1-4]$"),
-    )
-    if any(pattern.fullmatch(value) for pattern in patterns):
-        return value
-    return None
-
-
-def _to_dhis2_period_string(value: Any, period_type: str | None = None) -> str:
-    import pandas as pd
-
-    if _is_nullish(value):
-        raise ValueError("Cannot serialize null period value")
-
-    kind = _normalise_period_type(period_type)
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("Cannot serialize blank period value")
-        direct = _direct_dhis2_period_string(stripped)
-        if direct is not None:
-            if kind is None:
-                return direct
-            pattern_map = {
-                "daily": re.compile(r"^\d{8}$"),
-                "weekly": re.compile(r"^\d{4}W\d{2}$"),
-                "monthly": re.compile(r"^\d{6}$"),
-                "quarterly": re.compile(r"^\d{4}Q[1-4]$"),
-                "yearly": re.compile(r"^\d{4}$"),
-            }
-            if pattern_map[kind].fullmatch(stripped):
-                return direct
-            for known_type, pattern in pattern_map.items():
-                if known_type != kind and pattern.fullmatch(stripped):
-                    raise ValueError(f"Period value appears to be {known_type}, but period_type={kind}")
-        if kind is None:
-            raise ValueError(
-                "Ambiguous period value; provide save_result option 'period_type' "
-                "for date-like values that are not already in DHIS2 format"
-            )
-        try:
-            timestamp = pd.Timestamp(stripped)
-        except Exception as exc:
-            raise ValueError(f"Could not parse period value {stripped!r} for period_type={kind}") from exc
-        return _format_dhis2_timestamp(timestamp, kind)
-
-    if kind is None:
-        raise ValueError(
-            "Ambiguous period value; provide save_result option 'period_type' "
-            "for date-like values that are not already in DHIS2 format"
-        )
-
-    try:
-        timestamp = pd.Timestamp(value)
-    except Exception as exc:
-        raise ValueError(f"Could not parse period value {value!r} for period_type={kind}") from exc
-    return _format_dhis2_timestamp(timestamp, kind)
-
-
-def _format_dhis2_timestamp(timestamp: Any, period_type: str) -> str:
-    if period_type == "daily":
-        return str(timestamp.strftime("%Y%m%d"))
-    if period_type == "weekly":
-        iso = timestamp.isocalendar()
-        return f"{iso.year}W{iso.week:02d}"
-    if period_type == "monthly":
-        return str(timestamp.strftime("%Y%m"))
-    if period_type == "quarterly":
-        return f"{timestamp.year}Q{timestamp.quarter}"
-    if period_type == "yearly":
-        return str(timestamp.strftime("%Y"))
-    raise ValueError(f"Unsupported period_type '{period_type}'")
-
-
-def _to_dhis2_value_string(value: Any) -> str:
-    import numpy as np
-
-    if _is_nullish(value):
-        raise ValueError("Cannot serialize null value")
-    if isinstance(value, (bool, np.bool_)):
-        return "true" if bool(value) else "false"
-    if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
-        return str(int(value))
-    if isinstance(value, (float, np.floating)):
-        as_float = float(value)
-        as_float32 = float(np.float32(as_float))
-        if as_float == as_float32:
-            return np.format_float_positional(np.float32(as_float), trim="-")
-        return np.format_float_positional(as_float, trim="-")
-    if isinstance(value, Decimal):
-        normalized = format(value, "f")
-        if "." in normalized:
-            normalized = normalized.rstrip("0").rstrip(".")
-        return normalized or "0"
-    return str(value)
-
-
 def _write_png(ds: Any, results_dir: Any) -> str | None:
     """Render an xr.Dataset as a styled PNG using the collection's render settings.
 
-    Applies the same colormap, rescale range, and NaN transparency as the /map
-    viewer.  Squeezes to a 2-D slice (first time step if temporal).
+    Applies the same colormap, rescale range and NaN transparency as the /map viewer,
+    through the shared renderer in ``shared/thumbnails.py``. Squeezes to a 2-D slice by
+    taking the first step of each leading dimension: this is a *result* the caller asked
+    for, so it shows the front of the cube they computed, where a catalogue thumbnail of a
+    published store instead shows the step nearest today.
     """
-    import matplotlib
-    import numpy as np
-
-    matplotlib.use("agg")  # non-interactive backend — safe on worker threads
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import Normalize
+    from open_climate_service.shared.thumbnails import render_png
 
     var = list(ds.data_vars)[0]
     arr = ds[var]
-
-    # Squeeze to 2-D (first step of each leading dim)
     while arr.ndim > 2:
         arr = arr.isel({arr.dims[0]: 0})
 
-    data = arr.values.astype(float)
-
-    # Look up render settings from the published collection via the dataset registry
-    colormap_name = "viridis"
-    vmin, vmax = float(np.nanmin(data)), float(np.nanmax(data))
+    # Render settings from the published collection, via the dataset registry.
+    colormap: str | None = None
+    clim: tuple[float, float] | None = None
     try:
         from open_climate_service.data_registry.services import datasets as reg
 
@@ -2022,44 +1954,15 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
             display = _ds_meta.get("display", {})
             ds_var = _ds_meta.get("variable", "")
             if ds_var == var or _ds_meta.get("id", "").endswith(var):
-                colormap_name = display.get("colormap", colormap_name)
+                colormap = display.get("colormap", colormap)
                 rng = display.get("range")
                 if isinstance(rng, list) and len(rng) == 2:
-                    vmin, vmax = float(rng[0]), float(rng[1])
+                    clim = (float(rng[0]), float(rng[1]))
                 break
     except Exception:
         pass
 
-    cmap = plt.get_cmap(colormap_name).copy()
-    cmap.set_bad(alpha=0)  # NaN → transparent
-
-    norm = Normalize(vmin=vmin, vmax=vmax, clip=False)
-
-    # Render at the natural aspect ratio of the data
-    height, width = data.shape
-    dpi = 150
-    fig_w = max(4, width / dpi)
-    fig_h = max(3, height / dpi)
-
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
-    fig.patch.set_alpha(0)
-    # `origin="upper"` puts array row 0 at the top, which is right because published stores
-    # guarantee y descending (row 0 = north) — see shared/raster_contract. A cube that reaches
-    # here south-up (an in-flight openEO result, not a published store) is flipped first, so the
-    # thumbnail is never upside down.
-    y_name = next((str(d) for d in arr.dims if str(d) in ("y", "lat", "latitude")), None)
-    if y_name is not None and y_name in arr.coords and arr.sizes.get(y_name, 0) >= 2:
-        y_values = arr[y_name].values
-        if float(y_values[1]) > float(y_values[0]):
-            data = data[::-1]
-    ax.imshow(data, origin="upper", cmap=cmap, norm=norm, interpolation="nearest")
-    ax.axis("off")
-    fig.tight_layout(pad=0)
-
-    path = str(results_dir / "result.png")
-    fig.savefig(path, bbox_inches="tight", dpi=dpi, transparent=True, pad_inches=0)
-    plt.close(fig)
-    return path
+    return str(render_png(arr, results_dir / "result.png", colormap=colormap, clim=clim))
 
 
 def _derive_job_title(process: dict[str, Any]) -> str | None:

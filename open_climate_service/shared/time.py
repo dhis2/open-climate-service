@@ -3,7 +3,7 @@
 import calendar
 import logging
 import re
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Any, cast
 
@@ -38,7 +38,7 @@ _NON_TEMPORAL_PERIOD_TYPES = frozenset({"climatology"})
 # Period types a dataset template may declare. Deliberately *not* derived from
 # _PERIOD_TYPE_ISO_STEP: that map exists to give STAC a step for whatever is already in a
 # store, and includes "quarterly", which none of datetime_to_period_string,
-# normalize_period_string, numpy_datetime_to_period_string, _next_period_start or
+# normalize_period_string, numpy_datetime_to_period_string, next_period_string or
 # _default_target_end implement. Deriving the two from one set would advertise quarterly as
 # registerable and then fail at ingest, so they are kept apart.
 SUPPORTED_PERIOD_TYPES = (
@@ -324,6 +324,31 @@ def dekad_period_ids(start: str | date, end: str | date, *, cutoff: str | date |
         _, dekad_end = dekad_bounds(current)
         current = dekad_end + timedelta(days=1)
     return out
+
+
+def next_period_string(period: str, period_type: str) -> str:
+    """Return the dataset-native period immediately following ``period``."""
+    if period_type == "hourly":
+        timestamp = parse_hourly_period_string(period)
+        return datetime_to_period_string(timestamp + timedelta(hours=1), period_type)
+    if period_type == "daily":
+        return (date.fromisoformat(period) + timedelta(days=1)).isoformat()
+    if period_type == "dekadal":
+        _, end = dekad_bounds(period)
+        return (end + timedelta(days=1)).isoformat()
+    if period_type == "weekly":
+        current = parse_period_string_to_datetime(period).date()
+        return datetime_to_period_string(datetime.combine(current + timedelta(days=7), time(0)), period_type)
+    if period_type == "monthly":
+        current = date.fromisoformat(f"{period}-01")
+        year = current.year + (1 if current.month == 12 else 0)
+        month = 1 if current.month == 12 else current.month + 1
+        return f"{year:04d}-{month:02d}"
+    if period_type == "yearly":
+        return str(int(period) + 1)
+    if period_type == "climatology":
+        return str(int(period) + 1)
+    raise ValueError(f"Unsupported period_type '{period_type}'")
 
 
 def parse_hourly_period_string(value: str) -> datetime:

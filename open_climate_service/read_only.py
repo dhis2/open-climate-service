@@ -31,14 +31,17 @@ from fastapi import Request
 from starlette.responses import JSONResponse, Response
 
 from open_climate_service import config as api_config
+from open_climate_service.shared.urls import route_path
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # Mutating paths that remain open. Matched exactly (after stripping a trailing slash).
 _ALLOWED_WRITE_PATHS = frozenset({"/result"})
 
-# Path trees closed to every method, including GET: the admin console and batch jobs.
-_CLOSED_PREFIXES = ("/manage", "/jobs")
+# Path trees closed to every method, including GET: the admin console, batch
+# jobs, and operator export delivery. Delivery exposes server-held credentials
+# to an operation with external effects, so reports and dry runs are closed too.
+_CLOSED_PREFIXES = ("/manage", "/jobs", "/exports")
 
 _MESSAGE = (
     "This instance is read-only: {method} {path} is not available. "
@@ -77,9 +80,19 @@ async def read_only_middleware(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    """Refuse state-changing and admin requests when the instance is configured read-only."""
-    if api_config.is_read_only() and is_blocked(request.method, request.url.path):
-        message = _MESSAGE.format(method=request.method, path=request.url.path)
+    """Refuse state-changing and admin requests when the instance is configured read-only.
+
+    The policy is matched against the route path, with the ASGI prefix removed, because
+    `is_blocked` matches route paths as the app declares them. Matched against the raw request
+    path, `/ocs/manage` under `ROOT_PATH=/ocs` hits no closed prefix and read-only mode fails
+    open. `route_path` never consults `CLIMATE_SERVICE_BASE_URL`, whose path is a public-origin
+    statement rather than an incoming prefix.
+    """
+    if not api_config.is_read_only():
+        return await call_next(request)
+    path = route_path(request)
+    if is_blocked(request.method, path):
+        message = _MESSAGE.format(method=request.method, path=path)
         return JSONResponse(
             status_code=403,
             # `detail` matches FastAPI's HTTPException shape for ordinary HTTP clients;
