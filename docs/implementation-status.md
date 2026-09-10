@@ -196,10 +196,10 @@ Implemented sync behavior:
 - release datasets rematerialize when a newer requested release exists
 - static datasets return `not_syncable`
 - plugin `periods()` clamps target end to actually available data before execution
-- append V1 downloads only the missing range, then rebuilds the canonical artifact from local cache
-- Zarr materialization clips cached upstream data to the requested artifact scope
-- artifact reuse ignores records whose stored coverage does not match the requested scope
-- newly materialized artifacts are rejected when realized temporal coverage does not match the requested scope
+- append execution reuses the planned source delta and writes only missing periods to the committed Icechunk store
+- rematerialization builds and validates the complete contiguous union in a sibling store before publication
+- artifact records keep caller request scope as provenance and cumulative realized store coverage separately
+- existing stores are updated from a planned contiguous union; earlier or gapped ranges rematerialize in ascending order
 
 ## How The Current Flow Works
 

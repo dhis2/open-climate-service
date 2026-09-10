@@ -48,12 +48,33 @@ class ENACTSRainfallPlugin(BaseDatasetPlugin):
 strings) the source has available between `start` and `end`. The framework uses it to
 determine which periods are missing and need to be fetched.
 
+Ingestion requires a unique, ascending sequence with no missing calendar periods
+between the first and last period. Here `period_type: daily` means consecutive
+days, not just date-formatted acquisition identifiers. Sparse event or satellite
+acquisitions are not supported by this contract; they need an explicit sparse-period
+policy before they can use this ingestion path. `Cadence.IRREGULAR` describes
+variable-length calendar periods such as dekads, which still have a defined next
+period, and does not exempt a dataset from continuity checks. Explicit timestamp
+values in STAC describe stored coordinates; they do not change ingestion policy.
+
+For a contiguous existing store, a forward extension queries only the missing
+delta, beginning at the next period after committed coverage. The source need not
+retain older periods already stored by OCS. Requests wholly within committed
+coverage do not query the source. Extending backwards or repairing an existing gap
+requires the source to reproduce the complete union, including committed history.
+
 **`fetch_period`** — fetches exactly one period and returns it as an `xarray.Dataset`
 normalized to `(t, y, x)`. Write it as a regular (blocking) method and the framework runs
 it in a worker thread, so ordinary blocking I/O is fine; the framework appends the result
 directly to the Icechunk-backed Zarr store, so the function should not write to disk. For
 a natively-async source (e.g. lazy Zarr access), declare it `async def fetch_period(...)`
 instead — the orchestrator awaits it directly.
+
+**Event-loop lifetime** — planning may call `periods()` on a different event loop
+from asynchronous `fetch_period()` calls. Do not retain loop-bound resources such
+as async HTTP sessions, tasks, or locks from `periods()` for reuse during fetching.
+Create and close them within the call that uses them; ordinary configuration and
+in-memory metadata may be shared on the plugin instance.
 
 The framework **closes the dataset you return** after writing it (releasing the
 `open_rasterio` / `open_dataset` handles), so return a self-contained dataset — not a lazy
@@ -230,7 +251,7 @@ async def periods(self, start: str, end: str) -> list[str]:
 
 Note `end` stays a plain `str`, so there is no missing-value case to handle.
 
-**Honour `end` when it is given.** If your plugin returns periods outside the requested scope, the ingestion is refused with `Materialized artifact coverage does not match the requested scope`. That guard is helpful — it catches a plugin that ignores the range rather than silently storing more than was asked for — but it means a lead-day plugin has to filter rather than ignore.
+**Honour `end` when it is given.** If your plugin returns periods outside the requested temporal union, ingestion is refused before mutation. That guard catches a plugin that ignores the range rather than silently storing more than was asked for, so a lead-day plugin has to filter rather than ignore.
 
 `temporal_direction` is separate from `sync.kind` on purpose: a forecast is still `temporal` for sync (re-run it and you get fresher data); what differs is which way its periods run. It cannot be combined with `sync.kind: static`, which has no upstream to look ahead into.
 

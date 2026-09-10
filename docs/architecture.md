@@ -278,13 +278,13 @@ Every zarr artifact must have GeoZarr root attributes for map rendering to work 
 
 ## Artifact deduplication and version history
 
-When a new ingestion request arrives, the framework checks whether an existing artifact already covers the requested scope:
+When a new ingestion request arrives, the framework plans against the periods already committed in the managed store:
 
 - same `dataset_id`
 - same bbox (from the configured extent)
-- overlapping time range
+- the contiguous union of committed and requested source-valid periods
 
-If a match exists and `overwrite=false`, the existing artifact is returned without re-downloading. If `overwrite=true`, the existing artifact is replaced.
+If the union extends forward, only missing periods are appended. A non-adjacent request also fetches the intervening source-valid periods. If the union starts before existing coverage, or the committed coordinate is gapped or out of order, the framework rematerializes the union in a sibling store and publishes it only after successful validation and normalization. `request_scope` records what the caller asked for; artifact `coverage` records the cumulative realized store.
 
 The artifact store keeps the full history of records for sync deduplication and provenance. Old artifacts are not deleted automatically. For long-running instances, `records.json` grows over time. The long-term direction is a proper transactional store, but for the current scale (tens of artifacts per instance) a JSON file is adequate.
 
@@ -322,8 +322,8 @@ Each instance is configured for one place. This keeps the data model simple (no 
 
 ### Temporal gaps are not allowed
 
-The sync engine validates that new data connects to the end of the existing artifact before appending. If a gap exists, the sync fails rather than silently producing a dataset with a hole. This is a deliberate constraint: downstream consumers (DHIS2, CHAP) depend on continuous time series and should not receive data with silent gaps.
+Ingest and sync enumerate the complete source-valid union before writing. A forward request fills any intervening periods, while an earlier or already-gapped shape is rematerialized in ascending order. This is a deliberate constraint: downstream consumers (DHIS2, CHAP) depend on continuous, monotonic time series and should not receive data with silent gaps.
 
 ### The append execution mode avoids re-downloading history
 
-`append` downloads only the missing range and rebuilds the full zarr from all cached files. This means the local cache (NetCDF files in `data/downloads/`) is the source of truth for the full time series; the zarr is a derived view. If the cache is deleted, a rematerialize is required to recover.
+`append` writes only the source-available periods missing from the committed Icechunk store. The committed store is authoritative for existing history, while a temporary Icechunk branch preserves the pre-ingest snapshot until normalization and artifact registration succeed. Earlier requests, gaps, and release-style updates instead build a complete sibling replacement.

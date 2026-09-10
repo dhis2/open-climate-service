@@ -81,19 +81,23 @@ def _open_committed(store_path: Path) -> Any:
     return xr.open_zarr(store) if group is None else xr.open_zarr(store, group=group)
 
 
-def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: str = "t") -> set[str]:
-    """Return period ids already committed in the store, or an empty set.
+def read_committed_period_ids_ordered(store_path: Path, period_type: str, *, time_dim: str = "t") -> list[str]:
+    """Return committed period ids in their stored coordinate order.
 
     Resume correctness is store-first: if the repository already contains a
     committed time step, the orchestrator treats that as authoritative even when
     a persisted cursor is stale or missing.
+
+    Order matters to ingestion planning: a set can identify already-written
+    periods, but cannot distinguish a safe forward append from a store whose time
+    axis contains a gap or runs backwards.
     """
     import pandas as pd
 
     from open_climate_service.shared.time import datetime_to_period_string
 
     if not store_path.exists():
-        return set()
+        return []
 
     try:
         # Level 0 rather than the root: the root time coordinate of a pyramided store is
@@ -102,7 +106,7 @@ def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: s
         ds = _open_committed(store_path)
         try:
             if time_dim not in ds.coords:
-                return set()
+                return []
             coord = ds[time_dim]
             if coord.dtype.kind != "M":
                 # Non-datetime (ordinal) step dimension — e.g. an integer
@@ -111,17 +115,22 @@ def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: s
                 # as datetimes would mangle every value and leave ``committed``
                 # empty, causing duplicate appends on resume.
                 if coord.dtype.kind in "iu":
-                    return {str(int(item)) for item in coord.values}
-                return {str(item.item()) for item in coord.values}
-            return {
+                    return [str(int(item)) for item in coord.values]
+                return [str(item.item()) for item in coord.values]
+            return [
                 datetime_to_period_string(pd.Timestamp(item.item()).to_pydatetime(), period_type)
                 for item in coord.values
-            }
+            ]
         finally:
             ds.close()
     except Exception:
         logger.debug("Could not read committed periods from %s", store_path, exc_info=True)
-        return set()
+        return []
+
+
+def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: str = "t") -> set[str]:
+    """Return period ids already committed in the store, or an empty set."""
+    return set(read_committed_period_ids_ordered(store_path, period_type, time_dim=time_dim))
 
 
 def is_store_empty(store_path: Path) -> bool:
