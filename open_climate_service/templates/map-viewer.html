@@ -275,7 +275,7 @@
       // (carbonplan/zarr-layer#88). CLIM-1006 (CHIRPS3 streaks on the Rwanda instance) was
       // reported against 0.6.1, which never read these attributes, so it is a separate
       // fault and still open.
-      import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.9.0";
+      import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.9.1";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
 
       // Suffix _r means the scale is reversed (matplotlib convention).
@@ -376,10 +376,11 @@
       // layer load, then fell through to treating a numeric value as the index. That fallback
       // happened to be what we meant, so this worked by accident (CLIM-1003).
       //
-      // Saying it outright drops the wasted coordinate read and the logged failure, and stops
-      // depending on a fallback the library is actively changing: carbonplan/zarr-layer#87
-      // tightens the same resolver, rejecting unresolvable *string* selectors while keeping
-      // numeric ones. Every write to `selector` goes through here so they cannot drift apart.
+      // Saying it outright drops the wasted coordinate read and the logged failure, and no
+      // longer depends on a fallback that has since been removed: carbonplan/zarr-layer#87,
+      // released in 0.9.1, rejects an unresolvable *string* selector instead of silently
+      // returning index 0, and keeps the direct-index behaviour this relies on. Every write to
+      // `selector` goes through here so they cannot drift apart.
       function indexSelection(index) {
         return { selected: index, type: "index" };
       }
