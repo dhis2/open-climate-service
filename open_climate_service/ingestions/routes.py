@@ -135,11 +135,12 @@ def get_dataset(dataset_id: str) -> DatasetDetailRecord:
 def get_dataset_thumbnail(dataset_id: str) -> FileResponse:
     """Serve a dataset's thumbnail, the image its STAC collection points at.
 
-    404 when the dataset has none. A thumbnail is written at the end of each ingest and sync
-    run, so a published dataset normally has one and the miss is a dataset not yet ingested, or
-    a render that failed or found nothing to draw. It is a "no preview" answer rather than a
-    server fault. The STAC collection only advertises the asset when the file is there, so a
-    client following a published href does not meet this.
+    404 only when no thumbnail has ever been produced: a dataset not yet ingested, or a first
+    render that failed or found nothing to draw. It is a "no preview" answer rather than a
+    server fault. A later run that fails to render, or whose chosen slice is entirely missing,
+    leaves the previous image in place, so a 200 here can be a run or more stale — see
+    `write_dataset_thumbnail`. The STAC collection only advertises the asset when the file is
+    there, so a client following a published href does not meet the 404.
     """
     path = thumbnail_path(dataset_id)
     if not path.is_file():
