@@ -472,6 +472,9 @@ def test_build_collection_with_xstac_normalizes_pystac_collection(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        # Stands in for an xr.Dataset, so it has to answer `dims`: the collection builder
+        # inspects the time axis to tell a sparse one from a dense one (CLIM-950).
+        dims: tuple[str, ...] = ()
 
         def close(self) -> None:
             pass
@@ -506,6 +509,9 @@ def test_collection_reuses_cached_xstac_payload(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        # Stands in for an xr.Dataset, so it has to answer `dims`: the collection builder
+        # inspects the time axis to tell a sparse one from a dense one (CLIM-950).
+        dims: tuple[str, ...] = ()
 
         def close(self) -> None:
             pass
@@ -573,6 +579,9 @@ def test_collection_preserves_template_links_when_xstac_mutates_template(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        # Stands in for an xr.Dataset, so it has to answer `dims`: the collection builder
+        # inspects the time axis to tell a sparse one from a dense one (CLIM-950).
+        dims: tuple[str, ...] = ()
 
         def close(self) -> None:
             pass

@@ -332,6 +332,64 @@ them requires re-ingesting the dataset:
 | `display.colormap` | No       | Colormap name for map rendering (e.g. `blues`, `rdbu_r`) |
 | `display.range`    | No       | `[min, max]` display range for the colormap              |
 | `display.nodata`   | No       | No-data / fill value                                     |
+| `display.bands`    | No       | Three band names for a true-colour render instead of a colormap (see below) |
+| `display.band_dimension` | No | Cube dimension holding the bands. Defaults to `band`     |
+
+### True-colour (RGB) rendering
+
+Imagery whose point is what it looks like — a flood before and after, a land-cover backdrop —
+renders as a composite rather than through a colour ramp. Declare the three bands instead of a
+colormap:
+
+```yaml
+display:
+  bands: [red, green, blue] # values on the band dimension, in R, G, B order
+  range: [0, 3000] # one stretch for all three bands
+```
+
+Bands with different dynamic ranges take one pair each:
+
+```yaml
+display:
+  bands: [red, green, blue]
+  range: [[0, 2500], [0, 2600], [0, 3000]]
+```
+
+An 8-bit true-colour source (Sentinel-2 TCI, Planet `visual`) needs no stretching, so use
+`range: [0, 255]`. Reflectance bands do need it, and a wrong range is the usual reason a
+composite comes out black or washed out.
+
+The bands live on one variable along a band dimension — the same shape the source GeoTIFF has,
+and the same mechanism `worldpop_agesex_*` uses for its `age_group` axis. `display.colormap`
+is ignored when `display.bands` is set: a composite has no single ramp, so the map legend is
+hidden for these layers.
+
+This is published as the STAC [Render extension](https://github.com/stac-extensions/render)
+`bands` array, so any render-aware client can composite the layer without knowing anything
+about OCS.
+
+#### Label a band axis with strings, but do not expect a client to read them
+
+Give the band dimension string labels (`red`, `green`, `blue`) rather than bare integers.
+That is what makes `ds.sel(band="red")` work for Python and openEO consumers, and it is how
+`worldpop_agesex_*` labels its `sex` axis.
+
+Be aware of the cost, because it has already produced one silent bug. A string coordinate is
+written as the Zarr v3 extension data type `fixed_length_utf32`, which is **not** in the core
+Zarr v3 specification — zarr-python itself warns that such arrays "may be unreadable by other
+Zarr libraries", and today's JavaScript reader does reject them.
+
+So a browser client cannot resolve a band *by name* from the store. OCS publishes the labels
+in `cube:dimensions.<band dimension>.values` for exactly this reason, and a client should:
+
+1. read the labels from STAC,
+2. map each render band to its position in that list,
+3. select on the store **by index**, not by name.
+
+The map viewer does this. Selecting by name looks like it works and is worse than failing:
+zarr-layer falls back to index 0 for any value it cannot resolve, so all three bands read the
+same slice and the image renders grey — a plausible-looking picture of the wrong data. Every
+other stepping control in the viewer already selects by index; a composite is no different.
 
 ## Step 3: Point the instance at your plugins directory
 
