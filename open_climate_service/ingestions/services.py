@@ -441,7 +441,10 @@ def _plan_streaming_materialization(
             committed_periods=committed,
         )
 
-    if period_type == "climatology" and (not start.isdigit() or not end.isdigit()):
+    climatology_has_reference_bounds = period_type == "climatology" and not (
+        start.isdigit() and end.isdigit() and 1 <= int(start) <= 366 and 1 <= int(end) <= 366
+    )
+    if climatology_has_reference_bounds:
         # Date-shaped bounds describe the reference interval. Ask the source for
         # the ordinal materialization scope so a partial store cannot define its
         # own target and incorrectly appear complete.
@@ -644,9 +647,10 @@ def _create_streaming_artifact(
             _remove_store_path(replacement_path)
             ingest_path = replacement_path
         elif plan.action != SyncAction.NO_OP and plan.has_committed_periods:
-            # Icechunk commits each fetched period independently. Keep the pre-ingest
-            # snapshot reachable so an exception after any commit can restore the public
-            # branch instead of leaving a partial append or a stale pyramid behind.
+            # Icechunk commits each fetched period independently. Keep a pre-ingest
+            # snapshot for failures after ingest completes (for example normalization
+            # or record persistence). Mid-ingest failures retain their committed prefix
+            # so a retry can resume instead of downloading successful periods again.
             repo = open_or_create_repo(store_path)
             snapshot = repo.lookup_branch("main")
             branch = f"ocs-ingest-rollback-{uuid4().hex}"
