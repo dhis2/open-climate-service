@@ -1445,6 +1445,18 @@ def test_merge_cubes_wrapper_accepts_matching_unsorted_duplicate_index() -> None
     xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
 
 
+def test_merge_cubes_wrapper_rejects_different_duplicate_index() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    first = xr.DataArray([1.0, 2.0, 3.0], dims="t", coords={"t": [0, 1, 2]}, name="precip")
+    stacked = merge(cube1=first, cube2=first.rename("t2m"))
+    third = xr.DataArray([4.0, 5.0, 6.0], dims="t", coords={"t": [0, 1, 1]}, name="population")
+
+    with pytest.raises(ValueError, match="cannot be reordered because it has duplicate labels"):
+        merge(cube1=stacked, cube2=third)
+
+
 def test_merge_cubes_wrapper_preserves_same_variable_dataset_type_and_attrs() -> None:
     from open_climate_service.openeo.execution import _build_process_registry
 

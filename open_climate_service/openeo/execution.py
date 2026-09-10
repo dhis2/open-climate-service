@@ -156,6 +156,8 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
                 raise ValueError(f"Named predictors have different labels on index '{dim}'")
             if left_index.equals(right_index):
                 continue
+            if not right_index.is_unique:
+                raise ValueError(f"Named predictor index '{dim}' cannot be reordered because it has duplicate labels")
             positions = right_index.get_indexer(left_index)
             if (positions < 0).any():
                 left_values = left_index.to_numpy()
@@ -168,10 +170,6 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
                     if (abs(left_values - right_values) < FLOAT_TOLERANCE).all():
                         positions = np.arange(len(left_index))
                     else:
-                        if not right_index.is_unique:
-                            raise ValueError(
-                                f"Named predictor index '{dim}' cannot be reordered because it has duplicate labels"
-                            )
                         order = np.argsort(right_values)
                         sorted_right = right_index.take(order)
                         nearest = sorted_right.get_indexer(
