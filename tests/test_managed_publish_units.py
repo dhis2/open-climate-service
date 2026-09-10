@@ -169,7 +169,25 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the template registry and the store directory at a temporary instance."""
     configs = tmp_path / "datasets"
     configs.mkdir()
+    # The source these tests declare as `source_dataset_id`. Registered because lineage that
+    # does not resolve is now an error rather than silently "not derived from anything"
+    # (CLIM-946) — a typo there would otherwise disable licence propagation. Writing it also
+    # makes the fixture match production, where a source you derive from necessarily exists.
+    (configs / "source.yaml").write_text(
+        "- id: chirps3_precipitation_daily\n"
+        "  name: Total precipitation (CHIRPS3)\n"
+        "  variable: precip\n"
+        "  period_type: daily\n"
+        "  units: mm/d\n"
+        "  license: CC-BY-4.0\n"
+        "  sync:\n"
+        "    kind: temporal\n"
+        "  ingestion:\n"
+        "    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
+    registry.reset_template_caches()
     monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "downloads")
     (tmp_path / "downloads").mkdir()
     return configs

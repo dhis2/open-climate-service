@@ -38,8 +38,10 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Mutating paths that remain open. Matched exactly (after stripping a trailing slash).
 _ALLOWED_WRITE_PATHS = frozenset({"/result"})
 
-# Path trees closed to every method, including GET: the admin console and batch jobs.
-_CLOSED_PREFIXES = ("/manage", "/jobs")
+# Path trees closed to every method, including GET: the admin console, batch
+# jobs, and operator export delivery. Delivery exposes server-held credentials
+# to an operation with external effects, so reports and dry runs are closed too.
+_CLOSED_PREFIXES = ("/manage", "/jobs", "/exports")
 
 _MESSAGE = (
     "This instance is read-only: {method} {path} is not available. "

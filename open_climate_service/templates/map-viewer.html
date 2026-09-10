@@ -225,6 +225,8 @@
             <dd id="meta-source">—</dd>
             <dt id="meta-units-label">Units</dt>
             <dd id="meta-units">—</dd>
+            <dt>Licence</dt>
+            <dd id="meta-licence">—</dd>
           </dl>
           <p id="meta-description" class="meta-description hidden"></p>
 
@@ -250,7 +252,30 @@
       // import.meta.url, and esm.sh's transformed build doesn't serve it (404), which
       // blanks the map. unpkg serves the worker + shared chunk siblings with CORS.
       import * as maplibregl from "https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.mjs";
-      import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.6.1";
+      // 0.8.0 onwards reads the GeoZarr `spatial:*` attributes (`spatial:dimensions`,
+      // `spatial:shape`, `spatial:transform`) rather than inferring geometry from the
+      // coordinate arrays. That is the behaviour we want: placement comes from the store,
+      // not from a guess, and not from our own catalogue passed in by hand.
+      //
+      // It also means the store has to be right. One that declares its axes transposed —
+      // `["x","y"]` with a shape of `[x, y]` on a `(t, y, x)` array — renders as diagonal
+      // streaks in offset blocks, because that is what it asked for. Stores written before
+      // the CLIM-852 fix (2026-08-05) do exactly that, and 0.6.1 concealed it by ignoring
+      // these attributes altogether. Those stores get reingested rather than patched in
+      // place — CLIM-1008 records that decision, and which stores were affected.
+      //
+      // Two stores on the same grid and CRS, same 388x299 chunking over 1550x1195,
+      // differing only in when they were written, are what establish this is metadata
+      // rather than the library:
+      //
+      //   senorge_temperature_daily   (2026-06-26, ["x","y"]) -> streaks
+      //   senorge_precipitation_daily (2026-08-06, ["y","x"]) -> correct
+      //
+      // No upstream bug is involved; an earlier report of one was withdrawn
+      // (carbonplan/zarr-layer#88). CLIM-1006 (CHIRPS3 streaks on the Rwanda instance) was
+      // reported against 0.6.1, which never read these attributes, so it is a separate
+      // fault and still open.
+      import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.9.0";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
 
       // Suffix _r means the scale is reversed (matplotlib convention).
@@ -445,6 +470,20 @@
         return { lazy: true, start, inc, count };
       }
 
+      // Select a step by *index*, explicitly. ZarrLayer resolves a bare value against the
+      // dimension's coordinate array first, and a CF time axis holds raw offsets (hours since
+      // epoch) that never match a slider position — so it logged a resolution failure on every
+      // layer load, then fell through to treating a numeric value as the index. That fallback
+      // happened to be what we meant, so this worked by accident (CLIM-1003).
+      //
+      // Saying it outright drops the wasted coordinate read and the logged failure, and stops
+      // depending on a fallback the library is actively changing: carbonplan/zarr-layer#87
+      // tightens the same resolver, rejecting unresolvable *string* selectors while keeping
+      // numeric ones. Every write to `selector` goes through here so they cannot drift apart.
+      function indexSelection(index) {
+        return { selected: index, type: "index" };
+      }
+
       function stepCount(steps) {
         return Array.isArray(steps) ? steps.length : steps.count;
       }
@@ -511,6 +550,7 @@
       const metaUnits = document.getElementById("meta-units");
       const metaUnitsLabel = document.getElementById("meta-units-label");
       const metaDescription = document.getElementById("meta-description");
+      const metaLicence = document.getElementById("meta-licence");
       const legendEl = document.getElementById("legend");
       const legendBar = document.getElementById("legend-bar");
       const legendMin = document.getElementById("legend-min");
@@ -719,41 +759,38 @@
           return { key, dim, steps, control, count, label: dimLabel(key, dim), index };
         });
         selector = {};
-        for (const d of dimStates) selector[d.key] = d.index;
+        for (const d of dimStates) selector[d.key] = indexSelection(d.index);
 
-        // ZarrLayer resolves only its built-in CRSes (EPSG:4326 / EPSG:3857) from the
-        // code alone; every other CRS — e.g. seNorge's UTM33 (EPSG:32633) — needs an
-        // explicit proj4 definition, or it is treated as WGS84 degrees and lands in the
-        // wrong place. See ZarrLayerOptions `crs` docs: "built-in projections (EPSG:4326
-        // or EPSG:3857). For any other CRS, provide a matching proj4 definition."
+        // The CRS code alone is enough here. From 0.8.0 ZarrLayer resolves a code through
+        // proj4's own registry, which carries every UTM zone among others, so a projected
+        // store no longer needs a proj4 definition handed to it. That retires both the
+        // `open_climate_service:proj4` hint we used to publish and the epsg.io fetch that
+        // backed it up (CLIM-833) — one fewer non-standard field, and no third-party
+        // request on the render path.
         //
-        // Prefer the proj4 string published in the STAC collection
-        // (open_climate_service:proj4) so we don't depend on an external epsg.io lookup at
-        // render time; fall back to epsg.io only for older stores that predate the field.
+        // proj4's registry does not cover *every* EPSG code — carbonplan/zarr-layer#61,
+        // which would bundle a full database, is still open — so a code alone would leave a
+        // national grid (EPSG:27700, EPSG:2154) unresolved. Passing one here is harmless
+        // rather than fatal: ZarrLayer keeps no override for a code it cannot resolve, and
+        // falls back to reading the store's own `proj:wkt2` / `proj:projjson`, which both
+        // write paths publish beside `proj:code` (shared/crs.py, store_crs_attrs). The
+        // store, not the reader's lookup table, is what has to know the CRS.
         let nativeCrs = collection["proj:code"] ?? "EPSG:4326";
-        // CRS84 aliases (CRS84, OGC:CRS84, CRS:84, or a CRS84 URI) are geographic WGS84;
-        // ZarrLayer only recognizes EPSG:4326 / EPSG:3857 by code, so normalize to EPSG:4326
-        // before both the built-in check and passing `crs` into new ZarrLayer. Separators
-        // are stripped first so the short OGC form CRS:84 is matched too.
+        // CRS84 aliases (CRS84, OGC:CRS84, CRS:84, or a CRS84 URI) are geographic WGS84,
+        // normalised so `crs` is a code ZarrLayer recognises directly. Separators are
+        // stripped first so the short OGC form CRS:84 is matched too.
         if (nativeCrs.toUpperCase().replace(/[^A-Z0-9]/g, "").endsWith("CRS84")) nativeCrs = "EPSG:4326";
-        const BUILTIN_CRS = new Set(["EPSG:4326", "EPSG:3857"]);
-        const isBuiltinCrs = BUILTIN_CRS.has(nativeCrs.toUpperCase());
-        let proj4String = collection["open_climate_service:proj4"] ?? null;
-        if (!isBuiltinCrs && !proj4String) {
-          try {
-            const match = nativeCrs.match(/(\d+)$/);
-            const epsgId = match?.[1];
-            if (epsgId) {
-              const p4res = await fetch(`https://epsg.io/${epsgId}.proj4`);
-              if (p4res.ok) proj4String = (await p4res.text()).trim();
-              else console.warn(`[map] Could not fetch proj4 for ${nativeCrs} (HTTP ${p4res.status})`);
-            } else {
-              console.warn(`[map] Cannot extract EPSG id from CRS "${nativeCrs}" — rendering may be incorrect`);
-            }
-          } catch (err) {
-            console.warn(`[map] Failed to fetch proj4 string for "${nativeCrs}":`, err);
-          }
-        }
+
+        // No `bounds` is passed, deliberately: the store carries its own placement in the
+        // GeoZarr `spatial:*` attributes, and from 0.8.0 ZarrLayer reads them. Handing it a
+        // catalogue-derived extent as well would only add a second source of truth.
+        //
+        // It is also not safe to pass blind. ZarrLayer documents `bounds` as *edge* bounds,
+        // while `proj:bbox` is edge-based only when the store declares `spatial:bbox` for
+        // the STAC builder to prefer; without that it falls back to the coordinate min/max,
+        // which spans cell *centres*. Passing one as the other is half a cell out —
+        // invisible at country zoom, wrong as you zoom in. The store knows which it holds
+        // and the viewer does not, so let the library read the store.
 
         let cm;
         try {
@@ -776,7 +813,6 @@
             ...(zarrVersion !== null && { zarrVersion }),
             ...(fillValue !== null && { fillValue }),
             crs: nativeCrs,
-            ...(proj4String !== null && { proj4: proj4String }),
           });
           map.addLayer(activeLayer);
           for (const layer of map.getStyle().layers) {
@@ -825,6 +861,24 @@
         // fallback is built from, so a real description that happens to open with those words
         // ("Published GeoZarr dataset for X - use only within one country") is kept rather
         // than mistaken for the generated one.
+        // A user who can see a layer should be able to see what they may do with it
+        // (CLIM-946). `other` is what an undeclared licence publishes, so say "not declared"
+        // rather than showing a word that reads like the name of a licence.
+        const licenceLink = (collection.links ?? []).find((l) => l.rel === "license");
+        const licence = collection.license;
+        const licenceLabel =
+          !licence || licence === "other" ? (licenceLink?.title ?? "not declared") : licence;
+        if (licenceLink?.href) {
+          const anchor = document.createElement("a");
+          anchor.href = licenceLink.href;
+          anchor.target = "_blank";
+          anchor.rel = "noopener noreferrer";
+          anchor.textContent = licenceLabel;
+          metaLicence.replaceChildren(anchor);
+        } else {
+          metaLicence.textContent = licenceLabel;
+        }
+
         const description = collection.description ?? "";
         const generated = description === `Published GeoZarr dataset for ${collection.title}`;
         metaDescription.textContent = description;
@@ -891,7 +945,7 @@
             slider.addEventListener("input", (e) => {
               const i = parseInt(e.target.value, 10);
               d.index = i;
-              selector[d.key] = i;
+              selector[d.key] = indexSelection(i);
               valueEl.textContent = stepDisplay(d.key, d.steps, i) ?? "—";
               count.textContent = `${i + 1} / ${d.count}`;
               applySelector();
@@ -909,7 +963,7 @@
             select.addEventListener("change", (e) => {
               const i = parseInt(e.target.value, 10);
               d.index = i;
-              selector[d.key] = i;
+              selector[d.key] = indexSelection(i);
               applySelector();
             });
             block.append(select);

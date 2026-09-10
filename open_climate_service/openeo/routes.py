@@ -54,7 +54,7 @@ def credentials_oidc() -> dict[str, Any]:
 @capabilities_router.get("/file_formats")
 def file_formats() -> dict[str, Any]:
     """Return supported input and output file formats."""
-    output_formats = {
+    output_formats: dict[str, Any] = {
         "ZARR": {
             "title": "Zarr",
             "description": "Zarr v3 chunked array store — cloud-native format for multi-dimensional data",
@@ -134,6 +134,21 @@ def file_formats() -> dict[str, Any]:
             "links": [],
         },
     }
+    from open_climate_service.exports.registry import load_export_plugins
+
+    for plugin in load_export_plugins().values():
+        if plugin.format not in output_formats:
+            output_formats[plugin.format] = {
+                "title": plugin.format,
+                "description": "Pure export renderer; requires a configured export ID in save_result options.",
+                "gis_data_types": ["table"],
+                "parameters": {},
+                "links": [],
+            }
+        output_formats[plugin.format]["parameters"]["export"] = {
+            "type": "string",
+            "description": "Named export mapping; use this option without per-request mapping overrides.",
+        }
     return {
         "input": {},
         "output": output_formats,
@@ -325,6 +340,11 @@ def download_result_file(job_id: str, filename: str) -> FileResponse:
 
     suffix = path.suffix.lower()
     media_type = _RESULT_MEDIA_TYPES.get(suffix, "application/octet-stream")
+    from open_climate_service.exports.service import read_export_metadata
+
+    metadata = read_export_metadata(path)
+    if metadata is not None:
+        media_type = metadata["media_type"]
     return FileResponse(str(path), media_type=media_type, filename=filename)
 
 
@@ -385,6 +405,7 @@ def execute_synchronous(
     from open_climate_service.openeo.execution import SaveResultEnvelope
     from open_climate_service.openeo.jobs import (
         _VECTOR_FORMATS,
+        _as_wgs84,
         _write_dataset_tabular_export,
         _write_raster,
         _write_tabular_export,
@@ -398,6 +419,24 @@ def execute_synchronous(
         fmt = result.format
         options = result.options
         result = result.data
+
+    # Named exporters expect an eager frame, matching the batch-job path.
+    try:
+        import dask_geopandas
+
+        if isinstance(result, dask_geopandas.GeoDataFrame):
+            result = result.compute()
+    except ImportError:
+        pass
+
+    if "export" in options:
+        from open_climate_service.exports.service import render_named_export
+
+        try:
+            plugin, rendered = render_named_export(result, fmt, options)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(content=rendered.content, media_type=plugin.media_type)
 
     if isinstance(result, xr.DataArray):
         result = result.to_dataset(name=result.name or "result")
@@ -426,14 +465,6 @@ def execute_synchronous(
 
     # Try vector
     try:
-        import dask_geopandas
-
-        if isinstance(result, dask_geopandas.GeoDataFrame):
-            result = result.compute()
-    except ImportError:
-        pass
-
-    try:
         import geopandas as gpd
         import pandas as pd
 
@@ -453,9 +484,10 @@ def execute_synchronous(
                 frame = pd.DataFrame(result.drop(columns="geometry", errors="ignore"))
                 return _json_tabular_payload_response(frame, options)
             if fmt == "GEOJSON":
-                if result.crs is not None and result.crs.to_epsg() != 4326:
-                    result = result.to_crs("EPSG:4326")
-                return Response(content=result.to_json(), media_type="application/geo+json")
+                # Same rule as the file writers, from the same helper: this response is GeoJSON
+                # too, and the two paths reprojecting by different rules is how one of them ends
+                # up shipping eastings as longitudes.
+                return Response(content=_as_wgs84(result).to_json(), media_type="application/geo+json")
             if fmt in _VECTOR_FORMATS:
                 with tempfile.TemporaryDirectory() as tmp:
                     from pathlib import Path

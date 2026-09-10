@@ -21,6 +21,7 @@ from open_climate_service.ingestions.schemas import (
     SyncKind,
     SyncResponse,
 )
+from open_climate_service.shared.time import next_period_string
 
 
 def _artifact(
@@ -294,6 +295,33 @@ def test_plan_sync_for_plugin_backed_icechunk_uses_committed_store_state(
     assert result.action == SyncAction.NO_OP
     assert result.reason == "no_new_period"
     assert result.current_end == "2026-01-31"
+
+
+def test_plan_sync_uses_cumulative_coverage_start_not_latest_request_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    latest = _artifact(
+        artifact_id="a1",
+        managed_dataset_id="chirps3_precipitation_daily_sle",
+        end="2026-01-03",
+    )
+    latest.request_scope.start = "2026-01-03"
+    latest.coverage.temporal.start = "2026-01-01"
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *args, **kwargs: ["2026-01-04"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "chirps3_precipitation_daily",
+            "period_type": "daily",
+            "sync": {"kind": "temporal", "execution": "append"},
+            "ingestion": {"plugin": "example.Plugin"},
+        },
+        latest_artifact=latest,
+        requested_end="2026-01-04",
+    )
+
+    assert result.action == SyncAction.APPEND
+    assert result.current_start == "2026-01-01"
 
 
 def test_plan_sync_marks_static_non_temporal_dataset_not_syncable() -> None:
@@ -791,7 +819,7 @@ def test_default_target_end_rejects_unsupported_period_type() -> None:
 
 
 def test_next_period_start_preserves_hourly_period_format() -> None:
-    result = sync_engine._next_period_start("2026-04-21T13", period_type="hourly")
+    result = next_period_string("2026-04-21T13", "hourly")
 
     assert result == "2026-04-21T14"
 
@@ -805,13 +833,13 @@ def test_default_weekly_target_end_uses_iso_week_format(monkeypatch: pytest.Monk
 
 
 def test_next_period_start_preserves_weekly_period_format() -> None:
-    result = sync_engine._next_period_start("2026-W17", period_type="weekly")
+    result = next_period_string("2026-W17", "weekly")
 
     assert result == "2026-W18"
 
 
 def test_next_period_start_rolls_weekly_period_across_iso_year_boundary() -> None:
-    result = sync_engine._next_period_start("2020-W53", period_type="weekly")
+    result = next_period_string("2020-W53", "weekly")
 
     assert result == "2021-W01"
 
@@ -1066,6 +1094,50 @@ def test_run_sync_raises_clear_error_when_append_invariants_are_missing(monkeypa
         )
 
 
+def test_run_sync_preserves_rematerialize_action_as_overwrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        end="2024",
+    )
+    plan = SyncDetail(
+        source_dataset_id="worldpop_population_yearly",
+        sync_kind=SyncKind.RELEASE,
+        action=SyncAction.REMATERIALIZE,
+        reason="new_release_available",
+        message="new release",
+        current_start="2020",
+        current_end="2024",
+        target_end="2025",
+        target_end_source="request",
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(sync_engine, "plan_sync", lambda **kwargs: plan)
+
+    def fake_create_artifact(**kwargs: object) -> ArtifactRecord:
+        captured.update(kwargs)
+        return _artifact(
+            artifact_id="a2",
+            source_dataset_id="worldpop_population_yearly",
+            managed_dataset_id="worldpop_population_yearly_sle",
+            end="2025",
+        )
+
+    sync_engine.run_sync(
+        latest_artifact=latest,
+        source_dataset={"id": "worldpop_population_yearly", "period_type": "yearly", "sync": {"kind": "release"}},
+        requested_end="2025",
+        country_code="SLE",
+        publish=False,
+        create_artifact_fn=fake_create_artifact,
+        get_dataset_fn=lambda dataset_id: _dataset_detail(dataset_id),
+    )
+
+    assert captured["overwrite"] is True
+    assert captured["periods"] is None
+
+
 def test_sync_dataset_forwards_country_code_from_extent(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset_id = "worldpop_population_yearly_sle"
     latest = _artifact(
@@ -1143,7 +1215,7 @@ def test_maybe_build_pyramid_calls_write_to_icechunk_store(tmp_path: Path, monke
 
     monkeypatch.setattr(downloader, "write_to_icechunk_store", fake_write)
 
-    _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "precip"})
+    result = _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "precip"})
 
     assert len(written) == 1
     # The rewrite cannot target the store it is reading from, so it goes to a sibling and is
@@ -1152,6 +1224,8 @@ def test_maybe_build_pyramid_calls_write_to_icechunk_store(tmp_path: Path, monke
     assert icechunk_path.is_dir()
     assert not written[0][1].exists()
     assert not icechunk_path.with_name(f"{icechunk_path.name}.retired").exists()
+    assert result.completed is True
+    assert result.swapped is True
 
 
 def test_maybe_build_pyramid_skips_rewrite_for_normalized_flat_store(
@@ -1186,9 +1260,11 @@ def test_maybe_build_pyramid_skips_rewrite_for_normalized_flat_store(
     written: list[tuple] = []
     monkeypatch.setattr(downloader, "write_to_icechunk_store", lambda *a, **kw: written.append(a))
 
-    _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "precip"})
+    result = _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "precip"})
 
     assert written == []  # already GeoZarr-normalized and flat → no rewrite
+    assert result.completed is True
+    assert result.swapped is False
 
 
 def test_maybe_build_pyramid_falls_back_on_build_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1212,7 +1288,10 @@ def test_maybe_build_pyramid_falls_back_on_build_error(tmp_path: Path, monkeypat
     monkeypatch.setattr(downloader, "write_to_icechunk_store", fake_write_fail)
 
     # Must not raise — errors are swallowed so the flat artifact is still registered.
-    _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "v"})
+    result = _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "v"})
+
+    assert result.completed is False
+    assert result.swapped is False
 
 
 def test_plan_sync_append_for_icechunk_artifact(
@@ -1318,6 +1397,20 @@ def test_recover_interrupted_swap_is_a_no_op_for_a_brand_new_dataset(tmp_path: P
     assert recover_interrupted_swap(tmp_path / "never-existed.icechunk") is False
 
 
+def test_recover_interrupted_swap_removes_stale_ingest_rollback_branches(tmp_path: Path) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    target = tmp_path / "ds.icechunk"
+    repo = open_or_create_repo(target)
+    snapshot = repo.lookup_branch("main")
+    repo.create_branch("ocs-ingest-rollback-first", snapshot)
+    repo.create_branch("ocs-ingest-rollback-second", snapshot)
+
+    assert recover_interrupted_swap(target) is True
+    assert repo.list_branches() == {"main"}
+
+
 def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1348,6 +1441,11 @@ def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(
 
     seen: dict[str, object] = {}
 
+    class FakePlugin:
+        async def periods(self, start: str, end: str) -> list[str]:
+            assert (start, end) == ("2026-01-01", "2026-01-03")
+            return ["2026-01-01", "2026-01-02", "2026-01-03"]
+
     def fake_ingest(**kwargs: object) -> object:
         store_path = kwargs["store_path"]
         assert isinstance(store_path, Path)
@@ -1364,8 +1462,12 @@ def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(
 
     monkeypatch.setattr(downloader, "get_icechunk_path", lambda _dataset: target)
     monkeypatch.setattr(ingestion_services, "run_streaming_ingest_sync", fake_ingest)
-    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda *a, **k: object())
-    monkeypatch.setattr(ingestion_services, "_maybe_build_pyramid", lambda *a, **k: None)
+    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda *a, **k: FakePlugin())
+    monkeypatch.setattr(
+        ingestion_services,
+        "_maybe_build_pyramid",
+        lambda *a, **k: ingestion_services._StoreNormalizationResult(completed=True),
+    )
     monkeypatch.setattr(
         ingestion_services,
         "get_data_coverage_for_paths",
@@ -1405,3 +1507,67 @@ def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(
     # And the delta landed on top of the history rather than replacing it.
     assert (target / "history").read_text(encoding="utf-8") == "2026-01-01,2026-01-02,2026-01-03"
     assert not retired.exists()
+
+
+@pytest.mark.parametrize("restored", [False, True])
+def test_recover_interrupted_rollback_removes_rejected_store(tmp_path: Path, restored: bool) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+
+    target = tmp_path / "ds.icechunk"
+    retired = tmp_path / "ds.icechunk.retired"
+    failed = tmp_path / "ds.icechunk.failed"
+    original = target if restored else retired
+    original.mkdir()
+    (original / "data").write_text("original", encoding="utf-8")
+    failed.mkdir()
+    (failed / "data").write_text("rejected", encoding="utf-8")
+
+    assert recover_interrupted_swap(target) is True
+    assert (target / "data").read_text(encoding="utf-8") == "original"
+    assert not retired.exists()
+    assert not failed.exists()
+    assert recover_interrupted_swap(target) is False
+
+
+def test_interrupted_rollback_preserves_copies_if_restore_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+
+    target = tmp_path / "ds.icechunk"
+    retired = tmp_path / "ds.icechunk.retired"
+    failed = tmp_path / "ds.icechunk.failed"
+    retired.mkdir()
+    failed.mkdir()
+
+    def fail_rename(self: Path, destination: Path) -> Path:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(Path, "rename", fail_rename)
+    with pytest.raises(OSError, match="rename failed"):
+        recover_interrupted_swap(target)
+    assert retired.exists()
+    assert failed.exists()
+    assert not target.exists()
+
+
+def test_rollback_refuses_to_claim_success_without_retained_store(tmp_path: Path) -> None:
+    from open_climate_service.ingestions.services import _rollback_store_swap
+
+    target = tmp_path / "ds.icechunk"
+    target.mkdir()
+    with pytest.raises(FileNotFoundError, match="retained store .* is missing"):
+        _rollback_store_swap(target)
+    assert target.exists()
+
+
+def test_recovery_does_not_publish_a_rejected_store_without_original(tmp_path: Path) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+
+    target = tmp_path / "ds.icechunk"
+    failed = tmp_path / "ds.icechunk.failed"
+    failed.mkdir()
+    with pytest.raises(RuntimeError, match="only the rejected .failed store remains"):
+        recover_interrupted_swap(target)
+    assert failed.exists()
+    assert not target.exists()

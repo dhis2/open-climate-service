@@ -10,6 +10,7 @@ The current public story is:
 - discover published GeoZarr datasets with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
+- preview a dataset with `/datasets/{dataset_id}/thumbnail.png` (also a STAC collection asset)
 
 Internal artifacts still exist as a storage and provenance model, but they are not part of the public API contract.
 
@@ -27,6 +28,7 @@ Operational note:
 - `GET /datasets`
 - `GET /datasets/{dataset_id}`
 - `GET /datasets/{dataset_id}/download`
+- `GET /datasets/{dataset_id}/thumbnail.png`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
@@ -269,6 +271,12 @@ Example response:
 What this means:
 
 - `/datasets` is the public native catalog of managed datasets
+- `license` is an SPDX identifier, or `other` for a licence that has none — the Copernicus
+  licence, for instance. It is never absent: a dataset whose template declares no licence
+  reports `other` rather than something that reads as permissive. `license_url` points at the
+  licence text where one is known, and the STAC collection carries the same information as a
+  `rel: license` link plus `providers` for attribution.
+
 - `description` carries the dataset template's own prose, and is `null` when the template
   declares none. It is where a dataset states what its values actually mean, so it is worth
   reading before using one: `chirps3_precipitation_monthly` is a mean daily rate rather than a
@@ -331,9 +339,17 @@ Both endpoints are advertised as `assets` in the STAC collection:
     "href": "https://host/icechunk/chirps3_precipitation_daily",
     "type": "application/octet-stream",
     "xarray:open_kwargs": { "zarr_format": 3, "consolidated": false }
+  },
+  "thumbnail": {
+    "href": "https://host/datasets/chirps3_precipitation_daily/thumbnail.png",
+    "type": "image/png",
+    "title": "Thumbnail",
+    "roles": ["thumbnail"]
   }
 }
 ```
+
+The `thumbnail` asset is present only when the image exists — see section 9.
 
 A **pyramided** store advertises one extra media type parameter:
 
@@ -349,6 +365,23 @@ would send a renderer looking for levels that do not exist.
 
 It is matched as a literal, not parsed, so the string is byte-for-byte fixed: same parameter
 order, one space after each `;`. Reformatting it silently disables rendering.
+
+## 9. Fetch a dataset thumbnail
+
+`GET /datasets/{dataset_id}/thumbnail.png` serves a small PNG preview of the dataset: one
+representative 2-D slice, styled with the template's `display.colormap`, longest side 512 px,
+missing values transparent.
+
+```bash
+curl -s -o thumb.png "http://127.0.0.1:9000/datasets/chirps3_precipitation_daily/thumbnail.png"
+```
+
+A thumbnail is written at the end of each ingest and sync run, so a published dataset normally
+has one. The endpoint 404s only when none has ever been produced — a dataset not yet ingested,
+or a first render that failed or found nothing to draw. A later run that fails, or whose chosen
+slice is entirely missing, leaves the previous image in place rather than deleting it, so a
+served thumbnail can be a run or more stale. The STAC collection advertises the `thumbnail`
+asset only when the image exists.
 
 ## 10. Access published STAC collections
 
@@ -383,10 +416,10 @@ Implemented behavior:
 - `static` datasets return `not_syncable`
 - preserve stable managed dataset identity
 - use template-level `sync_execution`
-- `append` execution downloads only the missing period range, then rebuilds the canonical artifact from the local cache
-- `rematerialize` execution downloads the full original request range through the requested end period
+- `append` execution reuses the sync planner's source-available delta and writes only periods missing from the committed store
+- `rematerialize` execution downloads the complete planned contiguous union into a sibling store and publishes it only after validation
 - return the updated dataset view plus structured `sync_detail`
-- reject a rebuilt artifact before storing or publishing it if realized temporal coverage does not match the requested scope
+- validate realized temporal coverage against the planned contiguous artifact scope; retain the caller's request scope separately as provenance
 
 Current sync constraints:
 
@@ -470,8 +503,21 @@ Expected planning response:
 - `delta_start` is `2024-02-01`
 - `delta_end` is `2024-02-10`
 
-`append` here means Open Climate Service downloads only the missing period range and then
-rebuilds the canonical artifact from local cache. It is not in-place Zarr mutation.
+`append` here means Open Climate Service reuses the planner's source-available delta and
+writes only missing periods to the existing Icechunk store. A rollback snapshot protects
+the previously committed store until normalization and artifact registration succeed.
+Progress counts the new periods in this append, excluding already committed history.
+
+If a complete store has lost its artifact record, repeating `/ingest` reconstructs the
+record from the store without querying or fetching historical source data. Recovery
+validates and normalizes the store and honors the request's publication setting.
+
+Interrupted directory rollback can leave a rejected replacement at `<store>.failed`.
+The next ingest restores a missing target from `<store>.retired` and removes the
+rejected copy once the target exists. If rollback itself fails, the job reports that
+failure and preserves the recovery branch and snapshot; inspect the reported store
+paths before retrying. Snapshot reset is skipped if the original repository could
+not be restored.
 
 Where these timestamps come from:
 

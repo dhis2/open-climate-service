@@ -120,6 +120,32 @@ def test_committed_periods_come_from_level_zero(tmp_path: Path) -> None:
     }
 
 
+def test_resetting_a_failed_append_restores_every_pyramid_level(tmp_path: Path) -> None:
+    """The CLIM-899 rollback snapshot restores level 0, root, and overviews together."""
+    store_path, repo = _pyramided_store(tmp_path)
+    before = repo.lookup_branch("main")
+    repo.create_branch("rollback-test", before)
+
+    session = repo.writable_session("main")
+    _period(3).to_zarr(session.store, group=committed_data_group(store_path), append_dim="t", zarr_format=3)
+    session.commit("partial append")
+    assert len(read_committed_period_ids(store_path, "daily")) == 3
+
+    repo.reset_branch("main", before)
+    repo.delete_branch("rollback-test")
+
+    store = repo.readonly_session("main").store
+    root = zarr.open_group(store, mode="r")
+    counts = {"root": root["t"].shape[0]}
+    for group in root.group_keys():
+        level = xr.open_zarr(store, group=group)
+        try:
+            counts[group] = level.sizes["t"]
+        finally:
+            level.close()
+    assert set(counts.values()) == {2}
+
+
 def test_spatial_guard_is_active_on_a_pyramided_store(tmp_path: Path) -> None:
     """Reading the root returned None here, silently disabling the mirrored-raster check."""
     store_path, _ = _pyramided_store(tmp_path)
