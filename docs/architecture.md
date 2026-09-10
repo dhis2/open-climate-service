@@ -163,8 +163,7 @@ from open_climate_service.streaming import BaseDatasetPlugin
 
 
 class MyStreamingPlugin(BaseDatasetPlugin):
-    async def periods(self, start: str, end: str) -> list[str]:
-        ...
+    async def periods(self, start: str, end: str) -> list[str]: ...
 
     def fetch_period(self, period_id: str, bbox: list[float], **params) -> xr.Dataset:
         # A plain (blocking) method run in a worker thread, or `async def` for a
@@ -195,6 +194,7 @@ ingestion:
 
 ```python
 from open_climate_service.process import process
+
 
 @process(summary="My custom index")
 def my_index(data: xr.DataArray, thresh: float = 0.5) -> xr.DataArray:

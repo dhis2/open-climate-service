@@ -156,7 +156,7 @@ class CHIRPS3MonthlyPlugin(BaseDatasetPlugin):
         return monthly_period_ids(start, end, cutoff=cutoff)
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
-        """Fetch one month, convert the total to a mean daily rate, and clip to the bbox."""
+        """Fetch one month, clip it to the bbox, then convert the total to a mean daily rate."""
         import rioxarray
 
         year, month = self._parse_month(period_id)
@@ -164,21 +164,37 @@ class CHIRPS3MonthlyPlugin(BaseDatasetPlugin):
         if not isinstance(da, xr.DataArray):
             raise TypeError(f"Expected DataArray from CHIRPS3 monthly raster read, got {type(da).__name__}")
 
-        # Convert before masking so the nodata sentinel is still recognisable: -9999 / 31
-        # would no longer match _CHIRPS3_NODATA. normalize_period masks on the raw value,
-        # so scale only the valid data and leave the sentinel alone.
-        days_in_month = calendar.monthrange(year, month)[1]
-        da = da.where(da == _CHIRPS3_NODATA, da / days_in_month)
-
+        # Clip first, scale second — the order is the whole point (CLIM-951). The source is a
+        # global COG (7200 x 2400, tiled 512 x 512), so `normalize_period`'s clip can push down
+        # into a windowed read over HTTP range requests, but only while the array is still
+        # lazy. Any arithmetic here would instead touch every cell on the globe to keep the
+        # handful the bbox asks for: measured at 13 s and 572 MB per period, against 3.5 s and
+        # 205 MB when the clip goes first. Over a 439-month ingest that was 81 minutes and a
+        # 41.6 GB peak to produce a 41 MB store.
+        #
         # Stamp the first of the month as the time coordinate, matching the monthly
         # convention used by the ERA5-Land monthly datasets.
-        return normalize_period(
+        ds = normalize_period(
             da,
             variable="precip",
             period=f"{year:04d}-{month:02d}-01",
             nodata=_CHIRPS3_NODATA,
             bbox=bbox,
         )
+
+        # The source raster is a monthly *total* in mm, and the store holds mm/day — a real
+        # conversion, verified against the sum of the same month's dailies (see the class
+        # docstring). Scaling after `normalize_period` needs no guard for the -9999 sentinel:
+        # it has already been masked to NaN by then, and NaN / days stays NaN. Attributes and
+        # encoding are carried over explicitly because an xarray binary op drops both, and the
+        # store's nodata inference reads `_FillValue` off the encoding.
+        days_in_month = calendar.monthrange(year, month)[1]
+        precip = ds["precip"]
+        scaled = precip / days_in_month
+        scaled.attrs = dict(precip.attrs)
+        scaled.encoding = dict(precip.encoding)
+        ds["precip"] = scaled
+        return ds
 
     def _availability_cutoff(self) -> str:
         """Return the ``YYYY-MM`` of the most recently published monthly COG."""

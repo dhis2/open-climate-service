@@ -245,3 +245,48 @@ def test_pyramid_build_never_materialises_the_source(tmp_path: Path, monkeypatch
     root = zarr.open_group(repo.readonly_session("main").store, mode="r")
     assert "multiscales" in dict(root.attrs)
     assert {"0", "1"} <= {k for k, _ in root.groups()}
+
+
+def _projected_pyramid_sized_cube():
+    """A pyramid-sized cube on the British National Grid, in its native metres.
+
+    The coordinates have to be real eastings/northings, not degrees: the write path replaces
+    a projected CRS declared over coordinates that can only be degrees (see
+    ``resolve_store_crs``), so a lon/lat grid labelled EPSG:27700 would be stored as
+    EPSG:4326 and the test would assert nothing.
+    """
+    ny = nx = 2100
+    return xr.Dataset(
+        {"v": (("t", "y", "x"), np.ones((1, ny, nx), dtype="float32"))},
+        coords={
+            "t": np.array(["2020-01-01"], dtype="datetime64[ns]"),
+            "y": np.linspace(700000.0, 100000.0, ny),
+            "x": np.linspace(100000.0, 600000.0, nx),
+        },
+    )
+
+
+def test_pyramid_levels_carry_the_crs_definition_and_not_just_the_code(tmp_path: Path) -> None:
+    """Every group that declares `proj:` must declare the whole CRS, root and levels alike.
+
+    A client reads the `proj:` convention from the innermost source that declares any of it
+    — the data array, then the level-0 group, then the root — and stops there. Level groups
+    are written from the cube's own attrs, which carry a bare `proj:code`, so a definition
+    written only at the root sits behind a level-0 code that shadows it. For a code proj4
+    cannot resolve (EPSG:27700 here, unlike the UTM zones it ships) that leaves the CRS
+    unresolved and the store rendered in the wrong place, exactly as if the root said
+    nothing — see CLIM-833.
+    """
+    import icechunk
+    from pyproj import CRS
+
+    store_path = tmp_path / "national_grid.icechunk"
+    write_to_icechunk_store(_projected_pyramid_sized_cube(), store_path, crs="EPSG:27700")
+
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
+    root = zarr.open_group(repo.readonly_session("main").store, mode="r")
+
+    for name, attrs in [("root", dict(root.attrs)), ("level 0", dict(root["0"].attrs))]:
+        assert attrs["proj:code"] == "EPSG:27700", name
+        assert CRS.from_wkt(attrs["proj:wkt2"]) == CRS.from_epsg(27700), name
+        assert CRS.from_json_dict(attrs["proj:projjson"]) == CRS.from_epsg(27700), name

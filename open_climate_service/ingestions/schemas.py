@@ -174,6 +174,12 @@ class DatasetRecord(BaseModel):
     source_dataset_id: str = Field(description="Dataset template id from which this managed dataset was created.")
     dataset_name: str = Field(description="Full display name of the dataset.")
     short_name: str | None = Field(default=None, description="Short display name of the dataset.")
+    description: str | None = Field(
+        default=None,
+        description=(
+            "Longer prose description from the dataset template, where the caveats about what the values mean belong."
+        ),
+    )
     variable: str = Field(description="Primary raster variable stored in the dataset.")
     period_type: str = Field(description="Temporal period type of the dataset, for example daily or yearly.")
     units: str | None = Field(default=None, description="Units of the primary variable.")

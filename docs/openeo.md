@@ -131,6 +131,7 @@ job.start_job()
 
 # Poll until finished
 import time
+
 while (status := job.status()) not in ("finished", "error"):
     print("status:", status)
     time.sleep(2)
@@ -200,6 +201,8 @@ The `format` argument of `save_result` controls what the server writes. `GET /fi
 | `CHAPCSV`  | CHAP CSV   | Tabular         | Wide CSV for CHAP: `time_period`, `location`, one column per variable                   |
 
 For aggregating a dataset to DHIS2 org units and producing `DHIS2JSON` or `CHAPCSV` directly, see the built-in [org-unit aggregation workflows](workflows.md#built-in-workflows).
+
+An `aggregate_spatial` result keeps the geometry it was aggregated over, so `GEOJSON` and `PARQUET` output carries the real shapes — mappable in QGIS or geopandas without joining back to a boundary file — alongside a column holding each feature's id, named `geometry_id` (or after `target_dimension`, when one was given). The tabular and raster formats, `CSV` included, drop the shapes and keep the id, since that is the column the DHIS2 and CHAP exports use for location. Asking for `GEOJSON` or `PARQUET` for a cube with no usable geometry is a `400` error rather than a silent fallback to another format. `GEOJSON` output is always WGS 84, as RFC 7946 requires, so a projected cube is reprojected on the way out; `PARQUET` records the CRS in the file and keeps the native coordinates.
 
 ```bash
 # Monthly precipitation totals as NetCDF

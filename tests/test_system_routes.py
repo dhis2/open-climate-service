@@ -5,7 +5,6 @@ from typing import cast
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
-from starlette.datastructures import URL
 from starlette.responses import StreamingResponse
 
 from open_climate_service.ingestions import services as ingestion_services
@@ -48,9 +47,16 @@ class _ManageHtmlParser(HTMLParser):
 
 
 class _FakeRequest:
-    def __init__(self, form_data: dict[str, str]) -> None:
+    """Enough of a Request for the /manage form handlers.
+
+    `scope` is part of that surface, not an extra: the handlers read `root_path` from it to
+    build mount-relative redirects, so a double without it passes tests the real object would
+    fail. Defaults to an unmounted instance; pass `root_path` for a prefixed deployment.
+    """
+
+    def __init__(self, form_data: dict[str, str], root_path: str = "") -> None:
         self._form_data = form_data
-        self.base_url = URL("http://testserver/")
+        self.scope = {"root_path": root_path}
 
     async def form(self) -> dict[str, str]:
         return self._form_data
@@ -160,7 +166,9 @@ async def test_manage_sync_rejects_blank_dataset_id() -> None:
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "http://testserver/manage?error=Dataset%20ID%20is%20required"
+    # Relative on purpose: a redirect back to the console must land on the origin the operator
+    # actually reached, not on the configured public one (CLIM-974 review).
+    assert response.headers["location"] == "/manage?error=Dataset%20ID%20is%20required"
 
 
 @pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
@@ -386,3 +394,63 @@ def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     assert "function renderDimControls()" in response.text
     # ...and a slider-type dimension (e.g. time) defaults to its last index (latest step).
     assert 'control === "slider" ? Math.max(0, count - 1) : 0' in response.text
+
+
+@pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
+async def test_manage_redirects_keep_the_mount_prefix() -> None:
+    """A POST to `/ocs/manage/sync` that redirects to `/manage` drops the prefix and the proxy
+    returns 404. The Location has to be mount-relative — and still carry no origin, so it
+    lands on the host the operator actually reached."""
+    response = await system_routes.manage_sync(
+        cast("Request", _FakeRequest({"dataset_id": "  "}, root_path="/ocs")),
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/ocs/manage?error=")
+    assert "://" not in response.headers["location"]
+
+
+@pytest.mark.anyio
+async def test_a_successful_sync_redirects_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The success redirect is the one a mounted deployment actually reaches on the happy path.
+
+    The error redirects were mount-relative while this one was not, so under `/ocs` a sync that
+    worked sent the browser to `/manage` and the proxy 404'd — a failure only visible when nothing
+    had gone wrong.
+    """
+    scheduled: list[Coroutine[object, object, None]] = []
+
+    def fake_sync_dataset(
+        *,
+        dataset_id: str,
+        end: str | None,
+        publish: bool,
+        on_progress: Callable[[int | None, int | None, str | None], None],
+    ) -> None:
+        on_progress(1, 1, "done")
+
+    async def fake_to_thread(func: Callable[[], None]) -> None:
+        func()
+
+    def fake_create_task(coro: Coroutine[object, object, None]) -> None:
+        scheduled.append(coro)
+        return None
+
+    monkeypatch.setattr(ingestion_services, "sync_dataset", fake_sync_dataset)
+    monkeypatch.setattr(system_routes.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
+
+    response = await system_routes.manage_sync(
+        cast(Request, _FakeRequest({"dataset_id": "chirps3_precipitation_daily"}, root_path="/ocs"))
+    )
+    await scheduled[0]
+    # Narrowed rather than accessed directly: the endpoint is typed `-> Response`, and only a
+    # StreamingResponse carries the SSE body this assertion reads.
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk async for chunk in response.body_iterator]
+    payload = "".join(chunk.decode() if isinstance(chunk, bytes) else str(chunk) for chunk in chunks)
+
+    # %20 rather than + : `_manage_url` percent-encodes the banner text for every manage
+    # redirect. Starlette decodes both spellings to "Sync completed", so the page is unaffected.
+    assert "/ocs/manage?message=Sync%20completed" in payload
+    assert '"/manage?message' not in payload, "the bare path would 404 behind the proxy"
