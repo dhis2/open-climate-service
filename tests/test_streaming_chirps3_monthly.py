@@ -162,6 +162,55 @@ def test_nodata_is_masked_not_scaled(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not np.any(np.isclose(finite, _NODATA / 31, atol=1.0)), "the sentinel was scaled instead of masked"
 
 
+def test_the_clip_runs_before_the_conversion(stub_raster: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ordering is the fix, so assert the mechanism and not just the result (CLIM-951).
+
+    The source is a global COG. `normalize_period` clips it, and that clip only becomes a
+    windowed read while the array is still lazy — any arithmetic beforehand materialises the
+    whole globe to keep the handful of cells the bbox asks for. Guarding the *result* alone
+    would not catch a regression here, because both orderings produce identical values.
+    """
+    seen: list[xr.DataArray] = []
+    original = chirps3.normalize_period
+
+    def spy(obj: xr.DataArray, **kwargs: Any) -> xr.Dataset:
+        seen.append(obj)
+        return original(obj, **kwargs)
+
+    monkeypatch.setattr(chirps3, "normalize_period", spy)
+    CHIRPS3MonthlyPlugin().fetch_period("2025-01", [33.0, -14.0, 34.0, -13.0])
+
+    assert len(seen) == 1
+    # Still the raw monthly total, not 310/31 — nothing has scaled it before the clip.
+    assert float(np.nanmax(seen[0].values)) == pytest.approx(310.0)
+
+
+def test_reordering_preserves_the_previous_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clip-then-scale must equal scale-then-clip, sentinel included.
+
+    Reproduces the superseded ordering inline and compares. Against the live COGs the two
+    were bit-identical for the same month (max abs diff 0.0); this pins that here so the
+    optimisation cannot quietly change stored values.
+    """
+    import rioxarray
+
+    monkeypatch.setattr(rioxarray, "open_rasterio", lambda url, **_: _source_raster(with_nodata=True))
+    bbox = [33.0, -14.0, 34.0, -13.0]
+    actual = CHIRPS3MonthlyPlugin().fetch_period("2025-01", bbox)["precip"].values
+
+    # The previous implementation: scale everything except the sentinel, then clip and mask.
+    days = calendar.monthrange(2025, 1)[1]
+    raw = _source_raster(with_nodata=True)
+    scaled_first = raw.where(raw == _NODATA, raw / days)
+    expected = chirps3.normalize_period(
+        scaled_first, variable="precip", period="2025-01-01", nodata=_NODATA, bbox=bbox
+    )["precip"].values
+
+    assert actual.shape == expected.shape
+    assert np.array_equal(np.isnan(actual), np.isnan(expected)), "NaN pattern differs"
+    assert np.array_equal(actual, expected, equal_nan=True), "values differ"
+
+
 def test_time_coordinate_is_the_first_of_the_month(stub_raster: None) -> None:
     ds = CHIRPS3MonthlyPlugin().fetch_period("2025-03", [33.0, -14.0, 34.0, -13.0])
     assert np.datetime_as_string(ds["t"].values[0], unit="D") == "2025-03-01"

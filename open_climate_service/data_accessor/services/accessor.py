@@ -18,6 +18,19 @@ from ...shared.time import numpy_datetime_to_period_string
 logger = logging.getLogger(__name__)
 
 
+class DatasetDataUnavailable(OSError):
+    """Nothing has been ingested for this dataset, so there is no data to read or describe.
+
+    Distinct from a store that exists but cannot be opened. A dataset template is a
+    *declaration* — it exists whether or not anyone has ingested it — so "never ingested" is an
+    ordinary state, while an unreadable store is a fault. Code that *describes* a dataset treats
+    this as "no coverage"; code that *serves* data still fails, which is correct.
+
+    Subclasses OSError because that is what `open_mfdataset` raised before this existed, so a
+    caller already handling that keeps working.
+    """
+
+
 def get_data(
     dataset: dict[str, Any],
     start: str | None = None,
@@ -36,10 +49,21 @@ def get_data(
             logger.info(f"Using optimized zarr file: {zarr_path}")
             ds = open_zarr_dataset(str(zarr_path))
         else:
+            files = get_cache_files(dataset)
+            if not files:
+                # The last of the three sources, so nothing has been ingested. Raised rather
+                # than left to `open_mfdataset`, whose "no files to open" gave no dataset id
+                # and could not be told apart from a genuinely broken store (CLIM-897).
+                raise DatasetDataUnavailable(
+                    f"Dataset '{dataset['id']}' has no ingested data: no Icechunk store, no Zarr "
+                    f"archive and no cached NetCDF files. Ingest it before reading it."
+                )
+            # Logged only once files are known to exist. Before, every never-ingested dataset
+            # warned about falling back to NetCDF when there was no NetCDF either — on a fresh
+            # instance that is one misleading warning per template.
             logger.warning(
                 f"Could not find optimized zarr file for dataset {dataset['id']}, using slower netcdf files instead."
             )
-            files = get_cache_files(dataset)
             ds = xr.open_mfdataset(
                 files,
                 data_vars="minimal",
@@ -65,8 +89,17 @@ def get_data(
 
 
 def get_data_coverage(dataset: dict[str, Any]) -> dict[str, Any]:
-    """Return temporal and spatial coverage metadata for downloaded data."""
-    ds = get_data(dataset)
+    """Return temporal and spatial coverage metadata for a dataset's ingested data.
+
+    A dataset with nothing ingested reports `has_data: False` rather than raising, using the
+    same shape as a store whose dimensions are empty — both mean "there is nothing to
+    describe", and a caller describing a template should not have to tell them apart. Only the
+    *reading* paths still fail on absent data (CLIM-897).
+    """
+    try:
+        ds = get_data(dataset)
+    except DatasetDataUnavailable:
+        return _empty_coverage()
     try:
         return _coverage_from_dataset(ds=ds, period_type=str(dataset["period_type"]), native_crs=dataset_crs(ds))
     finally:
@@ -162,17 +195,26 @@ def _open_zarr(zarr_path: str) -> xr.Dataset:
     return xr.open_zarr(zarr_path, consolidated=None)  # type: ignore[no-any-return]
 
 
+def _empty_coverage() -> dict[str, Any]:
+    """The coverage payload for a dataset with nothing to describe.
+
+    Null fields rather than absent ones, so a client can tell "not ingested" from "this build
+    does not report coverage". `has_data` is the flag to branch on.
+    """
+    return {
+        "has_data": False,
+        "coverage": {
+            "temporal": {"start": None, "end": None},
+            "spatial": {"xmin": None, "ymin": None, "xmax": None, "ymax": None},
+            "spatial_wgs84": None,
+        },
+    }
+
+
 def _coverage_from_dataset(*, ds: xr.Dataset, period_type: str, native_crs: str = "EPSG:4326") -> dict[str, Any]:
     """Summarize temporal and spatial coverage for an already opened dataset."""
     if any(size == 0 for size in ds.sizes.values()):
-        return {
-            "has_data": False,
-            "coverage": {
-                "temporal": {"start": None, "end": None},
-                "spatial": {"xmin": None, "ymin": None, "xmax": None, "ymax": None},
-                "spatial_wgs84": None,
-            },
-        }
+        return _empty_coverage()
 
     x_dim, y_dim = get_x_y_dims(ds)
 

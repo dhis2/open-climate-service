@@ -20,6 +20,7 @@ from open_climate_service.ingestions.schemas import (
 )
 from open_climate_service.jobs.models import JobLink, JobRecord
 from open_climate_service.jobs.service import get_job_service
+from open_climate_service.shared.thumbnails import thumbnail_path
 
 ingestions_router = APIRouter()
 datasets_router = APIRouter()
@@ -128,6 +129,23 @@ def list_datasets() -> DatasetListResponse:
 def get_dataset(dataset_id: str) -> DatasetDetailRecord:
     """Get managed dataset metadata and available versions."""
     return services.get_dataset_or_404(dataset_id)
+
+
+@datasets_router.get("/{dataset_id}/thumbnail.png", response_class=FileResponse)
+def get_dataset_thumbnail(dataset_id: str) -> FileResponse:
+    """Serve a dataset's thumbnail, the image its STAC collection points at.
+
+    404 only when no thumbnail has ever been produced: a dataset not yet ingested, or a first
+    render that failed or found nothing to draw. It is a "no preview" answer rather than a
+    server fault. A later run that fails to render, or whose chosen slice is entirely missing,
+    leaves the previous image in place, so a 200 here can be a run or more stale — see
+    `write_dataset_thumbnail`. The STAC collection only advertises the asset when the file is
+    there, so a client following a published href does not meet the 404.
+    """
+    path = thumbnail_path(dataset_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"No thumbnail for dataset '{dataset_id}'")
+    return FileResponse(path, media_type="image/png")
 
 
 @datasets_router.get("/{dataset_id}/download")

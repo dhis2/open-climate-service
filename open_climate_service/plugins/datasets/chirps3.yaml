@@ -34,6 +34,14 @@
   standard_name: lwe_precipitation_rate
   variable: precip
   period_type: monthly
+  # Reaches the published STAC collection and /datasets (CLIM-973), which is the only place an
+  # API consumer would see it. The mm/d trap is the reason: the source ships a monthly total,
+  # this stores a mean daily rate, and reading one as the other is wrong by a factor of ~30
+  # while looking entirely plausible. The YAML comment below explains it to whoever edits this
+  # file; this explains it to whoever uses the data.
+  description: >-
+    Units are mm/d — a MEAN DAILY RATE, not a monthly total. Multiply by the days in the month
+    to get the total.
   sync:
     kind: temporal
     execution: append

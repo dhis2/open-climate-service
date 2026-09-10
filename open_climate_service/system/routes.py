@@ -2,18 +2,18 @@
 
 import asyncio
 import json
-import os
 import sys
 import urllib.parse
 from collections.abc import AsyncIterator
 from importlib.metadata import version as _pkg_version
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.responses import RedirectResponse, StreamingResponse
 
 from open_climate_service import config as api_config
+from open_climate_service.shared.urls import absolute_base, mount_prefix
 
 from .schemas import AppInfo, HealthStatus, Status
 from .templates import (
@@ -39,29 +39,27 @@ async def _sse_events(queue: asyncio.Queue[dict[str, Any] | None]) -> AsyncItera
 @router.get("/", response_class=Response, responses=ROOT_RESPONSES)
 def read_index(request: Request) -> Response:
     """Return openEO capabilities (JSON) or the landing page (HTML)."""
-    import os
-
-    # Use CLIMATE_SERVICE_BASE_URL when set so links are correct behind a reverse proxy.
-    base = os.getenv("CLIMATE_SERVICE_BASE_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
     if wants_json(request):
         from open_climate_service.openeo.capabilities import build_capabilities
 
-        caps = build_capabilities(base)
+        # openEO capabilities are consumed by other processes, so their links must be absolute
+        # and must name the public origin. The HTML page is navigated in a browser that is
+        # already on the right origin, so it uses relative paths instead.
+        caps = build_capabilities(absolute_base(request))
         return JSONResponse(caps.model_dump())
-    return HTMLResponse(render_landing(app_version, base))
+    return HTMLResponse(render_landing(app_version, mount_prefix(request)))
 
 
 @router.get("/map", response_class=HTMLResponse, include_in_schema=False)
 def maps(request: Request) -> HTMLResponse:
     """Return the interactive map viewer."""
-    base = str(request.base_url).rstrip("/")
-    return HTMLResponse(render_maps(base))
+    return HTMLResponse(render_maps(mount_prefix(request)))
 
 
 @router.get("/openeo", response_class=HTMLResponse, include_in_schema=False)
 def openeo_editor(request: Request) -> RedirectResponse:
     """Redirect to the openEO Web Editor pre-connected to this backend."""
-    base = os.getenv("CLIMATE_SERVICE_BASE_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    base = absolute_base(request)
     params = urllib.parse.urlencode({"server": base, "server-title": api_config.get_name()})
     return RedirectResponse(f"https://editor.openeo.org/?{params}", status_code=302)
 
@@ -73,8 +71,15 @@ def manage(
     error: str | None = None,
 ) -> HTMLResponse:
     """Return the management interface for ingestion and sync operations."""
-    base = str(request.base_url).rstrip("/")
-    return HTMLResponse(render_manage(app_version, base, message=message, error=error))
+    return HTMLResponse(render_manage(app_version, mount_prefix(request), message=message, error=error))
+
+
+def _manage_url(mount: str, banner: Literal["error", "message"], text: str) -> str:
+    """A mount-relative `/manage` URL carrying one banner, with the text percent-encoded.
+
+    Every redirect back to the console goes through here, so none can miss the prefix.
+    """
+    return f"{mount}/manage?{banner}={urllib.parse.quote(text)}"
 
 
 @router.post("/manage/ingest", include_in_schema=False)
@@ -87,7 +92,7 @@ async def manage_ingest(request: Request) -> Response:
     from open_climate_service.extents.services import get_extent_or_404
     from open_climate_service.ingestions.services import create_artifact
 
-    base = str(request.base_url).rstrip("/")
+    mount = mount_prefix(request)
     try:
         form = await request.form()
         dataset_id = str(form.get("dataset_id", "")).strip()
@@ -99,26 +104,31 @@ async def manage_ingest(request: Request) -> Response:
 
         template = get_dataset(dataset_id)
         if template is None:
-            msg = urllib.parse.quote(f"Dataset template '{dataset_id}' not found")
-            return RedirectResponse(f"{base}/manage?error={msg}", status_code=303)
+            return RedirectResponse(
+                _manage_url(mount, "error", f"Dataset template '{dataset_id}' not found"), status_code=303
+            )
 
         # Validate the blank start here rather than leaving it to create_artifact. The work
         # below runs inside an SSE stream, and a response that has already begun cannot
         # redirect — the operator would get a progress bar that fails mid-flight instead of
         # the error banner. Only a forecast may omit it (see temporal_direction).
         if start is None and not registry_datasets.is_future_facing(template):
-            msg = urllib.parse.quote(f"Start period is required for '{dataset_id}': its periods are not in the future")
-            return RedirectResponse(f"{base}/manage?error={msg}", status_code=303)
+            return RedirectResponse(
+                _manage_url(
+                    mount,
+                    "error",
+                    f"Start period is required for '{dataset_id}': its periods are not in the future",
+                ),
+                status_code=303,
+            )
 
         extent = get_extent_or_404()
         resolved_bbox = list(extent["bbox"])
         country_code = extent.get("country_code")
     except HTTPException as exc:
-        msg = urllib.parse.quote(str(exc.detail))
-        return RedirectResponse(f"{base}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, "error", str(exc.detail)), status_code=303)
     except Exception as exc:
-        msg = urllib.parse.quote(str(exc))
-        return RedirectResponse(f"{base}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, "error", str(exc)), status_code=303)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -143,22 +153,20 @@ async def manage_ingest(request: Request) -> Response:
                     on_progress=on_progress,
                 )
             )
-            name = urllib.parse.quote(str(template.get("name", dataset_id)))
+            name = str(template.get("name", dataset_id))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"redirect": f"{base}/manage?message=Ingested+{name}"},
+                {"redirect": _manage_url(mount, "message", f"Ingested {name}")},
             )
         except HTTPException as exc:
-            msg = urllib.parse.quote(str(exc.detail))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc.detail), "redirect": f"{base}/manage?error={msg}"},
+                {"error": str(exc.detail), "redirect": _manage_url(mount, "error", str(exc.detail))},
             )
         except Exception as exc:
-            msg = urllib.parse.quote(str(exc))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc), "redirect": f"{base}/manage?error={msg}"},
+                {"error": str(exc), "redirect": _manage_url(mount, "error", str(exc))},
             )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -174,7 +182,7 @@ async def manage_sync(request: Request) -> Response:
 
     from open_climate_service.ingestions.services import sync_dataset
 
-    base = str(request.base_url).rstrip("/")
+    mount = mount_prefix(request)
     try:
         form = await request.form()
         dataset_id = str(form.get("dataset_id", "")).strip()
@@ -184,11 +192,9 @@ async def manage_sync(request: Request) -> Response:
         if not dataset_id:
             raise HTTPException(status_code=400, detail="Dataset ID is required")
     except HTTPException as exc:
-        msg = urllib.parse.quote(str(exc.detail))
-        return RedirectResponse(f"{base}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, "error", str(exc.detail)), status_code=303)
     except Exception as exc:
-        msg = urllib.parse.quote(str(exc))
-        return RedirectResponse(f"{base}/manage?error={msg}", status_code=303)
+        return RedirectResponse(_manage_url(mount, "error", str(exc)), status_code=303)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -206,19 +212,17 @@ async def manage_sync(request: Request) -> Response:
             )
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"redirect": f"{base}/manage?message=Sync+completed"},
+                {"redirect": _manage_url(mount, "message", "Sync completed")},
             )
         except HTTPException as exc:
-            msg = urllib.parse.quote(str(exc.detail))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc.detail), "redirect": f"{base}/manage?error={msg}"},
+                {"error": str(exc.detail), "redirect": _manage_url(mount, "error", str(exc.detail))},
             )
         except Exception as exc:
-            msg = urllib.parse.quote(str(exc))
             loop.call_soon_threadsafe(
                 queue.put_nowait,
-                {"error": str(exc), "redirect": f"{base}/manage?error={msg}"},
+                {"error": str(exc), "redirect": _manage_url(mount, "error", str(exc))},
             )
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
