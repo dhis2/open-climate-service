@@ -719,7 +719,7 @@ def _create_streaming_artifact(
             dataset,
             retain_previous=plan.has_committed_periods and replacement_path is None,
         )
-        if plan.has_committed_periods and not normalization.completed:
+        if plan.action != SyncAction.NO_OP and plan.has_committed_periods and not normalization.completed:
             raise RuntimeError(f"Could not normalize '{dataset['id']}'; the dataset update was rolled back")
         if normalization.swapped and ingest_path == store_path and plan.has_committed_periods:
             # Pyramid normalization replaced the published repository but retained

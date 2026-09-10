@@ -847,7 +847,7 @@ def test_create_artifact_reuses_existing_artifact_for_no_op_request(
     assert plugin.calls == []
 
 
-def test_create_artifact_refreshes_stale_record_for_no_op_store(
+def test_create_artifact_refreshes_stale_record_when_no_op_normalization_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     dataset: dict[str, object] = {
@@ -880,7 +880,7 @@ def test_create_artifact_refreshes_stale_record_for_no_op_store(
         },
     )
     monkeypatch.setattr(
-        services, "_maybe_build_pyramid", lambda *args, **kwargs: services._StoreNormalizationResult(completed=True)
+        services, "_maybe_build_pyramid", lambda *args, **kwargs: services._StoreNormalizationResult(completed=False)
     )
     monkeypatch.setattr(services, "_upsert_artifact_record", lambda record, **kwargs: stored.append(record) or record)
 
