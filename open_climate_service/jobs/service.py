@@ -391,13 +391,15 @@ class JobService:
                     except Exception:
                         logger.exception("Failed to consume events for completed job %s", job_id)
                 return
-            except JobCancelledError:
+            except JobCancelledError as exc:
+                cancelled_result = exc.result
                 store.mutate_job_record(
                     job_id,
                     lambda current: current.model_copy(
                         update={
                             "status": JobStatus.CANCELLED,
                             "finished_at": utc_now(),
+                            "result": cancelled_result,
                             "progress": JobProgress(
                                 done=current.progress.done,
                                 total=current.progress.total,

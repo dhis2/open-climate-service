@@ -219,6 +219,13 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             value_columns = [str(name) for name in data.data_vars]
             if not value_columns:
                 raise ValueError("DHIS2 result contains no data variables")
+            scalar_coordinates = [
+                name
+                for name, coordinate in data.coords.items()
+                if not coordinate.dims and name not in {org_field, period_field}
+            ]
+            if scalar_coordinates:
+                data = data.drop_vars(scalar_coordinates)
             frame = data.to_dataframe().reset_index()
             if "__cubes__" in frame.columns:
                 if len(value_columns) != 1:
@@ -440,6 +447,8 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 created_at=created_at,
                 finished_at=utc_now().isoformat(),
             )
+            self._save_chunk_checkpoint(context, index, digest, report, status="retryable_failed")
+            return report
         self._save_chunk_checkpoint(context, index, digest, report)
         return report
 
@@ -475,14 +484,24 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 created_at=str(state.get("created_at") or utc_now().isoformat()),
                 finished_at=str(state.get("finished_at") or utc_now().isoformat()),
             )
+        if state.get("status") == "retryable_failed":
+            # The preceding attempt failed before submission. Retain its report
+            # for observability, but retry because DHIS2 received nothing.
+            return None
         raise ValueError("Unrecognized delivery checkpoint state; refusing to resend")
 
     def _save_chunk_checkpoint(
-        self, context: DeliveryContext | None, index: int, digest: str, report: ExportReport
+        self,
+        context: DeliveryContext | None,
+        index: int,
+        digest: str,
+        report: ExportReport,
+        *,
+        status: str | None = None,
     ) -> None:
         if context is None:
             return
-        status = "submitted_unknown" if report.outcome == ExportOutcome.UNKNOWN else "completed"
+        status = status or ("submitted_unknown" if report.outcome == ExportOutcome.UNKNOWN else "completed")
         context.save_checkpoint(
             self._chunk_checkpoint_key(index),
             {
@@ -657,7 +676,8 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 if report.remote_task_ids == []:
                     report = report.model_copy(update={"remote_task_ids": [task_id]})
                 return report
-            time.sleep(min(30.0, self.poll_backoff_base * (2**attempt)))
+            if attempt + 1 < self.max_poll_attempts:
+                time.sleep(min(30.0, self.poll_backoff_base * (2**attempt)))
 
         # The task never reached a terminal state within the poll budget.
         return ExportReport(
@@ -723,6 +743,7 @@ def build_dhis2_report(
     conflicts = summary.get("conflicts") or []
     if not isinstance(conflicts, list):
         conflicts = []
+    conflicts = [entry for entry in conflicts if isinstance(entry, dict)]
     remote_task_ids: list[str] = []
     task_id = summary.get("id") or summary.get("taskId")
     if isinstance(task_id, str) and task_id:

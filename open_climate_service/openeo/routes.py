@@ -433,6 +433,15 @@ def execute_synchronous(
         options = result.options
         result = result.data
 
+    # Named exporters expect an eager frame, matching the batch-job path.
+    try:
+        import dask_geopandas
+
+        if isinstance(result, dask_geopandas.GeoDataFrame):
+            result = result.compute()
+    except ImportError:
+        pass
+
     if "export" in options:
         from open_climate_service.exports.service import render_named_export
 
@@ -468,14 +477,6 @@ def execute_synchronous(
         )
 
     # Try vector
-    try:
-        import dask_geopandas
-
-        if isinstance(result, dask_geopandas.GeoDataFrame):
-            result = result.compute()
-    except ImportError:
-        pass
-
     try:
         import geopandas as gpd
         import pandas as pd

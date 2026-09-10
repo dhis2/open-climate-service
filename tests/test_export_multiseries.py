@@ -103,6 +103,18 @@ def test_multi_series_merged_cube_pivots_away_internal_dimension(definition: dic
     assert by_element["POPU0000001"] == "45000"
 
 
+def test_scalar_coordinate_is_not_treated_as_residual_dimension(definition: dict[str, Any]):
+    definition["series"] = definition["series"][:1]
+    data = xr.Dataset(
+        {"temperature": (("t", "geometry"), [[26.4]])},
+        coords={"t": ["202501"], "geometry": ["DiszpKrYNg8"], "height": 2.0},
+    )
+
+    values = json.loads(_render(data, definition).content)["dataValues"]
+
+    assert values[0]["value"] == "26.4"
+
+
 def test_multi_series_quantile_selection(definition: dict[str, Any]):
     definition["series"] = [
         {"select": {"variable": "precip", "quantile": 0.1}, "data_element": "PREC0000001"},

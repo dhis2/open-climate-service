@@ -115,6 +115,10 @@ def test_build_dhis2_report_outcomes() -> None:
     partial = build(200, {"status": "WARNING", "conflicts": [{"object": "value"}]})
     assert partial.outcome == ExportOutcome.PARTIAL
 
+    string_conflict = build(200, {"status": "WARNING", "conflicts": ["data element not found"]})
+    assert string_conflict.outcome == ExportOutcome.PARTIAL
+    assert string_conflict.conflicts == []
+
     rejected = build(200, {"status": "ERROR", "message": "no such data element"})
     assert rejected.outcome == ExportOutcome.REJECTED
 
@@ -171,8 +175,9 @@ def test_deliver_named_export_raises_job_cancelled_when_cancelled(saved: Path, m
     monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
     with lease_export_input("rain", "source") as verified:
         digest = json_digest(verified.manifest.model_dump(mode="json"))
-    with pytest.raises(JobCancelledError):
+    with pytest.raises(JobCancelledError) as exc_info:
         deliver_named_export("rain", "source", dry_run=False, expected_manifest_sha256=digest)
+    assert exc_info.value.result["outcome"] == ExportOutcome.CANCELLED
 
 
 def test_submit_delivery_deduplicates_by_idempotency_key(saved: Path, monkeypatch: pytest.MonkeyPatch) -> None:

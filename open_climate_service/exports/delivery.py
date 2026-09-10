@@ -113,7 +113,7 @@ def deliver_named_export(
     if report.outcome == ExportOutcome.CANCELLED:
         from open_climate_service.jobs.models import JobCancelledError
 
-        raise JobCancelledError("Export delivery was cancelled")
+        raise JobCancelledError("Export delivery was cancelled", result=report.model_dump(mode="json"))
     return report.model_dump(mode="json")
 
 

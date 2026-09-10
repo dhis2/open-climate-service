@@ -304,6 +304,16 @@ def test_send_reports_pre_submission_connection_failure(monkeypatch: pytest.Monk
     assert report.imported == 1000
     assert "Connection failed before submission" in str(report.message)
     assert context.checkpoints["chunk:1"]["report"]["outcome"] == ExportOutcome.REJECTED
+    assert context.checkpoints["chunk:1"]["status"] == "retryable_failed"
+
+    client.post_handler = lambda path, json, params: FakeResponse(
+        200, {"status": "SUCCESS", "importCount": {"imported": len(json["dataValues"])}}
+    )
+    resumed = plugin.send(_payload(values), "hmis", context=context)
+
+    assert resumed.outcome == ExportOutcome.SUCCESS
+    assert resumed.imported == 1001
+    assert len(client.posts) == 3
 
 
 def test_send_keeps_unknown_checkpoint_on_ambiguous_requests_connection_error(
