@@ -12,6 +12,7 @@ from starlette.responses import Response
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from open_climate_service.automation.service import get_workflow_automation_service
 from open_climate_service.data_registry import routes as dataset_template_routes
+from open_climate_service.exports import routes as exports_routes
 from open_climate_service.extents import routes as extent_routes
 from open_climate_service.ingestions import routes as ingestion_routes
 from open_climate_service.jobs.service import get_job_service
@@ -206,6 +207,7 @@ def create_app() -> FastAPI:
     _app.include_router(ingestion_routes.sync_router, prefix="/sync", tags=["Sync"])
     _app.include_router(scheduler_routes.router, prefix="/schedules", tags=["Schedules"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
+    _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])
 
     return _app
 

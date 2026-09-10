@@ -243,3 +243,24 @@ def test_dhis2_export_still_finds_its_single_value_column() -> None:
 def test_chap_export_still_finds_its_value_columns() -> None:
     frame = _result().to_dataframe().reset_index()
     assert jobs._select_chap_value_fields(frame, "geometry", "time") == ["t2m"]
+
+
+def test_every_renderer_excludes_the_same_non_value_columns() -> None:
+    """The named-export plugin picks its value column by elimination too, from its own copy of
+    the list. Three copies drifted apart once already: `geometry_wkt` reached `main` while the
+    export renderers were on a branch, so after the merge the CHAP path accepted a cube the
+    DHIS2JSON path refused with "found ['geometry_wkt', 't2m']". One shared set, one test."""
+    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_climate_service.exports.tabular import _build_dhis2_json_payload
+
+    frame = _result().to_dataframe().reset_index()
+    options = {
+        "data_element_id": "DE123",
+        "org_unit_field": "geometry",
+        "period_field": "time",
+        "period_type": "daily",
+    }
+
+    assert Dhis2ExportPlugin._candidate_value_fields(frame, None, "geometry", "time") == ["t2m"]
+    payload = _build_dhis2_json_payload(frame, options)
+    assert payload["dataValues"], "the plugin renderer refused a cube the CHAP path accepts"

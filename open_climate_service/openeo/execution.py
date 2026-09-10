@@ -461,6 +461,9 @@ def _load_collection_impl(
     """Load a published dataset as an openEO data cube (xr.DataArray)."""
     artifact = _get_published_artifact(id)
     ds = _ensure_crs(_open_artifact(artifact))
+    from open_climate_service.shared.provenance import record_source
+
+    record_source(id, artifact)
 
     bbox = _bbox_to_dict(spatial_extent)
     t_extent = _temporal_to_list(temporal_extent)
@@ -539,6 +542,7 @@ class SaveResultEnvelope:
         self.data = data
         self.format = format.upper()
         self.options: dict[str, Any] = options or {}
+        self.provenance: dict[str, Any] | None = None
 
 
 def _save_result_impl(data: Any, format: str = "Zarr", options: dict[str, Any] | None = None) -> Any:
@@ -743,7 +747,13 @@ def run_process_graph(
     registry = _augment_with_workflows(_build_process_registry())
     try:
         graph = OpenEOProcessGraph(process_graph)
-        return graph.to_callable(registry)()
+        from open_climate_service.shared.provenance import capture_execution
+
+        with capture_execution(process) as evidence:
+            result = graph.to_callable(registry)()
+            if isinstance(result, SaveResultEnvelope):
+                result.provenance = evidence.describe()
+            return result
     except HTTPException:
         raise
     except (TypeError, ValueError, KeyError) as exc:

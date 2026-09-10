@@ -51,12 +51,62 @@ def _load_config() -> dict[str, Any]:
         return {}
     if not path.exists():
         raise FileNotFoundError(f"CLIMATE_SERVICE_CONFIG not found: {path}")
-    text = _substitute_env_vars(path.read_text(encoding="utf-8"))
-    loaded = yaml.safe_load(text)
+    text = path.read_text(encoding="utf-8")
+    # Named connections and export mappings are validated as literal definitions.
+    # Reject environment interpolation inside only these two blocks before
+    # substitution, so a secret that happens to contain YAML syntax can never
+    # break parsing or be cached, while existing interpolation elsewhere (for
+    # example bbox: [${MINX}, ${MINY}]) keeps working.
+    for block in ("dhis2_connections", "exports"):
+        if _block_uses_interpolation(text, block):
+            raise ValueError(f"{block} does not support environment interpolation; use literal values")
+    loaded = yaml.safe_load(_substitute_env_vars(text))
     if loaded is not None and not isinstance(loaded, dict):
         raise ValueError(f"CLIMATE_SERVICE_CONFIG must be a YAML mapping at the top level: {path}")
+    if loaded is not None and "dhis2_connections" in loaded:
+        from open_climate_service.exports.dhis2_config import parse_connections
+
+        parse_connections(loaded["dhis2_connections"])
+    if loaded is not None and "exports" in loaded:
+        from open_climate_service.exports.manifest import validate_public_mapping
+
+        validate_public_mapping(loaded["exports"])
     _cache = dict(loaded or {})
     return _cache
+
+
+def _block_uses_interpolation(text: str, key: str) -> bool:
+    """Return True when the top-level ``key`` block contains ``${...}`` tokens.
+
+    Interpolation is disallowed inside ``dhis2_connections`` and ``exports``
+    because those definitions are validated as literals and a substituted secret
+    must never be cached. The scan stops at the next top-level key, so
+    interpolation in other blocks remains supported.
+    """
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        if not re.match(rf"^{re.escape(key)}\s*:", lines[index]):
+            index += 1
+            continue
+        # The value may be written on the key line itself. Aliases and anchors
+        # make the protected value depend on YAML outside this block, where the
+        # literal interpolation check cannot safely follow it.
+        value = lines[index].split(":", 1)[1].strip()
+        if "${" in value or value.startswith(("*", "&")):
+            return True
+        index += 1
+        while index < len(lines):
+            candidate = lines[index]
+            # Column-zero comments remain part of the surrounding YAML block.
+            # Stop only at the next ordinary top-level mapping key.
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:", candidate):
+                break
+            if "${" in candidate:
+                return True
+            index += 1
+        break
+    return False
 
 
 DEFAULT_CRS = "EPSG:4326"

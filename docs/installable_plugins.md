@@ -1,6 +1,6 @@
 # Installable plugins
 
-There are two ways to add datasets, processes, and workflows to an instance, and they
+There are two ways to add datasets, processes, workflows, and export renderers to an instance, and they
 complement each other:
 
 - **`plugins_dir`** — drop files into the instance's local plugins folder. Ideal for
@@ -15,9 +15,9 @@ keeps working exactly as before, and still takes precedence (see [Precedence](#p
 
 ## Package layout
 
-An importable package can ship any combination of the three extension points — **datasets,
-processes, and workflows are all auto-discovered** when the package is installed. `datasets/`
-and `processes/` hold importable Python, so each needs an `__init__.py` (`workflows/` is plain
+An importable package can ship any combination of these extension points — **datasets,
+processes, workflows, and exports are auto-discovered** when the package is installed. `datasets/`,
+`processes/`, and `exports/` hold importable Python, so each needs an `__init__.py` (`workflows/` is plain
 JSON and does not):
 
 ```
@@ -32,6 +32,9 @@ osc_example_plugin/
     my_process.py
   workflows/             # optional: openEO UDP JSON graphs
     my_workflow.json
+  exports/               # optional: pure export renderers
+    __init__.py
+    my_export.py         # exposes plugin = BaseExportPlugin subclass instance
 ```
 
 The layout mirrors `plugins_dir`, so migrating a `plugins_dir`-based plugin to a distributable
@@ -71,8 +74,9 @@ uv add osc-example-plugin
 ```
 
 OCS auto-discovers every installed package in the `open_climate_service.plugins` group and loads
-its `datasets/*.yaml` templates, its `processes/` (`@process`-decorated callables), and its
-`workflows/*.json` (openEO UDPs). The ingestion plugin class is importable by dotted path because
+its `datasets/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
+`workflows/*.json` (openEO UDPs), and its `exports/` renderers (see [Export plugins](export_plugins.md)).
+The ingestion plugin class is importable by dotted path because
 the package is installed. The datasets then appear in `/datasets` and can be ingested like any
 built-in.
 
