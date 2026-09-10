@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -685,7 +686,7 @@ def test_build_collection_with_xstac_reads_normalised_zarr_coordinates(tmp_path:
 
 
 def test_build_collection_emits_crs_render_hints_for_projected_store(tmp_path: Path) -> None:
-    """Projected (non-built-in) stores get proj:wkt2 + open_climate_service:proj4 so map
+    """Projected (non-built-in) stores get proj:wkt2 + proj:projjson so map
     clients can reproject without a runtime epsg.io lookup."""
     zarr_path = tmp_path / "senorge_temperature_daily.zarr"
     ds = xr.Dataset(
@@ -712,8 +713,9 @@ def test_build_collection_emits_crs_render_hints_for_projected_store(tmp_path: P
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
     assert payload["proj:code"] == "EPSG:32633"
-    proj4 = payload["open_climate_service:proj4"]
-    assert "proj=utm" in proj4 and "zone=33" in proj4
+    # The non-standard proj4 hint is retired (CLIM-833): zarr-layer resolves the code
+    # through proj4's own registry, so only standard fields are published now.
+    assert "open_climate_service:proj4" not in payload
     assert payload["proj:wkt2"].startswith("PROJCRS")  # WKT2, not WKT1 (PROJCS)
     # proj:projjson — same CRS as a PROJJSON object (EPSG:32633 = UTM zone 33N)
     assert payload["proj:projjson"]["type"] == "ProjectedCRS"
@@ -909,8 +911,7 @@ def test_build_collection_crs_render_hints_use_store_wkt(tmp_path: Path) -> None
 
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
-    proj4 = payload["open_climate_service:proj4"]
-    assert "proj=utm" in proj4 and "zone=33" in proj4
+    assert "open_climate_service:proj4" not in payload
     assert payload["proj:wkt2"].startswith("PROJCRS")
 
 
@@ -1035,3 +1036,115 @@ def test_cf_extension_is_not_declared_when_no_cf_attrs_are_present(
 
     assert not any(key.startswith("cf:") for key in payload["cube:variables"]["precip"])
     assert stac_services.CF_EXTENSION not in payload["stac_extensions"]
+
+
+# --- reference_system (CLIM-1004) -------------------------------------------------------
+#
+# The defect was a hardcoded `reference_system=4326` at the xstac call site, so a projected
+# store published its UTM metres as degrees. Testing `reference_system_for` alone would not
+# catch that returning: the constant has to be gone from the *caller*, so the call-site test
+# below asserts on what xstac actually receives.
+
+
+@pytest.mark.parametrize(
+    ("store_crs", "expected"),
+    [
+        (None, 4326),
+        ("", 4326),
+        ("EPSG:4326", 4326),
+        ("EPSG:32633", 32633),
+        ("EPSG:3857", 3857),
+        ("OGC:CRS84", 4326),  # a CRS84 alias is geographic WGS84
+        ("CRS:84", 4326),
+        (4326, 4326),  # a bare number, as canonical_crs_code accepts
+        # A proj4 string that names a known CRS resolves to its EPSG code rather than being
+        # published verbatim: proj4 is neither WKT2 nor PROJJSON, so the string form of the
+        # field cannot carry it.
+        ("+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs +type=crs", 32633),
+    ],
+)
+def test_reference_system_for_resolves_the_stores_own_crs(store_crs: str | int | None, expected: int | str) -> None:
+    assert stac_services.reference_system_for(store_crs) == expected
+
+
+def test_reference_system_for_emits_wkt2_when_there_is_no_epsg_code() -> None:
+    """A CRS with no EPSG equivalent must be published as WKT2, never as proj4."""
+    # A rotated pole grid has no EPSG code, so this exercises the WKT2 branch.
+    proj4 = "+proj=ob_tran +o_proj=longlat +o_lat_p=90 +o_lon_p=0 +lon_0=0 +datum=WGS84 +no_defs +type=crs"
+    result = stac_services.reference_system_for(proj4)
+
+    assert isinstance(result, str)
+    assert not result.startswith("+proj="), "a proj4 string is not a valid reference_system"
+    # WKT2 opens with a CRS keyword; good enough to tell WKT from proj4 without parsing it.
+    assert result.split("[")[0].endswith("CRS") or result.startswith("GEOGCRS"), result[:60]
+
+
+def test_reference_system_for_falls_back_to_4326_and_warns_on_an_uninterpretable_crs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Nothing honest can be published for a CRS we cannot parse, so say so in the log."""
+    # `startup.py` sets `propagate = False` on the `open_climate_service` logger, so caplog's
+    # root handler never sees these records and `caplog.text` stays empty. Attaching its
+    # handler to the emitting logger works whatever the propagation policy is.
+    emitting = logging.getLogger(stac_services.__name__)
+    emitting.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("WARNING", logger=emitting.name):
+            assert stac_services.reference_system_for("not a coordinate reference system") == 4326
+    finally:
+        emitting.removeHandler(caplog.handler)
+
+    assert "Could not interpret CRS" in caplog.text
+
+
+def test_xstac_is_given_the_stores_crs_not_a_constant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A projected store's axes must be published in that CRS, not as degrees."""
+    ds = xr.Dataset(
+        {"tg": (("time", "y", "x"), np.zeros((2, 3, 4), dtype="float32"))},
+        coords={
+            "time": pd.date_range("2026-01-01", periods=2, freq="D"),
+            "y": [7000000.0, 6999000.0, 6998000.0],
+            "x": [-74500.0, -73500.0, -72500.0, -71500.0],
+        },
+        attrs={"proj:code": "EPSG:32633"},
+    )
+
+    seen: dict[str, object] = {}
+
+    def _capture(dataset: xr.Dataset, template: pystac.Collection, **kwargs: object) -> pystac.Collection:
+        seen.update(kwargs)
+        return template
+
+    monkeypatch.setattr(stac_services, "_open_published_store", lambda _: ds)
+    monkeypatch.setattr(stac_services, "xarray_to_stac", _capture)
+    monkeypatch.setattr(stac_services, "_add_crs_render_hints", lambda **_: None)
+
+    template = pystac.Collection(
+        id="senorge_temperature_daily",
+        description="test",
+        extent=pystac.Extent(
+            pystac.SpatialExtent([[0, 0, 0, 0]]),
+            pystac.TemporalExtent([[None, None]]),
+        ),
+    )
+    stac_services._build_collection_with_xstac(
+        artifact=_artifact(artifact_id="a1", dataset_id="senorge_temperature_daily"),
+        template=template,
+    )
+
+    assert seen["reference_system"] == 32633, (
+        "the xstac call must pass the store's CRS; 4326 here means the constant is back"
+    )
+
+
+def test_both_cube_paths_agree_on_reference_system() -> None:
+    """The static (no time axis) path must resolve the CRS the same way as the temporal one."""
+    ds = xr.Dataset(
+        {"tg": (("y", "x"), np.zeros((3, 4), dtype="float32"))},
+        coords={"y": [7000000.0, 6999000.0, 6998000.0], "x": [-74500.0, -73500.0, -72500.0, -71500.0]},
+        attrs={"proj:code": "EPSG:32633"},
+    )
+    dims = stac_services._build_static_cube_dimensions(ds, "x", "y")
+    expected = stac_services.reference_system_for("EPSG:32633")
+    assert dims["x"]["reference_system"] == expected
+    assert dims["y"]["reference_system"] == expected
