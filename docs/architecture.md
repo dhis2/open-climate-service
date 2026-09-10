@@ -4,6 +4,60 @@ This document explains how the Open Climate Service is structured, why it is str
 
 ---
 
+## Core concepts
+
+The platform has four first-class concepts. Understanding the distinction between them is the foundation for understanding everything else.
+
+### Dataset template
+
+A **template** is a YAML blueprint that describes a data source. Built-ins live in `open_climate_service/plugins/datasets/` inside the package (loaded via `importlib.resources`). Custom templates live in `{plugins_dir}/datasets/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
+
+A template defines:
+
+- the dataset identifier and display metadata
+- the variable name, units, and period type
+- how to ingest the data (`ingestion.plugin` — a dotted path to a streaming plugin class)
+- any data transformations applied inside the plugin before returning
+- what sync strategy to use (`sync.kind`, `sync.execution`)
+
+Templates are config, not code. If a template needs custom logic, the logic goes into a Python function referenced by dotted path from the YAML.
+
+### Streaming ingest
+
+Datasets are ingested via a per-period streaming contract. The plugin enumerates periods and fetches one period at a time as an `xarray.Dataset`; the store grid is inferred from the first fetched period. The framework handles resume, concurrency, store commits, artifact persistence, and publication.
+
+The streaming engine lives in `open_climate_service.streaming`, while `open_climate_service.ingestions` is the application-facing layer that owns routes, artifact records, and publication state.
+
+### Artifact
+
+An **artifact** is the internal record of a completed data ingestion. It is the persistence layer — not a public API concept. Each ingestion produces exactly one artifact, which records:
+
+- what dataset template it came from
+- the exact spatial extent and time range that was materialized
+- where the data lives on disk (path to the zarr store or netCDF files)
+- when it was created
+- whether it has been published
+
+Multiple artifacts can exist for the same dataset template if data was ingested at different times (they form the version history). The most recent artifact for a given `dataset_id` is what the public API serves.
+
+Artifacts are stored in `{data_dir}/artifacts/records.json`, where `data_dir` is the path configured in `climate-service.yaml`. This is an internal implementation detail — consumers should never depend on artifact IDs or artifact paths directly.
+
+Store paths are persisted relative to `data_dir` (`downloads/foo.icechunk`) and resolved to absolute paths when records are loaded, so the data directory stays portable: it can be moved, copied to another host, or written in a container at `/app/data` and read from the host. Records written before this convention hold absolute paths and are re-rooted onto the current `data_dir` on read, then rewritten in relative form on the next update. Stores kept outside `data_dir` are recorded as absolute paths.
+
+### Managed dataset
+
+A **managed dataset** is the public-facing view of the most recent artifact for a given template. It is what `/datasets`, `/zarr`, and `/stac` expose. When an operator ingests or syncs a dataset, the managed dataset view updates to reflect the new artifact — the public ID stays stable.
+
+The relationship is: one template → many artifacts over time → one managed dataset (the latest).
+
+### Extent
+
+The **extent** is the spatial bounding box configured for this Open Climate Service instance. It is set once in `climate-service.yaml` and does not change at runtime. Every ingestion is automatically scoped to this extent — operators do not specify it per-request.
+
+This is a deliberate design constraint: each instance serves one place. A Sierra Leone instance serves Sierra Leone. Multi-country coverage requires multiple instances.
+
+---
+
 ## Operational ownership and access
 
 OCS owns its operational capabilities, policy, and state. An instance must remain
@@ -58,60 +112,6 @@ and maintenance of read-only deployments are planned. Such commands must use the
 shared domain services and may call them directly while the HTTP server is stopped.
 Until cross-process locking and transactional persistence are available, direct
 store mutation must require a stopped server or otherwise guarantee a single writer.
-
----
-
-## Core concepts
-
-The platform has four first-class concepts. Understanding the distinction between them is the foundation for understanding everything else.
-
-### Dataset template
-
-A **template** is a YAML blueprint that describes a data source. Built-ins live in `open_climate_service/plugins/datasets/` inside the package (loaded via `importlib.resources`). Custom templates live in `{plugins_dir}/datasets/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
-
-A template defines:
-
-- the dataset identifier and display metadata
-- the variable name, units, and period type
-- how to ingest the data (`ingestion.plugin` — a dotted path to a streaming plugin class)
-- any data transformations applied inside the plugin before returning
-- what sync strategy to use (`sync.kind`, `sync.execution`)
-
-Templates are config, not code. If a template needs custom logic, the logic goes into a Python function referenced by dotted path from the YAML.
-
-### Streaming ingest
-
-Datasets are ingested via a per-period streaming contract. The plugin enumerates periods and fetches one period at a time as an `xarray.Dataset`; the store grid is inferred from the first fetched period. The framework handles resume, concurrency, store commits, artifact persistence, and publication.
-
-The streaming engine lives in `open_climate_service.streaming`, while `open_climate_service.ingestions` is the application-facing layer that owns routes, artifact records, and publication state.
-
-### Artifact
-
-An **artifact** is the internal record of a completed data ingestion. It is the persistence layer — not a public API concept. Each ingestion produces exactly one artifact, which records:
-
-- what dataset template it came from
-- the exact spatial extent and time range that was materialized
-- where the data lives on disk (path to the zarr store or netCDF files)
-- when it was created
-- whether it has been published
-
-Multiple artifacts can exist for the same dataset template if data was ingested at different times (they form the version history). The most recent artifact for a given `dataset_id` is what the public API serves.
-
-Artifacts are stored in `{data_dir}/artifacts/records.json`, where `data_dir` is the path configured in `climate-service.yaml`. This is an internal implementation detail — consumers should never depend on artifact IDs or artifact paths directly.
-
-Store paths are persisted relative to `data_dir` (`downloads/foo.icechunk`) and resolved to absolute paths when records are loaded, so the data directory stays portable: it can be moved, copied to another host, or written in a container at `/app/data` and read from the host. Records written before this convention hold absolute paths and are re-rooted onto the current `data_dir` on read, then rewritten in relative form on the next update. Stores kept outside `data_dir` are recorded as absolute paths.
-
-### Managed dataset
-
-A **managed dataset** is the public-facing view of the most recent artifact for a given template. It is what `/datasets`, `/zarr`, and `/stac` expose. When an operator ingests or syncs a dataset, the managed dataset view updates to reflect the new artifact — the public ID stays stable.
-
-The relationship is: one template → many artifacts over time → one managed dataset (the latest).
-
-### Extent
-
-The **extent** is the spatial bounding box configured for this Open Climate Service instance. It is set once in `climate-service.yaml` and does not change at runtime. Every ingestion is automatically scoped to this extent — operators do not specify it per-request.
-
-This is a deliberate design constraint: each instance serves one place. A Sierra Leone instance serves Sierra Leone. Multi-country coverage requires multiple instances.
 
 ---
 
