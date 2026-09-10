@@ -74,6 +74,55 @@ def test_a_single_template_reports_it_too(client: TestClient) -> None:
     assert client.get(f"/dataset-templates/{derived}").json()["ingestable"] is False
 
 
+# -- and asking anyway is a 4xx, on both request shapes ---------------------------------------
+
+
+def test_the_async_ingest_refuses_before_it_enqueues(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`Prefer: respond-async` returns 202 and reports everything afterwards through the job
+    record. A check that lived only in `create_artifact` therefore accepted the request, ran in
+    the worker, and failed the job — logging a traceback for a client mistake and putting the
+    400 somewhere the caller was not looking."""
+    from open_climate_service.extents import services as extent_services
+    from open_climate_service.jobs import service as job_service
+
+    monkeypatch.setattr(
+        extent_services, "get_extent_or_404", lambda: {"bbox": [-13.5, 6.9, -10.1, 10.0], "country_code": "SLE"}
+    )
+    submitted: list[object] = []
+    monkeypatch.setattr(
+        job_service.JobService,
+        "submit_callable_job",
+        lambda self, **kw: submitted.append(kw) or (_ for _ in ()).throw(AssertionError("enqueued")),
+    )
+
+    response = client.post(
+        "/ingestions",
+        json={"dataset_id": "worldpop_population_change"},
+        headers={"Prefer": "respond-async"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "cannot be ingested" in response.json()["detail"]
+    assert submitted == [], "the job was enqueued before the template was checked"
+
+
+def test_the_async_ingest_still_accepts_an_ingestable_template(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard must not close the door on the ordinary case."""
+    from open_climate_service.extents import services as extent_services
+
+    monkeypatch.setattr(
+        extent_services, "get_extent_or_404", lambda: {"bbox": [-13.5, 6.9, -10.1, 10.0], "country_code": "SLE"}
+    )
+    response = client.post(
+        "/ingestions",
+        json={"dataset_id": "chirps3_precipitation_daily"},
+        headers={"Prefer": "respond-async"},
+    )
+    assert response.status_code == 202, response.text
+
+
 # -- and asking anyway is a 4xx --------------------------------------------------------------
 
 

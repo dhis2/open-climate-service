@@ -72,7 +72,11 @@ def create_ingestion(
     return immediately with 202 + ``Location: /ingestions/jobs/{id}``.
     """
     if _prefer_respond_async(prefer):
-        _get_dataset_or_404(request.dataset_id)
+        # Refuse here, not in the worker. Everything past `submit_callable_job` is reported
+        # through the job record, so a non-ingestable template would be accepted with 202 and
+        # then fail — logging a traceback for what is a client mistake, and hiding the reason
+        # from the response that was supposed to carry it (CLIM-912).
+        services.ensure_ingestable(_get_dataset_or_404(request.dataset_id))
         get_extent_or_404()
 
         from open_climate_service.ingestions.processes import execute_ingestion

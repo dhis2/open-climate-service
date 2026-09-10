@@ -243,6 +243,33 @@ def get_latest_artifact_for_dataset_or_404(dataset_id: str) -> ArtifactRecord:
     return max(artifacts, key=lambda artifact: artifact.created_at)
 
 
+def ensure_ingestable(dataset: dict[str, object]) -> None:
+    """Raise 400 unless *dataset* declares a source to fetch from.
+
+    Called at every entrance to ingestion, not only inside `create_artifact`. The async
+    branch of `POST /ingestions` (`Prefer: respond-async`) enqueues a job and returns 202
+    before `create_artifact` runs, so a check that lived only there turned a client mistake
+    into an accepted job that later failed — with a logged traceback, and with the 400 the
+    caller needed buried in the job record instead of in the response.
+
+    400 rather than 500. The request is well formed and the template is valid; it simply has
+    no upstream, which is a property of the dataset the caller named. A 500 says the server
+    broke and invites a retry that cannot succeed (CLIM-912).
+    """
+    if registry_datasets.is_ingestable(dataset):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Dataset template '{dataset['id']}' cannot be ingested: it declares no "
+            "'ingestion.plugin', so there is no source to fetch from. It is a derived "
+            "product, published by a workflow through 'save_result' rather than ingested — "
+            "run the workflow that produces it (see GET /process_graphs). "
+            "GET /dataset-templates/ reports 'ingestable' for every template."
+        ),
+    )
+
+
 def create_artifact(
     *,
     dataset: dict[str, object],
@@ -271,17 +298,7 @@ def create_artifact(
     # depend on the request, and checking it later meant an operator who picked a workflow
     # output was first told to supply a start period — advice for a request that could never
     # have succeeded.
-    if not registry_datasets.is_ingestable(dataset):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Dataset template '{dataset['id']}' cannot be ingested: it declares no "
-                "'ingestion.plugin', so there is no source to fetch from. It is a derived "
-                "product, published by a workflow through 'save_result' rather than ingested — "
-                "run the workflow that produces it (see GET /process_graphs). "
-                "GET /dataset-templates/ reports 'ingestable' for every template."
-            ),
-        )
+    ensure_ingestable(dataset)
 
     period_type = str(dataset["period_type"])
     start = _resolve_request_start(start, dataset=dataset, period_type=period_type)
