@@ -242,13 +242,60 @@ def test_explicit_obligations_are_used_when_nothing_else_supplies_them() -> None
 # -- valid SPDX identifiers OCS has not reviewed -------------------------------------------
 
 
-def test_a_valid_spdx_identifier_is_preserved_even_when_unreviewed() -> None:
-    """Downgrading BSD-3-Clause to a free-form name and publishing `other` threw away
-    information the catalogue already had. The identifier is kept; only the propagation
-    semantics are marked unknown."""
-    licence = parse_licence("BSD-3-Clause")
-    assert licence.stac_license == "BSD-3-Clause"
+@pytest.mark.parametrize("identifier", ["BSD-3-Clause", "ISC", "Zlib", "EUPL-1.2", "ODC-By-1.0"])
+def test_a_valid_spdx_identifier_is_preserved_even_when_unreviewed(identifier: str) -> None:
+    """The general contract, not one hand-listed example. Identity is SPDX's question and
+    obligations are OCS's; while a single table answered both, every valid identifier nobody
+    had reviewed was demoted to a free-form name and published as `other`. `ODC-By-1.0` is the
+    one that shows the cost — an open-data licence a climate source could plausibly carry."""
+    licence = parse_licence(identifier)
+    assert licence.stac_license == identifier
     assert licence.known is False
+    assert licence.commercial_use is None
+
+
+def test_every_reviewed_identifier_is_a_real_spdx_identifier() -> None:
+    """The two tables must agree on the identifiers they share. A typo in the obligations
+    table would otherwise sit there silently: the licence would parse to no identifier at all
+    and publish as `other`, with its reviewed obligations never consulted."""
+    from open_climate_service.shared.licences import _SPDX_OBLIGATIONS, _canonical_spdx
+
+    assert {identifier: _canonical_spdx(identifier) for identifier in _SPDX_OBLIGATIONS} == {
+        identifier: identifier for identifier in _SPDX_OBLIGATIONS
+    }
+
+
+def test_a_deprecated_identifier_publishes_as_its_current_form() -> None:
+    """SPDX supersedes identifiers; a catalogue should carry the current one. Passing the
+    deprecated spelling straight through would publish an identifier the register no longer
+    lists."""
+    assert parse_licence("GPL-3.0").stac_license == "GPL-3.0-only"
+
+
+@pytest.mark.parametrize(
+    ("declared", "why"),
+    [
+        ("Apache-2.0 OR MIT", "an expression has no single obligation set to compare on"),
+        ("Apache-2.0 AND MIT", "same, for a conjunction"),
+        ("GPL-2.0-only WITH Classpath-exception-2.0", "a WITH clause is not one licence"),
+        ("Classpath-exception-2.0", "an exception is a modifier, not a licence"),
+        ("LicenseRef-scancode-3com-microcode", "ScanCode's vocabulary, not the SPDX register"),
+        ("CC-BY-4", "a near miss is not an identifier"),
+    ],
+)
+def test_what_validates_as_spdx_but_is_not_one_licence_is_refused(declared: str, why: str) -> None:
+    """Validating against the full register widens what is accepted, so the boundary has to be
+    drawn deliberately rather than inherited from the library. Each of these parses cleanly as
+    SPDX and none of them is a single licence this module can carry obligations for."""
+    licence = parse_licence(declared)
+    assert licence.stac_license == STAC_LICENSE_OTHER, why
+    assert licence.known is False
+
+
+def test_an_identifier_is_matched_whatever_its_case() -> None:
+    """`cc-by-4.0` is an easy thing to write in YAML, and rejecting it would be unhelpful."""
+    assert parse_licence("odc-by-1.0").stac_license == "ODC-By-1.0"
+    assert parse_licence("cc-by-4.0").identifier == "CC-BY-4.0"
 
 
 # -- a name must be the licence, not merely start like it ----------------------------------
