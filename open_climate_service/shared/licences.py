@@ -279,26 +279,33 @@ def _resolve_identifier(declared: dict[str, Any]) -> tuple[str | None, str | Non
 def _contradiction(identifier: str | None, name: str | None) -> str | None:
     """Why an identifier and a name cannot both describe this licence, or None.
 
-    An identifier and a name that require different things is a contradiction, not a
-    redundancy. `{id: CC0-1.0, name: <a licence requiring attribution>, url: ...}` would
-    publish `license: CC0-1.0` while the `rel: license` link points at terms that demand
-    credit, and a STAC client reads the field far more often than it fetches the link. There
-    is no basis for picking a winner, so neither is used.
+    An identifier and a *recognised* name is a contradiction, not a redundancy.
+    `_KNOWN_NAMED_LICENCES` is by definition the table of licences that have **no** SPDX
+    identifier — that is the reason it exists — so a declaration naming one of them while also
+    giving an SPDX identifier is naming two different instruments. There is no basis for
+    picking a winner, so neither is used.
 
-    Only a *recognised* name can be shown to disagree. An unrecognised one is left alone: it
-    is a label and a link, the identifier stays authoritative for the terms, and the common
-    `{id, name, url}` spelling of a single licence has to keep working.
+    Compared on *identity*, not on obligations. Equal obligations establish compatibility, not
+    sameness: `CC-BY-4.0` and the Copernicus licence both require attribution and are not the
+    same licence, so comparing the obligation sets accepted
+    `{id: CC-BY-4.0, name: Licence to Use Copernicus Products, url: ...}` and published
+    `license: CC-BY-4.0` over a link to Copernicus terms — a STAC client reads the field far
+    more often than it fetches the link.
+
+    Any identifier, not only a reviewed one. Whether OCS has recorded what `ISC` requires has
+    no bearing on whether it is the Copernicus licence.
+
+    An *unrecognised* name is still left alone: it is a label and a link, the identifier stays
+    authoritative for the terms, and the common `{id, name, url}` spelling of a single licence
+    has to keep working.
     """
-    if identifier is None or identifier not in _SPDX_OBLIGATIONS:
-        return None
-    named = _obligations_for_name(name)
-    if named is None or named == _SPDX_OBLIGATIONS[identifier]:
+    if identifier is None or _obligations_for_name(name) is None:
         return None
     return (
         f"declares SPDX identifier {identifier} together with the name {name!r}, which OCS "
-        f"knows to require {sorted(named) or 'nothing'} rather than "
-        f"{sorted(_SPDX_OBLIGATIONS[identifier]) or 'nothing'}; treating the licence as "
-        f"undeclared. Declare whichever one describes the terms, not both."
+        f"knows as a licence in its own right with no SPDX identifier; the two name different "
+        f"instruments, so the licence is treated as undeclared. Declare whichever one describes "
+        f"the terms, not both."
     )
 
 
@@ -333,6 +340,23 @@ def licence_declaration_problem(declared: Any) -> str | None:
     Returns None when there is nothing specific to say. A declaration that is merely
     unreadable is already reported by the validator's generic message.
     """
+    if isinstance(declared, str):
+        text = declared.strip()
+        if not text:
+            return None  # an empty declaration is the generic "unreadable" case
+        if _canonical_spdx(text) is not None or _obligations_for_name(text) is not None:
+            return None
+        # Nothing downstream shows this string. `license` publishes `other`, the `rel: license`
+        # link needs a URL there is none of, and the viewer falls back to "not declared" — so a
+        # mistyped identifier is indistinguishable from declaring nothing at all, which is the
+        # one outcome this module exists to make impossible.
+        return (
+            f"declares the licence {text!r}, which is neither an SPDX identifier nor a licence "
+            f"name OCS knows. It publishes as 'other' with no licence link, so it cannot be told "
+            f"apart from declaring nothing — a mistyped identifier such as 'CC-BY-4.O' vanishes "
+            f"silently. Use the SPDX identifier if the licence has one, or the mapping form "
+            f"'{{name, url}}' so the collection can at least link to the terms."
+        )
     if not isinstance(declared, dict):
         return None
     identifier, conflict = _resolve_identifier(declared)
@@ -409,15 +433,12 @@ def parse_licence(declared: Any) -> DatasetLicence:
         if identifier is None and name is None:
             return UNDECLARED
 
-        # An identifier and a name that require different things is a contradiction, not a
-        # redundancy. `{id: CC0-1.0, name: <a licence requiring attribution>, url: ...}` would
-        # publish `license: CC0-1.0` while the `rel: license` link points at terms that demand
-        # credit, and a STAC client reads the field far more often than it fetches the link.
-        # There is no basis for picking a winner, so neither is used.
-        #
-        # Only a *recognised* name can be shown to disagree. An unrecognised one is left alone:
-        # it is a label and a link, the identifier stays authoritative for the terms, and the
-        # common `{id, name, url}` spelling of a single licence has to keep working.
+        # An identifier plus a *recognised* name is a contradiction, not a redundancy: the
+        # named-licence table holds licences that have no SPDX identifier, so a declaration
+        # giving both names two different instruments. Compared on identity rather than
+        # obligations — see `_contradiction`. An unrecognised name is left alone: it is a label
+        # and a link, the identifier stays authoritative, and the common `{id, name, url}`
+        # spelling of a single licence has to keep working.
         if _contradiction(identifier, name) is not None:
             return UNDECLARED
 

@@ -298,6 +298,27 @@ def test_an_identifier_is_matched_whatever_its_case() -> None:
     assert parse_licence("cc-by-4.0").identifier == "CC-BY-4.0"
 
 
+def test_a_string_that_is_neither_an_identifier_nor_a_known_name_is_reported() -> None:
+    """A mistyped identifier is published as `other` with no licence link, and the viewer then
+    shows "not declared" — indistinguishable from declaring nothing, which is the one outcome
+    this module exists to make impossible. Parsing still degrades quietly; the validator is
+    where it has to be said."""
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    problem = licence_declaration_problem("CC-BY-4.O")
+    assert problem is not None
+    assert "CC-BY-4.O" in problem
+
+
+@pytest.mark.parametrize("declared", ["CC-BY-4.0", "cc-by-4.0", "ISC", "Licence to Use Copernicus Products"])
+def test_a_string_that_resolves_to_something_is_not_reported(declared: str) -> None:
+    """An identifier in any case, a valid-but-unreviewed one, and a licence known by name are
+    all fine as plain strings; only an unresolvable one is worth a warning."""
+    from open_climate_service.shared.licences import licence_declaration_problem
+
+    assert licence_declaration_problem(declared) is None
+
+
 # -- a name must be the licence, not merely start like it ----------------------------------
 
 
@@ -329,6 +350,29 @@ def test_an_identifier_contradicted_by_a_known_name_is_undeclared() -> None:
     `CC0-1.0` beside a link to terms requiring attribution is worse than publishing nothing.
     There is no basis for choosing between them."""
     licence = parse_licence({"id": "CC0-1.0", "name": "Licence to Use Copernicus Products", "url": "https://x"})
+    assert licence is UNDECLARED
+
+
+def test_matching_obligations_do_not_make_two_licences_the_same_one() -> None:
+    """`CC-BY-4.0` and the Copernicus licence both require attribution and are different
+    instruments. Comparing the obligation sets accepted this and published `license: CC-BY-4.0`
+    over a link to Copernicus terms — the field a STAC client reads, disagreeing with the link
+    it usually does not fetch."""
+    licence = parse_licence(
+        {
+            "id": "CC-BY-4.0",
+            "name": "Licence to Use Copernicus Products",
+            "url": "https://apps.ecmwf.int/datasets/licences/copernicus/",
+        }
+    )
+    assert licence is UNDECLARED
+
+
+def test_a_recognised_name_contradicts_even_an_unreviewed_identifier() -> None:
+    """Whether OCS has recorded what `ISC` requires has no bearing on whether it is the
+    Copernicus licence. The check was skipped entirely for identifiers outside the obligations
+    table."""
+    licence = parse_licence({"id": "ISC", "name": "NASA Earth Science Data", "url": "https://x"})
     assert licence is UNDECLARED
 
 
@@ -384,7 +428,7 @@ def test_the_validator_names_the_contradiction_rather_than_calling_it_unreadable
     )
     assert problem is not None
     assert "CC0-1.0" in problem
-    assert "attribution" in problem
+    assert "Licence to Use Copernicus Products" in problem
 
 
 @pytest.mark.parametrize(
@@ -514,12 +558,13 @@ _EXPECTED: dict[tuple[str, str, str], str] = {
     ("absent", "known-conflicts", "present"): _IGNORED,
     ("absent", "unknown", "absent"): _ACCEPTED,
     ("absent", "unknown", "present"): _ACCEPTED,  # the legitimate use of an explicit list
-    # A recognised identifier is authoritative, and a known name that disagrees with it is a
-    # contradiction rather than a redundancy.
+    # An identifier beside *any* recognised name is a contradiction. The named-licence table
+    # holds licences that have no SPDX identifier, so the two name different instruments —
+    # matching obligations make them compatible, not the same licence.
     ("recognised", "absent", "absent"): _ACCEPTED,
     ("recognised", "absent", "present"): _IGNORED,
-    ("recognised", "known-agrees", "absent"): _ACCEPTED,
-    ("recognised", "known-agrees", "present"): _IGNORED,
+    ("recognised", "known-agrees", "absent"): _UNDECLARED,
+    ("recognised", "known-agrees", "present"): _UNDECLARED,
     ("recognised", "known-conflicts", "absent"): _UNDECLARED,
     ("recognised", "known-conflicts", "present"): _UNDECLARED,
     ("recognised", "unknown", "absent"): _ACCEPTED,
@@ -538,8 +583,8 @@ _EXPECTED: dict[tuple[str, str, str], str] = {
     # Both aliases naming one licence behaves exactly as one identifier.
     ("aliases-agree", "absent", "absent"): _ACCEPTED,
     ("aliases-agree", "absent", "present"): _IGNORED,
-    ("aliases-agree", "known-agrees", "absent"): _ACCEPTED,
-    ("aliases-agree", "known-agrees", "present"): _IGNORED,
+    ("aliases-agree", "known-agrees", "absent"): _UNDECLARED,
+    ("aliases-agree", "known-agrees", "present"): _UNDECLARED,
     ("aliases-agree", "known-conflicts", "absent"): _UNDECLARED,
     ("aliases-agree", "known-conflicts", "present"): _UNDECLARED,
     ("aliases-agree", "unknown", "absent"): _ACCEPTED,
