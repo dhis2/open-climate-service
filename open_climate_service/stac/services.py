@@ -21,6 +21,7 @@ from open_climate_service.data_registry.services import datasets as registry_dat
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
+from open_climate_service.shared.thumbnails import thumbnail_path
 from open_climate_service.shared.time import (
     Cadence,
     parse_period_string_to_datetime,
@@ -126,6 +127,12 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
     catalog_href = absolute_url(request, "/stac/catalog.json")
     dataset_href = absolute_url(request, f"/datasets/{dataset_id}")
     zarr_href = absolute_url(request, f"/zarr/{dataset_id}")
+    # Only when the file is actually there: a collection that advertises a thumbnail a client
+    # then 404s on is worse than one that advertises none. A render that failed or found
+    # nothing to draw leaves an otherwise complete collection without the asset.
+    thumbnail_href = (
+        absolute_url(request, f"/datasets/{dataset_id}/thumbnail.png") if thumbnail_path(dataset_id).is_file() else None
+    )
 
     template = _build_collection_template(
         dataset_id=dataset_id,
@@ -170,6 +177,19 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
         "roles": template_asset.get("roles"),
         "xarray:open_kwargs": xarray_open_kwargs,
     }
+    if thumbnail_href is not None:
+        # `thumbnail` is a standardised STAC asset role, and a Collection may carry assets —
+        # the spec recommends collection-level assets for exactly this shape, a standalone
+        # collection fronting a Zarr store with no items. So no extension is needed and any
+        # STAC client (STAC Browser among them) picks the image up unaided. Added here rather
+        # than on the pystac template because only the assets assembled here reach the
+        # payload; the template's are rebuilt from the xstac output above.
+        collection_payload["assets"]["thumbnail"] = {
+            "href": thumbnail_href,
+            "type": "image/png",
+            "title": "Thumbnail",
+            "roles": ["thumbnail"],
+        }
     if artifact.format == ArtifactFormat.ICECHUNK:
         collection_payload["assets"]["icechunk"] = {
             "href": absolute_url(request, f"/icechunk/{dataset_id}"),

@@ -27,6 +27,7 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobUpdate,
 )
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
@@ -715,6 +716,14 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
         crs=crs,
         pyramid_method=downloader.resampling_method_from_template(template),
         commit_message=f"Published from openEO job: {dataset_id}",
+    )
+
+    # A derived product is a published dataset and appears in the same lists, so it gets a
+    # thumbnail on the same terms. One write, so this is already the once-per-run render the
+    # streaming path has to arrange deliberately. Never raises.
+    write_dataset_thumbnail(
+        store_path,
+        {**template, "id": dataset_id, "variable": variable},
     )
 
     record = ArtifactRecord(
@@ -1875,28 +1884,22 @@ def _to_dhis2_value_string(value: Any) -> str:
 def _write_png(ds: Any, results_dir: Any) -> str | None:
     """Render an xr.Dataset as a styled PNG using the collection's render settings.
 
-    Applies the same colormap, rescale range, and NaN transparency as the /map
-    viewer.  Squeezes to a 2-D slice (first time step if temporal).
+    Applies the same colormap, rescale range and NaN transparency as the /map viewer,
+    through the shared renderer in ``shared/thumbnails.py``. Squeezes to a 2-D slice by
+    taking the first step of each leading dimension: this is a *result* the caller asked
+    for, so it shows the front of the cube they computed, where a catalogue thumbnail of a
+    published store instead shows the step nearest today.
     """
-    import matplotlib
-    import numpy as np
-
-    matplotlib.use("agg")  # non-interactive backend — safe on worker threads
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import Normalize
+    from open_climate_service.shared.thumbnails import render_png
 
     var = list(ds.data_vars)[0]
     arr = ds[var]
-
-    # Squeeze to 2-D (first step of each leading dim)
     while arr.ndim > 2:
         arr = arr.isel({arr.dims[0]: 0})
 
-    data = arr.values.astype(float)
-
-    # Look up render settings from the published collection via the dataset registry
-    colormap_name = "viridis"
-    vmin, vmax = float(np.nanmin(data)), float(np.nanmax(data))
+    # Render settings from the published collection, via the dataset registry.
+    colormap: str | None = None
+    clim: tuple[float, float] | None = None
     try:
         from open_climate_service.data_registry.services import datasets as reg
 
@@ -1904,44 +1907,15 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
             display = _ds_meta.get("display", {})
             ds_var = _ds_meta.get("variable", "")
             if ds_var == var or _ds_meta.get("id", "").endswith(var):
-                colormap_name = display.get("colormap", colormap_name)
+                colormap = display.get("colormap", colormap)
                 rng = display.get("range")
                 if isinstance(rng, list) and len(rng) == 2:
-                    vmin, vmax = float(rng[0]), float(rng[1])
+                    clim = (float(rng[0]), float(rng[1]))
                 break
     except Exception:
         pass
 
-    cmap = plt.get_cmap(colormap_name).copy()
-    cmap.set_bad(alpha=0)  # NaN → transparent
-
-    norm = Normalize(vmin=vmin, vmax=vmax, clip=False)
-
-    # Render at the natural aspect ratio of the data
-    height, width = data.shape
-    dpi = 150
-    fig_w = max(4, width / dpi)
-    fig_h = max(3, height / dpi)
-
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
-    fig.patch.set_alpha(0)
-    # `origin="upper"` puts array row 0 at the top, which is right because published stores
-    # guarantee y descending (row 0 = north) — see shared/raster_contract. A cube that reaches
-    # here south-up (an in-flight openEO result, not a published store) is flipped first, so the
-    # thumbnail is never upside down.
-    y_name = next((str(d) for d in arr.dims if str(d) in ("y", "lat", "latitude")), None)
-    if y_name is not None and y_name in arr.coords and arr.sizes.get(y_name, 0) >= 2:
-        y_values = arr[y_name].values
-        if float(y_values[1]) > float(y_values[0]):
-            data = data[::-1]
-    ax.imshow(data, origin="upper", cmap=cmap, norm=norm, interpolation="nearest")
-    ax.axis("off")
-    fig.tight_layout(pad=0)
-
-    path = str(results_dir / "result.png")
-    fig.savefig(path, bbox_inches="tight", dpi=dpi, transparent=True, pad_inches=0)
-    plt.close(fig)
-    return path
+    return str(render_png(arr, results_dir / "result.png", colormap=colormap, clim=clim))
 
 
 def _derive_job_title(process: dict[str, Any]) -> str | None:
