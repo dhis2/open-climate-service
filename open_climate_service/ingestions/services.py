@@ -267,6 +267,22 @@ def create_artifact(
     streaming engine remains store-authoritative and appends only periods that
     are actually missing from the committed store.
     """
+    # Before any request validation: whether this template can be ingested at all does not
+    # depend on the request, and checking it later meant an operator who picked a workflow
+    # output was first told to supply a start period — advice for a request that could never
+    # have succeeded.
+    if not registry_datasets.is_ingestable(dataset):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Dataset template '{dataset['id']}' cannot be ingested: it declares no "
+                "'ingestion.plugin', so there is no source to fetch from. It is a derived "
+                "product, published by a workflow through 'save_result' rather than ingested — "
+                "run the workflow that produces it (see GET /process_graphs). "
+                "GET /dataset-templates/ reports 'ingestable' for every template."
+            ),
+        )
+
     period_type = str(dataset["period_type"])
     start = _resolve_request_start(start, dataset=dataset, period_type=period_type)
     end = _normalize_optional_request_period(end, period_type=period_type, field_name="end")
@@ -295,25 +311,25 @@ def create_artifact(
         end=end,
         bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None,
     )
+    # Guaranteed non-blank by the `is_ingestable` check above, which is the single definition
+    # of what makes a template ingestable; re-testing it here would let the two drift.
     ingestion = dataset.get("ingestion")
-    plugin_path = ingestion.get("plugin") if isinstance(ingestion, dict) else None
-    if isinstance(plugin_path, str) and plugin_path:
-        return _create_streaming_artifact(
-            dataset=dataset,
-            plugin_path=plugin_path,
-            start=start,
-            end=resolved_download_end,
-            bbox=bbox,
-            country_code=country_code,
-            overwrite=overwrite,
-            publish=publish,
-            request_scope=request_scope,
-            on_progress=on_progress,
-            is_cancel_requested=is_cancel_requested,
-            save_cursor=save_cursor,
-            periods=periods,
-        )
-    raise HTTPException(status_code=500, detail=f"Dataset '{dataset['id']}' does not define ingestion.plugin")
+    plugin_path = str((ingestion or {}).get("plugin", "")).strip() if isinstance(ingestion, dict) else ""
+    return _create_streaming_artifact(
+        dataset=dataset,
+        plugin_path=plugin_path,
+        start=start,
+        end=resolved_download_end,
+        bbox=bbox,
+        country_code=country_code,
+        overwrite=overwrite,
+        publish=publish,
+        request_scope=request_scope,
+        on_progress=on_progress,
+        is_cancel_requested=is_cancel_requested,
+        save_cursor=save_cursor,
+        periods=periods,
+    )
 
 
 def _period_order_key(period: str, period_type: str) -> str:

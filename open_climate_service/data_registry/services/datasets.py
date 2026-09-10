@@ -146,6 +146,26 @@ def list_datasets() -> list[dict[str, Any]]:
     return list(merged.values())
 
 
+def is_ingestable(dataset: dict[str, Any]) -> bool:
+    """Whether this template can be ingested from an upstream source.
+
+    An ingestable template declares ``ingestion.plugin``: the fetch path. Half the shipped
+    catalogue does not — anomalies, normals and change rasters are *produced* by a workflow
+    through ``save_result`` and registered as static templates, so there is nothing upstream
+    to fetch.
+
+    Keyed on the plugin rather than on ``sync.kind``, which looks like the same question and
+    is not: ``era5land_temperature_daily_normal_1991_2020`` is ``kind: static`` *and* has a
+    plugin, so a kind-based rule would refuse a template that ingests perfectly well. The
+    plugin is what `create_artifact` actually requires, so it is what this reports.
+    """
+    ingestion = dataset.get("ingestion")
+    if not isinstance(ingestion, dict):
+        return False
+    plugin = ingestion.get("plugin")
+    return isinstance(plugin, str) and bool(plugin.strip())
+
+
 def get_dataset(dataset_id: str) -> dict[str, Any] | None:
     """Get dataset dict for a given id."""
     datasets_lookup = {d["id"]: d for d in list_datasets()}
