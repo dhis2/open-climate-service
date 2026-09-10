@@ -84,6 +84,47 @@ def grid_geometry(
     }
 
 
+def check_grid_description(
+    attrs: dict[str, Any],
+    *,
+    y_dim: str,
+    x_dim: str,
+    y_size: int,
+    x_size: int,
+    store: str = "",
+) -> None:
+    """Raise when the attributes about to be written contradict the grid they describe.
+
+    ``spatial:dimensions`` and ``spatial:shape`` are read positionally, so getting their
+    order wrong does not fail loudly: the store publishes successfully and every client that
+    trusts the convention silently renders a transposed grid. That is what happened before
+    CLIM-852 — 39 of 68 stores on one machine declared ``["x", "y"]`` with a reversed shape,
+    and it went unnoticed until a viewer started reading the attributes (CLIM-1008).
+
+    Both are derived from the same dataset moments earlier, so a mismatch here is a bug in
+    our own writer rather than bad input. Refusing the write is therefore the right response:
+    a store that never claims the wrong geometry cannot mislead a reader later, and no amount
+    of downstream care recovers a wrong claim once it is published.
+
+    Square grids are the case worth having a checker for at all — ``[n, n]`` matches either
+    way round, so the shape check passes and only the dimension names give the transposition
+    away.
+    """
+    where = f" for {store}" if store else ""
+
+    declared_dims = attrs.get("spatial:dimensions")
+    if list(declared_dims or []) != [y_dim, x_dim]:
+        raise ValueError(
+            f"spatial:dimensions{where} must be array order (y, x) — expected "
+            f"{[y_dim, x_dim]}, got {declared_dims!r}. Written x-first, every client that "
+            "reads the convention positionally transposes the grid."
+        )
+
+    declared_shape = attrs.get("spatial:shape")
+    if declared_shape is not None and list(declared_shape) != [y_size, x_size]:
+        raise ValueError(f"spatial:shape{where} must be (y, x) == {[y_size, x_size]}, got {list(declared_shape)!r}.")
+
+
 def gdal_geotransform(transform: Sequence[float]) -> str:
     """A GeoZarr ``spatial:transform`` as GDAL's ``GeoTransform`` string.
 

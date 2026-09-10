@@ -188,6 +188,9 @@ def open_icechunk_dataset(store_path: str | Path) -> xr.Dataset:
         ds = ds.sortby(t_dim)
     except ValueError:
         pass
+    from open_climate_service.shared.provenance import record_snapshot
+
+    record_snapshot(str(path), session.snapshot_id)
     return ds
 
 

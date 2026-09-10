@@ -152,7 +152,10 @@ Current STAC details:
 
 - the Zarr asset href is `/zarr/{dataset_id}` — the store root — for flat and pyramided stores alike. A pyramided root has no data variables of its own: it carries `multiscales` (with the levels under `0/`, `1/`, …) plus the time coordinate and `spatial_ref`, and its media type gains `profile=multiscales`, which is how a client knows to resolve a level rather than expecting arrays at the root. Python readers do that descent for you via `open_icechunk_dataset` / `open_zarr_dataset`, which always land on level 0
 - temporal extents are normalized to RFC 3339 in both STAC and Datacube temporal extent fields
-- STAC collection `license` currently defaults to `various`
+- STAC collection `license` publishes the dataset template's declared licence — an SPDX
+  identifier, or `other` for a licence that has none, with a `rel: license` link and
+  `providers` for attribution (CLIM-946). An undeclared licence warns at template load
+  and publishes `other`.
 - spatial `step` values are rounded for readability while preserving axis direction
 - an opt-in live interoperability smoke test exists at `tests/integration/test_stac_interop.py`
 
@@ -196,10 +199,10 @@ Implemented sync behavior:
 - release datasets rematerialize when a newer requested release exists
 - static datasets return `not_syncable`
 - plugin `periods()` clamps target end to actually available data before execution
-- append V1 downloads only the missing range, then rebuilds the canonical artifact from local cache
-- Zarr materialization clips cached upstream data to the requested artifact scope
-- artifact reuse ignores records whose stored coverage does not match the requested scope
-- newly materialized artifacts are rejected when realized temporal coverage does not match the requested scope
+- append execution reuses the planned source delta and writes only missing periods to the committed Icechunk store
+- rematerialization builds and validates the complete contiguous union in a sibling store before publication
+- artifact records keep caller request scope as provenance and cumulative realized store coverage separately
+- existing stores are updated from a planned contiguous union; earlier or gapped ranges rematerialize in ascending order
 
 ## How The Current Flow Works
 

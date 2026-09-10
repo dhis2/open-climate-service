@@ -22,6 +22,8 @@ from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
 from open_climate_service.shared import forecast
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
+from open_climate_service.shared.licences import DatasetLicence, parse_licence
+from open_climate_service.shared.thumbnails import thumbnail_path
 from open_climate_service.shared.time import (
     Cadence,
     parse_period_string_to_datetime,
@@ -127,6 +129,13 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
     catalog_href = absolute_url(request, "/stac/catalog.json")
     dataset_href = absolute_url(request, f"/datasets/{dataset_id}")
     zarr_href = absolute_url(request, f"/zarr/{dataset_id}")
+    # Only when the file is actually there: a collection that advertises a thumbnail a client
+    # then 404s on is worse than one that advertises none. A render that failed or found
+    # nothing to draw leaves an otherwise complete collection without the asset.
+    thumbnail_href = (
+        absolute_url(request, f"/datasets/{dataset_id}/thumbnail.png") if thumbnail_path(dataset_id).is_file() else None
+    )
+    licence = parse_licence(source_dataset.get("license"))
 
     template = _build_collection_template(
         dataset_id=dataset_id,
@@ -137,6 +146,7 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
         zarr_href=zarr_href,
         source_dataset=source_dataset,
         description=_collection_description(dataset_id, artifact, source_dataset),
+        licence=licence,
     )
     template_links = [_link_to_dict(link) for link in template.links]
     period_type = source_dataset.get("period_type")
@@ -157,6 +167,18 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
         collection_payload["stac_extensions"] = sorted({*existing_extensions, *extensions})
     else:
         collection_payload["stac_extensions"] = sorted(extensions)
+    # STAC defines `rel: license` for exactly this, and it is the only way a bespoke licence
+    # travels: the `license` field can only say `other`, so without the link a client learns
+    # nothing about the Copernicus terms beyond "not SPDX".
+    if licence.url:
+        template_links.append(
+            {
+                "rel": "license",
+                "href": licence.url,
+                "type": "text/html",
+                "title": licence.name or licence.identifier or "Licence",
+            }
+        )
     collection_payload["links"] = template_links
     assets = collection_payload.setdefault("assets", {})
     zarr_from_xstac = assets.get("zarr", {}) if isinstance(assets, dict) else {}
@@ -171,6 +193,19 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
         "roles": template_asset.get("roles"),
         "xarray:open_kwargs": xarray_open_kwargs,
     }
+    if thumbnail_href is not None:
+        # `thumbnail` is a standardised STAC asset role, and a Collection may carry assets —
+        # the spec recommends collection-level assets for exactly this shape, a standalone
+        # collection fronting a Zarr store with no items. So no extension is needed and any
+        # STAC client (STAC Browser among them) picks the image up unaided. Added here rather
+        # than on the pystac template because only the assets assembled here reach the
+        # payload; the template's are rebuilt from the xstac output above.
+        collection_payload["assets"]["thumbnail"] = {
+            "href": thumbnail_href,
+            "type": "image/png",
+            "title": "Thumbnail",
+            "roles": ["thumbnail"],
+        }
     if artifact.format == ArtifactFormat.ICECHUNK:
         collection_payload["assets"]["icechunk"] = {
             "href": absolute_url(request, f"/icechunk/{dataset_id}"),
@@ -180,6 +215,9 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
             "xarray:open_kwargs": {"zarr_format": 3, "consolidated": False},
         }
     collection_payload["license"] = template.license
+    providers = _build_providers(source_dataset)
+    if providers:
+        collection_payload["providers"] = providers
     _remove_helper_variables(collection_payload)
     _round_spatial_steps(collection_payload)
     # Prefer an explicit extents.temporal.resolution; fall back to the dataset's
@@ -221,6 +259,38 @@ def _collection_description(dataset_id: str, artifact: ArtifactRecord, source_da
     return f"Published GeoZarr dataset for {artifact.dataset_name}"
 
 
+def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:
+    """STAC `providers` from the template, for carrying attribution (CLIM-946).
+
+    Attribution is a licence condition under CC-BY and CC-BY-NC, not a courtesy, and OCS had
+    nowhere to record it at collection level. Entries are passed through with only their shape
+    checked — STAC defines `name`, `description`, `roles` and `url`, and inventing validation
+    beyond that would reject legitimate metadata.
+    """
+    declared = source_dataset.get("providers")
+    if not isinstance(declared, list):
+        return []
+    providers: list[dict[str, Any]] = []
+    for entry in declared:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        provider: dict[str, Any] = {"name": name.strip()}
+        for key in ("description", "url"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                provider[key] = value.strip()
+        roles = entry.get("roles")
+        if isinstance(roles, list):
+            cleaned = [str(r) for r in roles if isinstance(r, str) and r.strip()]
+            if cleaned:
+                provider["roles"] = cleaned
+        providers.append(provider)
+    return providers
+
+
 def _eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     return ingestion_services.latest_published_zarr_artifacts_by_dataset()
 
@@ -235,6 +305,7 @@ def _build_collection_template(
     zarr_href: str,
     source_dataset: dict[str, Any],
     description: str,
+    licence: DatasetLicence,
 ) -> pystac.Collection:
     spatial = artifact.coverage.spatial_wgs84 or artifact.coverage.spatial
     temporal = artifact.coverage.temporal
@@ -258,7 +329,7 @@ def _build_collection_template(
             PROJECTION_EXTENSION,
             ZARR_EXTENSION,
         ],
-        license=DEFAULT_STAC_LICENSE,
+        license=licence.stac_license,
     )
     # WGS84 default; the store's native CRS (read from its proj:code attr in
     # _build_collection_with_xstac) overrides this. The instance config CRS is
@@ -287,37 +358,45 @@ def _build_collection_template(
 def _add_crs_render_hints(*, template: pystac.Collection, ds: xr.Dataset, store_crs: str) -> None:
     """Surface CRS render hints on the collection for projected (non-built-in) stores.
 
-    Map clients reproject Zarr on the fly with proj4js, which resolves only the
-    built-in ``EPSG:4326`` / ``EPSG:3857`` from their code — any other CRS (e.g.
-    seNorge's UTM33, ``EPSG:32633``) needs a full definition, or the client has to
-    fetch one at render time (an external epsg.io lookup). Publishing the definition
-    in STAC removes that runtime dependency.
+    A client reprojecting Zarr on the fly needs to resolve the store's CRS. We used to hand
+    it a proj4 string under ``open_climate_service:proj4`` because zarr-layer 0.6.1 accepted
+    only its two built-in codes or an explicit proj4 definition. From 0.8.0 it resolves a
+    code through proj4's own registry, and a code proj4 does not ship through the full
+    definition the store publishes for itself (``shared/crs.py``, ``store_crs_attrs``) — so
+    that non-standard field and the viewer's epsg.io fallback are both retired (CLIM-833)
+    and only standard fields remain.
 
-    Four fields are emitted:
+    Three fields are emitted:
 
     * ``proj:wkt2`` — the STAC Projection-extension standard, lossless CRS
-      representation. It is the same information GeoZarr already carries in the CF
-      ``spatial_ref`` grid-mapping's ``crs_wkt`` attribute.
+      representation. It is the same information the store already carries, in the CF
+      ``spatial_ref`` grid-mapping's ``crs_wkt`` attribute and in its own ``proj:wkt2``
+      root attribute (``shared/crs.py``, ``store_crs_attrs``); this is the copy a client
+      that reads the catalogue and never opens the Zarr can see.
     * ``proj:projjson`` — the same CRS as PROJJSON. Also a STAC Projection-extension
       standard (and the GeoZarr ``proj:`` convention), but a JSON object a JS/STAC
-      client can consume directly instead of parsing WKT2 — the convention-aligned
-      sibling of the namespaced proj4 hint below.
-    * ``open_climate_service:proj4`` — a proj4 string for direct consumption by
-      proj4js. proj4 is intentionally *not* a STAC-standard field (PROJ treats proj4
-      strings as lossy), so it lives under our namespace rather than ``proj:``.
-      zarr-layer only accepts a built-in ``crs`` code or a ``proj4`` string today; once
-      carbonplan/zarr-layer#61 lands (auto-resolving any EPSG code) this proj4 hint
-      becomes unnecessary and only ``proj:wkt2`` need remain, for other STAC clients.
-    * ``proj:bbox`` — the data extent in the store's native CRS. Without it, a client
-      reprojecting the Zarr must fetch the x/y coordinate arrays at render time to
-      derive bounds (zarr-layer's "proj4 provided without explicit bounds" warning);
-      publishing it lets the client pass explicit bounds and skip that round-trip.
+      client can consume directly instead of parsing WKT2.
+    * ``proj:bbox`` — the data extent in the store's native CRS, as an optional hint for
+      STAC clients. It is *not* how our own viewer places a layer, and not the primary
+      record of a store's geometry: both write paths already write the GeoZarr
+      ``spatial:bbox`` — and ``spatial:transform`` whenever the cell size is derivable from
+      the coordinates, so all but a degenerate single-cell axis — into the store itself
+      (``shared/geozarr.py``, via ``data_manager/services/downloader.py`` and
+      ``streaming/store.py``), and from 0.8.0 zarr-layer reads those directly. The viewer
+      therefore passes no ``bounds`` and lets the library read the store.
+
+      Publishing the extent here still helps a STAC client that has the catalogue but has
+      not opened the store, and spares a reprojecting client the coordinate-array read it
+      would otherwise need. Note the two describe the extent differently: ``spatial:bbox``
+      is edge-based under ``pixel`` registration, whereas this falls back to the coordinate
+      min/max — cell centres — when the store declares no ``spatial:bbox``.
+
+      Stores written before CLIM-852 declare their ``spatial:*`` axes transposed, which now
+      misplaces them for any client that trusts the convention; see CLIM-1008.
     """
     if is_builtin_crs(store_crs):
         return
     try:
-        import warnings
-
         from pyproj import CRS
 
         # Prefer the CRS the data was actually written with (the CF grid-mapping WKT)
@@ -334,12 +413,6 @@ def _add_crs_render_hints(*, template: pystac.Collection, ds: xr.Dataset, store_
         # PROJJSON alongside it — the same CRS as a JSON object, cheaper for JS/STAC
         # clients than parsing WKT2. Cheap to emit next to the WKT2 above.
         template.extra_fields["proj:projjson"] = crs.to_json_dict()
-        with warnings.catch_warnings():
-            # to_proj4() warns that proj4 is lossy; that's acceptable for a render hint.
-            warnings.simplefilter("ignore")
-            proj4 = crs.to_proj4()
-        if proj4:
-            template.extra_fields["open_climate_service:proj4"] = proj4.strip()
     except Exception:
         logger.warning("Could not derive CRS render hints for '%s'", store_crs, exc_info=True)
 
@@ -422,7 +495,9 @@ def _build_collection_with_xstac(
                 temporal_dimension=time_dimension,
                 x_dimension=x_dimension,
                 y_dimension=y_dimension,
-                reference_system=4326,
+                # The store's own CRS, not a constant: these axes are in whatever the store
+                # uses, and seNorge's are UTM33 metres. See reference_system_for.
+                reference_system=reference_system_for(store_crs),
                 # Schema validation can trigger outbound fetches for STAC extension schemas.
                 validate=False,
             )
@@ -612,9 +687,55 @@ def _add_temporal_values(collection: dict[str, Any], ds: xr.Dataset, time_dimens
     dim["values"] = [f"{s.isoformat()}Z" for s in stamps.tz_localize(None)]
 
 
+def reference_system_for(store_crs: str | int | None) -> int | str:
+    """The datacube ``reference_system`` describing a store's spatial axes.
+
+    The datacube extension accepts an EPSG code as a number, or a WKT2 (ISO 19162) or
+    PROJJSON string, and defaults to 4326 when absent. An EPSG code is published as the
+    number because that is the unambiguous form, and because it is what a client comparing
+    against a numeric code expects.
+
+    Anything else is converted to WKT2 rather than passed through: a proj4 string is neither
+    WKT2 nor PROJJSON, so publishing one verbatim puts an invalid value in a standard field.
+    A CRS we cannot interpret at all leaves nothing honest to publish — the field has no
+    "unknown", and omitting it means the same 4326 default — so it falls back to 4326 and
+    says so in the log, loudly enough to be found.
+
+    Both cube-building paths must resolve this the same way. They previously did not: the
+    temporal path hardcoded ``4326`` for every dataset, so a projected store published its
+    UTM metres as degrees, while the static path read the store's own ``proj:code`` and
+    published a string. A client reading the field got a different answer, of a different
+    type, depending on whether the dataset happened to have a time axis (CLIM-1004).
+    """
+    if not store_crs:
+        return 4326
+    code = canonical_crs_code(store_crs)
+    prefix, _, tail = code.partition(":")
+    if prefix.upper() == "EPSG" and tail.isdigit():
+        return int(tail)
+
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    try:
+        parsed = CRS.from_user_input(code)
+    except (CRSError, TypeError, ValueError):
+        logger.warning(
+            "Could not interpret CRS %r as a coordinate reference system; publishing "
+            "cube:dimensions reference_system as 4326, which is wrong if the store is "
+            "projected. Fix the store's proj:code.",
+            code,
+        )
+        return 4326
+    epsg = parsed.to_epsg()
+    if epsg is not None:
+        return int(epsg)
+    return parsed.to_wkt()
+
+
 def _build_static_cube_dimensions(ds: xr.Dataset, x_dim: str, y_dim: str) -> dict[str, Any]:
     """Build minimal cube:dimensions for a dataset with no time axis."""
-    crs = ds.attrs.get("proj:code", "EPSG:4326")
+    crs = reference_system_for(ds.attrs.get("proj:code"))
     x_vals = ds[x_dim].values
     y_vals = ds[y_dim].values
     x_step = float(x_vals[1] - x_vals[0]) if len(x_vals) > 1 else None

@@ -15,6 +15,10 @@ DATASET_UPDATED_EVENT_TYPE = "dataset.updated"
 class JobCancelledError(Exception):
     """Raised by a job implementation when cooperative cancellation is honored."""
 
+    def __init__(self, message: str, *, result: Any | None = None) -> None:
+        super().__init__(message)
+        self.result = result
+
 
 class JobStatus(StrEnum):
     """Persisted lifecycle states for native jobs."""

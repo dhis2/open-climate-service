@@ -336,6 +336,21 @@ def _load_from_dir(folder: Path) -> list[dict[str, Any]]:
     return datasets
 
 
+def _warn_once(dataset_id: str, source: str, message: str) -> None:
+    """Log a template issue once per (template, source, message) per process.
+
+    Built-in templates are parsed once, but an instance's plugins_dir is deliberately re-read
+    on every request, so without this a questionable template there would log on every request
+    exactly as the built-ins used to (CLIM-904).
+    """
+    key = (dataset_id, source, message)
+    with _WARNED_LOCK:
+        first_time = key not in _WARNED_TEMPLATE_ISSUES
+        _WARNED_TEMPLATE_ISSUES.add(key)
+    if first_time:
+        logger.warning("Dataset template '%s' in %s: %s", dataset_id, source, message)
+
+
 def _validate_dataset_template(dataset: object, *, source: str) -> None:
     """Validate registry fields required by runtime sync planning."""
     if not isinstance(dataset, dict):
@@ -415,19 +430,43 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
     # Surface non-CF/udunits units so unit-aware processes (xclim indices) don't fail
     # cryptically later. Warn rather than reject — not every variable is a physical
     # quantity (e.g. population counts) (#280).
+    # A licence is how a user knows what they may do with a layer, and OCS published the
+    # constant "various" on every collection until CLIM-946. Warn rather than reject: an
+    # instance should not be unable to serve data because a template is missing metadata, and
+    # an undeclared licence still publishes honestly as `other`. But warn every time, because
+    # the default path — say nothing, publish something permissive-sounding — is how a
+    # non-commercial source gets laundered through a derived product.
+    if "license" not in dataset:
+        _warn_once(
+            dataset_id,
+            source,
+            "declares no 'license'; the published collection will say 'other'. Set an SPDX "
+            "identifier (license: CC-BY-4.0) or a name and URL for a licence that has none.",
+        )
+    else:
+        from open_climate_service.shared.licences import (
+            UNDECLARED,
+            licence_declaration_problem,
+            parse_licence,
+        )
+
+        # A specific complaint where there is one — a contradictory id/name pair reads as
+        # "unreadable" otherwise, which sends the author looking for a typo.
+        problem = licence_declaration_problem(dataset.get("license"))
+        if problem is not None:
+            _warn_once(dataset_id, source, problem)
+        elif parse_licence(dataset.get("license")) is UNDECLARED:
+            _warn_once(
+                dataset_id,
+                source,
+                f"has an unreadable 'license' value {dataset.get('license')!r}; treating it as "
+                "undeclared. Expected an SPDX identifier, or a mapping with 'name' and 'url'.",
+            )
+
     units = dataset.get("units")
     if isinstance(units, str):
         from open_climate_service.shared.cf import validate_units
 
         message = validate_units(units)
         if message:
-            # Once per (template, source, message) per process. Built-in templates are now
-            # parsed once, but an instance's plugins_dir is deliberately re-read on every
-            # request, so without this a questionable unit there would log on every request
-            # exactly as the built-ins used to (CLIM-904).
-            key = (dataset_id, source, message)
-            with _WARNED_LOCK:
-                first_time = key not in _WARNED_TEMPLATE_ISSUES
-                _WARNED_TEMPLATE_ISSUES.add(key)
-            if first_time:
-                logger.warning("Dataset template '%s' in %s: %s", dataset_id, source, message)
+            _warn_once(dataset_id, source, message)

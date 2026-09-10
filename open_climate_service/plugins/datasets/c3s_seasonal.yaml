@@ -42,6 +42,12 @@
   resolution: 1° x 1° (~110 km)
   source: C3S seasonal forecast anomalies (ECMWF SEAS5.1) via CDS
   source_url: https://cds.climate.copernicus.eu/datasets/seasonal-postprocessed-single-levels
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: RdBu_r
     range: [-3, 3]
@@ -75,6 +81,12 @@
   resolution: 1° x 1° (~110 km)
   source: C3S seasonal forecast anomalies (ECMWF SEAS5.1) via CDS
   source_url: https://cds.climate.copernicus.eu/datasets/seasonal-postprocessed-single-levels
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: BrBG
     range: [-5, 5]

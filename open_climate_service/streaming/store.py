@@ -18,7 +18,8 @@ from typing import Any
 
 from geozarr_toolkit import create_geozarr_attrs
 
-from open_climate_service.shared.geozarr import grid_geometry, write_gdal_geotransform
+from open_climate_service.shared.crs import store_crs_attrs
+from open_climate_service.shared.geozarr import check_grid_description, grid_geometry, write_gdal_geotransform
 from open_climate_service.stac.media_types import is_multiscales_convention
 from open_climate_service.streaming.protocol import GridSpec
 
@@ -80,12 +81,16 @@ def _open_committed(store_path: Path) -> Any:
     return xr.open_zarr(store) if group is None else xr.open_zarr(store, group=group)
 
 
-def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: str = "t") -> set[str]:
-    """Return period ids already committed in the store, or an empty set.
+def read_committed_period_ids_ordered(store_path: Path, period_type: str, *, time_dim: str = "t") -> list[str]:
+    """Return committed period ids in their stored coordinate order.
 
     Resume correctness is store-first: if the repository already contains a
     committed time step, the orchestrator treats that as authoritative even when
     a persisted cursor is stale or missing.
+
+    Order matters to ingestion planning: a set can identify already-written
+    periods, but cannot distinguish a safe forward append from a store whose time
+    axis contains a gap or runs backwards.
 
     A forecast store has no ``t``, and its committed steps are its issue times, so the default
     ``time_dim`` resolves against ``reference_time`` there. Without that a caller reading the
@@ -98,7 +103,7 @@ def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: s
     from open_climate_service.shared.time import datetime_to_period_string
 
     if not store_path.exists():
-        return set()
+        return []
 
     try:
         # Level 0 rather than the root: the root time coordinate of a pyramided store is
@@ -109,7 +114,7 @@ def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: s
             if time_dim not in ds.coords and forecast.is_forecast_cube(ds):
                 time_dim = forecast.REFERENCE_DIM
             if time_dim not in ds.coords:
-                return set()
+                return []
             coord = ds[time_dim]
             if coord.dtype.kind != "M":
                 # Non-datetime (ordinal) step dimension — e.g. an integer
@@ -118,17 +123,22 @@ def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: s
                 # as datetimes would mangle every value and leave ``committed``
                 # empty, causing duplicate appends on resume.
                 if coord.dtype.kind in "iu":
-                    return {str(int(item)) for item in coord.values}
-                return {str(item.item()) for item in coord.values}
-            return {
+                    return [str(int(item)) for item in coord.values]
+                return [str(item.item()) for item in coord.values]
+            return [
                 datetime_to_period_string(pd.Timestamp(item.item()).to_pydatetime(), period_type)
                 for item in coord.values
-            }
+            ]
         finally:
             ds.close()
     except Exception:
         logger.debug("Could not read committed periods from %s", store_path, exc_info=True)
-        return set()
+        return []
+
+
+def read_committed_period_ids(store_path: Path, period_type: str, *, time_dim: str = "t") -> set[str]:
+    """Return period ids already committed in the store, or an empty set."""
+    return set(read_committed_period_ids_ordered(store_path, period_type, time_dim=time_dim))
 
 
 def is_store_empty(store_path: Path) -> bool:
@@ -245,13 +255,15 @@ def write_geozarr_attrs(store: Any, *, spec: GridSpec, bbox: list[float]) -> Non
         bbox=bbox,
         shape=spec.shape,
     )
-    crs_code = f"EPSG:{spec.crs}"
-    attrs["proj:code"] = crs_code
+    # `create_geozarr_attrs` records an EPSG input as `proj:code` and nothing else, which
+    # only describes the store to a reader that can look the code up. Overwrite with the full
+    # `proj:` set so the store carries its own definition — see store_crs_attrs.
+    attrs.update(store_crs_attrs(f"EPSG:{spec.crs}"))
     # Native-CRS extent, in the GeoZarr `spatial:bbox` convention. Direct-Zarr clients
-    # (GDAL/QGIS, zarr-layer) read the CRS from the CF grid-mapping (`crs_wkt`) / `proj:`
-    # convention that create_geozarr_attrs already writes, and the extent from here or the
-    # coordinate arrays — no non-standard `proj4`/`bounds` attrs required. The STAC hints
-    # (open_climate_service:proj4, proj:bbox) in stac/services.py serve the map viewer.
+    # (GDAL/QGIS, zarr-layer) read the CRS from the CF grid-mapping (`crs_wkt`) / the `proj:`
+    # convention above, and the extent from here or the coordinate arrays — no non-standard
+    # `proj4`/`bounds` attrs required. stac/services.py publishes the same CRS fields plus
+    # `proj:bbox` on the collection, for clients that read the catalogue and not the store.
     attrs["spatial:bbox"] = bbox
     if geometry is not None:
         # The affine is what a client actually places the raster with. Without it, viewers
@@ -261,6 +273,16 @@ def write_geozarr_attrs(store: Any, *, spec: GridSpec, bbox: list[float]) -> Non
         attrs["spatial:shape"] = geometry["shape"]
         attrs["spatial:bbox"] = geometry["bbox"]
     attrs.update(spec.attrs)
+
+    # Checked after `spec.attrs` is merged, not before: a plugin's own attrs land last and
+    # could otherwise reintroduce a bad description past the guard. `spec.shape` is (y, x).
+    check_grid_description(
+        attrs,
+        y_dim=spec.y_dim,
+        x_dim=spec.x_dim,
+        y_size=int(spec.shape[0]),
+        x_size=int(spec.shape[1]),
+    )
 
     # An append to a pyramided store must not un-declare its pyramid. `create_geozarr_attrs`
     # builds `zarr_conventions` for a *flat* store, and the `update` below replaces the list

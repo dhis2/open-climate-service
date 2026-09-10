@@ -25,6 +25,12 @@ def _annotation_to_schema(ann: Any) -> dict[str, Any]:
 
     Handles plain types (str, int, …) and nullable unions (str | None).
     Returns {} for types with no known mapping (e.g. xr.DataArray).
+
+    A nullable annotation keeps its null: `str | None` is `{"type": ["string", "null"]}`,
+    matching how the openEO process specs express an optional parameter whose default is
+    null (`aggregate_spatial`'s `target_dimension` is exactly this). Unwrapping to a bare
+    `"string"` would publish a schema that rejects the documented default, which is worse
+    than publishing none — a client validating the graph would refuse a valid call.
     """
     direct = _PYTHON_TYPE_MAP.get(ann)
     if direct:
@@ -35,8 +41,68 @@ def _annotation_to_schema(ann: Any) -> dict[str, Any]:
     if isinstance(ann, types.UnionType) or origin is typing.Union:
         non_none = [a for a in args if a is not type(None)]
         if len(non_none) == 1:
-            return _annotation_to_schema(non_none[0])
+            inner = _annotation_to_schema(non_none[0])
+            if not inner:
+                return {}
+            if len(non_none) < len(args):
+                return {**inner, "type": [inner["type"], "null"]}
+            return inner
     return {}
+
+
+def _schema_types(schema: Any) -> tuple[str, ...]:
+    """The JSON Schema `type` of a parameter schema, always as a tuple.
+
+    `type` is either a string or a list of them, and an absent or declared-empty schema has
+    none. Callers only ask whether a particular type is admitted, so normalise the shape here
+    rather than at each site.
+    """
+    if not isinstance(schema, dict):
+        return ()
+    declared = schema.get("type")
+    if isinstance(declared, str):
+        return (declared,)
+    if isinstance(declared, list):
+        return tuple(str(item) for item in declared)
+    return ()
+
+
+def _resolved_annotations(fn: Any) -> dict[str, Any]:
+    """A function's annotations as objects rather than strings.
+
+    `from __future__ import annotations` stores every annotation as a string, so a raw
+    `param.annotation` is `"str"` rather than `str` and the type map below never matches — the
+    parameter is then published with an empty schema, and a client building a graph gets an
+    untyped field with nothing to validate against.
+
+    Resolution needs the module's namespace and can fail on a type imported only under
+    `TYPE_CHECKING`.
+
+    `get_type_hints` resolves the whole mapping atomically, so a single unresolvable name would
+    cost *every* parameter its schema — a plugin annotating one exotic type would publish an
+    untyped contract for its ordinary `str` and `int` parameters too. So a failure degrades to
+    resolving each annotation on its own, and only the ones that genuinely cannot be resolved
+    are left out. Omitting a name is what the caller wants: it falls back to the raw string
+    annotation, which maps to an empty schema for that parameter alone.
+    """
+    try:
+        return typing.get_type_hints(fn)
+    except Exception:  # noqa: BLE001 — fall through to per-annotation resolution below
+        pass
+
+    # Same operation `get_type_hints` performs internally, against the function's own module
+    # globals — the strings come from the plugin's source, so this is no wider a trust boundary.
+    globalns = getattr(fn, "__globals__", {})
+    resolved: dict[str, Any] = {}
+    for name, annotation in getattr(fn, "__annotations__", {}).items():
+        if not isinstance(annotation, str):
+            resolved[name] = annotation
+            continue
+        try:
+            resolved[name] = eval(annotation, globalns)  # noqa: S307 — see above
+        except Exception:  # noqa: BLE001, S112 — one unresolvable name costs only its own schema
+            continue
+    return resolved
 
 
 @overload
@@ -85,26 +151,33 @@ def process(
     def decorator(fn: F) -> F:
         doc = inspect.getdoc(fn) or ""
         sig = inspect.signature(fn)
+        hints = _resolved_annotations(fn)
 
         params: list[dict[str, Any]] = []
         for name, param in sig.parameters.items():
             if name in ("self", "cls"):
                 continue
             p: dict[str, Any] = {"name": name, "schema": {}}
-            ann = param.annotation
+            ann = hints.get(name, param.annotation)
             if ann is not inspect.Parameter.empty:
                 schema = _annotation_to_schema(ann)
                 if schema:
                     p["schema"] = schema
+            override = parameters.get(name, {}) if parameters else {}
+            if override:
+                p.update(override)
+            # The default is decided after the override, against the schema that actually
+            # ships. An explicit schema can narrow a nullable annotation or widen a
+            # non-nullable one, and deciding beforehand would contradict either.
             if param.default is not inspect.Parameter.empty:
-                p["optional"] = True
-                # Only emit the default value when it is not None, or when the
-                # schema explicitly allows null.  Emitting default=None for a
-                # purely-string schema creates a type mismatch in the catalog.
-                if param.default is not None or not p.get("schema"):
+                p.setdefault("optional", True)
+                # A schema carrying "null" admits a None default, so it is published as-is.
+                # A non-nullable one would be contradicted by it, so the default is withheld.
+                # An explicit default in the override always wins.
+                if "default" not in override and (
+                    param.default is not None or not p.get("schema") or "null" in _schema_types(p.get("schema"))
+                ):
                     p["default"] = param.default
-            if parameters and name in parameters:
-                p.update(parameters[name])
             params.append(p)
 
         meta: dict[str, Any] = {

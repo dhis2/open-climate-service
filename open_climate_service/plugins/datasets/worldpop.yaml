@@ -28,6 +28,10 @@
   resolution: 100m x 100m
   source: WorldPop Global2
   source_url: https://hub.worldpop.org/project/categories?id=3
+  license: CC-BY-4.0
+  providers:
+    - name: WorldPop, University of Southampton
+      url: https://hub.worldpop.org/
   display:
     colormap: reds
     range: [0.5, 100.0]
@@ -59,6 +63,10 @@
   resolution: 100m x 100m
   source: WorldPop Global2
   source_url: https://hub.worldpop.org/project/categories?id=8
+  license: CC-BY-4.0
+  providers:
+    - name: WorldPop, University of Southampton
+      url: https://hub.worldpop.org/
   display:
     colormap: reds
     range: [0.5, 10.0]
@@ -74,6 +82,10 @@
   resolution: 100m x 100m
   source: WorldPop Global2
   source_url: https://hub.worldpop.org/project/categories?id=3
+  license: CC-BY-4.0
+  providers:
+    - name: WorldPop, University of Southampton
+      url: https://hub.worldpop.org/
   display:
     colormap: RdBu
     range: [-50.0, 50.0]

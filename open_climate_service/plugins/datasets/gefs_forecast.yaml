@@ -28,6 +28,14 @@
   resolution: 0.25° x 0.25° (~28 km)
   source: NOAA GEFS via dynamical.org
   source_url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+  license: CC-BY-4.0
+  providers:
+    - name: dynamical.org
+      url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+      roles: [processor, licensor]
+    - name: NOAA NWS NCEP
+      url: https://www.ncep.noaa.gov/
+      roles: [producer]
   display:
     colormap: RdYlBu_r
     range: [-10, 40]
@@ -62,6 +70,14 @@
   resolution: 0.25° x 0.25° (~28 km)
   source: NOAA GEFS via dynamical.org
   source_url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+  license: CC-BY-4.0
+  providers:
+    - name: dynamical.org
+      url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+      roles: [processor, licensor]
+    - name: NOAA NWS NCEP
+      url: https://www.ncep.noaa.gov/
+      roles: [producer]
   display:
     colormap: YlGnBu
     range: [0, 50]

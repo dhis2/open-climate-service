@@ -5,6 +5,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from open_climate_service.shared.licences import STAC_LICENSE_OTHER
+
 
 class ArtifactFormat(StrEnum):
     """Supported stored artifact formats."""
@@ -186,6 +188,15 @@ class DatasetRecord(BaseModel):
     resolution: str | None = Field(default=None, description="Native spatial resolution summary.")
     source: str | None = Field(default=None, description="Upstream source name.")
     source_url: str | None = Field(default=None, description="Upstream source documentation URL.")
+    license: str = Field(
+        default=STAC_LICENSE_OTHER,
+        description=(
+            "SPDX identifier for the dataset's licence, or 'other' when the licence has no "
+            "SPDX identifier. Never absent: an undeclared licence reports 'other' rather than "
+            "something that reads as permissive."
+        ),
+    )
+    license_url: str | None = Field(default=None, description="URL of the licence text, when known.")
     extent: ArtifactCoverage = Field(description="Current covered spatial and temporal extent of the dataset.")
     last_updated: datetime = Field(
         description="Timestamp when Open Climate Service last materialized or updated the dataset."

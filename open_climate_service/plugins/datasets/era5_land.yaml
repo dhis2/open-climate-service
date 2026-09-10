@@ -22,6 +22,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/era5-land-daily
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
     range: [-30.0, 30.0]
@@ -52,6 +58,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -81,6 +93,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
   source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
     range: [-30.0, 30.0]
@@ -111,6 +129,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
   source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -139,6 +163,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
     range: [-30.0, 30.0]
@@ -167,6 +197,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -194,6 +230,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis (Earth Data Hub)
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/era5-land-daily
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
     range: [-30.0, 30.0]
@@ -220,6 +262,12 @@
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis (Earth Data Hub)
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/era5-land-daily
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -244,6 +292,12 @@
     kind: static
   units: degC
   source: Derived (climate_normal workflow)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
     range: [-30.0, 30.0]
@@ -259,6 +313,12 @@
   # the days in each calendar month, so the result stays a mean daily rate.
   units: mm/d
   source: Derived (climate_normal workflow)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -280,6 +340,12 @@
     kind: static
   units: degC
   source: Derived (climate_anomaly workflow)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
     range: [-15.0, 15.0]
@@ -293,6 +359,12 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
     range: [-100.0, 100.0]
@@ -306,6 +378,12 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
     range: [-20.0, 20.0]
@@ -325,6 +403,12 @@
     kind: static
   units: degC
   source: Derived (climate_anomaly workflow)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
     range: [-3.0, 3.0]
@@ -338,6 +422,12 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
     range: [-10.0, 10.0]
@@ -351,6 +441,12 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
     range: [-100.0, 100.0]
