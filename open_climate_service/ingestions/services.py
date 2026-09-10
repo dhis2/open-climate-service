@@ -51,6 +51,7 @@ from open_climate_service.ingestions.schemas import (
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
 from open_climate_service.shared.licences import DatasetLicence
+from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
     datetime_to_period_string,
     dekad_start,
@@ -410,6 +411,11 @@ def _create_streaming_artifact(
         _maybe_build_pyramid(ingest_path, dataset)
         if replacement_path is not None:
             _swap_store(replacement_path, store_path)
+        # Once per sync run, here rather than per commit: a streaming ingest commits one
+        # period at a time, so rendering on each would produce a few hundred PNGs during a
+        # historical backfill and keep the last. After the swap, so it renders the store that
+        # is actually published. Never raises — see write_dataset_thumbnail.
+        write_dataset_thumbnail(store_path, dataset)
 
         record = ArtifactRecord(
             artifact_id=str(uuid4()),

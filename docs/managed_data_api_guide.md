@@ -10,6 +10,7 @@ The current public story is:
 - discover published GeoZarr datasets with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
+- preview a dataset with `/datasets/{dataset_id}/thumbnail.png` (also a STAC collection asset)
 
 Internal artifacts still exist as a storage and provenance model, but they are not part of the public API contract.
 
@@ -27,6 +28,7 @@ Operational note:
 - `GET /datasets`
 - `GET /datasets/{dataset_id}`
 - `GET /datasets/{dataset_id}/download`
+- `GET /datasets/{dataset_id}/thumbnail.png`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
@@ -337,9 +339,17 @@ Both endpoints are advertised as `assets` in the STAC collection:
     "href": "https://host/icechunk/chirps3_precipitation_daily",
     "type": "application/octet-stream",
     "xarray:open_kwargs": { "zarr_format": 3, "consolidated": false }
+  },
+  "thumbnail": {
+    "href": "https://host/datasets/chirps3_precipitation_daily/thumbnail.png",
+    "type": "image/png",
+    "title": "Thumbnail",
+    "roles": ["thumbnail"]
   }
 }
 ```
+
+The `thumbnail` asset is present only when the image exists — see section 9.
 
 A **pyramided** store advertises one extra media type parameter:
 
@@ -355,6 +365,23 @@ would send a renderer looking for levels that do not exist.
 
 It is matched as a literal, not parsed, so the string is byte-for-byte fixed: same parameter
 order, one space after each `;`. Reformatting it silently disables rendering.
+
+## 9. Fetch a dataset thumbnail
+
+`GET /datasets/{dataset_id}/thumbnail.png` serves a small PNG preview of the dataset: one
+representative 2-D slice, styled with the template's `display.colormap`, longest side 512 px,
+missing values transparent.
+
+```bash
+curl -s -o thumb.png "http://127.0.0.1:9000/datasets/chirps3_precipitation_daily/thumbnail.png"
+```
+
+A thumbnail is written at the end of each ingest and sync run, so a published dataset normally
+has one. The endpoint 404s only when none has ever been produced — a dataset not yet ingested,
+or a first render that failed or found nothing to draw. A later run that fails, or whose chosen
+slice is entirely missing, leaves the previous image in place rather than deleting it, so a
+served thumbnail can be a run or more stale. The STAC collection advertises the `thumbnail`
+asset only when the image exists.
 
 ## 10. Access published STAC collections
 

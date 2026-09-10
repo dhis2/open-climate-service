@@ -8,6 +8,7 @@ import numpy as np
 import xarray as xr
 
 from open_climate_service.process import process
+from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
 
 
 def _parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
@@ -173,6 +174,33 @@ def aggregate_spatial(
 
     combined = xr.concat(results, dim=geom_dim)
     combined[geom_dim] = geom_labels
+    # Carry the shapes as well as the labels, so the result is a vector datacube rather than a
+    # table that has forgotten where it came from — `save_result(format="GeoParquet")` writes
+    # them straight out, and a consumer can map the result without joining back to a boundary
+    # file. See CLIM-836.
+    #
+    # A companion coordinate rather than replacing the labels on `geom_dim`: the label is the
+    # feature id, and the DHIS2 and CHAP exports key their location column on it
+    # (`location_field` defaults to "geometry"). Putting shapes there would break both.
+    #
+    # WKT strings rather than shapely objects, which is what openEO's vector datacube model uses
+    # (xvec puts shapely geometries in an object-dtype coordinate with a CRS-carrying
+    # GeometryIndex). This process does not build an xvec cube in the first place — the geometry
+    # dimension carries string feature ids, because that is the label the exports need — so the
+    # carrier is chosen for robustness instead: a string coordinate is inert on every path the
+    # cube can take, whereas an object-dtype one makes `to_zarr` fail outright, and the drop that
+    # currently prevents that lives in a single place in the job writer.
+    #
+    # xvec's own encodings are not a better option here: `encode_wkb` round-trips through Zarr as
+    # null-terminated bytes and comes back truncated, and `encode_cf` restructures the cube into
+    # several CF geometry variables — right for an archival file, wrong for a carrier that only
+    # has to survive as far as the vector writer.
+    # Cost worth knowing: numpy stores this as fixed-width unicode (`<U{longest}`) at 4 bytes per
+    # character, sized by the *longest* WKT, and it is attached on every aggregation regardless of
+    # the output format. For simple boundaries that is nothing; for detailed ones it is roughly
+    # 4 x longest-WKT x n_features. Hex-encoded WKB in a bytes array would be ~4x smaller and is
+    # still null-free, so still Zarr-safe -- worth doing if a real boundary set makes this hurt.
+    combined = combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in geom_shapes])})
     return combined
 
 

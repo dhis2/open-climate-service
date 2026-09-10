@@ -58,6 +58,63 @@ This is a deliberate design constraint: each instance serves one place. A Sierra
 
 ---
 
+## Operational ownership and access
+
+OCS owns its operational capabilities, policy, and state. An instance must remain
+operable without DHIS2. The DHIS2 Climate App is an optional client of the OCS API:
+it may provide DHIS2-specific presentation, mappings, and interaction flows, but
+must not duplicate OCS lifecycle rules or maintain a parallel copy of operational
+state.
+
+Domain services and persistent stores are the source of truth. HTTP routes, the
+built-in web console, and future host CLI commands must reuse those services rather
+than implement separate lifecycle rules. External clients use the HTTP API.
+
+### Built-in web surfaces
+
+OCS owns two web surfaces with distinct purposes:
+
+- **The landing page (`/`) provides public discovery.** It presents the instance,
+  published data, available templates, exploration tools, and documentation, and
+  must remain useful without DHIS2. The root URL serves HTML to browsers and JSON
+  discovery metadata to API clients through content negotiation.
+- **The `/manage` console provides operator administration.** It supports ingestion
+  and synchronization and is the OCS surface for dataset administration. It is
+  unavailable when the instance is configured as read-only.
+
+See [Using the web interface](web_interface.md) for the available views and actions.
+
+### Access boundaries
+
+The access model distinguishes three classes:
+
+| Access class | Intended responsibility |
+| --- | --- |
+| Public read | Discover and consume published datasets and instance metadata through the public API and landing page. |
+| Operator read and write | Inspect operational state and perform ingestion, synchronization, and lifecycle actions through the OCS API and `/manage`. |
+| Host operator | Configure the instance, including read-only policy and schedule definitions, and perform host maintenance. |
+
+Network-exposed operator reads and writes must be protected by authentication and
+authorization. This is a design requirement; built-in authentication and
+authorization are not yet implemented. Read-only mode is an HTTP access policy,
+not an identity or permissions system. Operational diagnostics such as job errors
+must not be treated as public merely because reading them does not mutate state.
+See [Read-only instances](instance_guide.md#read-only-instances) for the current
+deployment behavior.
+
+Schedule definitions are operator-managed configuration in `climate-service.yaml`;
+there is no schedule editing API or web view. See
+[Scheduled dataset synchronization](scheduled_sync.md) for configuration and the
+available status API.
+
+The current CLI only starts the server. Commands for ingestion, job inspection,
+and maintenance of read-only deployments are planned. Such commands must use the
+shared domain services and may call them directly while the HTTP server is stopped.
+Until cross-process locking and transactional persistence are available, direct
+store mutation must require a stopped server or otherwise guarantee a single writer.
+
+---
+
 ## Data lifecycle
 
 ```

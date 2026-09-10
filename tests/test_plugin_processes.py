@@ -113,3 +113,123 @@ def cdd(pr: xr.DataArray, thresh: str = "1mm/day") -> xr.DataArray:
     procs = {p["id"]: p for p in response.json()["processes"]}
     assert "cdd" in procs
     assert procs["cdd"]["summary"] == "Consecutive dry days"
+
+
+def test_string_annotations_are_resolved_to_schemas() -> None:
+    """`from __future__ import annotations` stores annotations as strings.
+
+    A raw `param.annotation` is then `"str"` rather than `str`, the type map never matches, and the
+    parameter is published with an empty schema — a client building a graph gets an untyped field
+    with nothing to validate against. Written here as explicit string annotations, which is exactly
+    what that import produces.
+    """
+
+    @process
+    def scaled(threshold: "str", count: "int" = 3, ratio: "float | None" = None) -> "str":
+        """Do something with a threshold."""
+        return threshold
+
+    meta = get_process_metadata(scaled)
+    assert meta is not None
+    schemas = {p["name"]: p.get("schema") for p in meta["parameters"]}
+    assert schemas == {
+        "threshold": {"type": "string"},
+        "count": {"type": "integer"},
+        # `float | None` keeps its null, as the openEO specs do for a nullable parameter.
+        "ratio": {"type": ["number", "null"]},
+    }
+
+
+def test_a_nullable_annotation_keeps_its_null_and_its_default() -> None:
+    """`str | None` must publish `["string", "null"]`, not a bare `"string"`.
+
+    This is how the openEO specs express an optional parameter defaulting to null —
+    `aggregate_spatial`'s `target_dimension` is exactly this shape. Unwrapping to `"string"`
+    publishes a schema that rejects the documented default, so a client validating the graph
+    would refuse a valid call. That is worse than publishing no schema at all.
+    """
+
+    @process
+    def nullable(target: str | None = None, count: int = 1) -> None:
+        """Has a nullable parameter."""
+
+    meta = get_process_metadata(nullable)
+    assert meta is not None
+    target, count = meta["parameters"]
+
+    assert target["schema"] == {"type": ["string", "null"]}
+    assert target["optional"] is True
+    assert target["default"] is None
+
+    # A non-nullable parameter is unaffected.
+    assert count["schema"] == {"type": "integer"}
+    assert count["default"] == 1
+
+
+def test_an_unresolvable_annotation_does_not_lose_the_process() -> None:
+    """A plugin may annotate a type it imports only under TYPE_CHECKING.
+
+    Resolution needs the module namespace and fails for those, which must cost the schema for that
+    process rather than the process itself.
+    """
+
+    @process
+    def exotic(data: "SomeTypeThatIsNotImported", factor: "int" = 2) -> None:  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
+        """Takes something unresolvable."""
+
+    meta = get_process_metadata(exotic)
+    assert meta is not None
+    data, factor = meta["parameters"]
+    assert [p["name"] for p in meta["parameters"]] == ["data", "factor"]
+
+    # Only the offending parameter loses its schema. `get_type_hints` resolves the whole
+    # mapping atomically, so without per-annotation fallback `factor` would be empty too —
+    # one exotic type would publish an untyped contract for the whole process.
+    assert data["schema"] == {}
+    assert factor["schema"] == {"type": "integer"}
+
+
+def test_an_explicit_schema_decides_whether_the_default_is_published() -> None:
+    """The null/default check must run against the schema that ships, not the inferred one.
+
+    A `parameters=` override replaces the schema after it is inferred, so deciding beforehand
+    contradicts whichever side the override changed. Both directions are wrong in the same way:
+    a narrowed schema would publish a null default it rejects, and a widened one would withhold
+    a null default it admits, leaving an optional parameter with nothing to fall back on.
+    """
+
+    @process(parameters={"target": {"schema": {"type": "string"}}})
+    def narrowed(target: str | None = None) -> None:
+        """An override narrows a nullable annotation."""
+
+    meta = get_process_metadata(narrowed)
+    assert meta is not None
+    (target,) = meta["parameters"]
+    assert target["schema"] == {"type": "string"}
+    assert target["optional"] is True
+    assert "default" not in target
+
+    @process(parameters={"target": {"schema": {"type": ["string", "null"]}}})
+    def widened(target: str = None) -> None:  # type: ignore[assignment]  # pyright: ignore[reportArgumentType]
+        """An override widens a non-nullable annotation."""
+
+    meta = get_process_metadata(widened)
+    assert meta is not None
+    (target,) = meta["parameters"]
+    assert target["schema"] == {"type": ["string", "null"]}
+    assert target["optional"] is True
+    assert target["default"] is None
+
+
+def test_an_override_may_set_the_default_itself() -> None:
+    """An explicit default in the override is the author's, and survives the inferred one."""
+
+    @process(parameters={"target": {"default": "explicit"}})
+    def overridden(target: str = None) -> None:  # type: ignore[assignment]  # pyright: ignore[reportArgumentType]
+        """An override supplies its own default."""
+
+    meta = get_process_metadata(overridden)
+    assert meta is not None
+    (target,) = meta["parameters"]
+    assert target["default"] == "explicit"
+    assert target["optional"] is True
