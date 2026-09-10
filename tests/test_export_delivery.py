@@ -177,6 +177,7 @@ def test_deliver_named_export_raises_job_cancelled_when_cancelled(saved: Path, m
         digest = json_digest(verified.manifest.model_dump(mode="json"))
     with pytest.raises(JobCancelledError) as exc_info:
         deliver_named_export("rain", "source", dry_run=False, expected_manifest_sha256=digest)
+    assert exc_info.value.result is not None
     assert exc_info.value.result["outcome"] == ExportOutcome.CANCELLED
 
 
