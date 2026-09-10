@@ -1118,6 +1118,371 @@ def test_merge_cubes_wrapper_preserves_named_dataarrays_on_cube_axis() -> None:
     assert list(merged["__cubes__"].values) == ["tp", "t2m"]
 
 
+def test_merge_cubes_wrapper_appends_third_named_predictor() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    reg = _build_process_registry()
+    merge = reg["merge_cubes"].implementation
+    coords = {
+        "t": np.array(["2025-01-01", "2025-02-01"], dtype="datetime64[D]"),
+        "geometry": ["DISTRICT_A", "DISTRICT_B"],
+    }
+    precipitation = xr.DataArray(
+        np.array([[100.0, 80.0], [120.0, 90.0]], dtype=np.float32),
+        dims=("t", "geometry"),
+        coords=coords,
+        name="precip",
+    )
+    temperature = xr.DataArray(
+        np.array([[25.0, 24.0], [26.0, 25.0]], dtype=np.float32),
+        dims=("t", "geometry"),
+        coords=coords,
+        name="t2m",
+    )
+    population = xr.DataArray(
+        np.array([[10_000.0, 20_000.0], [10_000.0, 20_000.0]], dtype=np.float32),
+        dims=("t", "geometry"),
+        coords=coords,
+        name="pop_total",
+    )
+
+    climate = merge(cube1=precipitation, cube2=temperature)
+    merged = merge(cube1=climate, cube2=population)
+
+    assert isinstance(merged, xr.DataArray)
+    assert list(merged["__cubes__"].values) == ["precip", "t2m", "pop_total"]
+    xr.testing.assert_equal(merged.sel(__cubes__="pop_total", drop=True), population)
+
+
+def test_merge_cubes_wrapper_combines_three_zonal_datasets_as_chap_csv() -> None:
+    """Single-variable Datasets mirror aggregate_spatial's return type."""
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    reg = _build_process_registry()
+    merge = reg["merge_cubes"].implementation
+    coords = {
+        "t": np.array(["2025-01-01", "2025-02-01"], dtype="datetime64[D]"),
+        "geometry": ["DISTRICT_A"],
+    }
+    precipitation = xr.Dataset(
+        {"precip": (("t", "geometry"), np.array([[100.0], [120.0]], dtype=np.float32))},
+        coords=coords,
+    )
+    temperature = xr.Dataset(
+        {"t2m": (("t", "geometry"), np.array([[25.0], [26.0]], dtype=np.float32))},
+        coords=coords,
+    )
+    population = xr.Dataset(
+        {"pop_total": (("t", "geometry"), np.array([[10_000.0], [10_000.0]], dtype=np.float32))},
+        coords=coords,
+    )
+
+    climate = merge(cube1=precipitation, cube2=temperature)
+    merged = merge(cube1=climate, cube2=population)
+    frame = _build_chap_csv_frame(merged.to_dataframe().reset_index(), {"period_type": "monthly"})
+
+    assert frame.to_dict(orient="records") == [
+        {
+            "time_period": "202501",
+            "location": "DISTRICT_A",
+            "precip": "100",
+            "t2m": "25",
+            "pop_total": "10000",
+        },
+        {
+            "time_period": "202502",
+            "location": "DISTRICT_A",
+            "precip": "120",
+            "t2m": "26",
+            "pop_total": "10000",
+        },
+    ]
+
+
+def test_merge_cubes_wrapper_rejects_misaligned_predictor_indexes() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    reg = _build_process_registry()
+    merge = reg["merge_cubes"].implementation
+    precipitation = xr.DataArray(
+        np.ones((2, 1), dtype=np.float32),
+        dims=("t", "geometry"),
+        coords={"t": [0, 1], "geometry": ["DISTRICT_A"]},
+        name="precip",
+    )
+    temperature = precipitation.rename("t2m")
+    population = xr.DataArray(
+        np.ones((2, 1), dtype=np.float32),
+        dims=("t", "geometry"),
+        coords={"t": [0, 2], "geometry": ["DISTRICT_A"]},
+        name="pop_total",
+    )
+
+    climate = merge(cube1=precipitation, cube2=temperature)
+    with pytest.raises(ValueError, match="different labels on index 't'"):
+        merge(cube1=climate, cube2=population)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_merge_cubes_wrapper_combines_two_named_predictor_groups(reverse: bool) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    predictors = [
+        xr.DataArray([float(index)], dims="t", coords={"t": [0]}, name=name)
+        for index, name in enumerate(["precip", "t2m", "pop_total", "elevation"])
+    ]
+    left = merge(cube1=predictors[0], cube2=predictors[1])
+    right = merge(cube1=predictors[2], cube2=predictors[3])
+    merged = merge(cube1=right, cube2=left) if reverse else merge(cube1=left, cube2=right)
+
+    expected = predictors[2:] + predictors[:2] if reverse else predictors
+    assert list(merged["__cubes__"].values) == [cube.name for cube in expected]
+    for cube in predictors:
+        xr.testing.assert_equal(merged.sel(__cubes__=cube.name, drop=True), cube)
+
+
+@pytest.mark.parametrize("missing", ["dimension", "index"])
+def test_merge_cubes_wrapper_does_not_broadcast_missing_predictor_axes(missing: str) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray(
+        np.ones((2, 1)),
+        dims=("t", "geometry"),
+        coords={"t": [0, 1], "geometry": ["DISTRICT_A"]},
+        name="precip",
+    )
+    climate = merge(cube1=cube, cube2=cube.rename("t2m"))
+    population = cube.rename("pop_total")
+    if missing == "dimension":
+        population = population.isel(t=0, drop=True)
+    else:
+        population = population.drop_indexes("t")
+    with pytest.raises(ValueError, match="Named predictors must have the same"):
+        merge(cube1=climate, cube2=population)
+
+
+@pytest.mark.parametrize(
+    "dimension, labels, noise",
+    [("geometry", ["B", "A"], 0.0), ("y", [2.0, 1.0], 0.0), ("y", [2.0, 1.0], 1e-9)],
+)
+def test_merge_cubes_wrapper_aligns_reordered_predictors(dimension: str, labels: list[Any], noise: float) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([10.0, 20.0], dims=dimension, coords={dimension: labels}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m").copy(deep=True))
+    third = cube.rename("population").isel({dimension: [1, 0]})
+    if dimension == "y":
+        third = third.assign_coords({dimension: third[dimension] + noise})
+    before = third.copy(deep=True)
+    result = merge(cube1=stacked, cube2=third)
+    xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
+    xr.testing.assert_identical(third, before)
+    assert result.chunksizes["__cubes__"] == (3,)
+
+
+@pytest.mark.parametrize("offset", [1e-9, 1e-4])
+def test_merge_cubes_wrapper_uses_upstream_coordinate_tolerance(offset: float) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0, 2.0], dims="x", coords={"x": [10.0, 11.0]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m").copy(deep=True))
+    third = cube.rename("population").assign_coords(x=cube.x + offset)
+    if offset > 1e-6:
+        with pytest.raises(ValueError, match="different labels on index 'x'"):
+            merge(cube1=stacked, cube2=third)
+    else:
+        result = merge(cube1=stacked, cube2=third)
+        xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
+
+
+@pytest.mark.parametrize("extra_side", ["stacked", "third"])
+def test_merge_cubes_wrapper_rejects_extra_index_labels(extra_side: str) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0, 2.0], dims="geometry", coords={"geometry": ["A", "B"]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = cube.rename("population")
+    extra = xr.DataArray(
+        [1.0, 2.0, 3.0],
+        dims="geometry",
+        coords={"geometry": ["A", "B", "C"]},
+        name="population",
+    )
+    if extra_side == "stacked":
+        stacked = merge(cube1=extra.rename("precip"), cube2=extra.rename("t2m"))
+    else:
+        third = extra
+
+    with pytest.raises(ValueError, match="different labels on index 'geometry'"):
+        merge(cube1=stacked, cube2=third)
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_merge_cubes_wrapper_rejects_resolver_when_extending_group(grouped: bool) -> None:
+    from open_climate_service.openeo.execution import _make_named_merge_cubes
+
+    cube = xr.DataArray([[1.0], [2.0]], dims=("__cubes__", "t"), coords={"__cubes__": ["precip", "t2m"], "t": [0]})
+    other = xr.DataArray([3.0], dims="t", coords={"t": [0]}, name="population")
+    if grouped:
+        other = other.expand_dims(__cubes__=["population"])
+    resolver = object()
+    context = {"scale": 2}
+    with pytest.raises(ValueError, match="only supported on the initial"):
+        _make_named_merge_cubes(lambda **kwargs: other)(
+            cube1=cube, cube2=other, overlap_resolver=resolver, context=context
+        )
+
+
+def test_merge_cubes_registry_passes_context_and_overlap_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    import openeo_processes_dask.process_implementations as implementations
+
+    import open_climate_service.openeo.execution as execution
+
+    captured: dict[str, Any] = {}
+    expected = xr.DataArray([3.0], dims="t", coords={"t": [0]})
+
+    def original(
+        cube1: Any,
+        cube2: Any,
+        overlap_resolver: Any = None,
+        context: Any = None,
+    ) -> xr.DataArray:
+        captured.update(overlap_resolver=overlap_resolver, context=context)
+        return expected
+
+    monkeypatch.setattr(implementations, "merge_cubes", original)
+    monkeypatch.setattr(execution, "_registry", None)
+    merge = execution._build_process_registry()["merge_cubes"].implementation
+    resolver = object()
+    context = {"scale": 2}
+
+    result = merge(
+        cube1=xr.DataArray([1.0], dims="t", coords={"t": [0]}),
+        cube2=xr.DataArray([2.0], dims="t", coords={"t": [0]}),
+        overlap_resolver=resolver,
+        context=context,
+    )
+
+    assert result is expected
+    assert captured == {"overlap_resolver": resolver, "context": context}
+
+
+def test_merge_cubes_wrapper_accepts_equivalent_datetime_units() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    daily = xr.DataArray(
+        [1.0, 2.0],
+        dims="t",
+        coords={"t": np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]")},
+        name="precip",
+    )
+    stacked = merge(cube1=daily, cube2=daily.rename("t2m"))
+    population = xr.DataArray(
+        [3.0, 4.0],
+        dims="t",
+        coords={"t": np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[s]")},
+        name="population",
+    )
+
+    result = merge(cube1=stacked, cube2=population)
+
+    assert list(result["__cubes__"].values) == ["precip", "t2m", "population"]
+
+
+@pytest.mark.parametrize("right_scalar", [None, "EPSG:3857"])
+def test_merge_cubes_wrapper_ignores_non_index_scalar_coordinate_differences(right_scalar: str | None) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0], dims="t", coords={"t": [0], "spatial_ref": "EPSG:4326"}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = xr.DataArray([2.0], dims="t", coords={"t": [0]}, name="population")
+    if right_scalar is not None:
+        third = third.assign_coords(spatial_ref=right_scalar)
+
+    result = merge(cube1=stacked, cube2=third)
+
+    assert result.coords["spatial_ref"].item() == "EPSG:4326"
+
+
+def test_merge_cubes_wrapper_preserves_shared_auxiliary_and_drops_right_only_auxiliary() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray(
+        [1.0, 2.0],
+        dims="geometry",
+        coords={"geometry": ["A", "B"], "name": ("geometry", ["Alpha", "Beta"])},
+        name="precip",
+    )
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = cube.rename("population").assign_coords(
+        name=("geometry", ["Other A", "Other B"]),
+        source_name=("geometry", ["one", "two"]),
+    )
+
+    result = merge(cube1=stacked, cube2=third)
+
+    assert result.coords["name"].values.tolist() == ["Alpha", "Beta"]
+    assert "source_name" not in result.coords
+
+
+def test_merge_cubes_wrapper_accepts_matching_unsorted_duplicate_index() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0, 2.0, 3.0], dims="t", coords={"t": [1, 0, 1]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+
+    result = merge(cube1=stacked, cube2=cube.rename("population"))
+
+    xr.testing.assert_equal(result.sel(__cubes__="population", drop=True), cube.rename("population"))
+
+
+def test_merge_cubes_wrapper_rejects_different_duplicate_index() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    first = xr.DataArray([1.0, 2.0, 3.0], dims="t", coords={"t": [0, 1, 2]}, name="precip")
+    stacked = merge(cube1=first, cube2=first.rename("t2m"))
+    third = xr.DataArray([4.0, 5.0, 6.0], dims="t", coords={"t": [0, 1, 1]}, name="population")
+
+    with pytest.raises(ValueError, match="cannot be reordered because it has duplicate labels"):
+        merge(cube1=stacked, cube2=third)
+
+
+def test_merge_cubes_wrapper_preserves_same_variable_dataset_type_and_attrs() -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    first = xr.Dataset({"temperature": ("t", [1.0])}, coords={"t": [0]}, attrs={"source": "first"})
+    second = xr.Dataset({"temperature": ("t", [2.0])}, coords={"t": [0]}, attrs={"source": "second"})
+
+    result = merge(cube1=first, cube2=second)
+
+    assert isinstance(result, xr.Dataset)
+    assert result.attrs == first.attrs
+
+
+@pytest.mark.parametrize("kind", ["unnamed", "duplicate"])
+def test_merge_cubes_wrapper_reports_invalid_third_predictor_name(kind: str) -> None:
+    from open_climate_service.openeo.execution import _build_process_registry
+
+    merge = _build_process_registry()["merge_cubes"].implementation
+    cube = xr.DataArray([1.0], dims="t", coords={"t": [0]}, name="precip")
+    stacked = merge(cube1=cube, cube2=cube.rename("t2m"))
+    third = cube.rename(None if kind == "unnamed" else "precip")
+
+    with pytest.raises(ValueError, match="distinct name|labels must be distinct"):
+        merge(cube1=stacked, cube2=third)
+
+
 def test_dhis2_period_string_accepts_existing_monthly_string() -> None:
     assert _to_dhis2_period_string("202401") == "202401"
 
