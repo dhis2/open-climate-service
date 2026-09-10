@@ -28,6 +28,7 @@ from open_climate_service.openeo.schemas import (
 )
 from open_climate_service.shared.cf import is_temperature_like
 from open_climate_service.shared.time import utc_now
+from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
 
 _T = TypeVar("_T")
@@ -1322,20 +1323,27 @@ _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
 
 def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     """Write an xr.Dataset to disk in the requested format. Returns the output path."""
-    # aggregate_spatial returns a Dataset with a 'geometry' dimension — convert
-    # to GeoDataFrame so GEOJSON/PARQUET/CSV produce tabular vector output.
-    if "geometry" in getattr(ds, "dims", {}):
-        try:
-            import geopandas as gpd
-            from shapely import wkt as shapely_wkt
-
-            df = ds.to_dataframe().reset_index()
-            # geometry column may contain Shapely objects or WKT strings
-            geoms = df["geometry"].apply(lambda g: g if hasattr(g, "geom_type") else shapely_wkt.loads(str(g)))
-            gdf = gpd.GeoDataFrame(df.drop(columns=["geometry"]), geometry=geoms, crs="EPSG:4326")
-            return _write_vector(gdf, results_dir, fmt if fmt in _VECTOR_FORMATS else "GEOJSON")
-        except Exception:
-            logger.debug("geometry→GeoDataFrame conversion failed", exc_info=True)
+    # aggregate_spatial returns a vector datacube. A format that carries geometry gets the real
+    # shapes written out, rather than a table that has to be joined back to a boundary file.
+    geom_dim = _vector_dim(ds)
+    if geom_dim is not None:
+        # CSV is listed as a vector format but carries no shapes, so it must not demand them: a
+        # cube with feature ids and no geometry is still a perfectly good table.
+        if fmt in _VECTOR_FORMATS and fmt != "CSV":
+            try:
+                frame = _vector_frame(ds, geom_dim)
+            except Exception as exc:
+                # Only the geometry conversion is described this way. A failure writing the file --
+                # a full disk, a driver problem -- is a different thing and keeps its own error.
+                # Re-raised as ValueError: that is what the sync route turns into a 400, and a
+                # cube without shapes is the caller's problem, not the server's.
+                raise ValueError(f"Cannot write {fmt}: the vector datacube has no usable geometry ({exc})") from exc
+            # Outside the try, so a write failure still cannot fall through to a raster writer: a
+            # request for GeoParquet coming back as a Zarr directory is worse than an error.
+            return _write_vector(frame, results_dir, fmt)
+        # A raster or tabular format was asked for, so honour it — but the WKT companion
+        # coordinate is neither wanted nor writeable there.
+        ds = ds.drop_vars(GEOMETRY_WKT_COORD, errors="ignore")
 
     if fmt not in _RASTER_FORMATS:
         # Defaulting an unwritable format to Zarr wrote a `result.zarr` directory and called it
@@ -1392,7 +1400,7 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
         path = str(results_dir / "result.csv")
         df = ds.to_dataframe().reset_index()
         # Drop internal Zarr artefacts (spatial_ref, index) that add noise for consumers
-        drop = [c for c in df.columns if c in ("spatial_ref", "index") or c.startswith("level_")]
+        drop = [c for c in df.columns if c in ("spatial_ref", "index", GEOMETRY_WKT_COORD) or c.startswith("level_")]
         df.drop(columns=drop, errors="ignore").to_csv(path, index=False)
         return path
 
@@ -1402,13 +1410,108 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     raise ValueError(f"Unsupported raster format '{fmt}'. Known formats: {known}")
 
 
+_NON_VALUE_FIELDS = frozenset({"geometry", GEOMETRY_WKT_COORD, "spatial_ref", "index", "band", "bands"})
+"""Columns that are never a data value once a cube is flattened to a dataframe.
+
+Shared by the tabular exports rather than repeated in each: they identify their value column by
+elimination, so a coordinate missing from one of these lists is not a cosmetic slip — it either
+becomes a bogus value column or makes the export refuse an otherwise valid cube.
+"""
+
+
+def _vector_dim(ds: Any) -> str | None:
+    """The dimension a vector datacube's features live on, or None for a raster cube.
+
+    Found through the `geometry_wkt` carrier first, because `aggregate_spatial` names the
+    dimension after its `target_dimension` argument — a cube aggregated onto `regions` is just as
+    much a vector cube as one aggregated onto `geometry`. The name is the fallback for a cube from
+    elsewhere that carries shapes on `geometry` directly.
+    """
+    coords = getattr(ds, "coords", {})
+    if GEOMETRY_WKT_COORD in coords:
+        dims = coords[GEOMETRY_WKT_COORD].dims
+        if len(dims) == 1:
+            return str(dims[0])
+    if "geometry" in getattr(ds, "dims", {}):
+        return "geometry"
+    return None
+
+
+def _vector_crs(ds: Any, geom_dim: str) -> Any:
+    """The CRS the cube's shapes are in.
+
+    An xvec cube declares it on the GeometryIndex of its geometry coordinate. The `geometry_wkt`
+    carrier from `aggregate_spatial` has none to declare: its shapes are the GeoJSON the request
+    supplied, which RFC 7946 fixes to WGS 84.
+    """
+    index = getattr(ds, "xindexes", {}).get(geom_dim)
+    crs = getattr(index, "crs", None)
+    return crs if crs is not None else "EPSG:4326"
+
+
+def _vector_frame(ds: Any, geom_dim: str) -> Any:
+    """Build a GeoDataFrame from a vector datacube, keeping the feature labels as a column.
+
+    Geometry comes from the `geometry_wkt` companion coordinate that `aggregate_spatial`
+    attaches. A cube from elsewhere may instead carry WKT or shapely objects directly on the
+    geometry dimension, so that is tried second — and if neither yields geometry, this raises
+    rather than inventing an empty column, because a caller asking for GeoParquet is asking for
+    the shapes.
+    """
+    import geopandas as gpd
+    import pandas as pd
+    from shapely import wkt as shapely_wkt
+
+    crs = _vector_crs(ds, geom_dim)
+    frame = ds.to_dataframe().reset_index()
+
+    def _as_geometry(value: Any) -> Any:
+        if hasattr(value, "geom_type"):
+            return value
+        return shapely_wkt.loads(str(value))
+
+    source = GEOMETRY_WKT_COORD if GEOMETRY_WKT_COORD in frame.columns else geom_dim
+    # A flattened vector cube has one row per (feature, timestep), so the same handful of polygons
+    # repeat once per step: a daily year over 500 districts is 182,500 rows carrying 500 distinct
+    # shapes. Parse each distinct value once and fan it back out, rather than paying WKT parsing per
+    # row — for large boundaries that is the dominant cost of writing the file.
+    codes, uniques = pd.factorize(frame[source])
+    # factorize codes a null as -1, and `parsed[-1]` is the last polygon, not a missing one: a
+    # feature without geometry would silently be written with its neighbour's shape.
+    if (codes < 0).any():
+        raise ValueError(f"{int((codes < 0).sum())} rows have no geometry in '{source}'")
+    parsed = [_as_geometry(value) for value in uniques]
+    geoms = [parsed[code] for code in codes]
+    attributes = frame.drop(columns=[c for c in (GEOMETRY_WKT_COORD, geom_dim) if c in frame.columns])
+    # The label survives as a plain column: it is the feature id every consumer joins on. It keeps
+    # the dimension's name unless that is `geometry`, which the shapes now occupy.
+    if source != geom_dim:
+        label_column = "geometry_id" if geom_dim == "geometry" else geom_dim
+        attributes.insert(0, label_column, frame[geom_dim])
+    return gpd.GeoDataFrame(attributes, geometry=geoms, crs=crs)
+
+
+def _as_wgs84(gdf: Any) -> Any:
+    """The frame reprojected to WGS 84, for GeoJSON only.
+
+    RFC 7946 fixes GeoJSON coordinates to WGS 84, and the format carries no CRS of its own to
+    say otherwise, so a projected frame written straight out reads as degrees and lands off the
+    coast of Africa. GeoParquet is the opposite case -- it records the CRS in its metadata, so a
+    projected cube keeps its native coordinates there and loses no precision to a round trip.
+    """
+    crs = getattr(gdf, "crs", None)
+    if crs is None or crs.to_epsg() == 4326:
+        return gdf
+    return gdf.to_crs("EPSG:4326")
+
+
 def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
     """Write a GeoDataFrame to disk in the requested format. Returns the output path."""
     ext, _ = _VECTOR_FORMATS.get(fmt, (".geojson", "application/geo+json"))
 
     if ext == ".geojson":
         path = str(results_dir / "result.geojson")
-        gdf.to_file(path, driver="GeoJSON")
+        _as_wgs84(gdf).to_file(path, driver="GeoJSON")
         return path
 
     if ext == ".parquet":
@@ -1418,12 +1521,19 @@ def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
 
     if ext == ".csv":
         path = str(results_dir / "result.csv")
-        gdf.drop(columns="geometry", errors="ignore").to_csv(path, index=False)
+        # CSV drops the shapes, so nothing is competing for the name: the label column goes back to
+        # `geometry`, which is what it is called on the cube, what a CSV of a vector cube contained
+        # before, and what the tabular exports default `location_field` to. Only the formats that
+        # actually carry geometry need the label to stand aside under `geometry_id`.
+        flat = gdf.drop(columns="geometry", errors="ignore")
+        if "geometry_id" in flat.columns:
+            flat = flat.rename(columns={"geometry_id": "geometry"})
+        flat.to_csv(path, index=False)
         return path
 
     # Fallback to GeoJSON
     path = str(results_dir / "result.geojson")
-    gdf.to_file(path, driver="GeoJSON")
+    _as_wgs84(gdf).to_file(path, driver="GeoJSON")
     return path
 
 
@@ -1485,16 +1595,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
     # label dimension. Pivot that long form to one CHAP value column per cube.
     if "__cubes__" in frame.columns:
         cube_field = "__cubes__"
-        non_value_fields = {
-            location_field,
-            period_field,
-            cube_field,
-            "geometry",
-            "spatial_ref",
-            "index",
-            "band",
-            "bands",
-        }
+        non_value_fields = {location_field, period_field, cube_field, *_NON_VALUE_FIELDS}
         candidate_value_fields = [
             str(c) for c in frame.columns if c not in non_value_fields and not str(c).startswith("level_")
         ]
@@ -1545,16 +1646,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
 
 
 def _select_chap_value_fields(frame: Any, location_field: str, period_field: str) -> list[str]:
-    excluded = {
-        location_field,
-        period_field,
-        "__cubes__",
-        "geometry",
-        "spatial_ref",
-        "index",
-        "band",
-        "bands",
-    }
+    excluded = {location_field, period_field, "__cubes__", *_NON_VALUE_FIELDS}
     candidates = [str(c) for c in frame.columns if c not in excluded and not str(c).startswith("level_")]
     if not candidates:
         raise ValueError("CHAPCSV export requires at least one value column")
@@ -1628,15 +1720,7 @@ def _optional_str_option(options: dict[str, Any], key: str) -> str | None:
 
 
 def _select_dhis2_value_field(frame: Any, org_unit_field: str, period_field: str) -> str:
-    excluded = {
-        org_unit_field,
-        period_field,
-        "geometry",
-        "spatial_ref",
-        "index",
-        "band",
-        "bands",
-    }
+    excluded = {org_unit_field, period_field, *_NON_VALUE_FIELDS}
     candidates = [str(c) for c in frame.columns if c not in excluded and not str(c).startswith("level_")]
     if len(candidates) != 1:
         raise ValueError(
