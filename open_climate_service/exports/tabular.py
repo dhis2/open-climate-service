@@ -6,6 +6,16 @@ import re
 from decimal import Decimal
 from typing import Any
 
+from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
+
+_NON_VALUE_FIELDS = frozenset({"geometry", GEOMETRY_WKT_COORD, "spatial_ref", "index", "band", "bands"})
+"""Columns that are never a data value once a cube is flattened to a dataframe.
+
+Shared by the tabular exports rather than repeated in each: they identify their value column by
+elimination, so a coordinate missing from one of these lists is not a cosmetic slip - it either
+becomes a bogus value column or makes the export refuse an otherwise valid cube.
+"""
+
 
 def _build_dhis2_json_payload(df: Any, options: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
     import pandas as pd
@@ -67,15 +77,7 @@ def _optional_str_option(options: dict[str, Any], key: str) -> str | None:
 
 
 def _select_dhis2_value_field(frame: Any, org_unit_field: str, period_field: str) -> str:
-    excluded = {
-        org_unit_field,
-        period_field,
-        "geometry",
-        "spatial_ref",
-        "index",
-        "band",
-        "bands",
-    }
+    excluded = {org_unit_field, period_field, *_NON_VALUE_FIELDS}
     candidates = [str(c) for c in frame.columns if c not in excluded and not str(c).startswith("level_")]
     if len(candidates) != 1:
         raise ValueError(

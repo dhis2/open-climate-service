@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from fastapi import HTTPException, Request
 
+from open_climate_service.shared.urls import absolute_base
 from open_climate_service.stac import services as stac_services
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def _normalize_cube_dimensions(collection: dict[str, Any]) -> dict[str, Any]:
 
 def _rewrite_collection_links(collection: dict[str, Any], request: Request) -> dict[str, Any]:
     """Replace /stac/collections links with /collections links."""
-    base_url = _abs_base(request)
+    base_url = absolute_base(request)
     links = collection.get("links", [])
     rewritten: list[dict[str, Any]] = []
     for link in links:
@@ -73,7 +73,7 @@ def list_collections(request: Request) -> dict[str, Any]:
             )
             continue
 
-    base_url = _abs_base(request)
+    base_url = absolute_base(request)
     return {
         "collections": collections,
         "links": [
@@ -88,10 +88,3 @@ def get_collection(dataset_id: str, request: Request) -> dict[str, Any]:
     collection = stac_services.build_collection(dataset_id, request)
     collection = _rewrite_collection_links(collection, request)
     return _normalize_cube_dimensions(collection)
-
-
-def _abs_base(request: Request) -> str:
-    base_url = os.getenv("CLIMATE_SERVICE_BASE_URL")
-    if base_url:
-        return base_url.rstrip("/")
-    return str(request.base_url).rstrip("/")

@@ -31,6 +31,7 @@ pytest.importorskip("rioxarray")
 zarr = pytest.importorskip("zarr")
 
 from open_climate_service.shared.geozarr import (  # noqa: E402
+    check_grid_description,
     gdal_geotransform,
     grid_geometry,
 )
@@ -276,3 +277,74 @@ def test_pyramid_levels_get_their_own_geotransform(tmp_path: Path) -> None:
         checked += 1
 
     assert checked == len(layout) >= 2  # every level covered, and there is more than one
+
+
+# --- the write-time guard ---------------------------------------------------------------
+#
+# Getting the positional order wrong is silent: the store writes fine and every client that
+# trusts the convention transposes the grid. 39 of 68 stores on one machine had it wrong for
+# months before a viewer started reading the attributes. The guard refuses the write instead,
+# because a wrong claim cannot be un-published.
+
+
+def test_check_grid_description_accepts_a_correct_description() -> None:
+    check_grid_description(
+        {"spatial:dimensions": ["y", "x"], "spatial:shape": [60, 581]},
+        y_dim="y",
+        x_dim="x",
+        y_size=60,
+        x_size=581,
+    )
+
+
+def test_check_grid_description_rejects_x_first_dimensions() -> None:
+    with pytest.raises(ValueError, match="array order"):
+        check_grid_description(
+            {"spatial:dimensions": ["x", "y"], "spatial:shape": [60, 581]},
+            y_dim="y",
+            x_dim="x",
+            y_size=60,
+            x_size=581,
+        )
+
+
+def test_check_grid_description_rejects_a_reversed_shape() -> None:
+    with pytest.raises(ValueError, match=r"spatial:shape"):
+        check_grid_description(
+            {"spatial:dimensions": ["y", "x"], "spatial:shape": [581, 60]},
+            y_dim="y",
+            x_dim="x",
+            y_size=60,
+            x_size=581,
+        )
+
+
+def test_check_grid_description_catches_a_transposed_square_grid() -> None:
+    """The case a shape check alone misses: [n, n] matches either way round."""
+    with pytest.raises(ValueError, match="array order"):
+        check_grid_description(
+            {"spatial:dimensions": ["x", "y"], "spatial:shape": [1509, 1509]},
+            y_dim="y",
+            x_dim="x",
+            y_size=1509,
+            x_size=1509,
+        )
+
+
+def test_streaming_store_refuses_attrs_that_contradict_the_grid(tmp_path: Path) -> None:
+    """Through the write path: a plugin's own attrs land last and must not slip past.
+
+    `spec.attrs` is merged after the derived description, so the guard has to run after that
+    merge — otherwise a plugin could reintroduce exactly the bug this exists to stop.
+    """
+    x, y = _chirps_coords()
+    store = _init_store(tmp_path, _cube(x, y, "EPSG:4326"))
+    spec = GridSpec(
+        shape=(CHIRPS_NY, CHIRPS_NX),
+        crs=4326,
+        dtype=np.dtype("float32"),
+        attrs={"spatial:dimensions": ["x", "y"]},
+    )
+
+    with pytest.raises(ValueError, match="array order"):
+        write_geozarr_attrs(store, spec=spec, bbox=CHIRPS_REQUESTED_BBOX)

@@ -12,6 +12,8 @@ from open_climate_service import config as api_config
 from open_climate_service.main import app
 from open_climate_service.read_only import is_blocked
 
+from .conftest import MountedClientFactory
+
 # The full mutating surface, written with the app's own path templates so
 # test_every_mutating_route_is_covered_by_the_policy can compare exactly rather than
 # approximately. Anything mutating that is intended to stay open goes in _OPEN_WRITES.
@@ -290,3 +292,33 @@ def test_policy_is_inert_when_the_flag_is_off(client: TestClient) -> None:
     """is_blocked() describes the policy; the middleware only applies it when configured."""
     assert is_blocked("POST", "/ingestions")  # policy says yes...
     assert client.post("/ingestions", json={}).status_code != 403  # ...but it is not applied
+
+
+@pytest.mark.parametrize("root_path", ["/ocs", "/ocs/"])
+def test_read_only_still_refuses_the_console_under_a_mount_prefix(
+    read_only: None, mounted_client_factory: MountedClientFactory, root_path: str
+) -> None:
+    """The policy matches route paths as the app declares them, so the prefix must come off.
+
+    Matched unstripped, `/ocs/manage` hits no closed prefix and read-only mode fails open. The
+    trailing-slash case is the same failure one step later: uvicorn joins `root_path + path`
+    verbatim, so `/ocs/` yields `/ocs//manage`, which Starlette still routes to `/manage`.
+    """
+    mounted = mounted_client_factory(root_path)
+
+    assert mounted.get("/manage").status_code == 403
+    assert mounted.get("/jobs").status_code == 403
+    assert mounted.get("/stac").status_code == 200
+
+
+def test_a_configured_base_url_path_cannot_bypass_read_only(read_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The policy reads the ASGI path, never the path of `CLIMATE_SERVICE_BASE_URL`.
+
+    That path is a statement about the public origin, not about the incoming path. Stripping
+    it would let a base URL of `https://public.example/jobs` take `/jobs` off the real route.
+    """
+    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "https://public.example/jobs")
+    client = TestClient(app)
+
+    assert client.get("/jobs").status_code == 403
+    assert client.get("/manage").status_code == 403

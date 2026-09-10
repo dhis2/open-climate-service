@@ -12,6 +12,7 @@ from typing import Any
 from open_climate_service.exports.base import BaseExportPlugin, DeliveryContext, RenderedExport
 from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
 from open_climate_service.exports.tabular import (
+    _NON_VALUE_FIELDS,
     _is_nullish,
     _normalise_period_type,
     _to_dhis2_period_string,
@@ -129,7 +130,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 for column in frame.columns
                 if column not in {org_field, period_field}
                 and str(column) not in value_columns
-                and str(column) not in {"geometry", "spatial_ref", "index", "band", "bands"}
+                and str(column) not in _NON_VALUE_FIELDS
             ]
 
         data_values: list[dict[str, str]] = []
@@ -272,8 +273,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     ) -> list[str]:
         if value_columns is not None:
             return [column for column in value_columns if column in frame.columns]
-        excluded = {org_field, period_field, "geometry", "spatial_ref", "index", "band", "bands"}
-        excluded.add("quantile")
+        excluded = {org_field, period_field, *_NON_VALUE_FIELDS, "quantile"}
         return [
             str(column) for column in frame.columns if column not in excluded and not str(column).startswith("level_")
         ]
