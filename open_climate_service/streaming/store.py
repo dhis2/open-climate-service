@@ -91,9 +91,15 @@ def read_committed_period_ids_ordered(store_path: Path, period_type: str, *, tim
     Order matters to ingestion planning: a set can identify already-written
     periods, but cannot distinguish a safe forward append from a store whose time
     axis contains a gap or runs backwards.
+
+    A forecast store has no ``t``, and its committed steps are its issue times, so the default
+    ``time_dim`` resolves against ``reference_time`` there. Without that a caller reading the
+    store's progress sees an empty set and takes the coverage horizon as the answer instead —
+    which for a forecast is 35 days in the future, so no new run ever looks due.
     """
     import pandas as pd
 
+    from open_climate_service.shared import forecast
     from open_climate_service.shared.time import datetime_to_period_string
 
     if not store_path.exists():
@@ -105,6 +111,8 @@ def read_committed_period_ids_ordered(store_path: Path, period_type: str, *, tim
         # re-append periods that are already committed.
         ds = _open_committed(store_path)
         try:
+            if time_dim not in ds.coords and forecast.is_forecast_cube(ds):
+                time_dim = forecast.REFERENCE_DIM
             if time_dim not in ds.coords:
                 return []
             coord = ds[time_dim]

@@ -141,8 +141,10 @@ def test_every_builtin_licence_parses(path: str) -> None:
 # from it. Nothing in the checks above catches that: CC0 parses, and every derived product
 # dropped attribution consistently.
 _REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
+    "c3s_seasonal.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "chirps3.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
     "era5_land.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "gefs_forecast.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0, per dynamical.org's catalogue page
     "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
 }
 

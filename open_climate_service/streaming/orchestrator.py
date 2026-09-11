@@ -26,7 +26,7 @@ from typing import Any, cast
 
 import xarray as xr
 
-from open_climate_service.shared.cf import apply_cf_metadata, cf_attrs_from_template
+from open_climate_service.shared.cf import apply_cf_metadata, cf_attrs_from_template, drop_unserializable_attrs
 from open_climate_service.shared.raster_contract import (
     prepare_for_publication,
     spatial_coords_match,
@@ -272,6 +272,9 @@ async def run_streaming_ingest(
                     spec = _grid_spec_from_dataset(ds, time_dim=time_dim, x_dim=x_dim, y_dim=y_dim, crs=prepared.crs)
                 _strip_cf_encoding(ds, period_type, time_dim=spec.time_dim)
                 apply_cf_metadata(ds, cf_attrs, overwrite=True)
+                # Every plugin, not just the ones that noticed: a source's own attributes may be
+                # shapes Zarr accepts and NetCDF cannot, and the store is what later exports read.
+                drop_unserializable_attrs(ds, context=f"{(dataset or {}).get('id', '<unknown>')} {period_id}")
                 try:
                     spatial_shape = (int(ds.sizes[spec.y_dim]), int(ds.sizes[spec.x_dim]))
                 except KeyError as exc:

@@ -1,0 +1,92 @@
+# C3S seasonal forecast anomalies, from the Copernicus Climate Data Store.
+# Six lead *months* per run, one run per month — the first built-in dataset whose forecast lead
+# is counted in months rather than days.
+#
+# Anomalies rather than absolute values: at 1° a seasonal forecast of absolute temperature
+# carries model bias that has to be removed before it means anything locally, and the anomaly
+# against each system's own 1993-2016 hindcast climatology is both the bias-corrected quantity
+# and the one a planner acts on.
+#
+# Needs CDS credentials (~/.cdsapirc or CDSAPI_URL / CDSAPI_KEY), same as the ERA5-Land datasets.
+- id: c3s_seasonal_temperature_anomaly
+  name: Temperature anomaly, seasonal forecast (C3S)
+  short_name: Temp anomaly forecast
+  standard_name: air_temperature_anomaly
+  variable: t2a
+  period_type: monthly
+  temporal_direction: future
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      resolution: P1M
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.c3s_seasonal.C3SSeasonalAnomalyPlugin
+    params:
+      variable: 2m_temperature_anomaly
+      # ECMWF SEAS5.1. The system number is part of the data's identity — a different system is
+      # a different model, not a newer version of the same numbers.
+      originating_centre: ecmwf
+      system: "51"
+      # Real-time runs carry 51 members and hindcasts 25, so quantiles rather than member
+      # indices: they mean the same thing either side of that change.
+      quantiles: [0.1, 0.5, 0.9]
+      # A relabel, not a conversion: these are anomalies, so the values already are degrees
+      # Celsius of difference. `kelvin_to_celsius` would report +1.4 K as -271.75 °C.
+      unit_transform: kelvin_difference_to_celsius
+  units: degC
+  cell_methods: "time: mean"
+  resolution: 1° x 1° (~110 km)
+  source: C3S seasonal forecast anomalies (ECMWF SEAS5.1) via CDS
+  source_url: https://cds.climate.copernicus.eu/datasets/seasonal-postprocessed-single-levels
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: RdBu_r
+    range: [-3, 3]
+
+- id: c3s_seasonal_precipitation_anomaly
+  name: Precipitation anomaly, seasonal forecast (C3S)
+  short_name: Precip anomaly forecast
+  standard_name: precipitation_flux_anomaly
+  variable: tpara
+  period_type: monthly
+  temporal_direction: future
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      resolution: P1M
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.c3s_seasonal.C3SSeasonalAnomalyPlugin
+    params:
+      variable: total_precipitation_anomalous_rate_of_accumulation
+      originating_centre: ecmwf
+      system: "51"
+      quantiles: [0.1, 0.5, 0.9]
+      # Upstream is an anomalous rate in m s-1.
+      unit_transform: metres_per_second_to_mm_per_day
+  units: mm/d
+  cell_methods: "time: mean"
+  resolution: 1° x 1° (~110 km)
+  source: C3S seasonal forecast anomalies (ECMWF SEAS5.1) via CDS
+  source_url: https://cds.climate.copernicus.eu/datasets/seasonal-postprocessed-single-levels
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: BrBG
+    range: [-5, 5]

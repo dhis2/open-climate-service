@@ -22,6 +22,7 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat
+from open_climate_service.shared import forecast
 
 logger = logging.getLogger(__name__)
 
@@ -464,6 +465,26 @@ def _load_collection_impl(
     from open_climate_service.shared.provenance import record_source
 
     record_source(id, artifact)
+
+    # A forecast cube carries every run ever issued. Every process downstream — the DHIS2 and
+    # CHAP exports, the aggregations, compute_anomaly — is written against a single time axis,
+    # so hand them the current forecast: the latest run, with valid time as `t`. The chosen
+    # issue time survives as a scalar coordinate, so a result still records which run produced
+    # it, and `temporal_extent` below then filters the dates being forecast rather than the
+    # dates the forecasts were made on, which is what a caller asking for a range means.
+    #
+    # Reaching the archive (for verification, or "what did we say last Monday") means opening
+    # the store directly. Exposing that through load_collection needs a way to name a run,
+    # which openEO has no parameter for.
+    if forecast.is_forecast_cube(ds):
+        chosen = forecast.latest_reference(ds)
+        logger.info(
+            "load_collection('%s'): forecast cube, using the latest issue time %s of %d",
+            id,
+            str(chosen)[:19],
+            ds.sizes[forecast.REFERENCE_DIM],
+        )
+        ds = forecast.latest_reference_view(ds)
 
     bbox = _bbox_to_dict(spatial_extent)
     t_extent = _temporal_to_list(temporal_extent)

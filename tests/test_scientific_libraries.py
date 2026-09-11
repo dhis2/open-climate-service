@@ -56,6 +56,24 @@ def test_promised_library_is_importable(module_name: str) -> None:
     assert importlib.import_module(module_name) is not None
 
 
+def test_the_cfgrib_engine_is_registered_with_xarray() -> None:
+    """The C3S seasonal plugin reads GRIB, and an xarray engine fails late.
+
+    `plugins/datasets/c3s_seasonal.py` calls `xr.open_dataset(..., engine="cfgrib")`. An
+    absent engine raises only when an ingest runs — the API starts, the templates list, and
+    the failure is `unrecognized engine 'cfgrib'` in an ingest job. `cfgrib` reached the tree
+    transitively via `earthkit-data` until that was dropped, so it is declared in `[server]`
+    now and asserted here: the reading path is what matters, not the distribution name.
+    """
+    from xarray.backends import list_engines
+
+    engines = list_engines()
+    assert "cfgrib" in engines, (
+        f"the cfgrib xarray engine is not registered (have: {sorted(engines)}). The C3S "
+        "seasonal plugin cannot decode what CDS delivers without it."
+    )
+
+
 def test_earthkit_transforms_climatology_entry_points_exist() -> None:
     """The functions our normals/anomaly processes call, pinned against a major upgrade.
 

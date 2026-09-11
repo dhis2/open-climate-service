@@ -20,6 +20,7 @@ from open_climate_service.data_manager.services.utils import get_time_dim, get_x
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
+from open_climate_service.shared import forecast
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
 from open_climate_service.shared.licences import DatasetLicence, parse_licence
 from open_climate_service.shared.thumbnails import thumbnail_path
@@ -522,6 +523,11 @@ def _build_collection_with_xstac(
         ordinal_dims = _build_ordinal_dimensions(ds, x_dimension, y_dimension, time_dimension)
         if ordinal_dims:
             payload.setdefault("cube:dimensions", {}).update(ordinal_dims)
+        # After the ordinal dims, so the forecast axes replace the anonymous integer entry the
+        # ordinal builder makes for `lead_time` and add the `reference_time` xstac cannot see.
+        forecast_dims = _build_forecast_dimensions(ds)
+        if forecast_dims:
+            payload.setdefault("cube:dimensions", {}).update(forecast_dims)
         # WGS84 spatial extent from the live store — consistent with cube:dimensions and
         # immune to a stale/native-CRS cached coverage record (see _wgs84_extent_from_store).
         extent_bbox = _wgs84_extent_from_store(ds, store_crs or "EPSG:4326", x_dimension, y_dimension)
@@ -752,6 +758,48 @@ def _build_static_cube_dimensions(ds: xr.Dataset, x_dim: str, y_dim: str) -> dic
     }
 
 
+def _build_forecast_dimensions(ds: xr.Dataset) -> dict[str, Any]:
+    """cube:dimensions entries for a forecast cube's two temporal axes.
+
+    xstac derives the temporal dimension from a single time axis, so neither forecast axis is
+    declared without this: ``reference_time`` is datetime-typed and skipped by the ordinal
+    builder as "handled by xstac", while ``lead_time`` would appear as an anonymous integer
+    axis. A client would then see no time at all.
+
+    ``reference_time`` is declared temporal with explicit ``values``, because the issue times
+    are a discrete set with no fixed spacing — a run can be missed. ``lead_time`` stays
+    ``other`` with a unit, since the datacube extension has no lead-time type, and carries the
+    slider hint so a viewer steps it rather than offering a dropdown of horizons.
+    """
+    if not forecast.is_forecast_cube(ds):
+        return {}
+    reference = pd.DatetimeIndex(np.asarray(ds[forecast.REFERENCE_DIM].values, dtype="datetime64[ns]"))
+    stamps = [f"{value.isoformat()}Z" for value in reference.tz_localize(None)]
+    # Through `lead_values`, never the raw values: a store round-trips the axis as timedelta64,
+    # so `int()` on it would publish nanoseconds against the declared unit.
+    leads = [int(value) for value in forecast.lead_values(ds)]
+    # The unit is the axis's, not always "day" — a seasonal forecast steps in months.
+    unit = forecast.lead_unit(ds)
+    return {
+        forecast.REFERENCE_DIM: {
+            "type": "temporal",
+            "extent": [stamps[0], stamps[-1]] if stamps else [None, None],
+            "values": stamps,
+            "description": "Forecast issue time — when the run that produced this value was made.",
+        },
+        forecast.LEAD_DIM: {
+            "type": "other",
+            "values": leads,
+            "unit": unit,
+            "description": (
+                f"{unit.capitalize()}s ahead of the issue time. "
+                f"The period described is reference_time plus lead_time {unit}s."
+            ),
+            "open_climate_service:control": "slider",
+        },
+    }
+
+
 def _build_ordinal_dimensions(ds: xr.Dataset, x_dim: str, y_dim: str, time_dim: str | None) -> dict[str, Any]:
     """cube:dimensions entries for non-spatial, non-temporal axes (e.g. ``dayofyear``).
 
@@ -839,10 +887,17 @@ def _override_temporal_extent_from_artifact(collection: dict[str, Any], artifact
     collection["extent"]["temporal"]["interval"] = [[start, end]]
     dimensions = collection.setdefault("cube:dimensions", {})
     for key, value in dimensions.items():
-        if isinstance(value, dict) and value.get("type") == "temporal":
-            value["extent"] = [start, end]
-            dimensions[key] = value
-            return
+        if not isinstance(value, dict) or value.get("type") != "temporal":
+            continue
+        # The collection extent is the artifact's coverage, but a forecast cube's temporal
+        # dimension is its *issue* times, which span a different range — coverage reaches past
+        # the last run by the forecast horizon. Its extent is set from its own values, so leave
+        # it alone rather than stamping the coverage over it.
+        if key == forecast.REFERENCE_DIM:
+            continue
+        value["extent"] = [start, end]
+        dimensions[key] = value
+        return
 
 
 def _declare_cf_extension_if_used(collection: dict[str, Any]) -> None:

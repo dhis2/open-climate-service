@@ -12,6 +12,7 @@ from pyproj import Transformer
 
 from ...data_manager.services.downloader import get_cache_files, get_icechunk_path, get_zarr_path
 from ...data_manager.services.utils import get_time_dim, get_x_y_dims
+from ...shared import forecast
 from ...shared.crs import dataset_crs
 from ...shared.time import numpy_datetime_to_period_string
 
@@ -226,16 +227,22 @@ def _coverage_from_dataset(*, ds: xr.Dataset, period_type: str, native_crs: str 
     # spatial coverage only, mirroring how the STAC builder treats these stores.
     start: str | None
     end: str | None
-    try:
-        time_dim = get_time_dim(ds)
-    except ValueError:
-        # No datetime axis — a non-temporal (ordinal) dataset, e.g. a day-of-year
-        # climatology — so there is no temporal coverage. (Scoped to get_time_dim only,
-        # so a genuine period-string conversion error below still surfaces.)
-        start = end = None
+    if forecast.is_forecast_cube(ds):
+        # A forecast's coverage is what it says something about, not when it was issued. The
+        # issue times are the append axis; reporting those would say the store ends today
+        # however far ahead it reaches.
+        start, end = forecast.period_bounds_as_strings(ds, period_type)
     else:
-        start = _period_string_scalar(numpy_datetime_to_period_string(ds[time_dim].min(), period_type))  # type: ignore[arg-type]
-        end = _period_string_scalar(numpy_datetime_to_period_string(ds[time_dim].max(), period_type))  # type: ignore[arg-type]
+        try:
+            time_dim = get_time_dim(ds)
+        except ValueError:
+            # No datetime axis — a non-temporal (ordinal) dataset, e.g. a day-of-year
+            # climatology — so there is no temporal coverage. (Scoped to get_time_dim only,
+            # so a genuine period-string conversion error below still surfaces.)
+            start = end = None
+        else:
+            start = _period_string_scalar(numpy_datetime_to_period_string(ds[time_dim].min(), period_type))  # type: ignore[arg-type]
+            end = _period_string_scalar(numpy_datetime_to_period_string(ds[time_dim].max(), period_type))  # type: ignore[arg-type]
 
     xmin, xmax = ds[x_dim].min().item(), ds[x_dim].max().item()
     ymin, ymax = ds[y_dim].min().item(), ds[y_dim].max().item()
@@ -247,8 +254,21 @@ def _coverage_from_dataset(*, ds: xr.Dataset, period_type: str, native_crs: str 
         lon_min, lat_min, lon_max, lat_max = transformer.transform_bounds(xmin, ymin, xmax, ymax)
         spatial_wgs84 = {"xmin": lon_min, "ymin": lat_min, "xmax": lon_max, "ymax": lat_max}
 
+    # A forecast's issue times, reported alongside the coverage rather than inside it. An
+    # ingest request selects *runs*, while coverage describes what those runs say something
+    # about, so comparing one against the other rejects every forecast: three daily runs
+    # reaching five days ahead legitimately cover dates past the requested window.
+    forecast_reference: dict[str, str] | None = None
+    if forecast.is_forecast_cube(ds):
+        reference = ds[forecast.REFERENCE_DIM]
+        forecast_reference = {
+            "start": _period_string_scalar(numpy_datetime_to_period_string(reference.min(), period_type)),  # type: ignore[arg-type]
+            "end": _period_string_scalar(numpy_datetime_to_period_string(reference.max(), period_type)),  # type: ignore[arg-type]
+        }
+
     return {
         "has_data": True,
+        "forecast_reference": forecast_reference,
         "coverage": {
             "temporal": {"start": start, "end": end},
             "spatial": {"xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax},

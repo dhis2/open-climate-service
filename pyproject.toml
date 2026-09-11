@@ -135,9 +135,8 @@ server = [
     # eccodeslib and eckit, both of which require eckitlib, and none of those three has ever
     # published a Windows wheel (ecmwf/earthkit-data#1105). Every other package in the
     # resolved tree is pure-Python or ships win_amd64, including `eccodes` itself, which is
-    # why the failure was so confusing to hit. A plugin that genuinely reads GRIB declares
-    # earthkit-data in its own instance dependencies, as it would any other plugin-owned
-    # import — see tests/test_scientific_libraries.py for the guard that keeps it out.
+    # why the failure was so confusing to hit. GRIB reading here goes through `cfgrib` below
+    # instead — see tests/test_scientific_libraries.py for the guard that keeps earthkit-data out.
     "earthkit-transforms>=1.0",
     "earthkit-meteo>=1.0",
     "earthkit-utils>=1.0",
@@ -145,6 +144,19 @@ server = [
     # downloads are read with.
     "ecmwf-datastores-client>=0.4",
     "netcdf4>=1.7",
+    # The GRIB engine for the C3S seasonal forecast plugin, which reads what CDS delivers
+    # (`xr.open_dataset(..., engine="cfgrib")` in plugins/datasets/c3s_seasonal.py). Declared
+    # rather than relied on transitively: it arrived via earthkit-data until that was dropped,
+    # and an xarray engine going missing surfaces only when an ingest runs.
+    #
+    "cfgrib>=0.9.15",
+    # libeccodes itself. `eccodes` locates the C library at import via findlibs, and its
+    # py3-none-any wheel is 91 KB — it bundles nothing, so without this the engine works only
+    # where a system libeccodes happens to be installed (and silently against whatever version
+    # that is). The Windows wheel *does* bundle the library, so this is scoped off Windows —
+    # which is also what keeps the tree resolvable there, unlike earthkit-data's unconditional
+    # pin (ecmwf/earthkit-data#1105). The CI Windows resolution check enforces that.
+    "eccodeslib>=2.42; sys_platform != 'win32'",
     "apscheduler>=3.11,<4",
 ]
 

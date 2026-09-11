@@ -22,6 +22,65 @@ logger = logging.getLogger(__name__)
 # Variable-level CF attributes we propagate from the dataset template.
 CF_VARIABLE_FIELDS = ("units", "standard_name", "cell_methods")
 
+# What a NetCDF attribute may hold. Derived by trying each type against `to_netcdf` rather than
+# from the error message it raises, which lists `Number` and so implies `bool` and `complex` are
+# fine — both are rejected in practice. Zarr is looser (its attributes are JSON, so a nested
+# mapping writes happily), which is the trap: the store accepts the attribute and every later
+# NetCDF export of that store fails instead.
+_NETCDF_SCALARS: tuple[type, ...] = (str, bytes, int, float)
+
+
+def drop_unserializable_attrs(obj: xr.Dataset, *, context: str = "") -> xr.Dataset:
+    """Remove attributes NetCDF cannot hold, from the dataset and every variable in it.
+
+    Sources hand us attributes shaped for their own catalogue: dynamical.org's GEFS store carries
+    ``statistics_approximate`` as a nested mapping, and cfgrib attaches GRIB provenance. Zarr
+    stores those without complaint, then `to_netcdf` raises ``TypeError: Invalid value for attr``
+    — so an openEO export of the store fails with a 500 while the ingest that produced it looked
+    clean.
+
+    Applied at the boundaries rather than per plugin: any plugin can import foreign attributes,
+    and a guard that lives in one plugin only protects that plugin. A blocklist of unwriteable
+    *types* rather than an allowlist of known keys, because provenance a source chose to publish
+    is worth keeping when it can be written — unlike the STAC payload, which deliberately keeps
+    only declared CF fields (see ``stac.services._sanitize_variable_attrs``).
+    """
+    import numpy as np
+
+    def _clean(attrs: dict[Any, Any], where: str) -> None:
+        for key in [k for k, value in attrs.items() if not _is_netcdf_writeable(value, np)]:
+            logger.debug(
+                "Dropping attribute %r on %s%s: %s is not writeable to NetCDF",
+                key,
+                where,
+                f" ({context})" if context else "",
+                type(attrs[key]).__name__,
+            )
+            del attrs[key]
+
+    _clean(obj.attrs, "the dataset")
+    for name in list(obj.coords) + list(obj.data_vars):
+        _clean(obj[name].attrs, str(name))
+    return obj
+
+
+def _is_netcdf_writeable(value: Any, np: Any) -> bool:
+    """Whether `to_netcdf` accepts this attribute value.
+
+    ``bool`` is excluded before the numeric check: NetCDF has no boolean attribute type, and a
+    bool passes ``isinstance(..., int)``. A list or tuple must be flat — a nested one raises when
+    numpy tries to make an array of it.
+    """
+    if isinstance(value, (bool, np.bool_)):
+        return False
+    if isinstance(value, (*_NETCDF_SCALARS, np.number)):
+        return True
+    if isinstance(value, np.ndarray):
+        return bool(value.dtype != object)
+    if isinstance(value, list | tuple):
+        return all(isinstance(item, (*_NETCDF_SCALARS, np.number)) and not isinstance(item, bool) for item in value)
+    return False
+
 
 def cf_attrs_from_template(template: dict[str, Any] | None) -> dict[str, str]:
     """Return the CF variable attributes declared on a dataset template.
