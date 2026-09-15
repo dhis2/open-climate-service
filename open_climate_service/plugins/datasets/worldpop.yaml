@@ -9,6 +9,9 @@
   temporal_direction: spanning
   sync:
     kind: release
+    # The upstream release identity, independent of period_type — WorldPop reissues
+    # this revision, not a calendar year. See ArtifactRecord.version.
+    version: R2025A
   extents:
     spatial:
       bbox: [-180, -90, 180, 90]
@@ -47,6 +50,9 @@
   temporal_direction: spanning
   sync:
     kind: release
+    # The upstream release identity, independent of period_type — WorldPop reissues
+    # this revision, not a calendar year. See ArtifactRecord.version.
+    version: R2025A
   extents:
     spatial:
       bbox: [-180, -90, 180, 90]

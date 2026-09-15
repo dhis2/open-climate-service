@@ -166,6 +166,109 @@ def plan_sync(
             periods=periods_for_orchestrator,
         )
 
+    # Release identity, independent of period_type. current_end/target_end stay
+    # period-domain values throughout, but when a template declares a version that is
+    # the authoritative currency signal: an upstream source can republish the *same*
+    # periods under a new revision, which no period comparison can ever detect. That
+    # case is the reason this field exists — see ArtifactRecord.version.
+    current_version = latest_artifact.version
+    declared_version = source_dataset.get("sync", {}).get("version")
+    target_version = (
+        declared_version.strip() if isinstance(declared_version, str) and declared_version.strip() else None
+    )
+    release_label = target_version or current_version
+
+    if target_version is not None and target_version != current_version:
+        # Two cases reach here, and both rematerialize:
+        #
+        # - the declared release genuinely changed (current_version is a different string)
+        # - the artifact predates version tracking (current_version is None), so its
+        #   release is *unknown* rather than known-equal
+        #
+        # The legacy case is a deliberate one-time migration cost: rematerializing stamps
+        # the version, so the next sync sees current_version == target_version and stops.
+        # Treating an unknown version as a match instead would leave it unknown forever
+        # and silently serve content nothing can vouch for.
+        #
+        # A version change rewrites the existing span; it must never truncate it. Without
+        # this, a sync that omits `end` takes the default target of today and would replace
+        # a 2015..2030 artifact with 2015..<this year>. An explicitly requested earlier end
+        # is held to the same rule: release sync does not shrink a managed dataset, which is
+        # also why the period path below returns NO_OP rather than rematerializing whenever
+        # target_end is already behind current_end. Periods compare lexically here as they
+        # do everywhere else in this module.
+        if current_end > target_end:
+            target_end = current_end
+            target_end_source = "current_coverage"
+
+        # What availability may do here depends on where it lands relative to the coverage
+        # already held, which is the floor — not target_end, which may sit ahead of it:
+        #
+        #   before current_end        wait; rematerializing would shorten the dataset
+        #   current_end..target_end   rematerialize, clamped — preserves coverage, advances it
+        #   through target_end        rematerialize the full requested span
+        #
+        # Periods are queried from current_start, not current_end, because a version change
+        # rewrites the whole artifact rather than extending it, matching how run_sync
+        # executes REMATERIALIZE (start=current_start, no download window).
+        available_for_release = _query_available_periods(source_dataset, current_start or current_end, target_end)
+        if available_for_release is not None:
+            if not available_for_release or available_for_release[-1] < current_end:
+                # The declared release cannot yet be materialized across the span we already
+                # hold — either the plugin reports nothing at all, or it stops short of the
+                # coverage floor. Rematerializing to the shorter span would shrink a
+                # published dataset to chase a version, and rematerializing past what the
+                # source has would fail at execution with "Source has no data for the
+                # requested scope". Wait instead, leaving the current artifact and its old
+                # version in place, and say so.
+                reach = (
+                    f"reports no available periods through {target_end}"
+                    if not available_for_release
+                    else f"covers only through {available_for_release[-1]}, short of the current {current_end}"
+                )
+                return SyncDetail(
+                    source_dataset_id=latest_artifact.dataset_id,
+                    sync_kind=sync_kind,
+                    action=SyncAction.NO_OP,
+                    reason="release_version_unavailable",
+                    message=(
+                        f"The template declares release {target_version}, but the source {reach}. "
+                        "Sync will not rematerialize, because doing so would shorten the dataset."
+                    ),
+                    current_start=current_start,
+                    current_end=current_end,
+                    target_end=target_end,
+                    target_end_source=target_end_source,
+                    current_version=current_version,
+                    target_version=target_version,
+                )
+            if available_for_release[-1] < target_end:
+                target_end = available_for_release[-1]
+                target_end_source = "plugin_availability"
+        return SyncDetail(
+            source_dataset_id=latest_artifact.dataset_id,
+            sync_kind=sync_kind,
+            action=SyncAction.REMATERIALIZE,
+            reason="release_version_unknown" if current_version is None else "release_version_changed",
+            message=(
+                (
+                    f"The stored artifact predates release tracking and its release is unknown; "
+                    f"the template declares {target_version}. Sync will rematerialize the dataset."
+                )
+                if current_version is None
+                else (
+                    f"The declared release changed from {current_version} to {target_version}. "
+                    "Sync will rematerialize the dataset."
+                )
+            ),
+            current_start=current_start,
+            current_end=current_end,
+            target_end=target_end,
+            target_end_source=target_end_source,
+            current_version=current_version,
+            target_version=target_version,
+        )
+
     # Clamp target_end to what the plugin reports as actually available so we
     # never plan a rematerialization into future/unpublished releases.
     available_periods = _query_available_periods(source_dataset, current_end, target_end)
@@ -176,11 +279,13 @@ def plan_sync(
                 sync_kind=sync_kind,
                 action=SyncAction.NO_OP,
                 reason="no_new_release",
-                message=f"No new release available beyond {current_end}.",
+                message=f"No new release available beyond {release_label or current_end}.",
                 current_start=current_start,
                 current_end=current_end,
                 target_end=target_end,
                 target_end_source=target_end_source,
+                current_version=current_version,
+                target_version=target_version,
             )
         target_end = available_periods[-1]
         target_end_source = "plugin_availability"
@@ -192,13 +297,15 @@ def plan_sync(
             action=SyncAction.NO_OP,
             reason="no_new_release",
             message=(
-                f"Release {current_end} is already available locally; target {target_end} "
+                f"Release {release_label or current_end} is already available locally; target {target_end} "
                 "does not require a new download."
             ),
             current_start=current_start,
             current_end=current_end,
             target_end=target_end,
             target_end_source=target_end_source,
+            current_version=current_version,
+            target_version=target_version,
         )
 
     return SyncDetail(
@@ -206,11 +313,13 @@ def plan_sync(
         sync_kind=sync_kind,
         action=SyncAction.REMATERIALIZE,
         reason="new_release_available",
-        message=f"A newer release is available: {target_end}. Sync will rematerialize the dataset.",
+        message=f"A newer release is available: {release_label or target_end}. Sync will rematerialize the dataset.",
         current_start=current_start,
         current_end=current_end,
         target_end=target_end,
         target_end_source=target_end_source,
+        current_version=current_version,
+        target_version=target_version,
     )
 
 
@@ -232,6 +341,7 @@ def run_sync(
     response model:
 
     - `up_to_date` when no new upstream state is planned
+    - `waiting_for_source` when a newer release is declared but the source cannot serve it
     - `not_syncable` for templates that should not be synced
     - `completed` when EO API rematerializes a fresh backing artifact
     """
@@ -254,6 +364,23 @@ def run_sync(
     )
 
     if sync_detail.action == SyncAction.NO_OP:
+        if sync_detail.reason == "release_version_unavailable":
+            # Nothing to run, but the dataset is *not* current: a newer release is declared
+            # and the source cannot serve it yet. Reporting "already current" here would
+            # assert the opposite of what the planner found, so carry the planner's own
+            # explanation through instead of the canned message.
+            logger.info(
+                "Sync skipped for dataset '%s': declared release %s is not yet available from the source",
+                dataset_id,
+                sync_detail.target_version,
+            )
+            return SyncResponse(
+                sync_id=None,
+                status="waiting_for_source",
+                message=sync_detail.message,
+                dataset=get_dataset_fn(dataset_id),
+                sync_detail=sync_detail,
+            )
         logger.info("Sync skipped for dataset '%s': already current", dataset_id)
         return SyncResponse(
             sync_id=None,

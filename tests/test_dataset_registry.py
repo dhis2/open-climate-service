@@ -45,6 +45,69 @@ def test_dataset_registry_rejects_unsupported_sync_kind(
         datasets.list_datasets()
 
 
+def test_dataset_registry_rejects_blank_sync_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A blank version reads as 'none declared' and would silently disable release detection."""
+    registry_file = tmp_path / "blank_sync_version.yaml"
+    registry_file.write_text(
+        """
+- id: blank_sync_version
+  name: Blank sync version
+  variable: value
+  period_type: yearly
+  sync:
+    kind: release
+    version: "   "
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="invalid sync.version"):
+        datasets.list_datasets()
+
+
+def test_dataset_registry_rejects_sync_version_on_a_non_release_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Only a release dataset carries a release identity; elsewhere it would never be read."""
+    registry_file = tmp_path / "temporal_sync_version.yaml"
+    registry_file.write_text(
+        """
+- id: temporal_sync_version
+  name: Temporal with version
+  variable: value
+  period_type: daily
+  sync:
+    kind: temporal
+    version: R2025A
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="declares sync.version but has sync.kind 'temporal'"):
+        datasets.list_datasets()
+
+
+def test_worldpop_release_version_matches_its_plugin_revision() -> None:
+    """Guards the one duplicated value: sync.version and ingestion.params.revision must agree.
+
+    WorldPop states its revision twice — once for release planning, once for the URL the
+    plugin builds — and nothing at runtime couples them, so drift would mean syncing for a
+    revision the plugin never actually downloads.
+    """
+    templates = [dataset for dataset in datasets.list_datasets() if dataset.get("sync", {}).get("kind") == "release"]
+    worldpop = [d for d in templates if "worldpop" in str(d.get("id", ""))]
+    assert worldpop, "expected at least one WorldPop release template"
+    for dataset in worldpop:
+        declared = dataset["sync"]["version"]
+        revision = dataset.get("ingestion", {}).get("params", {}).get("revision")
+        assert declared == revision, (
+            f"{dataset['id']}: sync.version {declared!r} does not match ingestion.params.revision {revision!r}"
+        )
+
+
 def test_dataset_registry_accepts_supported_sync_kind(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

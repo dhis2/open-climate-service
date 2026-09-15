@@ -107,6 +107,17 @@ class ArtifactRecord(BaseModel):
     dataset_name: str
     variable: str
     period_type: str | None = None
+    version: str | None = Field(
+        default=None,
+        description=(
+            "Upstream release identifier, independent of period_type. Distinct from "
+            "coverage.temporal.end: a period is a point on this dataset's own temporal "
+            "axis, while a version is the upstream source's release identity, which is "
+            "not always expressible as a period (for example a build-dated release like "
+            "'2026-08-19.0'). None for a dataset with no independent release identity, "
+            "where sync planning still uses coverage.temporal.end."
+        ),
+    )
     format: ArtifactFormat
     path: str | None = None
     asset_paths: list[str] = Field(default_factory=list)
@@ -335,6 +346,19 @@ class SyncDetail(BaseModel):
             "Where target_end came from, for example request, default_today, "
             "request_clamped_by_availability, default_today_clamped_by_availability, or current_coverage."
         ),
+    )
+    current_version: str | None = Field(
+        default=None,
+        description=(
+            "Release identity of the currently materialized artifact, read from "
+            "ArtifactRecord.version. Populated only for sync_kind=release when the "
+            "artifact carries one; current_end remains the period-domain value used for "
+            "availability queries even when this is set."
+        ),
+    )
+    target_version: str | None = Field(
+        default=None,
+        description="Release identity the template declares as current, for sync_kind=release.",
     )
     delta_start: str | None = Field(
         default=None,

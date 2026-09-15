@@ -48,6 +48,7 @@ from open_climate_service.ingestions.schemas import (
     PublicationStatus,
     SyncAction,
     SyncDetail,
+    SyncKind,
     SyncResponse,
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
@@ -314,6 +315,27 @@ def create_artifact(
             periods=periods,
         )
     raise HTTPException(status_code=500, detail=f"Dataset '{dataset['id']}' does not define ingestion.plugin")
+
+
+def _resolve_artifact_version(dataset: dict[str, object]) -> str | None:
+    """Return the release identity to stamp on a newly materialized artifact.
+
+    Only a release-kind template's declared `sync.version` (the upstream release's own
+    identifier, e.g. WorldPop's revision `R2025A`) produces one. There is deliberately
+    no fall back to `coverage.temporal.end`: a period is a point on the dataset's own
+    temporal axis and a version is the upstream source's release identity, and deriving
+    one from the other is exactly the coupling this field exists to remove — it would
+    also make every ordinary temporal append silently change the artifact's "version".
+    A dataset with no declared release identity has `version=None`, and release planning
+    falls back to period comparison for it, as it did before this field existed.
+    """
+    sync_config = dataset.get("sync")
+    if not isinstance(sync_config, dict) or sync_config.get("kind") != SyncKind.RELEASE:
+        return None
+    declared_version = sync_config.get("version")
+    if isinstance(declared_version, str) and declared_version.strip():
+        return declared_version.strip()
+    return None
 
 
 def _period_order_key(period: str, period_type: str) -> str:
@@ -743,6 +765,7 @@ def _create_streaming_artifact(
             dataset_name=str(dataset["name"]),
             variable=str(dataset["variable"]),
             period_type=str(dataset.get("period_type")) if dataset.get("period_type") is not None else None,
+            version=_resolve_artifact_version(dataset),
             format=ArtifactFormat.ICECHUNK,
             path=str(store_path.resolve()),
             asset_paths=[str(store_path.resolve())],
