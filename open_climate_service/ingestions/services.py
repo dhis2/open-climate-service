@@ -35,6 +35,7 @@ from open_climate_service.ingestions.schemas import (
     ArtifactPublication,
     ArtifactRecord,
     ArtifactRequestScope,
+    ArtifactVersion,
     CoverageSpatial,
     CoverageTemporal,
     DatasetAccessLink,
@@ -50,6 +51,7 @@ from open_climate_service.ingestions.schemas import (
     SyncDetail,
     SyncKind,
     SyncResponse,
+    parse_declared_artifact_version,
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
@@ -317,25 +319,25 @@ def create_artifact(
     raise HTTPException(status_code=500, detail=f"Dataset '{dataset['id']}' does not define ingestion.plugin")
 
 
-def _resolve_artifact_version(dataset: dict[str, object]) -> str | None:
+def _resolve_artifact_version(dataset: dict[str, object]) -> ArtifactVersion | None:
     """Return the release identity to stamp on a newly materialized artifact.
 
-    Only a release-kind template's declared `sync.version` (the upstream release's own
-    identifier, e.g. WorldPop's revision `R2025A`) produces one. There is deliberately
-    no fall back to `coverage.temporal.end`: a period is a point on the dataset's own
-    temporal axis and a version is the upstream source's release identity, and deriving
-    one from the other is exactly the coupling this field exists to remove — it would
-    also make every ordinary temporal append silently change the artifact's "version".
+    Only a release-kind template's declared `sync.version` produces one, and it declares
+    both halves — the upstream's identifier and the authority whose scheme names it. Neither
+    half is inferred: deriving `value` from `coverage.temporal.end` is the coupling this
+    field exists to remove, and deriving `authority` from a display field such as `source`
+    would repeat that mistake one level up, since editing a label for presentation would
+    silently rename every release under it.
+
     A dataset with no declared release identity has `version=None`, and release planning
     falls back to period comparison for it, as it did before this field existed.
     """
     sync_config = dataset.get("sync")
     if not isinstance(sync_config, dict) or sync_config.get("kind") != SyncKind.RELEASE:
         return None
-    declared_version = sync_config.get("version")
-    if isinstance(declared_version, str) and declared_version.strip():
-        return declared_version.strip()
-    return None
+    # One interpreter for the declaration, shared with registration and sync planning, so
+    # the version stamped here is the one the planner will compare against.
+    return parse_declared_artifact_version(sync_config.get("version"))
 
 
 def _period_order_key(period: str, period_type: str) -> str:

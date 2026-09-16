@@ -9,9 +9,13 @@
   temporal_direction: spanning
   sync:
     kind: release
-    # The upstream release identity, independent of period_type — WorldPop reissues
-    # this revision, not a calendar year. See ArtifactRecord.version.
-    version: R2025A
+    # The release identity, independent of period_type — WorldPop reissues this
+    # revision, not a calendar year. `authority` is a stable machine identifier for
+    # whose versioning scheme names the value, never a display label; the display
+    # names live on `source` and `providers` below. See ArtifactVersion.
+    version:
+      value: R2025A
+      authority: worldpop
   extents:
     spatial:
       bbox: [-180, -90, 180, 90]
@@ -50,9 +54,13 @@
   temporal_direction: spanning
   sync:
     kind: release
-    # The upstream release identity, independent of period_type — WorldPop reissues
-    # this revision, not a calendar year. See ArtifactRecord.version.
-    version: R2025A
+    # The release identity, independent of period_type — WorldPop reissues this
+    # revision, not a calendar year. `authority` is a stable machine identifier for
+    # whose versioning scheme names the value, never a display label; the display
+    # names live on `source` and `providers` below. See ArtifactVersion.
+    version:
+      value: R2025A
+      authority: worldpop
   extents:
     spatial:
       bbox: [-180, -90, 180, 90]

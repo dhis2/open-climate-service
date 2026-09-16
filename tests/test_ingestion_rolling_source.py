@@ -9,7 +9,7 @@ import xarray as xr
 
 from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
 from open_climate_service.ingestions import services
-from open_climate_service.ingestions.schemas import CoverageTemporal
+from open_climate_service.ingestions.schemas import ArtifactVersion, CoverageTemporal
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
 
@@ -63,7 +63,7 @@ def test_materialization_stamps_a_declared_release_version(
     silently carry version=None while those tests still passed.
     """
     _, dataset, _ = rolling_store
-    dataset["sync"] = {"kind": "release", "version": "R2025A"}
+    dataset["sync"] = {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}}
 
     artifact = services.create_artifact(
         dataset=dataset,
@@ -75,8 +75,8 @@ def test_materialization_stamps_a_declared_release_version(
         publish=False,
     )
 
-    assert artifact.version == "R2025A"
-    assert services._load_records()[-1].version == "R2025A"
+    assert artifact.version == ArtifactVersion(value="R2025A", authority="worldpop")
+    assert services._load_records()[-1].version == ArtifactVersion(value="R2025A", authority="worldpop")
 
 
 def test_materialization_leaves_a_temporal_dataset_without_a_version(

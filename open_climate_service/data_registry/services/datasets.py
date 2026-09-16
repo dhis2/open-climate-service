@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from open_climate_service import config as api_config
+from open_climate_service.ingestions.schemas import parse_declared_artifact_version
 from open_climate_service.shared.time import SUPPORTED_PERIOD_TYPES
 
 logger = logging.getLogger(__name__)
@@ -351,6 +352,19 @@ def _warn_once(dataset_id: str, source: str, message: str) -> None:
         logger.warning("Dataset template '%s' in %s: %s", dataset_id, source, message)
 
 
+def _validate_sync_version(declared: object, *, dataset_id: str, source: str) -> None:
+    """Reject a malformed release identity at registration, with template context.
+
+    The rules themselves live with ArtifactVersion — registration adds only "which template,
+    which file", so a constraint cannot be tightened on the model and silently keep passing
+    here, or vice versa.
+    """
+    try:
+        parse_declared_artifact_version(declared)
+    except ValueError as exc:
+        raise ValueError(f"Dataset template '{dataset_id}' in {source} has an {exc}") from exc
+
+
 def _validate_dataset_template(dataset: object, *, source: str) -> None:
     """Validate registry fields required by runtime sync planning."""
     if not isinstance(dataset, dict):
@@ -370,17 +384,13 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
             f"'{sync_kind}'. Supported values: {supported}"
         )
 
-    # sync.version is the upstream release identity a release-kind dataset is compared
-    # against. A blank or non-string one would be read as "no version declared" by the
-    # planner and silently disable release-change detection, so reject it at registration
-    # rather than letting a typo turn into a dataset that never notices a new revision.
+    # sync.version is the release identity a release-kind dataset is compared against, and
+    # it declares both halves: the identifier, and the authority whose scheme names it. A
+    # malformed one would be read as "no version declared" by the planner and silently
+    # disable release-change detection, so reject it at registration rather than letting a
+    # typo turn into a dataset that never notices a new revision.
     if isinstance(sync_block, dict) and "version" in sync_block:
-        declared_version = sync_block.get("version")
-        if not isinstance(declared_version, str) or not declared_version.strip():
-            raise ValueError(
-                f"Dataset template '{dataset_id}' in {source} has an invalid sync.version "
-                f"{declared_version!r}; it must be a non-empty string"
-            )
+        _validate_sync_version(sync_block.get("version"), dataset_id=dataset_id, source=source)
         if sync_kind != "release":
             raise ValueError(
                 f"Dataset template '{dataset_id}' in {source} declares sync.version but has "

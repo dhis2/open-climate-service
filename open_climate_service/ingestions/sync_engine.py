@@ -22,10 +22,12 @@ from open_climate_service import config as api_config
 from open_climate_service.ingestions.schemas import (
     ArtifactFormat,
     ArtifactRecord,
+    ArtifactVersion,
     SyncAction,
     SyncDetail,
     SyncKind,
     SyncResponse,
+    parse_declared_artifact_version,
 )
 from open_climate_service.publications.services import managed_dataset_id_for
 from open_climate_service.shared.time import (
@@ -44,6 +46,27 @@ logger = logging.getLogger(__name__)
 
 class SyncConfigurationError(RuntimeError):
     """Raised when server-side sync configuration is invalid."""
+
+
+def _declared_release_version(source_dataset: dict[str, Any]) -> ArtifactVersion | None:
+    """Return the release identity a template declares, or None if it declares none.
+
+    Delegates to the one interpreter of that declaration, so the planner cannot read it
+    differently from the path that stamps it on an artifact.
+    """
+    return parse_declared_artifact_version(source_dataset.get("sync", {}).get("version"))
+
+
+def _release_label(version: ArtifactVersion | None) -> str | None:
+    """Render a release identity for a human-readable message, as `authority:value`.
+
+    Both halves, because the value alone is ambiguous — the pair is what identifies a
+    release — and because a message naming only "R2025A" cannot explain a sync triggered by
+    the authority changing.
+    """
+    if version is None:
+        return None
+    return f"{version.authority}:{version.value}"
 
 
 def plan_sync(
@@ -172,16 +195,16 @@ def plan_sync(
     # periods under a new revision, which no period comparison can ever detect. That
     # case is the reason this field exists — see ArtifactRecord.version.
     current_version = latest_artifact.version
-    declared_version = source_dataset.get("sync", {}).get("version")
-    target_version = (
-        declared_version.strip() if isinstance(declared_version, str) and declared_version.strip() else None
-    )
-    release_label = target_version or current_version
+    target_version = _declared_release_version(source_dataset)
+    release_label = _release_label(target_version or current_version)
 
+    # Compared as a whole, not on `value`: the authority is half the identity, so
+    # `worldpop:R2025A` and `ocs:R2025A` name different releases that happen to share a
+    # string. Pydantic models compare by field value, so `!=` is that comparison.
     if target_version is not None and target_version != current_version:
         # Two cases reach here, and both rematerialize:
         #
-        # - the declared release genuinely changed (current_version is a different string)
+        # - the declared release genuinely changed (current_version is a different identity)
         # - the artifact predates version tracking (current_version is None), so its
         #   release is *unknown* rather than known-equal
         #
@@ -252,7 +275,7 @@ def plan_sync(
                     action=SyncAction.NO_OP,
                     reason="release_version_unavailable",
                     message=(
-                        f"The template declares release {target_version}, but the source {reach}. "
+                        f"The template declares release {_release_label(target_version)}, but the source {reach}. "
                         "Sync will not rematerialize, because doing so would shorten the dataset."
                     ),
                     current_start=current_start,
@@ -273,11 +296,12 @@ def plan_sync(
             message=(
                 (
                     f"The stored artifact predates release tracking and its release is unknown; "
-                    f"the template declares {target_version}. Sync will rematerialize the dataset."
+                    f"the template declares {_release_label(target_version)}. Sync will rematerialize the dataset."
                 )
                 if current_version is None
                 else (
-                    f"The declared release changed from {current_version} to {target_version}. "
+                    f"The declared release changed from {_release_label(current_version)} to "
+                    f"{_release_label(target_version)}. "
                     "Sync will rematerialize the dataset."
                 )
             ),
@@ -399,7 +423,7 @@ def run_sync(
             logger.info(
                 "Sync skipped for dataset '%s': declared release %s is not yet available from the source",
                 dataset_id,
-                sync_detail.target_version,
+                _release_label(sync_detail.target_version),
             )
             return SyncResponse(
                 sync_id=None,

@@ -428,25 +428,51 @@ Current sync constraints:
 
 ### Release identity
 
-A `release` dataset's template may declare the upstream release's own identifier, which is
-independent of `period_type` and of temporal coverage:
+A `release` dataset's template may declare a release identity, independent of `period_type`
+and of temporal coverage. It has two halves:
 
 ```yaml
 sync:
   kind: release
-  version: R2025A
+  version:
+    value: R2025A # the identifier, verbatim as the source publishes it
+    authority: worldpop # whose versioning scheme gives that identifier meaning
 ```
 
-That identifier is stored on the materialized artifact and reported on every release plan:
+The pair is the identity — a bare `R2025A` or `1.0` says nothing on its own, so both halves
+are required and neither is inferred. `value` is opaque: OCS never parses, orders or
+normalises it, because its syntax belongs to the authority. Because it is stored exactly as
+declared, a blank or whitespace-padded value is rejected rather than trimmed — otherwise
+`" R2025A "` would be a different release from `R2025A`. `authority` is a stable machine
+identifier (`worldpop`, `overture`, `ocs`), never a display label — display names live on
+`source` and `providers` — and it is compared exactly, so changing it renames every release
+under it. Both are capped at 64 characters, and the same rules apply wherever an identity is
+built: a template at registration, an artifact at materialization, a record on load.
+
+That identity is stored on the materialized artifact and reported on every release plan:
+
+```json
+{
+  "current_version": { "value": "R2025A", "authority": "worldpop" },
+  "target_version": { "value": "R2025B", "authority": "worldpop" }
+}
+```
 
 - `sync_detail.current_version` — the release the local artifact holds
 - `sync_detail.target_version` — the release the template currently declares
 
 It exists because a source can republish *the same periods* under a new revision, which no
 period comparison can detect. When the two differ, sync rematerializes even though temporal
-coverage is unchanged. An artifact materialized before its template declared a version has
-`current_version: null`; its release is unknown rather than known-equal, so it rematerializes
-once to establish identity and then settles.
+coverage is unchanged — and they are compared as a whole, so the same `value` under a
+different `authority` is a different release. An artifact materialized before its template
+declared a version has `current_version: null`; its release is unknown rather than
+known-equal, so it rematerializes once to establish identity and then settles.
+
+A version is a *logical release*, distinct from the other two identities on a record:
+`artifact_id` is the exact materialization, and provenance is how it was produced. A derived
+dataset does not inherit a version from its inputs — an openEO result carries no version
+unless OCS deliberately releases it, as `{"value": "1.0", "authority": "ocs"}`, with its
+inputs recorded as provenance.
 
 A template that declares no version keeps the period-based behaviour described above, and a
 `temporal` dataset never carries a release identity however many periods it appends.
@@ -713,12 +739,13 @@ curl -s "http://127.0.0.1:9000/sync/worldpop_population_global2_R2025A_100m/plan
 
 Expected:
 
-- `current_version` and `target_version` are both `R2025A`
+- `current_version` and `target_version` are both `{"value": "R2025A", "authority": "worldpop"}`
 - `action` is `no_op` and `reason` is `no_new_release` — matching releases fall through to the
   period comparison
 
-To see a release change drive a sync, edit the template's `sync.version` (and the plugin's
-matching `ingestion.params.revision`) to a published revision and plan again. Expected:
+To see a release change drive a sync, edit the template's `sync.version.value` (and the
+plugin's matching `ingestion.params.revision`) to a published revision and plan again.
+Expected:
 
 - `action` is `rematerialize`
 - `reason` is `release_version_changed`
