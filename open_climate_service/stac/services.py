@@ -291,7 +291,7 @@ def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
-    return ingestion_services.latest_published_zarr_artifacts_by_dataset()
+    return ingestion_services.stac_eligible_artifacts_by_dataset()
 
 
 def _build_collection_template(

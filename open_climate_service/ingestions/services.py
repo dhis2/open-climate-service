@@ -169,17 +169,68 @@ def group_datasets() -> dict[str, list[ArtifactRecord]]:
     return grouped
 
 
-def latest_published_zarr_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
-    """Return the latest published Zarr/Icechunk artifact for each dataset id."""
+LOADABLE_RASTER_FORMATS = frozenset({ArtifactFormat.ICECHUNK, ArtifactFormat.ZARR})
+"""Stored formats a raster reader can open as a datacube.
+
+Kept beside the gate that applies it so the two cannot drift: admitting a format no reader
+opens turns a catalogue entry into a runtime failure, and excluding one a reader handles
+hides a dataset that works. `openeo/execution.py::_open_artifact` opens exactly these two —
+Icechunk through its own reader, a plain Zarr store through `open_zarr_dataset`.
+
+NETCDF is absent deliberately: nothing opens it as a datacube, and `_dataset_links` offers it
+as a download instead.
+"""
+
+
+def _latest_published_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the latest published artifact for each dataset id, whatever its format.
+
+    Publication and recency are format-neutral questions, so they are answered once here.
+    What each surface then *does* with a given format is the surface's own question, asked
+    by the two gates below.
+
+    Publication is filtered *before* recency, not after. Picking the newest record first and
+    then testing it would drop a dataset entirely whenever its newest artifact happens to be
+    unpublished — an ingest with `publish: false` over an already-published dataset would
+    take it out of both catalogues, even though the published version is still there and
+    still serveable.
+    """
     result: dict[str, ArtifactRecord] = {}
     for dataset_id, artifacts in group_datasets().items():
-        latest = max(artifacts, key=lambda artifact: artifact.created_at)
-        if latest.publication.status != PublicationStatus.PUBLISHED:
+        published = [artifact for artifact in artifacts if artifact.publication.status == PublicationStatus.PUBLISHED]
+        if not published:
             continue
-        if latest.format != ArtifactFormat.ICECHUNK:
-            continue
-        result[dataset_id] = latest
+        result[dataset_id] = max(published, key=lambda artifact: artifact.created_at)
     return dict(sorted(result.items()))
+
+
+def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the published raster datacube for each dataset id.
+
+    This is the set that can actually be *opened* as a raster: openEO `/collections` and
+    `load_collection`, the native Zarr and Icechunk routes, and job-result assets all
+    dereference the record as a store, so all of them ask this question rather than the
+    catalogue one. Membership follows `LOADABLE_RASTER_FORMATS` — the shape a reader can
+    open, rather than one specific storage format — so a format that is not a datacube does
+    not belong here however it is catalogued.
+    """
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in LOADABLE_RASTER_FORMATS
+    }
+
+
+def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the artifacts the STAC catalogue advertises.
+
+    Identical to the raster set today, and deliberately a separate function rather than an
+    alias: STAC describes what exists, while openEO advertises what `load_collection` can
+    consume, and those stop being the same question once a non-raster artifact can be
+    published. A feature collection is a STAC collection and is not an openEO datacube, so
+    it joins here (CLIM-1069) and nowhere else.
+    """
+    return latest_published_raster_artifacts_by_dataset()
 
 
 def list_ingestions() -> IngestionListResponse:
@@ -1183,7 +1234,7 @@ def _get_latest_published_icechunk_artifact_cached(dataset_id: str) -> ArtifactR
 
 def _get_latest_published_icechunk_artifact(dataset_id: str) -> ArtifactRecord:
     """Return the latest published Icechunk artifact for dataset_id, or raise 404/409."""
-    artifacts = latest_published_zarr_artifacts_by_dataset()
+    artifacts = latest_published_raster_artifacts_by_dataset()
     artifact = artifacts.get(dataset_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
