@@ -426,6 +426,54 @@ Current sync constraints:
 - append execution is a delta-download plus canonical rebuild, not in-place Zarr mutation
 - upstream availability is determined by each plugin's `periods()` method
 
+### Release identity
+
+A `release` dataset's template may declare the upstream release's own identifier, which is
+independent of `period_type` and of temporal coverage:
+
+```yaml
+sync:
+  kind: release
+  version: R2025A
+```
+
+That identifier is stored on the materialized artifact and reported on every release plan:
+
+- `sync_detail.current_version` — the release the local artifact holds
+- `sync_detail.target_version` — the release the template currently declares
+
+It exists because a source can republish *the same periods* under a new revision, which no
+period comparison can detect. When the two differ, sync rematerializes even though temporal
+coverage is unchanged. An artifact materialized before its template declared a version has
+`current_version: null`; its release is unknown rather than known-equal, so it rematerializes
+once to establish identity and then settles.
+
+A template that declares no version keeps the period-based behaviour described above, and a
+`temporal` dataset never carries a release identity however many periods it appends.
+
+Rematerializing for a new release never shortens a managed dataset. If the declared release
+cannot cover what is already held — the source reports nothing, stops short of the current
+end, or no longer reaches back to the start — the plan reports:
+
+- `action` is `no_op`
+- `reason` is `release_version_unavailable`
+- `message` names which end of the span the source falls short of
+
+Executing that sync returns top-level `status: waiting_for_source` (**not** `up_to_date`,
+which would claim the dataset is current when a newer release is declared).
+
+Clients should treat `waiting_for_source` as "retry later": nothing was written, the existing
+artifact and its version are untouched, and the same request succeeds once the source
+publishes the declared release. Where the source *can* preserve existing coverage but reaches
+only partway to the requested end, sync proceeds and clamps `target_end` to what is available,
+reporting `target_end_source` as `plugin_availability`.
+
+This guard is only as good as each plugin's `periods()` reporting. A plugin that enumerates
+periods without regard to the revision it was configured with — WorldPop's returns a fixed
+2015–2030 year list — reports every period as available even for a revision the upstream hub
+has not published, so advancing such a template to an unpublished revision fails at fetch time
+rather than returning `waiting_for_source`.
+
 Configured availability policies:
 
 - CHIRPS3 daily uses `open_climate_service.providers.availability.chirps3_daily_latest_available`; this clamps sync targets to the latest complete released source month
@@ -653,6 +701,34 @@ Expected:
 - `status` is `completed`
 - `sync_detail.action` is `rematerialize`
 - `dataset.dataset_id` is `worldpop_population_global2_R2025A_100m`
+
+### 8. Observe release identity
+
+Plan again with the end you just materialized:
+
+```bash
+curl -s "http://127.0.0.1:9000/sync/worldpop_population_global2_R2025A_100m/plan?end=2021" | jq \
+  '{action: .action, reason: .reason, current_version, target_version}'
+```
+
+Expected:
+
+- `current_version` and `target_version` are both `R2025A`
+- `action` is `no_op` and `reason` is `no_new_release` — matching releases fall through to the
+  period comparison
+
+To see a release change drive a sync, edit the template's `sync.version` (and the plugin's
+matching `ingestion.params.revision`) to a published revision and plan again. Expected:
+
+- `action` is `rematerialize`
+- `reason` is `release_version_changed`
+- `target_end` is unchanged from the current coverage end — a version change rewrites the
+  existing span rather than truncating it to today
+
+If the declared revision is not yet published by the source, the same plan returns `no_op`
+with `reason: release_version_unavailable`; executing the sync returns
+`status: waiting_for_source`, provided the plugin's `periods()` reports availability for that
+revision — see **Release identity** above.
 
 ## Summary
 

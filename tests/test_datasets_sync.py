@@ -30,6 +30,7 @@ def _artifact(
     source_dataset_id: str = "chirps3_precipitation_daily",
     managed_dataset_id: str = "chirps3_precipitation_daily_sle",
     created_at: str = "2026-01-10T00:00:00+00:00",
+    start: str = "2026-01-01",
     end: str = "2026-01-10",
     path: str = "/tmp/chirps3_precipitation_daily.icechunk",
     version: str | None = None,
@@ -45,12 +46,12 @@ def _artifact(
         asset_paths=[path],
         variables=["precip"],
         request_scope=ArtifactRequestScope(
-            start="2026-01-01",
+            start=start,
             end=end,
             bbox=(1.0, 2.0, 3.0, 4.0),
         ),
         coverage=ArtifactCoverage(
-            temporal=CoverageTemporal(start="2026-01-01", end=end),
+            temporal=CoverageTemporal(start=start, end=end),
             spatial=CoverageSpatial(xmin=1.0, ymin=2.0, xmax=3.0, ymax=4.0),
         ),
         created_at=datetime.fromisoformat(created_at),
@@ -976,10 +977,11 @@ def test_version_change_waits_when_the_new_release_stops_short_of_current_covera
         artifact_id="a1",
         source_dataset_id="worldpop_population_yearly",
         managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
         end="2030",
         version="R2025A",
     )
-    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2028", "2029"])
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2029"])
 
     result = sync_engine.plan_sync(
         source_dataset={
@@ -1010,10 +1012,11 @@ def test_version_change_clamps_to_availability_when_it_advances_beyond_current_c
         artifact_id="a1",
         source_dataset_id="worldpop_population_yearly",
         managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
         end="2024",
         version="R2025A",
     )
-    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2024", "2025"])
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2025"])
 
     result = sync_engine.plan_sync(
         source_dataset={
@@ -1032,6 +1035,71 @@ def test_version_change_clamps_to_availability_when_it_advances_beyond_current_c
     assert result.target_end_source == "plugin_availability"
 
 
+def test_version_change_waits_when_the_new_release_no_longer_reaches_the_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A release that dropped the earliest years cannot rewrite the artifact either.
+
+    Execution requires the first available period to equal the requested start, so planning
+    REMATERIALIZE here would fail with "Source cannot materialize the requested temporal
+    scope from 2015" — and succeeding would drop the head of the series.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
+        end="2030",
+        version="R2025A",
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2018", "2030"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": "R2025B"},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.NO_OP
+    assert result.reason == "release_version_unavailable"
+    assert "starts at 2018, after the current 2015" in result.message
+
+
+def test_version_change_passes_planned_periods_to_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The span approved at planning is the span execution materializes.
+
+    The list is queried over exactly [current_start, target_end], so unlike the temporal
+    append path it can describe the whole rewrite — carrying it through avoids a second
+    periods() call that could return a different span than the plan was approved for.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
+        end="2016",
+        version="R2025A",
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2016"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": "R2025B"},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.REMATERIALIZE
+    assert result.periods == ["2015", "2016"]
+
+
 def test_version_change_rematerializes_when_availability_reaches_the_protected_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1040,10 +1108,11 @@ def test_version_change_rematerializes_when_availability_reaches_the_protected_t
         artifact_id="a1",
         source_dataset_id="worldpop_population_yearly",
         managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
         end="2030",
         version="R2025A",
     )
-    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2029", "2030"])
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2030"])
 
     result = sync_engine.plan_sync(
         source_dataset={

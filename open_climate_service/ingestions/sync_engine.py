@@ -208,24 +208,44 @@ def plan_sync(
         #   current_end..target_end   rematerialize, clamped — preserves coverage, advances it
         #   through target_end        rematerialize the full requested span
         #
+        # Both ends are checked. A release that no longer republishes the earliest years
+        # starts after current_start, and execution requires the first available period to
+        # equal the requested start (_validate_source_periods), so passing only the
+        # last-period check would plan a rematerialization that fails with "Source cannot
+        # materialize the requested temporal scope from ...". It would also drop the head of
+        # the series, which is the same shrinkage the tail check exists to prevent.
+        #
         # Periods are queried from current_start, not current_end, because a version change
         # rewrites the whole artifact rather than extending it, matching how run_sync
         # executes REMATERIALIZE (start=current_start, no download window).
-        available_for_release = _query_available_periods(source_dataset, current_start or current_end, target_end)
+        #
+        # This guard is only as strong as the plugin's own period reporting, and a plugin
+        # whose periods() ignores the revision it was configured with — WorldPop's returns
+        # a fixed 2015..2030 year list — reports every period as available even for a
+        # revision the upstream hub has not published. Advancing such a template to an
+        # unpublished revision therefore still fails at fetch time rather than waiting here.
+        # That is a property of the plugin contract, unchanged by release tracking: making
+        # availability revision-aware belongs with the plugin, not the planner.
+        release_start = current_start or current_end
+        available_for_release = _query_available_periods(source_dataset, release_start, target_end)
         if available_for_release is not None:
-            if not available_for_release or available_for_release[-1] < current_end:
-                # The declared release cannot yet be materialized across the span we already
-                # hold — either the plugin reports nothing at all, or it stops short of the
-                # coverage floor. Rematerializing to the shorter span would shrink a
-                # published dataset to chase a version, and rematerializing past what the
-                # source has would fail at execution with "Source has no data for the
-                # requested scope". Wait instead, leaving the current artifact and its old
-                # version in place, and say so.
-                reach = (
-                    f"reports no available periods through {target_end}"
-                    if not available_for_release
-                    else f"covers only through {available_for_release[-1]}, short of the current {current_end}"
-                )
+            if (
+                not available_for_release
+                or available_for_release[-1] < current_end
+                or available_for_release[0] > release_start
+            ):
+                # The declared release cannot be materialized across the span we already
+                # hold: the plugin reports nothing at all, or it stops short of the coverage
+                # floor, or it no longer reaches back to the start. Rematerializing to the
+                # shorter span would shrink a published dataset to chase a version, and
+                # planning past what the source has would fail at execution instead. Wait,
+                # leaving the current artifact and its old version in place, and say so.
+                if not available_for_release:
+                    reach = f"reports no available periods through {target_end}"
+                elif available_for_release[0] > release_start:
+                    reach = f"starts at {available_for_release[0]}, after the current {release_start}"
+                else:
+                    reach = f"covers only through {available_for_release[-1]}, short of the current {current_end}"
                 return SyncDetail(
                     source_dataset_id=latest_artifact.dataset_id,
                     sync_kind=sync_kind,
@@ -267,6 +287,13 @@ def plan_sync(
             target_end_source=target_end_source,
             current_version=current_version,
             target_version=target_version,
+            # Unlike the temporal path — whose list covers only the append delta and so
+            # cannot describe a full rewrite — this one was queried over exactly the span
+            # execution will rematerialize, [current_start, target_end]. Passing it keeps
+            # planning and execution on one view of source availability, instead of letting
+            # a second periods() call moments later materialize a different span than the
+            # one this plan was approved for.
+            periods=available_for_release,
         )
 
     # Clamp target_end to what the plugin reports as actually available so we

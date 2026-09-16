@@ -178,6 +178,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `period_type`        | Yes      | Temporal resolution: `hourly`, `daily`, `dekadal`, `weekly`, `monthly`, `yearly`, or `climatology`. Validated at registration — an unrecognised value is rejected rather than silently ignored, and it is required unless `sync.kind` is `static` |
 | `sync.kind`          | Yes      | `temporal` — data grows over time; `release` — versioned releases; `static` — never synced                                                                                                                                                        |
 | `sync.execution`     | No       | `append` — new time steps appended to existing store; `rematerialize` — full rebuild on each sync                                                                                                                                                 |
+| `sync.version`       | No       | Release-kind only: the upstream release's own identifier (e.g. WorldPop's `R2025A`), independent of `period_type`. Changing it triggers a rematerialization even when the periods are unchanged. Rejected at registration on a non-release template, or when blank. See below |
 | `temporal_direction` | No       | Which way the periods run relative to now: `past` (default), `future` (a forecast), or `spanning` (crosses now, e.g. WorldPop 2015–2030). See below                                                                                               |
 
 ### Dekads: a period type with no fixed length
@@ -199,6 +200,40 @@ Two consequences worth knowing:
 A plugin enumerating dekads should use `shared.time.dekad_period_ids(start, end)`, the
 dekadal counterpart of `daily_period_ids`. `dekad_bounds(period_id)` gives the inclusive
 first and last day, which is the only complete description of a dekad's extent.
+
+### Versioned releases: `sync.version`
+
+A `release` dataset is one the upstream source reissues as a whole. Sometimes a reissue also
+extends the periods, and a period comparison notices it — but often the source republishes
+*the same* periods under a new revision, and nothing about the temporal axis changes. Declare
+the revision so sync can see it:
+
+```yaml
+- id: population_counts_yearly
+  period_type: yearly
+  sync:
+    kind: release
+    version: R2025A # the source's own identifier, not a period
+  ingestion:
+    plugin: datasets.my_population.MyPopulationPlugin
+    params:
+      revision: R2025A
+```
+
+Bumping `sync.version` makes the next sync rematerialize the dataset even when its coverage is
+unchanged. Omit the field and the dataset keeps the period-based behaviour — appropriate for a
+source whose releases only ever add periods.
+
+Two things worth knowing before you rely on it:
+
+- **Keep it in step with whatever your plugin uses to build URLs.** If your plugin takes the
+  revision as an `ingestion.params` value, the two are separate strings and nothing couples
+  them at runtime; drift means syncing for a revision the plugin never downloads.
+- **Sync can only wait for a release your plugin can see.** Before rematerializing, the planner
+  asks `periods()` whether the span it already holds is still available, and reports
+  `waiting_for_source` when it is not. A `periods()` that ignores the configured revision
+  reports every period as available regardless, so bumping to an unpublished revision fails at
+  fetch time instead. Make `periods()` revision-aware if you need that guarantee.
 
 ### Which way the periods run: `temporal_direction`
 

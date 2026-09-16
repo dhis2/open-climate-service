@@ -53,6 +53,53 @@ def rolling_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[_Rol
     return plugin, dataset, store_path
 
 
+def test_materialization_stamps_a_declared_release_version(
+    rolling_store: tuple[_RollingPlugin, dict[str, object], Path],
+) -> None:
+    """A release template's declared version reaches the persisted record.
+
+    Planner tests build ArtifactRecord directly, so without this the assignment in
+    create_artifact could be dropped and every newly materialized release artifact would
+    silently carry version=None while those tests still passed.
+    """
+    _, dataset, _ = rolling_store
+    dataset["sync"] = {"kind": "release", "version": "R2025A"}
+
+    artifact = services.create_artifact(
+        dataset=dataset,
+        start="2026-01-01",
+        end="2026-01-02",
+        bbox=[1.0, 2.0, 3.0, 4.0],
+        country_code=None,
+        overwrite=False,
+        publish=False,
+    )
+
+    assert artifact.version == "R2025A"
+    assert services._load_records()[-1].version == "R2025A"
+
+
+def test_materialization_leaves_a_temporal_dataset_without_a_version(
+    rolling_store: tuple[_RollingPlugin, dict[str, object], Path],
+) -> None:
+    """A temporal dataset has no release identity, however many periods it appends."""
+    _, dataset, _ = rolling_store
+    dataset["sync"] = {"kind": "temporal"}
+
+    artifact = services.create_artifact(
+        dataset=dataset,
+        start="2026-01-01",
+        end="2026-01-02",
+        bbox=[1.0, 2.0, 3.0, 4.0],
+        country_code=None,
+        overwrite=False,
+        publish=False,
+    )
+
+    assert artifact.version is None
+    assert services._load_records()[-1].version is None
+
+
 @pytest.mark.parametrize("request_start", ["2026-01-01", "2026-01-04"])
 def test_forward_ingestion_preserves_retired_source_history(
     rolling_store: tuple[_RollingPlugin, dict[str, object], Path], request_start: str
