@@ -62,7 +62,7 @@ def test_spanning_is_not_treated_as_future() -> None:
     WorldPop Global2 runs 2015–2030. Defaulting its start to "now" would ingest only the
     projected years and drop every historical one — usually the half that is wanted.
     """
-    spanning = {"id": "worldpop_population_global2_R2025A_100m", "temporal_direction": "spanning"}
+    spanning = {"id": "worldpop_population_global2_100m", "temporal_direction": "spanning"}
     assert registry.temporal_direction(spanning) == "spanning"
     assert registry.is_future_facing(spanning) is False
 
@@ -70,7 +70,7 @@ def test_spanning_is_not_treated_as_future() -> None:
 def test_worldpop_global2_declares_itself_spanning() -> None:
     """The built-in that motivated the third value: declared extent 2015 → 2030."""
     loaded = {d["id"]: d for d in registry.list_datasets()}
-    for dataset_id in ("worldpop_population_global2_R2025A_100m", "worldpop_agesex_global2_R2025A_100m"):
+    for dataset_id in ("worldpop_population_global2_100m", "worldpop_agesex_global2_100m"):
         dataset = loaded[dataset_id]
         assert registry.temporal_direction(dataset) == "spanning"
         assert registry.declared_temporal_end(dataset) == "2030"
@@ -84,7 +84,7 @@ def test_declared_temporal_end_is_none_when_absent() -> None:
 
 
 def test_spanning_dataset_still_requires_a_start_over_http(client: TestClient) -> None:
-    response = client.post("/ingestions", json={"dataset_id": "worldpop_population_global2_R2025A_100m"})
+    response = client.post("/ingestions", json={"dataset_id": "worldpop_population_global2_100m"})
     assert response.status_code == 400, response.text
     assert "requires a start period" in response.json()["detail"]
 

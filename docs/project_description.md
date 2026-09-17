@@ -153,7 +153,7 @@ The dataset ID schema encodes the source, variable, period type, and spatial ext
 
 - `chirps3_precipitation_daily_sle`
 - `era5_temperature_daily_sle`
-- `worldpop_population_global2_R2025A_100m_sle`
+- `worldpop_population_global2_100m_sle`
 
 Sub-national extents use the same schema (e.g. `chirps3_precipitation_daily_bo` for the Bo district of Sierra Leone), allowing larger countries to configure a district-level extent to limit initial download volume.
 

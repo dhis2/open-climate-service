@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from open_climate_service.shared.licences import STAC_LICENSE_OTHER
 
@@ -98,6 +98,126 @@ class ArtifactPublication(BaseModel):
     published_at: datetime | None = None
 
 
+OCS_AUTHORITY = "ocs"
+"""Version authority for a release Open Climate Service defines itself.
+
+A constant rather than a literal at each site, so the path that stamps a derived dataset's
+release and the planner that compares one cannot disagree about its spelling.
+"""
+
+AUTHORITY_PATTERN = r"^[a-z0-9]+([._-][a-z0-9]+)*$"
+"""Shape of a version authority: a stable machine identifier, not a display label.
+
+Lowercase so two templates cannot name the same authority differently and have the planner
+read that as a release change; separators so a narrower authority (`dhis2.national-hmis`)
+stays expressible without a schema change. Display names live on `source` and `providers`.
+"""
+
+AUTHORITY_MAX_LENGTH = 64
+"""Length bound for both halves of a release identity, applied wherever one is built."""
+
+
+class ArtifactVersion(BaseModel):
+    """A logical release identity: what the release is, and whose scheme names it.
+
+    The meaningful identity is the pair. A bare "1.0" or "R2025A" says nothing on its own —
+    it is `worldpop:R2025A` or `ocs:1.0` that identifies a release — so one namespaced
+    concept is carried here rather than parallel `source_version` / `dataset_version` /
+    `release_version` fields that would each mean something slightly different.
+
+    Distinct from the other two identities on a record. `artifact_id` answers "which exact
+    materialization is this?" and every artifact has one; this answers "which logical
+    release is this?" and only a versioned dataset has one. How an artifact was produced is
+    provenance, and a derived artifact does not inherit a version from its inputs — an
+    openEO result carries `version=None` unless OCS deliberately releases it, with its
+    inputs recorded as provenance rather than folded into this field.
+    """
+
+    value: str = Field(
+        min_length=1,
+        max_length=AUTHORITY_MAX_LENGTH,
+        description=(
+            "The release identifier itself, verbatim as the authority publishes it "
+            "(for example 'R2025A' or '2026-08-19.0'). Opaque to OCS: not parsed, ordered, "
+            "or normalized, because its syntax belongs to the authority. Surrounding "
+            "whitespace is rejected rather than trimmed, so 'verbatim' stays true and a "
+            "padded declaration cannot compare unequal to the same release declared cleanly."
+        ),
+    )
+    authority: str = Field(
+        pattern=AUTHORITY_PATTERN,
+        max_length=AUTHORITY_MAX_LENGTH,
+        description=(
+            "Whose versioning scheme gives `value` its meaning, as a stable machine "
+            "identifier ('worldpop', 'overture', 'ocs') — never a display label. Compared "
+            "exactly, and part of the identity, so changing it renames every release under "
+            "it; choose it once."
+        ),
+    )
+
+    @field_validator("value")
+    @classmethod
+    def _value_is_present_and_unpadded(cls, value: str) -> str:
+        # Enforced on the model rather than only at template registration, so every
+        # construction path — a loaded record, an API payload, a future provider — gets the
+        # same invariant. Rejecting rather than stripping keeps the field honest about being
+        # verbatim, and stops " R2025A " from reading as a different release than "R2025A".
+        if not value.strip():
+            raise ValueError("release version value must not be blank")
+        if value != value.strip():
+            raise ValueError(
+                f"release version value {value!r} has leading or trailing whitespace; "
+                "it is stored verbatim, so declare it without padding"
+            )
+        return value
+
+
+def parse_declared_artifact_version(declared: object) -> ArtifactVersion | None:
+    """Read a template's declared `sync.version` into a release identity.
+
+    The single interpreter of that declaration. Template registration, materialization and
+    sync planning all come through here, so the version stamped on an artifact and the
+    version the planner compares against cannot drift apart — and registration's promise to
+    reject a malformed declaration is the same check the other two would have made.
+
+    Returns None when nothing is declared. Raises ValueError when something is declared but
+    is not a usable identity, because silently reading a malformed declaration as "no
+    version" would disable release-change detection for a dataset that asked for it.
+    """
+    if declared is None:
+        return None
+    if not isinstance(declared, dict):
+        raise ValueError(
+            f"invalid sync.version {declared!r}; it must declare a mapping of 'value' "
+            "(the upstream identifier) and 'authority' (whose scheme names it)"
+        )
+    missing = [key for key in ("value", "authority") if key not in declared]
+    if missing:
+        raise ValueError(f"sync.version is missing {', '.join(missing)}; both halves are required")
+    try:
+        return ArtifactVersion(value=declared["value"], authority=declared["authority"])
+    except ValidationError as exc:
+        raise ValueError(_describe_version_error(exc)) from exc
+
+
+def _describe_version_error(exc: ValidationError) -> str:
+    """Turn a pydantic failure on ArtifactVersion into one template-author-facing line."""
+    problems = []
+    for error in exc.errors():
+        field = str(error["loc"][0]) if error["loc"] else "value"
+        if field == "authority":
+            problems.append(
+                f"invalid sync.version.authority {error.get('input')!r}. It is a stable machine "
+                "identifier, not a display label: lowercase letters and digits, separated by "
+                f"'.', '-' or '_' (for example 'worldpop'), at most {AUTHORITY_MAX_LENGTH} "
+                "characters. Display names belong on 'source' and 'providers'. It is part of "
+                "the release identity, so changing it later renames every release under it."
+            )
+        else:
+            problems.append(f"invalid sync.version.{field}: {error['msg'].removeprefix('Value error, ')}")
+    return "; ".join(problems)
+
+
 class ArtifactRecord(BaseModel):
     """Stored artifact metadata."""
 
@@ -107,6 +227,16 @@ class ArtifactRecord(BaseModel):
     dataset_name: str
     variable: str
     period_type: str | None = None
+    version: ArtifactVersion | None = Field(
+        default=None,
+        description=(
+            "Logical release identity, independent of period_type. Distinct from "
+            "coverage.temporal.end: a period is a point on this dataset's own temporal "
+            "axis, while a version is a release identifier that is not always expressible "
+            "as a period (for example a build-dated '2026-08-19.0'). None for a dataset "
+            "with no release identity, where sync planning still uses coverage.temporal.end."
+        ),
+    )
     format: ArtifactFormat
     path: str | None = None
     asset_paths: list[str] = Field(default_factory=list)
@@ -335,6 +465,19 @@ class SyncDetail(BaseModel):
             "Where target_end came from, for example request, default_today, "
             "request_clamped_by_availability, default_today_clamped_by_availability, or current_coverage."
         ),
+    )
+    current_version: ArtifactVersion | None = Field(
+        default=None,
+        description=(
+            "Release identity of the currently materialized artifact, read from "
+            "ArtifactRecord.version. Populated only for sync_kind=release when the "
+            "artifact carries one; current_end remains the period-domain value used for "
+            "availability queries even when this is set."
+        ),
+    )
+    target_version: ArtifactVersion | None = Field(
+        default=None,
+        description="Release identity the template declares as current, for sync_kind=release.",
     )
     delta_start: str | None = Field(
         default=None,

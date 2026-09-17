@@ -62,7 +62,7 @@ See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, incl
 
 | Property               | Value                                                                |
 | ---------------------- | -------------------------------------------------------------------- |
-| **Dataset ID**         | `worldpop_population_global2_R2025A_100m`                            |
+| **Dataset ID**         | `worldpop_population_global2_100m`                                   |
 | **Variable**           | `pop_total`                                                          |
 | **Units**              | people                                                               |
 | **Period**             | Yearly                                                               |
@@ -84,7 +84,7 @@ WorldPop Global2 provides gridded population estimates and projections at 100 m 
 
 | Property               | Value                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------- |
-| **Dataset ID**         | `worldpop_agesex_global2_R2025A_100m`                                                     |
+| **Dataset ID**         | `worldpop_agesex_global2_100m`                                                            |
 | **Variable**           | `population` (over `sex` and `age_group` dimensions)                                      |
 | **Units**              | people                                                                                    |
 | **Period**             | Yearly                                                                                    |

@@ -35,6 +35,7 @@ from open_climate_service.ingestions.schemas import (
     ArtifactPublication,
     ArtifactRecord,
     ArtifactRequestScope,
+    ArtifactVersion,
     CoverageSpatial,
     CoverageTemporal,
     DatasetAccessLink,
@@ -48,7 +49,9 @@ from open_climate_service.ingestions.schemas import (
     PublicationStatus,
     SyncAction,
     SyncDetail,
+    SyncKind,
     SyncResponse,
+    parse_declared_artifact_version,
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
@@ -314,6 +317,27 @@ def create_artifact(
             periods=periods,
         )
     raise HTTPException(status_code=500, detail=f"Dataset '{dataset['id']}' does not define ingestion.plugin")
+
+
+def _resolve_artifact_version(dataset: dict[str, object]) -> ArtifactVersion | None:
+    """Return the release identity to stamp on a newly materialized artifact.
+
+    Only a release-kind template's declared `sync.version` produces one, and it declares
+    both halves — the upstream's identifier and the authority whose scheme names it. Neither
+    half is inferred: deriving `value` from `coverage.temporal.end` is the coupling this
+    field exists to remove, and deriving `authority` from a display field such as `source`
+    would repeat that mistake one level up, since editing a label for presentation would
+    silently rename every release under it.
+
+    A dataset with no declared release identity has `version=None`, and release planning
+    falls back to period comparison for it, as it did before this field existed.
+    """
+    sync_config = dataset.get("sync")
+    if not isinstance(sync_config, dict) or sync_config.get("kind") != SyncKind.RELEASE:
+        return None
+    # One interpreter for the declaration, shared with registration and sync planning, so
+    # the version stamped here is the one the planner will compare against.
+    return parse_declared_artifact_version(sync_config.get("version"))
 
 
 def _period_order_key(period: str, period_type: str) -> str:
@@ -743,6 +767,7 @@ def _create_streaming_artifact(
             dataset_name=str(dataset["name"]),
             variable=str(dataset["variable"]),
             period_type=str(dataset.get("period_type")) if dataset.get("period_type") is not None else None,
+            version=_resolve_artifact_version(dataset),
             format=ArtifactFormat.ICECHUNK,
             path=str(store_path.resolve()),
             asset_paths=[str(store_path.resolve())],

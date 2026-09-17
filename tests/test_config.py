@@ -121,7 +121,7 @@ def test_builtin_datasets_include_chirps_era5_worldpop(monkeypatch: pytest.Monke
     assert "chirps3_precipitation_daily" in ids
     assert "era5land_temperature_daily" in ids
     assert "era5land_precipitation_monthly" in ids
-    assert "worldpop_population_global2_R2025A_100m" in ids
+    assert "worldpop_population_global2_100m" in ids
 
 
 def test_get_crs_defaults_to_wgs84(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -28,7 +28,7 @@ data_dir: ./data   # required — directory for downloaded NetCDF files and Zarr
 #       publish: true
 #       max_attempts: 3
 #
-#     - dataset_id: worldpop_population_global2_R2025A_100m
+#     - dataset_id: worldpop_population_global2_100m
 #       cron: "0 7 1 * *"       # first day of each month at 07:00 UTC
 #       publish: true
 #       max_attempts: 3

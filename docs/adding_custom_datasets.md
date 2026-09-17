@@ -178,6 +178,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `period_type`        | Yes      | Temporal resolution: `hourly`, `daily`, `dekadal`, `weekly`, `monthly`, `yearly`, or `climatology`. Validated at registration — an unrecognised value is rejected rather than silently ignored, and it is required unless `sync.kind` is `static` |
 | `sync.kind`          | Yes      | `temporal` — data grows over time; `release` — versioned releases; `static` — never synced                                                                                                                                                        |
 | `sync.execution`     | No       | `append` — new time steps appended to existing store; `rematerialize` — full rebuild on each sync                                                                                                                                                 |
+| `sync.version`       | No       | Release-kind only: the release identity, as `value` (the source's own identifier, e.g. WorldPop's `R2025A`) plus `authority` (a machine identifier for whose scheme names it, e.g. `worldpop`). Independent of `period_type`; changing either half triggers a rematerialization even when the periods are unchanged. Both halves required. Rejected at registration on a non-release template, when blank, or when `authority` is not a machine identifier. See below |
 | `temporal_direction` | No       | Which way the periods run relative to now: `past` (default), `future` (a forecast), or `spanning` (crosses now, e.g. WorldPop 2015–2030). See below                                                                                               |
 
 ### Dekads: a period type with no fixed length
@@ -199,6 +200,58 @@ Two consequences worth knowing:
 A plugin enumerating dekads should use `shared.time.dekad_period_ids(start, end)`, the
 dekadal counterpart of `daily_period_ids`. `dekad_bounds(period_id)` gives the inclusive
 first and last day, which is the only complete description of a dekad's extent.
+
+### Versioned releases: `sync.version`
+
+A `release` dataset is one the upstream source reissues as a whole. Sometimes a reissue also
+extends the periods, and a period comparison notices it — but often the source republishes
+*the same* periods under a new revision, and nothing about the temporal axis changes. Declare
+the revision so sync can see it:
+
+```yaml
+- id: population_counts_yearly
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: R2025A # the source's own identifier, not a period
+      authority: mypopulation # whose scheme names it — an identifier, not a label
+  ingestion:
+    plugin: datasets.my_population.MyPopulationPlugin
+    params:
+      revision: R2025A
+```
+
+Both halves are required, because the pair is the identity: `R2025A` on its own does not say
+whose `R2025A` it is, and OCS may later publish its own releases of derived datasets under the
+`ocs` authority. `value` is passed through verbatim and never parsed — its syntax belongs to
+the source — so a blank or padded value (`" R2025A "`) is rejected rather than trimmed, since
+trimming would make the stored identity differ from the declared one. `authority` is a
+**stable machine identifier**: lowercase letters and digits, separated by `.`, `-` or `_`, at
+most 64 characters. A display label like `WorldPop Global2` is rejected rather than silently
+lower-cased, so the template and the stored record can never disagree about what the identity
+is. Display names belong on `source` and `providers`.
+
+Both halves are validated by the same code at registration, at materialization and when a
+record is loaded, so a template that registers cleanly cannot fail later.
+
+Pick the authority once. It is compared exactly and is half the release identity, so changing
+it later renames every release under it and triggers a rematerialization.
+
+Bumping `sync.version.value` makes the next sync rematerialize the dataset even when its
+coverage is unchanged. Omit `version` entirely and the dataset keeps the period-based
+behaviour — appropriate for a source whose releases only ever add periods.
+
+Two things worth knowing before you rely on it:
+
+- **Keep it in step with whatever your plugin uses to build URLs.** If your plugin takes the
+  revision as an `ingestion.params` value, the two are separate strings and nothing couples
+  them at runtime; drift means syncing for a revision the plugin never downloads.
+- **Sync can only wait for a release your plugin can see.** Before rematerializing, the planner
+  asks `periods()` whether the span it already holds is still available, and reports
+  `waiting_for_source` when it is not. A `periods()` that ignores the configured revision
+  reports every period as available regardless, so bumping to an unpublished revision fails at
+  fetch time instead. Make `periods()` revision-aware if you need that guarantee.
 
 ### Which way the periods run: `temporal_direction`
 
