@@ -463,7 +463,12 @@ def test_each_tile_is_one_link_to_its_page(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(landing, "_load_datasets", lambda: [_record()])
     html = landing.render_landing("0.0.0", "")
 
-    for area, prefix in (("datasets", "/datasets/"), ("data-sources", "/data-sources/"), ("workflows", "/workflows/")):
+    for area, prefix in (
+        ("datasets", "/datasets/"),
+        ("data-sources", "/data-sources/"),
+        ("workflows", "/workflows/"),
+        ("processes", "/processes/"),
+    ):
         section = html.split(f'id="{area}" data-area', 1)[1].split("</section>", 1)[0]
         items = re.split(r'class="panel item[^"]*"', section)[1:]
         assert items, area
@@ -622,3 +627,62 @@ def test_the_processes_area_hides_core_processes_by_default(client: TestClient) 
     assert 'data-views="processes"' in section
     # A leading "!" in a filter value must be understood by the list script.
     assert 'value.charAt(0) === "!"' in html
+
+
+# --- the process page --------------------------------------------------------------------
+
+
+def test_process_descriptions_render_their_markdown_safely() -> None:
+    blocks = landing._description_blocks(
+        "Uses ``eq()`` and **bold**; see [docs](https://openeo.org) or [x](javascript:alert(1)).\n\n"
+        "* First <item>\n* Second `code`\n\n"
+        "```\nprint(1)\n```"
+    )
+
+    assert str(blocks[0]["html"]) == (
+        'Uses <code>eq()</code> and <strong>bold</strong>; see <a href="https://openeo.org">docs</a> '
+        "or [x](javascript:alert(1))."
+    )
+    assert [str(item) for item in blocks[1]["bullets"]] == ["First &lt;item&gt;", "Second <code>code</code>"]
+    assert blocks[2] == {"code": "print(1)\n"}
+
+
+def test_the_process_page_lists_the_workflows_that_use_it() -> None:
+    process = {
+        "id": "reduce_dimension",
+        "summary": "Reduce",
+        "categories": ["cubes"],
+        "parameters": [{"name": "data", "schema": {"type": "object", "subtype": "datacube"}}],
+        "returns": {"description": "A cube.", "schema": {"type": "object", "subtype": "datacube"}},
+        "links": [{"href": "https://example.org", "title": "About"}, {"href": "javascript:x", "rel": "bad"}],
+    }
+    nested = _workflow_record(
+        id="uses_it",
+        process_graph={
+            "r": {
+                "process_id": "apply",
+                "arguments": {"process": {"process_graph": {"x": {"process_id": "reduce_dimension"}}}},
+            }
+        },
+    )
+    unrelated = _workflow_record(id="does_not")
+
+    context = landing._process_page_context(process, "openEO core", [nested, unrelated])
+
+    assert [w["id"] for w in context["used_by"]] == ["uses_it"]
+    assert context["returns"]["type"] == "datacube"
+    assert context["parameters"][0]["type"] == "datacube"
+    assert context["links"] == [{"href": "https://example.org", "title": "About"}]
+
+
+@pytest.mark.parametrize(("accept", "html"), [(BROWSER_ACCEPT, True), ("*/*", False), ("application/json", False)])
+def test_the_process_endpoint_serves_a_page_only_to_browsers(client: TestClient, accept: str, html: bool) -> None:
+    response = client.get("/processes/load_collection", headers={"Accept": accept})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html" if html else "application/json")
+    if html:
+        assert 'href="/workflows/climate_normal"' in response.text
+        assert 'href="/#processes" aria-current="page"' in response.text
+    else:
+        assert response.json()["id"] == "load_collection"

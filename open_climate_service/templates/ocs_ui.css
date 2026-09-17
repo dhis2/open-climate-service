@@ -632,6 +632,10 @@ pre.code code {
 .table-title {
   padding: var(--spacers-dp16) var(--spacers-dp16) 0;
 }
+.bullets {
+  padding-left: var(--spacers-dp24);
+  margin: var(--spacers-dp8) 0;
+}
 .plain-list {
   list-style: none;
   display: flex;

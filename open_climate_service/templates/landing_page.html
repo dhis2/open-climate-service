@@ -326,13 +326,13 @@
             <div class="collection view-tiles" data-view-target>
               {% for p in processes %}
               <article
-                class="panel item"
+                class="panel item clickable"
                 data-item
                 data-origin="{{ p.origin }}"
                 data-search="{{ [p.id, p.summary] | join(' ') | lower }}"
               >
                 <div class="body">
-                  <h3><code>{{ p.id }}</code></h3>
+                  <h3><a class="item-link" href="{{ mount }}/processes/{{ p.id }}"><code>{{ p.id }}</code></a></h3>
                   {% if p.summary %}<p class="description clamp">{{ p.summary }}</p>{% endif %}
                   <div class="meta">
                     <span class="chip{% if p.origin == 'ocs' %} chip-output{% endif %}">{{ p.origin_label }}</span>

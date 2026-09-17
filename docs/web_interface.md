@@ -63,6 +63,13 @@ datasets it produces (linked where they have been made), and any automation conf
 run it when a dataset is updated. The process graph itself is at
 `/process_graphs/{workflow_id}`. Workflows cannot yet be started from the page.
 
+### The process page (`/processes/{process_id}`)
+
+Selecting a process opens its page: its description, origin and categories, its parameters
+and return value, the workflows on this instance that use it, and its reference links. As
+with datasets, the URL still returns the openEO process description as JSON to API clients;
+a browser gets the page, and `?f=json` and `?f=html` choose explicitly.
+
 ### The dataset page (`/datasets/{dataset_id}`)
 
 Selecting a dataset opens its page: a larger preview, the full description, and everything

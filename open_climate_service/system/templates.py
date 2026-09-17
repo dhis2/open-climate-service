@@ -4,6 +4,7 @@ import functools
 import importlib.resources
 import json
 import logging
+import re
 from datetime import date
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -709,23 +710,63 @@ def _workflow_results(record: Any) -> list[tuple[str, str]]:
     return list(dict.fromkeys(results))
 
 
+_MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
 def _inline_code(text: str) -> Markup:
-    """Escape *text*, rendering `backticked` spans as code, the way the descriptions are written."""
-    parts = str(text).split("`")
-    return Markup("").join(
-        Markup("<code>{}</code>").format(part) if index % 2 else escape(part) for index, part in enumerate(parts)
-    )
+    """Escape *text*, rendering the inline markdown descriptions use: code spans and web links.
+
+    Only `code`, ``code``, **bold** and [text](http…) are recognised; anything else stays
+    literal text.
+    Links are limited to http(s), so a description cannot smuggle in a `javascript:` URL.
+    """
+    parts = str(text).replace("``", "`").split("`")
+    rendered = []
+    for index, part in enumerate(parts):
+        if index % 2:
+            rendered.append(Markup("<code>{}</code>").format(part))
+            continue
+        pieces, last = [], 0
+        for match in _MARKDOWN_LINK.finditer(part):
+            pieces.append(_bold(part[last : match.start()]))
+            pieces.append(Markup('<a href="{}">{}</a>').format(match.group(2), match.group(1)))
+            last = match.end()
+        pieces.append(_bold(part[last:]))
+        rendered.append(Markup("").join(pieces))
+    return Markup("").join(rendered)
+
+
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _bold(text: str) -> Markup:
+    # Applied to escaped text, so the markup it adds is the only markup there is.
+    return Markup(_BOLD.sub(r"<strong>\1</strong>", str(escape(text))))
+
+
+_LIST_ITEM = re.compile(r"^\s*(?:[*-]|\d+\.)\s+")
 
 
 def _description_blocks(text: str | None) -> list[dict[str, Any]]:
-    """Paragraphs of a workflow description; a block that is a JSON example becomes code."""
-    blocks = []
+    """Blocks of a workflow or process description: paragraphs, bullet lists and code.
+
+    A block that is a JSON example, or fenced with backticks, becomes code; a block whose lines
+    all start with a list marker becomes a list.
+    """
+    blocks: list[dict[str, Any]] = []
     for block in (text or "").replace("\r\n", "\n").split("\n\n"):
         stripped = block.strip()
         if not stripped:
             continue
-        if stripped[0] in "{[":
+        if stripped.startswith("```"):
+            code = stripped.strip("`").split("\n", 1)
+            blocks.append({"code": code[1] if len(code) > 1 else code[0]})
+        elif stripped[0] in "{[" and not _MARKDOWN_LINK.match(stripped):
             blocks.append({"code": stripped})
+        elif all(_LIST_ITEM.match(line) for line in stripped.splitlines()):
+            blocks.append(
+                {"bullets": [_inline_code(_LIST_ITEM.sub("", line).strip()) for line in stripped.splitlines()]}
+            )
         else:
             blocks.append({"html": _inline_code(" ".join(stripped.split()))})
     return blocks
@@ -745,6 +786,21 @@ def _parameter_type(schema: object) -> str:
     return " or ".join(dict.fromkeys(labels))
 
 
+def _parameter_views(record: Any) -> list[dict[str, Any]]:
+    """Rows for a parameters table, from an openEO process or workflow description."""
+    return [
+        {
+            "name": str(parameter.get("name") or ""),
+            "required": not parameter.get("optional", False),
+            "type": _parameter_type(parameter.get("schema")),
+            "default": json.dumps(parameter["default"]) if "default" in parameter else "",
+            "description": _inline_code(" ".join(str(parameter.get("description") or "").split())),
+        }
+        for parameter in record.parameters
+        if isinstance(parameter, dict)
+    ]
+
+
 def _workflow_page_context(
     record: Any, templates: list[dict[str, Any]], datasets: list[Any], triggers: list[Any]
 ) -> dict[str, Any]:
@@ -757,17 +813,7 @@ def _workflow_page_context(
         ),
         key=lambda output: str(output["name"]).lower(),
     )
-    parameters = [
-        {
-            "name": str(parameter.get("name") or ""),
-            "required": not parameter.get("optional", False),
-            "type": _parameter_type(parameter.get("schema")),
-            "default": json.dumps(parameter["default"]) if "default" in parameter else "",
-            "description": _inline_code(" ".join(str(parameter.get("description") or "").split())),
-        }
-        for parameter in record.parameters
-        if isinstance(parameter, dict)
-    ]
+    parameters = _parameter_views(record)
     return {
         "workflow": {
             "id": record.id,
@@ -809,6 +855,60 @@ def render_workflow_page(record: Any, mount: str) -> str:
         name=api_config.get_name(),
         styles=_read_asset("ocs_ui.css"),
         **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_triggers()),
+    )
+
+
+def _uses_process(graph: object, process_id: str) -> bool:
+    """Whether a process graph calls *process_id*, including inside callbacks."""
+    if isinstance(graph, dict):
+        if graph.get("process_id") == process_id:
+            return True
+        return any(_uses_process(value, process_id) for value in graph.values())
+    if isinstance(graph, list):
+        return any(_uses_process(value, process_id) for value in graph)
+    return False
+
+
+def _process_page_context(process: dict[str, Any], origin_label: str, workflows: list[Any]) -> dict[str, Any]:
+    returns = _mapping(process.get("returns"))
+    record = type("ProcessParameters", (), {"parameters": process.get("parameters") or []})
+    return {
+        "process": {
+            "id": process["id"],
+            "summary": " ".join(str(process.get("summary") or "").split()),
+            "origin": origin_label,
+            "categories": [str(category) for category in process.get("categories") or []],
+            "experimental": bool(process.get("experimental")),
+            "deprecated": bool(process.get("deprecated")),
+        },
+        "blocks": _description_blocks(process.get("description")),
+        "parameters": _parameter_views(record),
+        "returns": {
+            "type": _parameter_type(returns.get("schema")),
+            "description": _inline_code(" ".join(str(returns.get("description") or "").split())),
+        },
+        "links": [
+            {"href": str(link["href"]), "title": str(link.get("title") or link["href"])}
+            for link in process.get("links") or []
+            if isinstance(link, dict) and str(link.get("href", "")).startswith(("http://", "https://"))
+        ],
+        "used_by": [
+            {"id": workflow.id, "title": _workflow_title(workflow.id)}
+            for workflow in workflows
+            if _uses_process(workflow.process_graph, process["id"])
+        ],
+    }
+
+
+def render_process_page(process: dict[str, Any], mount: str) -> str:
+    """Render the page for one process: what it does, its parameters and where it is used."""
+    origins = {view["id"]: view["origin_label"] for view in _load_processes()}
+    return get_template("process_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        styles=_read_asset("ocs_ui.css"),
+        **_process_page_context(process, origins.get(process["id"], ""), _load_workflows()),
     )
 
 

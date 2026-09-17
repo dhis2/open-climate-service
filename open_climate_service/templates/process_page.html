@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{ workflow.title }} · {{ name }}</title>
+    <title>{{ process.id }} · {{ name }}</title>
     <style>
 {{ styles | safe }}
     </style>
@@ -22,33 +22,34 @@
           <li><a href="{{ mount }}/#explore">Explore</a></li>
           <li><a href="{{ mount }}/#datasets">Datasets</a></li>
           <li><a href="{{ mount }}/#data-sources">Data sources</a></li>
-          <li><a href="{{ mount }}/#workflows" aria-current="page">Workflows</a></li>
-          <li><a href="{{ mount }}/#processes">Processes</a></li>
+          <li><a href="{{ mount }}/#workflows">Workflows</a></li>
+          <li><a href="{{ mount }}/#processes" aria-current="page">Processes</a></li>
         </ul>
       </nav>
 
       <main id="content">
-        <p class="breadcrumb"><a href="{{ mount }}/#workflows">Workflows</a> / {{ workflow.id }}</p>
+        <p class="breadcrumb"><a href="{{ mount }}/#processes">Processes</a> / {{ process.id }}</p>
         <div class="page-title">
-          <h2>{{ workflow.title }}</h2>
-          {% for kind, label in workflow.results %}
-          <span class="chip{% if kind == 'publish' %} chip-output{% endif %}">{{ label }}</span>
-          {% endfor %}
+          <h2><code>{{ process.id }}</code></h2>
+          {% if process.origin %}<span class="chip">{{ process.origin }}</span>{% endif %}
+          {% for category in process.categories %}<span class="chip">{{ category }}</span>{% endfor %}
+          {% if process.experimental %}<span class="chip chip-unpublished">experimental</span>{% endif %}
+          {% if process.deprecated %}<span class="chip chip-unpublished">deprecated</span>{% endif %}
         </div>
 
         <div class="dataset-page">
           <div class="stack">
             <section class="panel" aria-labelledby="description-title">
               <h3 id="description-title">Description</h3>
-              {% if workflow.summary %}<p class="lead">{{ workflow.summary }}</p>{% endif %}
+              {% if process.summary %}<p class="lead">{{ process.summary }}</p>{% endif %}
               {% if blocks %}
               <div class="prose">
                 {% for block in blocks %}
                 {% if block.code %}<pre class="code"><code>{{ block.code }}</code></pre>{% elif block.bullets %}<ul class="bullets">{% for item in block.bullets %}<li>{{ item }}</li>{% endfor %}</ul>{% else %}<p>{{ block.html }}</p>{% endif %}
                 {% endfor %}
               </div>
-              {% elif not workflow.summary %}
-              <p class="note">No description has been provided for this workflow.</p>
+              {% elif not process.summary %}
+              <p class="note">No description has been provided for this process.</p>
               {% endif %}
             </section>
 
@@ -77,51 +78,39 @@
                 </tbody>
               </table>
               {% else %}
-              <p class="note table-title">This workflow takes no parameters.</p>
+              <p class="note table-title">This process takes no parameters.</p>
               {% endif %}
             </section>
           </div>
 
           <div class="stack">
-            <section class="panel" aria-labelledby="produces-title">
-              <h3 id="produces-title">Produces</h3>
-              {% if outputs %}
-              <ul class="plain-list">
-                {% for o in outputs %}
-                <li>
-                  {% if o.ingested %}<a href="{{ mount }}/datasets/{{ o.id }}">{{ o.name }}</a>{% else %}{{ o.name }}{% endif %}
-                </li>
-                {% endfor %}
-              </ul>
-              {% elif workflow.results %}
-              <p class="note">{% for kind, label in workflow.results %}{{ label }}{% if not loop.last %}, {% endif %}{% endfor %}.</p>
-              {% else %}
-              <p class="note">No result is declared.</p>
-              {% endif %}
+            <section class="panel" aria-labelledby="returns-title">
+              <h3 id="returns-title">Returns</h3>
+              {% if returns.type %}<p><code>{{ returns.type }}</code></p>{% endif %}
+              {% if returns.description %}<p class="note">{{ returns.description }}</p>{% endif %}
+              {% if not returns.type and not returns.description %}<p class="note">No return value is described.</p>{% endif %}
             </section>
 
-            <section class="panel" aria-labelledby="triggers-title">
-              <h3 id="triggers-title">Automation</h3>
-              {% if triggers %}
-              {% for t in triggers %}
-              <div class="trigger">
-                <p>
-                  <strong>{{ t.id }}</strong> runs when
-                  {% if t.held %}<a href="{{ mount }}/datasets/{{ t.on_update_of }}">{{ t.on_update_of }}</a>{% else %}<code>{{ t.on_update_of }}</code>{% endif %}
-                  is updated.
-                </p>
-                {% if t.arguments %}<pre class="code"><code>{{ t.arguments }}</code></pre>{% endif %}
-              </div>
-              {% endfor %}
+            <section class="panel" aria-labelledby="used-title">
+              <h3 id="used-title">Used by workflows</h3>
+              {% if used_by %}
+              <ul class="plain-list">
+                {% for w in used_by %}
+                <li><a href="{{ mount }}/workflows/{{ w.id }}">{{ w.title }}</a></li>
+                {% endfor %}
+              </ul>
               {% else %}
-              <p class="note">No automation runs this workflow on this instance.</p>
+              <p class="note">No workflow on this instance uses this process.</p>
               {% endif %}
             </section>
 
             <section class="panel" aria-labelledby="links-title">
               <h3 id="links-title">Links</h3>
               <div class="actions">
-                <a class="button-link" href="{{ mount }}/process_graphs/{{ workflow.id }}">Process graph (JSON)</a>
+                {% for link in links %}
+                <a class="button-link" href="{{ link.href }}">{{ link.title }}</a>
+                {% endfor %}
+                <a class="button-link" href="{{ mount }}/processes/{{ process.id }}?f=json">Process description (JSON)</a>
               </div>
             </section>
           </div>
