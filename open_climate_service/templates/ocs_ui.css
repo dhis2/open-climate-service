@@ -293,6 +293,10 @@ dl.facts dt {
 dl.facts dd {
   overflow-wrap: anywhere;
 }
+/* The note under the facts is a separate statement, not another row of the list. */
+dl.facts + .note {
+  margin-top: var(--spacers-dp12);
+}
 
 .cards {
   display: grid;
