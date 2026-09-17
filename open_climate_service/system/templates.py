@@ -722,6 +722,21 @@ _PERIOD_FORMAT_HINTS = {
 }
 
 
+def _period_value(value: str, period: str) -> str:
+    """A date cut down to the source's own precision.
+
+    The field asks for a period identifier, not a date: a monthly source takes `2025-09`, a
+    yearly one `2025`. Prefilling the full ISO date contradicted the format stated right under
+    the field, and left the reader to work out which of the two the form actually wanted.
+    """
+    hint = _PERIOD_FORMAT_HINTS.get(period, "")
+    if not value or not hint:
+        return value
+    if hint.endswith("THH"):
+        return f"{value[:10]}T00" if len(value) >= 10 else value
+    return value[: len(hint)]
+
+
 def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
     """Prefilled start and end for the ingest form, following the source's direction.
 
@@ -730,12 +745,18 @@ def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
     runs to the declared end, so the projected years are not cut off at today.
     """
     direction = str(template.get("temporal_direction") or "past")
+    period = str(template.get("period_type") or "")
     year_ago = today.replace(year=today.year - 1).isoformat()
     declared_end = _mapping(_mapping(template.get("extents")).get("temporal")).get("end")
     if direction == "future":
         return {"start": "", "end": "", "start_required": False, "direction": direction}
     end = str(declared_end) if direction == "spanning" and declared_end else today.isoformat()
-    return {"start": year_ago, "end": end, "start_required": True, "direction": direction}
+    return {
+        "start": _period_value(year_ago, period),
+        "end": _period_value(end, period),
+        "start_required": True,
+        "direction": direction,
+    }
 
 
 def _data_source_page_context(

@@ -8,6 +8,7 @@ drive it directly; the rendering tests go through `GET /`, where the page is act
 from __future__ import annotations
 
 import re
+from datetime import date
 from html.parser import HTMLParser
 from types import SimpleNamespace
 from typing import Any
@@ -434,6 +435,31 @@ def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> Non
     assert 'action="/manage/ingest"' in response.text
     assert '<input type="hidden" name="dataset_id" value="chirps3_precipitation_daily" />' in response.text
     assert "template" not in _visible_text(response.text).lower()
+
+
+def test_the_ingest_form_prefills_dates_in_the_format_it_states(client: TestClient) -> None:
+    """The field takes a period identifier, so a monthly source must not be prefilled with a day."""
+    body = client.get("/data-sources/era5land_temperature_monthly").text
+    form = body.split('id="ingest-form"', 1)[1]
+
+    assert 'value="{}"'.format(date.today().replace(year=date.today().year - 1).strftime("%Y-%m")) in form
+    assert "Format YYYY-MM." in form
+
+
+@pytest.mark.parametrize(
+    ("value", "period", "expected"),
+    [
+        ("2026-09-17", "yearly", "2026"),
+        ("2026-09-17", "monthly", "2026-09"),
+        ("2026-09-17", "daily", "2026-09-17"),
+        ("2026-09-17", "hourly", "2026-09-17T00"),
+        ("2026-09-17", "climatology", "2026-09-17"),
+        ("", "monthly", ""),
+        ("2030", "monthly", "2030"),
+    ],
+)
+def test_a_prefilled_date_is_cut_to_the_period(value: str, period: str, expected: str) -> None:
+    assert landing._period_value(value, period) == expected
 
 
 def test_an_unknown_data_source_is_a_404(client: TestClient) -> None:
