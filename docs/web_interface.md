@@ -118,7 +118,13 @@ appear here.
 - **Legend** — a colour bar with the value range and units, derived from the dataset's
   metadata (including the colour scheme defined in its template).
 - **Source and units** — shown alongside the legend for context.
+- **Link to the dataset** — opens the dataset's page.
 - The map fits to the instance's configured extent on load.
+
+The viewer sits under the same header and navigation as the other pages. To link to one
+dataset, use `/map?dataset={dataset_id}`: the viewer opens with that dataset selected, and
+choosing another dataset updates the address, so what is in the address bar can always be
+shared. A dataset page's **Open in map viewer** button uses the same link.
 
 If a dataset doesn't show up, confirm it was ingested with **Publish** enabled — only
 published datasets are listed.

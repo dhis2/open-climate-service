@@ -686,3 +686,51 @@ def test_the_process_endpoint_serves_a_page_only_to_browsers(client: TestClient,
         assert 'href="/#processes" aria-current="page"' in response.text
     else:
         assert response.json()["id"] == "load_collection"
+
+
+# --- the map viewer ----------------------------------------------------------------------
+
+
+def test_every_page_links_to_the_map_viewer(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    pages = [
+        client.get("/", headers={"Accept": "text/html"}).text,
+        client.get("/data-sources/chirps3_precipitation_daily").text,
+        client.get("/workflows/climate_normal").text,
+        client.get("/processes/load_collection", headers={"Accept": BROWSER_ACCEPT}).text,
+    ]
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
+    pages.append(landing.render_dataset_page(_record(), ""))
+
+    for html in pages:
+        assert 'href="/map">Map viewer</a>' in html
+
+
+def test_the_map_viewer_has_the_page_header_and_navigation(client: TestClient) -> None:
+    html = client.get("/map").text
+
+    assert '<body class="map-page">' in html
+    assert '<a href="/map" aria-current="page">Map viewer</a>' in html
+    assert 'href="/#datasets">Datasets</a>' in html
+    assert "--colors-blue800" in html, "the shared design tokens are included"
+
+
+def test_the_map_viewer_opens_the_dataset_named_in_the_address(client: TestClient) -> None:
+    html = client.get("/map", params={"dataset": "chirps3_precipitation_daily"}).text
+
+    assert 'new URLSearchParams(window.location.search).get("dataset")' in html
+    assert 'url.searchParams.set("dataset", id)' in html
+    assert "`/datasets/${encodeURIComponent(id)}`" in html
+
+
+def test_the_dataset_page_opens_the_map_on_that_dataset() -> None:
+    html = landing.render_dataset_page(_record("chirps monthly"), "/ocs")
+
+    assert 'href="/ocs/map?dataset=chirps%20monthly"' in html
+
+
+def test_page_nav_marks_only_the_current_page() -> None:
+    nav = str(landing.page_nav("/ocs", "workflows"))
+
+    assert nav.count('aria-current="page"') == 1
+    assert '<a href="/ocs/#workflows" aria-current="page">Workflows</a>' in nav
+    assert '<a href="/ocs/map">Map viewer</a>' in nav

@@ -16,16 +16,7 @@
     </header>
 
     <div class="layout">
-      <nav class="rail" aria-label="Sections">
-        <ul>
-          <li><a href="{{ mount }}/#overview">Overview</a></li>
-          <li><a href="{{ mount }}/#explore">Explore</a></li>
-          <li><a href="{{ mount }}/#datasets">Datasets</a></li>
-          <li><a href="{{ mount }}/#data-sources">Data sources</a></li>
-          <li><a href="{{ mount }}/#workflows" aria-current="page">Workflows</a></li>
-          <li><a href="{{ mount }}/#processes">Processes</a></li>
-        </ul>
-      </nav>
+      {{ nav }}
 
       <main id="content">
         <p class="breadcrumb"><a href="{{ mount }}/#workflows">Workflows</a> / {{ workflow.id }}</p>

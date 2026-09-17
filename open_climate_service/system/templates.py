@@ -117,6 +117,32 @@ def wants_json(request: Request) -> bool:
     return json_q >= 0 and (html_q < 0 or json_q >= html_q)
 
 
+_NAV_ITEMS = (
+    ("overview", "Overview", "/#overview"),
+    ("explore", "Explore", "/#explore"),
+    ("map", "Map viewer", "/map"),
+    ("datasets", "Datasets", "/#datasets"),
+    ("data-sources", "Data sources", "/#data-sources"),
+    ("workflows", "Workflows", "/#workflows"),
+    ("processes", "Processes", "/#processes"),
+)
+
+
+def page_nav(mount: str, current: str) -> Markup:
+    """The left navigation for pages outside the landing page, with *current* marked.
+
+    The landing page renders its own, because its links switch areas in place rather than
+    navigate.
+    """
+    items = Markup("").join(
+        Markup('<li><a href="{}{}"{}>{}</a></li>').format(
+            mount, path, Markup(' aria-current="page"') if key == current else "", label
+        )
+        for key, label, path in _NAV_ITEMS
+    )
+    return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
+
+
 def render_maps(mount: str) -> str:
     """Render the map viewer page.
 
@@ -129,7 +155,13 @@ def render_maps(mount: str) -> str:
     Required rather than defaulted: an omitted mount gives links that work unmounted and 404
     behind a prefix, which is the failure this parameter exists to prevent.
     """
-    return get_template("map-viewer.html").render(mount=mount, name=api_config.get_name())
+    return get_template("map-viewer.html").render(
+        mount=mount,
+        name=api_config.get_name(),
+        version=app_version,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "map"),
+    )
 
 
 def _load_extent() -> dict[str, Any] | None:
@@ -540,6 +572,7 @@ def render_dataset_page(record: Any, mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "datasets"),
         job_script=_read_asset("ocs_jobs.js"),
         read_only=api_config.is_read_only(),
         **_dataset_page_context(record, template),
@@ -672,6 +705,7 @@ def render_data_source_page(template: dict[str, Any], mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "data-sources"),
         job_script=_read_asset("ocs_jobs.js"),
         **_data_source_page_context(
             template,
@@ -854,6 +888,7 @@ def render_workflow_page(record: Any, mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "workflows"),
         **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_triggers()),
     )
 
@@ -908,6 +943,7 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "processes"),
         **_process_page_context(process, origins.get(process["id"], ""), _load_workflows()),
     )
 
