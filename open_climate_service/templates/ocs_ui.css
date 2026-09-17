@@ -280,7 +280,8 @@ a.stat:hover {
 .globe .extent {
   fill: none;
   stroke: black;
-  stroke-width: 2;
+  /* The viewBox is scaled up ~1.8x on screen, so this lands near 2 device pixels. */
+  stroke-width: 1.2;
   stroke-linejoin: round;
 }
 
