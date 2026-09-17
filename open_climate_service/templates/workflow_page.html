@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ workflow.title }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <h1>{{ name }}</h1>
+      <span class="version">v{{ version }}</span>
+    </header>
+
+    <div class="layout">
+      <nav class="rail" aria-label="Sections">
+        <ul>
+          <li><a href="{{ mount }}/#overview">Overview</a></li>
+          <li><a href="{{ mount }}/#explore">Explore</a></li>
+          <li><a href="{{ mount }}/#datasets">Datasets</a></li>
+          <li><a href="{{ mount }}/#data-sources">Data sources</a></li>
+          <li><a href="{{ mount }}/#workflows" aria-current="page">Workflows</a></li>
+        </ul>
+      </nav>
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/#workflows">Workflows</a> / {{ workflow.id }}</p>
+        <div class="page-title">
+          <h2>{{ workflow.title }}</h2>
+          {% for kind, label in workflow.results %}
+          <span class="chip{% if kind == 'publish' %} chip-output{% endif %}">{{ label }}</span>
+          {% endfor %}
+        </div>
+
+        <div class="dataset-page">
+          <div class="stack">
+            <section class="panel" aria-labelledby="description-title">
+              <h3 id="description-title">Description</h3>
+              {% if workflow.summary %}<p class="lead">{{ workflow.summary }}</p>{% endif %}
+              {% if blocks %}
+              <div class="prose">
+                {% for block in blocks %}
+                {% if block.code %}<pre class="code"><code>{{ block.code }}</code></pre>{% else %}<p>{{ block.html }}</p>{% endif %}
+                {% endfor %}
+              </div>
+              {% elif not workflow.summary %}
+              <p class="note">No description has been provided for this workflow.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel table-wrap" aria-labelledby="parameters-title">
+              <h3 id="parameters-title" class="table-title">Parameters</h3>
+              {% if parameters %}
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for p in parameters %}
+                  <tr>
+                    <td>
+                      <code>{{ p.name }}</code>
+                      <div class="hint">{% if p.required %}required{% else %}optional{% endif %}{% if p.default %}, default <code>{{ p.default }}</code>{% endif %}</div>
+                    </td>
+                    <td>{{ p.type }}</td>
+                    <td>{{ p.description }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              {% else %}
+              <p class="note table-title">This workflow takes no parameters.</p>
+              {% endif %}
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel" aria-labelledby="produces-title">
+              <h3 id="produces-title">Produces</h3>
+              {% if outputs %}
+              <ul class="plain-list">
+                {% for o in outputs %}
+                <li>
+                  {% if o.ingested %}<a href="{{ mount }}/datasets/{{ o.id }}">{{ o.name }}</a>{% else %}{{ o.name }}{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+              {% elif workflow.results %}
+              <p class="note">{% for kind, label in workflow.results %}{{ label }}{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+              {% else %}
+              <p class="note">No result is declared.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="triggers-title">
+              <h3 id="triggers-title">Automation</h3>
+              {% if triggers %}
+              {% for t in triggers %}
+              <div class="trigger">
+                <p>
+                  <strong>{{ t.id }}</strong> runs when
+                  {% if t.held %}<a href="{{ mount }}/datasets/{{ t.on_update_of }}">{{ t.on_update_of }}</a>{% else %}<code>{{ t.on_update_of }}</code>{% endif %}
+                  is updated.
+                </p>
+                {% if t.arguments %}<pre class="code"><code>{{ t.arguments }}</code></pre>{% endif %}
+              </div>
+              {% endfor %}
+              {% else %}
+              <p class="note">No automation runs this workflow on this instance.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="links-title">
+              <h3 id="links-title">Links</h3>
+              <div class="actions">
+                <a class="button-link" href="{{ mount }}/process_graphs/{{ workflow.id }}">Process graph (JSON)</a>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <footer>
+      <a href="https://github.com/dhis2/open-climate-service">dhis2/open-climate-service</a>
+    </footer>
+  </body>
+</html>

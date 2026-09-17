@@ -29,7 +29,7 @@ on a narrow screen). One area shows at a time, and each has its own address, suc
 | **Explore**      | The map viewer, openEO editor, STAC catalog, API docs and the JSON root                             |
 | **Datasets**     | The data this instance holds, with temporal coverage and publication status                         |
 | **Data sources** | Data the instance can fetch from outside providers, titled by dataset with the provider beneath     |
-| **Workflows**    | Each workflow, with the datasets it produces (anomalies, normals, change rasters)                   |
+| **Workflows**    | Each workflow and what it makes: a published dataset or an exported file                            |
 
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript every area is shown in sequence and each list is complete.
@@ -53,6 +53,14 @@ and the full declared range for a source that runs into the future. Progress is 
 page; when ingestion finishes the dataset page opens, and an error is shown in place. Data is
 always fetched for the instance's configured extent. The form is not shown on a read-only
 instance or when no extent is configured.
+
+### The workflow page (`/workflows/{workflow_id}`)
+
+Selecting a workflow opens its page: what it does, including its usage example, whether it
+publishes a dataset or exports a file, its parameters with their types and defaults, the
+datasets it produces (linked where they have been made), and any automation configured to
+run it when a dataset is updated. The process graph itself is at
+`/process_graphs/{workflow_id}`. Workflows cannot yet be started from the page.
 
 ### The dataset page (`/datasets/{dataset_id}`)
 

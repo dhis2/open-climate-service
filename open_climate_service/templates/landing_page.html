@@ -257,26 +257,20 @@
           <h2 id="workflows-title" tabindex="-1">Workflows</h2>
           <p class="lead">Processing chains that turn data into new datasets and exports.</p>
           {% if workflows %}
-          {% for w in workflows %}
-          <article class="panel workflow">
-            <h3><a href="{{ mount }}/process_graphs/{{ w.record.id }}">{{ w.record.id }}</a></h3>
-            {% if w.record.summary %}<p class="note">{{ w.record.summary }}</p>{% endif %}
-            {% if w.outputs %}
-            <div class="outputs">
-            <span class="chip chip-output" id="outputs-{{ w.record.id }}">Produces</span>
-            <ul aria-labelledby="outputs-{{ w.record.id }}">
-              {% for o in w.outputs %}
-              <li>
-                <span>{{ o.name }}</span>
-                {% if o.period_type %}<span class="chip">{{ o.period_type }}</span>{% endif %}
-                {% if o.units %}<span class="chip">{{ o.units }}</span>{% endif %}
-              </li>
-              {% endfor %}
-            </ul>
-            </div>
-            {% endif %}
-          </article>
-          {% endfor %}
+          <div class="collection view-tiles">
+            {% for w in workflows %}
+            <article class="panel item clickable">
+              <div class="body">
+                <h3><a class="item-link" href="{{ mount }}/workflows/{{ w.record.id }}">{{ w.title }}</a></h3>
+                {% if w.record.summary %}<p class="description clamp">{{ w.record.summary }}</p>{% endif %}
+                <div class="meta">
+                  {% for kind, label in w.results %}<span class="chip{% if kind == 'publish' %} chip-output{% endif %}">{{ label }}</span>{% endfor %}
+                  {% if w.outputs %}<span class="chip">{{ w.outputs | length }} dataset{{ "s" if w.outputs | length != 1 }}</span>{% endif %}
+                </div>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
           {% else %}
           <p class="note">No workflows are registered.</p>
           {% endif %}

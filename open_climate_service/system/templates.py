@@ -2,6 +2,7 @@
 
 import functools
 import importlib.resources
+import json
 import logging
 from datetime import date
 from importlib.metadata import PackageNotFoundError
@@ -10,6 +11,7 @@ from typing import Any
 
 import jinja2
 from fastapi import Request
+from markupsafe import Markup, escape
 
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
@@ -286,7 +288,15 @@ def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) ->
     unattributed.sort(key=lambda view: view["name"].lower())
     return {
         "sources": sources,
-        "workflows": [{"record": workflow, "outputs": outputs[workflow.id]} for workflow in workflows],
+        "workflows": [
+            {
+                "record": workflow,
+                "title": _workflow_title(workflow.id),
+                "results": _workflow_results(workflow),
+                "outputs": outputs[workflow.id],
+            }
+            for workflow in workflows
+        ],
         "unattributed_outputs": unattributed,
     }
 
@@ -610,6 +620,136 @@ def render_data_source_page(template: dict[str, Any], mount: str) -> str:
             has_extent=_load_extent() is not None,
             today=date.today(),
         ),
+    )
+
+
+_TITLE_WORDS = {"chap": "CHAP", "csv": "CSV", "dhis2": "DHIS2", "json": "JSON"}
+
+_RESULT_FORMATS = {
+    "zarr": ("publish", "Publishes a dataset"),
+    "geozarr": ("publish", "Publishes a dataset"),
+    "chapcsv": ("export", "Exports CHAP CSV"),
+    "dhis2json": ("export", "Exports DHIS2 JSON"),
+}
+
+
+def _workflow_title(workflow_id: str) -> str:
+    """`aggregate_to_chap_csv` → `Aggregate to CHAP CSV`: workflows declare no title of their own."""
+    words = [_TITLE_WORDS.get(word, word) for word in workflow_id.split("_")]
+    return " ".join([words[0][:1].upper() + words[0][1:], *words[1:]]) if words else workflow_id
+
+
+def _workflow_results(record: Any) -> list[tuple[str, str]]:
+    """What the workflow's `save_result` nodes produce, as (kind, label) pairs."""
+    results = []
+    for node in (getattr(record, "process_graph", None) or {}).values():
+        if not isinstance(node, dict) or node.get("process_id") != "save_result":
+            continue
+        fmt = str(_mapping(node.get("arguments")).get("format") or "")
+        results.append(_RESULT_FORMATS.get(fmt.lower(), ("other", f"Returns {fmt}" if fmt else "Returns a result")))
+    return list(dict.fromkeys(results))
+
+
+def _inline_code(text: str) -> Markup:
+    """Escape *text*, rendering `backticked` spans as code, the way the descriptions are written."""
+    parts = str(text).split("`")
+    return Markup("").join(
+        Markup("<code>{}</code>").format(part) if index % 2 else escape(part) for index, part in enumerate(parts)
+    )
+
+
+def _description_blocks(text: str | None) -> list[dict[str, Any]]:
+    """Paragraphs of a workflow description; a block that is a JSON example becomes code."""
+    blocks = []
+    for block in (text or "").replace("\r\n", "\n").split("\n\n"):
+        stripped = block.strip()
+        if not stripped:
+            continue
+        if stripped[0] in "{[":
+            blocks.append({"code": stripped})
+        else:
+            blocks.append({"html": _inline_code(" ".join(stripped.split()))})
+    return blocks
+
+
+def _parameter_type(schema: object) -> str:
+    """A short label for a parameter's schema: type or subtype, and the allowed values."""
+    schemas = schema if isinstance(schema, list) else [schema]
+    labels = []
+    for item in schemas:
+        item = _mapping(item)
+        label = str(item.get("subtype") or item.get("type") or "")
+        if isinstance(item.get("enum"), list):
+            label = " | ".join(str(value) for value in item["enum"])
+        if label:
+            labels.append(label)
+    return " or ".join(dict.fromkeys(labels))
+
+
+def _workflow_page_context(
+    record: Any, templates: list[dict[str, Any]], datasets: list[Any], triggers: list[Any]
+) -> dict[str, Any]:
+    held = {dataset.dataset_id for dataset in datasets}
+    outputs = sorted(
+        (
+            {"id": t["id"], "name": t.get("name") or t["id"], "ingested": t["id"] in held}
+            for t in templates
+            if t.get("produced_by") == record.id and not registry_datasets.is_ingestable(t)
+        ),
+        key=lambda output: str(output["name"]).lower(),
+    )
+    parameters = [
+        {
+            "name": str(parameter.get("name") or ""),
+            "required": not parameter.get("optional", False),
+            "type": _parameter_type(parameter.get("schema")),
+            "default": json.dumps(parameter["default"]) if "default" in parameter else "",
+            "description": _inline_code(" ".join(str(parameter.get("description") or "").split())),
+        }
+        for parameter in record.parameters
+        if isinstance(parameter, dict)
+    ]
+    return {
+        "workflow": {
+            "id": record.id,
+            "title": _workflow_title(record.id),
+            "summary": record.summary or "",
+            "results": _workflow_results(record),
+        },
+        "blocks": _description_blocks(record.description),
+        "parameters": parameters,
+        "outputs": outputs,
+        "triggers": [
+            {
+                "id": trigger.id,
+                "on_update_of": trigger.on_update_of,
+                "held": trigger.on_update_of in held,
+                "arguments": json.dumps(trigger.arguments, indent=2) if trigger.arguments else "",
+            }
+            for trigger in triggers
+            if trigger.workflow_id == record.id
+        ],
+    }
+
+
+def _load_triggers() -> list[Any]:
+    try:
+        from open_climate_service.automation.config import get_automation_config
+
+        return list(get_automation_config().workflow_triggers)
+    except Exception:
+        _log.exception("Unexpected error loading workflow triggers")
+        return []
+
+
+def render_workflow_page(record: Any, mount: str) -> str:
+    """Render the page for one workflow: what it does, its parameters and what it produces."""
+    return get_template("workflow_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        styles=_read_asset("ocs_ui.css"),
+        **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_triggers()),
     )
 
 

@@ -215,12 +215,18 @@ def test_lists_carry_the_filter_and_pager_hooks(client: TestClient) -> None:
     assert 'class="thumb' not in section
 
 
-def test_workflow_outputs_are_listed_under_their_workflow(client: TestClient) -> None:
+def test_workflow_tiles_link_to_the_page_that_lists_their_outputs(client: TestClient) -> None:
     html = client.get("/", headers={"Accept": "text/html"}).text
     section = html.split('id="workflows"', 1)[1].split("</section>", 1)[0]
-    temporal_change = section.split('/process_graphs/temporal_change"', 1)[1].split("</article>", 1)[0]
+    tile = section.split('href="/workflows/temporal_change"', 1)[1].split("</article>", 1)[0]
 
-    assert "Population change (WorldPop Global2)" in temporal_change
+    assert "Temporal change" in tile
+    assert "Publishes a dataset" in tile
+    # The list of what it produces is on the workflow page, not the tile.
+    assert "Population change (WorldPop Global2)" not in section
+
+    page = client.get("/workflows/temporal_change").text
+    assert "Population change (WorldPop Global2)" in page.split('id="produces-title"', 1)[1]
 
 
 def test_colours_come_from_the_token_block(client: TestClient) -> None:
@@ -457,9 +463,9 @@ def test_each_tile_is_one_link_to_its_page(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(landing, "_load_datasets", lambda: [_record()])
     html = landing.render_landing("0.0.0", "")
 
-    for area, prefix in (("datasets", "/datasets/"), ("data-sources", "/data-sources/")):
+    for area, prefix in (("datasets", "/datasets/"), ("data-sources", "/data-sources/"), ("workflows", "/workflows/")):
         section = html.split(f'id="{area}" data-area', 1)[1].split("</section>", 1)[0]
-        items = section.split("data-item")[1:]
+        items = re.split(r'class="panel item[^"]*"', section)[1:]
         assert items, area
         for item in items:
             item = item.split("</article>", 1)[0]
@@ -497,3 +503,81 @@ def test_the_dataset_page_offers_sync_only_where_it_can_run(
         assert "function runJobForm" in html
     else:
         assert "/manage" not in html
+
+
+# --- the workflow page -------------------------------------------------------------------
+
+
+def _workflow_record(**fields: Any) -> Any:
+    from open_climate_service.openeo.schemas import WorkflowRecord
+
+    values: dict[str, Any] = {
+        "id": "aggregate_to_chap_csv",
+        "summary": "Aggregate and export",
+        "description": 'Loads `dataset_id` and exports.\n\nUsage:\n\n{\n  "agg": {"process_id": "x"}\n}',
+        "parameters": [
+            {"name": "dataset_id", "schema": {"type": "string"}, "description": "The `dataset` to read."},
+            {
+                "name": "period",
+                "optional": True,
+                "default": "month",
+                "schema": {"type": "string", "enum": ["month", "week"]},
+            },
+            {"name": "temporal_extent", "schema": {"type": "array", "subtype": "temporal-interval"}},
+        ],
+        "process_graph": {
+            "load": {"process_id": "load_collection", "arguments": {}},
+            "save": {"process_id": "save_result", "arguments": {"format": "CHAPCSV"}, "result": True},
+        },
+        **fields,
+    }
+    return WorkflowRecord.model_validate(values)
+
+
+def test_the_workflow_page_describes_the_workflow() -> None:
+    context = landing._workflow_page_context(_workflow_record(), [], [], [])
+
+    assert context["workflow"]["title"] == "Aggregate to CHAP CSV"
+    assert context["workflow"]["results"] == [("export", "Exports CHAP CSV")]
+    assert str(context["blocks"][0]["html"]) == "Loads <code>dataset_id</code> and exports."
+    assert context["blocks"][2]["code"].startswith("{")
+    params = {p["name"]: p for p in context["parameters"]}
+    assert params["dataset_id"]["required"] is True
+    assert params["period"] == {**params["period"], "required": False, "type": "month | week", "default": '"month"'}
+    assert params["temporal_extent"]["type"] == "temporal-interval"
+
+
+def test_workflow_descriptions_are_escaped() -> None:
+    context = landing._workflow_page_context(_workflow_record(description="<script>x</script> `<b>`"), [], [], [])
+
+    assert str(context["blocks"][0]["html"]) == "&lt;script&gt;x&lt;/script&gt; <code>&lt;b&gt;</code>"
+
+
+def test_the_workflow_page_lists_outputs_and_triggers() -> None:
+    from open_climate_service.automation.config import WorkflowTrigger
+
+    record = _workflow_record(id="climate_normal")
+    templates = [
+        _template("normal_b", name="B normal", produced_by="climate_normal"),
+        _template("normal_a", name="A normal", produced_by="climate_normal"),
+        _template("other", produced_by="temporal_change"),
+    ]
+    triggers = [
+        WorkflowTrigger(id="refresh", on_update_of="chirps_monthly", workflow_id="climate_normal", arguments={"x": 1}),
+        WorkflowTrigger(id="elsewhere", on_update_of="chirps_monthly", workflow_id="temporal_change"),
+    ]
+
+    context = landing._workflow_page_context(record, templates, [_record("normal_b")], triggers)
+
+    assert [(o["id"], o["ingested"]) for o in context["outputs"]] == [("normal_a", False), ("normal_b", True)]
+    assert [t["id"] for t in context["triggers"]] == ["refresh"]
+    assert context["triggers"][0]["held"] is False
+
+
+def test_the_workflow_page_is_served(client: TestClient) -> None:
+    response = client.get("/workflows/climate_normal")
+
+    assert response.status_code == 200
+    assert "Climate normal" in response.text
+    assert 'href="/process_graphs/climate_normal"' in response.text
+    assert client.get("/workflows/does_not_exist").status_code == 404
