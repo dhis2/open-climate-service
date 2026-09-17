@@ -204,7 +204,7 @@ h2:focus {
 }
 h3 {
   font-size: var(--font-size-h3);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-bold);
 }
 .lead {
   color: var(--colors-grey700);
@@ -536,9 +536,6 @@ footer a {
   padding: var(--spacers-dp12) var(--spacers-dp16);
   flex: 1;
   min-width: 0;
-}
-.item h3 {
-  font-weight: var(--font-weight-bold);
 }
 .item h3 a {
   text-decoration: none;
