@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ source.name }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <h1>{{ name }}</h1>
+      <span class="version">v{{ version }}</span>
+    </header>
+
+    <div class="layout">
+      <nav class="rail" aria-label="Sections">
+        <ul>
+          <li><a href="{{ mount }}/#overview">Overview</a></li>
+          <li><a href="{{ mount }}/#explore">Explore</a></li>
+          <li><a href="{{ mount }}/#datasets">Datasets</a></li>
+          <li><a href="{{ mount }}/#data-sources" aria-current="page">Data sources</a></li>
+          <li><a href="{{ mount }}/#workflows">Workflows</a></li>
+          {% if not read_only %}
+          <li><a href="{{ mount }}/#operator">Operator tools</a></li>
+          {% endif %}
+        </ul>
+      </nav>
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/#data-sources">Data sources</a> / {{ source.id }}</p>
+        <div class="page-title">
+          <h2>{{ source.name }}</h2>
+          {% if ingested %}<span class="chip chip-{{ ingested.status }}">ingested</span>{% endif %}
+        </div>
+
+        <div class="dataset-page">
+          <div class="stack">
+            <section class="panel" aria-labelledby="description-title">
+              <h3 id="description-title">Description</h3>
+              {% if paragraphs %}
+              <div class="prose">
+                {% for paragraph in paragraphs %}
+                <p>{{ paragraph }}</p>
+                {% endfor %}
+              </div>
+              {% else %}
+              <p class="note">No description has been provided for this data source.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="ingest-title">
+              <h3 id="ingest-title">Ingest</h3>
+              {% if ingested %}
+              <p class="note">
+                Already ingested{% if ingested.coverage %} for {{ ingested.coverage }}{% endif %}.
+                <a href="{{ mount }}/datasets/{{ source.id }}">View the dataset</a>.
+                Ingesting again adds to it, or replaces it when <em>Overwrite</em> is checked.
+              </p>
+              {% endif %}
+              {% if can_ingest %}
+              <form
+                id="ingest-form"
+                method="post"
+                action="{{ mount }}/manage/ingest"
+                data-dataset-url="{{ mount }}/datasets/{{ source.id }}"
+              >
+                <input type="hidden" name="dataset_id" value="{{ source.id }}" />
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="start">Start{% if not defaults.start_required %} (optional){% endif %}</label>
+                    <input
+                      type="text"
+                      id="start"
+                      name="start"
+                      value="{{ defaults.start }}"
+                      {% if format_hint %}placeholder="{{ format_hint }}"{% endif %}
+                      {% if defaults.start_required %}required{% endif %}
+                      aria-describedby="start-hint"
+                    />
+                    <span class="hint" id="start-hint">
+                      {% if defaults.direction == "future" %}Leave blank to ingest the full forecast window from now.{% elif format_hint %}Format {{ format_hint }}.{% endif %}
+                    </span>
+                  </div>
+                  <div class="field">
+                    <label for="end">End (optional)</label>
+                    <input
+                      type="text"
+                      id="end"
+                      name="end"
+                      value="{{ defaults.end }}"
+                      {% if format_hint %}placeholder="{{ format_hint }}"{% endif %}
+                      aria-describedby="end-hint"
+                    />
+                    <span class="hint" id="end-hint">
+                      {% if defaults.direction == "spanning" %}Prefilled to the end of what the source covers.{% else %}Blank means as far as the source goes.{% endif %}
+                    </span>
+                  </div>
+                </div>
+                <div class="checks">
+                  <label><input type="checkbox" name="publish" checked /> Publish after ingestion</label>
+                  <label><input type="checkbox" name="overwrite" /> Overwrite if already ingested</label>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="primary" id="ingest-button">Ingest</button>
+                  <span class="note">Data is fetched for this instance's extent. This may take several minutes.</span>
+                </div>
+                <div class="progress" id="ingest-progress" hidden>
+                  <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
+                  <span class="progress-label" aria-live="polite">Starting…</span>
+                </div>
+                <div class="notice error" id="ingest-error" role="alert" hidden></div>
+              </form>
+              {% elif not ingestable %}
+              <p class="note">
+                This dataset is not fetched from a provider{% if produced_by %}; it is produced by the
+                <a href="{{ mount }}/process_graphs/{{ produced_by }}">{{ produced_by }}</a> workflow{% endif %}.
+              </p>
+              {% elif read_only %}
+              <p class="note">This instance is read-only, so data cannot be ingested here.</p>
+              {% elif not has_extent %}
+              <p class="note">
+                No extent is configured for this instance. Set <code>extent:</code> in
+                <code>CLIMATE_SERVICE_CONFIG</code> before ingesting data.
+              </p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="data-title">
+              <h3 id="data-title">Data</h3>
+              <dl class="facts">
+                {% for label, value, href in data %}
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+                {% endfor %}
+              </dl>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel" aria-labelledby="about-title">
+              <h3 id="about-title">About</h3>
+              <dl class="facts">
+                {% for label, value, href in about %}
+                <dt>{{ label }}</dt>
+                <dd>{% if href %}<a href="{{ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}</dd>
+                {% endfor %}
+              </dl>
+            </section>
+
+            <section class="panel" aria-labelledby="status-title">
+              <h3 id="status-title">Updates and display</h3>
+              <dl class="facts">
+                {% for label, value, href in status_facts %}
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+                {% endfor %}
+              </dl>
+              <span class="ramp-bar" style="--ramp: {{ source.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
+            </section>
+
+            <section class="panel" aria-labelledby="links-title">
+              <h3 id="links-title">Links</h3>
+              <div class="actions">
+                {% if ingested %}
+                <a class="button-link" href="{{ mount }}/datasets/{{ source.id }}">Ingested dataset</a>
+                {% endif %}
+                <a class="button-link" href="{{ mount }}/dataset-templates/{{ source.id }}">Metadata (JSON)</a>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <footer>
+      <a href="https://github.com/dhis2/open-climate-service">dhis2/open-climate-service</a>
+    </footer>
+
+    {% if can_ingest %}
+    <script>
+      // Posts to the same streaming endpoint as the /manage console, but stays on this page:
+      // progress is shown here, a failure is shown here, and success opens the dataset.
+      (function () {
+        var form = document.getElementById("ingest-form");
+        var button = document.getElementById("ingest-button");
+        var progress = document.getElementById("ingest-progress");
+        var fill = progress.querySelector(".progress-fill");
+        var label = progress.querySelector(".progress-label");
+        var error = document.getElementById("ingest-error");
+        var controls = Array.prototype.slice.call(form.querySelectorAll("input:not([type=hidden]), button"));
+
+        function setBusy(busy) {
+          controls.forEach(function (control) {
+            control.disabled = busy;
+          });
+        }
+
+        function fail(message) {
+          setBusy(false);
+          progress.hidden = true;
+          error.textContent = message || "Ingestion failed.";
+          error.hidden = false;
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          var data = new FormData(form);
+          error.hidden = true;
+          progress.hidden = false;
+          fill.className = "progress-fill indeterminate";
+          fill.style.width = "";
+          label.textContent = "Starting…";
+          setBusy(true);
+
+          var response;
+          try {
+            response = await fetch(form.action, { method: "POST", body: data });
+          } catch (e) {
+            fail("The request could not be sent.");
+            return;
+          }
+          // Validation failures answer with a redirect to the console carrying the message.
+          if (response.redirected) {
+            fail(new URL(response.url).searchParams.get("error") || "Ingestion could not start.");
+            return;
+          }
+          if (!response.ok || !response.body) {
+            fail("Ingestion could not start (HTTP " + response.status + ").");
+            return;
+          }
+
+          var reader = response.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = "";
+          while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (var i = 0; i < lines.length; i++) {
+              if (lines[i].indexOf("data: ") !== 0) continue;
+              var evt;
+              try {
+                evt = JSON.parse(lines[i].slice(6));
+              } catch (e) {
+                continue;
+              }
+              if (evt.error) {
+                fail(evt.error);
+                return;
+              }
+              if (evt.redirect) {
+                window.location.href = form.getAttribute("data-dataset-url");
+                return;
+              }
+              if (typeof evt.done === "number" && typeof evt.total === "number" && evt.total > 0) {
+                fill.className = "progress-fill";
+                fill.style.width = Math.round((evt.done / evt.total) * 100) + "%";
+              }
+              if (evt.message) label.textContent = evt.message;
+            }
+          }
+          fail("Ingestion ended without a result.");
+        });
+      })();
+    </script>
+    {% endif %}
+  </body>
+</html>

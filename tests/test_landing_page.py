@@ -368,3 +368,85 @@ def test_the_datasets_area_offers_tiles_and_list(monkeypatch: pytest.MonkeyPatch
     assert 'class="collection view-tiles" data-view-target' in section
     assert 'href="/datasets/chirps_monthly"' in section
     assert "First line wraps here." in section
+
+
+# --- the data source page ----------------------------------------------------------------
+
+TODAY = __import__("datetime").date(2026, 9, 17)
+
+
+def _source_context(template: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    options: dict[str, Any] = {"read_only": False, "has_extent": True, "today": TODAY, **overrides}
+    datasets = options.pop("datasets", [])
+    return landing._data_source_page_context(template, datasets, **options)
+
+
+@pytest.mark.parametrize(
+    ("direction", "extents", "expected"),
+    [
+        (None, {}, {"start": "2025-09-17", "end": "2026-09-17", "start_required": True}),
+        ("future", {}, {"start": "", "end": "", "start_required": False}),
+        ("spanning", {"temporal": {"end": "2030"}}, {"start": "2025-09-17", "end": "2030", "start_required": True}),
+    ],
+)
+def test_the_ingest_form_is_prefilled_for_the_direction_of_the_source(
+    direction: str | None, extents: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    template = _ingestable("src", extents=extents, **({"temporal_direction": direction} if direction else {}))
+
+    defaults = _source_context(template)["defaults"]
+
+    assert {key: defaults[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize(
+    ("template", "overrides", "can_ingest"),
+    [
+        (_ingestable("src"), {}, True),
+        (_ingestable("src"), {"read_only": True}, False),
+        (_ingestable("src"), {"has_extent": False}, False),
+        (_template("normal", produced_by="climate_normal"), {}, False),
+    ],
+)
+def test_the_form_is_offered_only_where_ingesting_can_work(
+    template: dict[str, Any], overrides: dict[str, Any], can_ingest: bool
+) -> None:
+    assert _source_context(template, **overrides)["can_ingest"] is can_ingest
+
+
+def test_an_ingested_source_links_to_its_dataset() -> None:
+    context = _source_context(_ingestable("chirps_monthly"), datasets=[_record("chirps_monthly")])
+
+    assert context["ingested"] == {"coverage": "2020-01 – 2026-07", "status": "published"}
+
+
+def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:
+    response = client.get("/data-sources/chirps3_precipitation_daily")
+
+    assert response.status_code == 200
+    assert 'id="ingest-form"' in response.text
+    assert 'action="/manage/ingest"' in response.text
+    assert '<input type="hidden" name="dataset_id" value="chirps3_precipitation_daily" />' in response.text
+    assert "template" not in _visible_text(response.text).lower()
+
+
+def test_an_unknown_data_source_is_a_404(client: TestClient) -> None:
+    assert client.get("/data-sources/does_not_exist").status_code == 404
+
+
+def test_read_only_pages_offer_no_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api_config, "is_read_only", lambda: True)
+    template = registry_datasets.get_dataset("chirps3_precipitation_daily")
+    assert template is not None
+
+    html = landing.render_data_source_page(template, "")
+
+    assert "/manage" not in html
+    assert "read-only" in _visible_text(html)
+
+
+def test_data_sources_link_to_their_page(client: TestClient) -> None:
+    html = client.get("/", headers={"Accept": "text/html"}).text
+    section = html.split('id="data-sources"', 1)[1].split('id="workflows"', 1)[0]
+
+    assert 'href="/data-sources/chirps3_precipitation_daily"' in section

@@ -237,7 +237,7 @@
                 data-search="{{ [s.name, s.id, s.provider, s.variable] | join(' ') | lower }}"
               >
                 <div class="body">
-                  <h3>{{ s.name }}</h3>
+                  <h3><a href="{{ mount }}/data-sources/{{ s.id }}">{{ s.name }}</a></h3>
                   <span class="provider clamp" title="{{ s.provider }}">
                     {% if s.provider_url %}<a href="{{ s.provider_url }}">{{ s.provider or s.id }}</a>{% else %}{{ s.provider or "Unknown provider" }}{% endif %}
                   </span>

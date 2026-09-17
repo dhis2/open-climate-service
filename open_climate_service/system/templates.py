@@ -481,6 +481,142 @@ def render_dataset_page(record: Any, mount: str) -> str:
     )
 
 
+_PERIOD_FORMAT_HINTS = {
+    "hourly": "YYYY-MM-DDTHH",
+    "daily": "YYYY-MM-DD",
+    "dekadal": "YYYY-MM-DD",
+    "weekly": "YYYY-MM-DD",
+    "monthly": "YYYY-MM",
+    "yearly": "YYYY",
+}
+
+
+def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
+    """Prefilled start and end for the ingest form, following the source's direction.
+
+    The same rules as the `/manage` form: history defaults to the past year; a forecast leaves
+    both blank, meaning "from now, as far ahead as the source offers"; a span that crosses now
+    runs to the declared end, so the projected years are not cut off at today.
+    """
+    direction = str(template.get("temporal_direction") or "past")
+    year_ago = today.replace(year=today.year - 1).isoformat()
+    declared_end = _mapping(_mapping(template.get("extents")).get("temporal")).get("end")
+    if direction == "future":
+        return {"start": "", "end": "", "start_required": False, "direction": direction}
+    end = str(declared_end) if direction == "spanning" and declared_end else today.isoformat()
+    return {"start": year_ago, "end": end, "start_required": True, "direction": direction}
+
+
+def _data_source_page_context(
+    template: dict[str, Any], datasets: list[Any], *, read_only: bool, has_extent: bool, today: date
+) -> dict[str, Any]:
+    """Everything the data source page shows, and whether it can offer the ingest form."""
+    display = _mapping(template.get("display"))
+    sync = _mapping(template.get("sync"))
+    sync_kind = str(sync.get("kind") or "")
+    extents = _mapping(template.get("extents"))
+    temporal = _mapping(extents.get("temporal"))
+    bbox = _mapping(extents.get("spatial")).get("bbox")
+    version = sync.get("version")
+    providers = ", ".join(
+        str(provider["name"])
+        for provider in template.get("providers") or []
+        if isinstance(provider, dict) and provider.get("name")
+    )
+    ingestable = registry_datasets.is_ingestable(template)
+    ingested = next((dataset for dataset in datasets if dataset.dataset_id == template["id"]), None)
+    display_range = display.get("range")
+
+    about: list[Fact] = [
+        ("Identifier", str(template["id"]), None),
+        ("Short name", str(template.get("short_name") or ""), None),
+        ("Provider", str(template.get("source") or ""), template.get("source_url")),
+        ("Providers", providers, None),
+        ("Licence", _licence_label(template) or "", None),
+    ]
+    data: list[Fact] = [
+        ("Variable", str(template.get("variable") or ""), None),
+        ("Standard name", str(template.get("standard_name") or ""), None),
+        ("Units", str(template.get("units") or ""), None),
+        ("Cell methods", str(template.get("cell_methods") or ""), None),
+        ("Period", str(template.get("period_type") or ""), None),
+        ("Available", _coverage_label(temporal.get("begin"), temporal.get("end")), None),
+        ("Direction", str(template.get("temporal_direction") or ""), None),
+        ("Resolution", str(template.get("resolution") or ""), None),
+        (
+            "Coverage",
+            ", ".join(str(value) for value in bbox) if isinstance(bbox, list) and len(bbox) == 4 else "",
+            None,
+        ),
+    ]
+    status: list[Fact] = [
+        ("Updates", _SYNC_KIND_LABELS.get(sync_kind, sync_kind), None),
+        (
+            "Release",
+            f"{version.get('authority')}:{version.get('value')}" if isinstance(version, dict) else str(version or ""),
+            None,
+        ),
+        ("Colour scale", str(display.get("colormap") or ""), None),
+        (
+            "Display range",
+            f"{display_range[0]} – {display_range[1]}"
+            if isinstance(display_range, list | tuple) and len(display_range) == 2
+            else "",
+            None,
+        ),
+    ]
+
+    def present(facts: list[Fact]) -> list[Fact]:
+        return [fact for fact in facts if fact[1]]
+
+    period = str(template.get("period_type") or "")
+    return {
+        "source": {
+            "id": template["id"],
+            "name": template.get("name") or template["id"],
+            "provider": template.get("source") or "",
+            "ramp": _colormap_ramp(display.get("colormap") if isinstance(display.get("colormap"), str) else None),
+        },
+        "paragraphs": _paragraphs(str(template.get("description") or "")),
+        "about": present(about),
+        "data": present(data),
+        "status_facts": present(status),
+        "ingestable": ingestable,
+        "produced_by": template.get("produced_by") if not ingestable else None,
+        "ingested": (
+            {
+                "coverage": _coverage_label(ingested.extent.temporal.start, ingested.extent.temporal.end),
+                "status": "published" if ingested.publication.status == "published" else "unpublished",
+            }
+            if ingested is not None
+            else None
+        ),
+        "can_ingest": ingestable and not read_only and has_extent,
+        "read_only": read_only,
+        "has_extent": has_extent,
+        "defaults": _ingest_defaults(template, today),
+        "format_hint": _PERIOD_FORMAT_HINTS.get(period, ""),
+    }
+
+
+def render_data_source_page(template: dict[str, Any], mount: str) -> str:
+    """Render the page for one data source, with the form that ingests it."""
+    read_only = api_config.is_read_only()
+    return get_template("data_source_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        styles=_read_asset("ocs_ui.css"),
+        **_data_source_page_context(
+            template,
+            _load_datasets(),
+            read_only=read_only,
+            has_extent=_load_extent() is not None,
+            today=date.today(),
+        ),
+    )
+
+
 def prefers_html(request: Request) -> bool:
     """Whether a client asked for HTML over JSON, for an endpoint that is JSON by default.
 

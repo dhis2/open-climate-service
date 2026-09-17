@@ -19,6 +19,7 @@ from .schemas import AppInfo, HealthStatus, Status
 from .templates import (
     ROOT_RESPONSES,
     app_version,
+    render_data_source_page,
     render_landing,
     render_manage,
     render_maps,
@@ -54,6 +55,23 @@ def read_index(request: Request) -> Response:
 def maps(request: Request) -> HTMLResponse:
     """Return the interactive map viewer."""
     return HTMLResponse(render_maps(mount_prefix(request)))
+
+
+@router.get("/data-sources/{dataset_id}", response_class=HTMLResponse, include_in_schema=False)
+def data_source_page(request: Request, dataset_id: str) -> HTMLResponse:
+    """Return the page for one data source, where it can also be ingested.
+
+    A page rather than an API resource: the machine-readable form of the same thing is
+    `GET /dataset-templates/{dataset_id}`, which this deliberately does not rename.
+    """
+    from fastapi import HTTPException
+
+    from open_climate_service.data_registry.services.datasets import get_dataset
+
+    template = get_dataset(dataset_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Data source '{dataset_id}' not found")
+    return HTMLResponse(render_data_source_page(template, mount_prefix(request)))
 
 
 @router.get("/openeo", response_class=HTMLResponse, include_in_schema=False)

@@ -43,6 +43,19 @@ Each dataset shows its thumbnail, source, a short description, publication statu
 temporal coverage and units. A dataset ingested before thumbnails existed shows its colour
 scale instead, until its next sync renders one.
 
+### The data source page (`/data-sources/{dataset_id}`)
+
+Selecting a data source opens its page: the description, what the data is (variable, units,
+period, available range, resolution and coverage), the provider and licence, how it updates,
+and its colour scale. If it has already been ingested, the page links to that dataset.
+
+The page also has an **ingest form**. It takes a start and an optional end, prefilled for the
+kind of source — the past year for historical data, blank (meaning "from now") for a forecast,
+and the full declared range for a source that runs into the future. Progress is shown on the
+page; when ingestion finishes the dataset page opens, and an error is shown in place. Data is
+always fetched for the instance's configured extent. The form is not shown on a read-only
+instance or when no extent is configured.
+
 ### The dataset page (`/datasets/{dataset_id}`)
 
 Selecting a dataset opens its page: a larger preview, the full description, and everything
