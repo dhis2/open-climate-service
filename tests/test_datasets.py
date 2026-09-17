@@ -163,7 +163,7 @@ def test_dataset_links_include_stac_for_published_icechunk() -> None:
     assert any(link.rel == "stac" and link.href == "/stac/collections/chirps3_precipitation_daily" for link in links)
 
 
-def test_dataset_links_omit_stac_for_unpublished_or_netcdf() -> None:
+def test_dataset_links_omit_catalogue_links_for_unpublished_or_netcdf() -> None:
     unpublished = _artifact(artifact_id="a1")
     unpublished.publication.status = PublicationStatus.UNPUBLISHED
     netcdf = _artifact(artifact_id="a2")
@@ -172,8 +172,8 @@ def test_dataset_links_omit_stac_for_unpublished_or_netcdf() -> None:
     unpublished_links = services._dataset_links("chirps3_precipitation_daily", unpublished)
     netcdf_links = services._dataset_links("chirps3_precipitation_daily", netcdf)
 
-    assert all(link.rel != "stac" for link in unpublished_links)
-    assert all(link.rel != "stac" for link in netcdf_links)
+    for links in (unpublished_links, netcdf_links):
+        assert all(link.rel not in {"zarr", "stac"} for link in links)
 
 
 def test_dataset_links_include_zarr_and_stac_for_icechunk() -> None:

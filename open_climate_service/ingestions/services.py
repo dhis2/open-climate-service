@@ -192,8 +192,8 @@ def _latest_published_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     Publication is filtered *before* recency, not after. Picking the newest record first and
     then testing it would drop a dataset entirely whenever its newest artifact happens to be
     unpublished — an ingest with `publish: false` over an already-published dataset would
-    take it out of both catalogues, even though the published version is still there and
-    still serveable.
+    take it out of both catalogues, even though the earlier published record remains the
+    correct catalogue representative.
     """
     result: dict[str, ArtifactRecord] = {}
     for dataset_id, artifacts in group_datasets().items():
@@ -1877,7 +1877,7 @@ def _build_dataset_detail_record(dataset_id: str, artifacts: list[ArtifactRecord
 
 def _dataset_links(dataset_id: str, latest: ArtifactRecord) -> list[DatasetAccessLink]:
     links = [DatasetAccessLink(href=f"/datasets/{dataset_id}", rel="self", title="Dataset detail")]
-    if latest.format in LOADABLE_RASTER_FORMATS:
+    if latest.publication.status == PublicationStatus.PUBLISHED and latest.format in LOADABLE_RASTER_FORMATS:
         links.append(DatasetAccessLink(href=f"/zarr/{dataset_id}", rel="zarr", title="Zarr store"))
     if latest.publication.status == PublicationStatus.PUBLISHED and latest.format in LOADABLE_RASTER_FORMATS:
         links.append(DatasetAccessLink(href=f"/stac/collections/{dataset_id}", rel="stac", title="STAC collection"))
