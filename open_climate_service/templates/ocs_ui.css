@@ -392,6 +392,14 @@ td {
   border-bottom: 1px solid var(--colors-grey300);
   vertical-align: top;
 }
+th:first-child,
+td:first-child {
+  padding-left: var(--spacers-dp16);
+}
+th:last-child,
+td:last-child {
+  padding-right: var(--spacers-dp16);
+}
 th {
   font-weight: var(--font-weight-medium);
   color: var(--colors-grey700);
@@ -446,15 +454,6 @@ button:disabled {
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--spacers-dp8);
-}
-
-footer {
-  color: var(--colors-grey600);
-  font-size: var(--font-size-small);
-  padding: var(--spacers-dp16) var(--spacers-dp32);
-}
-footer a {
-  color: var(--colors-grey700);
 }
 
 /* Dataset collection: tiles or list, switched on the container. */
@@ -648,7 +647,7 @@ footer a {
 /* Panel and section headings, but not tile titles: a tile's body spaces itself with a gap. */
 .panel > h3,
 main > h2 {
-  margin-bottom: var(--spacers-dp12);
+  margin-bottom: var(--spacers-dp4);
 }
 
 /* Workflow page */
@@ -679,7 +678,7 @@ pre.code code {
   padding: var(--spacers-dp16) var(--spacers-dp16) 0;
 }
 h3.table-title {
-  margin-bottom: var(--spacers-dp8);
+  margin-bottom: var(--spacers-dp16);
 }
 .bullets {
   padding-left: var(--spacers-dp24);
