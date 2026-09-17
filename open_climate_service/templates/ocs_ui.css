@@ -276,7 +276,7 @@ a.stat:hover {
 }
 .globe .extent {
   fill: none;
-  stroke: var(--theme-primary800);
+  stroke: #333;
   stroke-width: 2;
   stroke-linejoin: round;
 }
