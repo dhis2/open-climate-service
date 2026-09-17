@@ -503,6 +503,11 @@ def test_the_dataset_page_offers_sync_only_where_it_can_run(
     assert ('id="sync-form"' in html) is form
     if form:
         assert 'action="/ocs/manage/sync"' in html
+        # No publish choice: a sync keeps the dataset's current publication state, because
+        # nothing here can change it and an incremental sync writes into the published store
+        # either way.
+        assert 'name="publish" value="on"' in html, "a published dataset stays published"
+        assert "Publish after sync" not in html
         assert 'data-plan-url="/ocs/sync/chirps_monthly/plan"' in html
         assert 'placeholder="YYYY-MM"' in html
         assert "function runJobForm" in html
@@ -784,3 +789,16 @@ def test_a_writable_instance_marks_nothing_closed(client: TestClient) -> None:
     context = landing._api_page_context(schema, read_only=False)
 
     assert not [e for group in context["groups"] for e in group["endpoints"] if e["closed"]]
+
+
+def test_a_sync_leaves_an_unpublished_dataset_unpublished(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        registry_datasets, "get_dataset", lambda dataset_id: _ingestable("d", sync={"kind": "temporal"})
+    )
+    record = _record()
+    record.publication.status = "unpublished"
+
+    html = landing.render_dataset_page(record, "")
+
+    assert 'name="publish"' not in html
+    assert "The dataset stays unpublished." in _visible_text(html)

@@ -104,7 +104,9 @@ There is no separate console: data is added from the page of the thing it concer
   start. Progress streams on the page; the dataset page opens when it finishes.
 - **Sync** from a dataset page (`/datasets/{dataset_id}`): the page shows what the source
   has published since the last sync, and **Start sync** fetches it, optionally only up to a
-  cutoff date. The page reloads with the new coverage when it finishes.
+  cutoff date. The page reloads with the new coverage when it finishes. A sync keeps the
+  dataset's current publication state — a published dataset stays published — because an
+  incremental sync appends to the store the published version already points at.
 
 You do **not** enter a bounding box — ingestion always uses the spatial extent configured
 for the instance in `climate-service.yaml`. On a read-only instance neither form is shown.

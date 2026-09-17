@@ -105,11 +105,14 @@
                   <input type="text" id="sync-end" name="end" {% if format_hint %}placeholder="{{ format_hint }}"{% endif %} aria-describedby="sync-end-hint" />
                   <span class="hint" id="sync-end-hint">Leave blank to sync through the latest available period.</span>
                 </div>
-                <div class="checks">
-                  <label><input type="checkbox" name="publish" {% if published %}checked{% endif %} /> Publish after sync</label>
-                </div>
+                {% if published %}
+                <input type="hidden" name="publish" value="on" />
+                {% endif %}
                 <div class="form-actions">
                   <button type="submit" class="primary" id="sync-button">Start sync</button>
+                  <span class="note">
+                    {% if published %}The dataset stays published.{% else %}The dataset stays unpublished.{% endif %}
+                  </span>
                 </div>
                 <div class="progress" data-job-progress hidden>
                   <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
