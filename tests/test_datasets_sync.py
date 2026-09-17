@@ -39,7 +39,7 @@ def _artifact(
     start: str = "2026-01-01",
     end: str = "2026-01-10",
     path: str = "/tmp/chirps3_precipitation_daily.icechunk",
-    version: str | None = None,
+    version: ArtifactVersion | None = None,
 ) -> ArtifactRecord:
     return ArtifactRecord(
         artifact_id=artifact_id,
@@ -1234,7 +1234,7 @@ def test_release_planner_ignores_versions_when_no_template_declares_one(monkeypa
 
 def test_resolve_artifact_version_reads_both_halves_and_infers_neither() -> None:
     """Neither half is derived, and no declaration at all is the only route to None."""
-    declared = {"sync": {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}}}
+    declared: dict[str, object] = {"sync": {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}}}
     assert services._resolve_artifact_version(declared) == _version("R2025A")
 
     # A release template that declares no version, so period comparison still governs it.

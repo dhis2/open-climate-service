@@ -176,11 +176,13 @@ def test_dataset_registry_rejects_sync_version_on_a_non_release_dataset(
 
 
 def test_worldpop_release_version_matches_its_plugin_revision() -> None:
-    """Guards the one duplicated value: sync.version and ingestion.params.revision must agree.
+    """WorldPop keeps stable dataset identity while its declared revision changes.
 
     WorldPop states its revision twice — once for release planning, once for the URL the
     plugin builds — and nothing at runtime couples them, so drift would mean syncing for a
-    revision the plugin never actually downloads.
+    revision the plugin never actually downloads. The revision must not leak back into the
+    dataset id or display name, or changing it would create a new dataset instead of syncing
+    the existing one in place.
     """
     templates = [dataset for dataset in datasets.list_datasets() if dataset.get("sync", {}).get("kind") == "release"]
     worldpop = [d for d in templates if "worldpop" in str(d.get("id", ""))]
@@ -191,6 +193,8 @@ def test_worldpop_release_version_matches_its_plugin_revision() -> None:
         assert declared == revision, (
             f"{dataset['id']}: sync.version {declared!r} does not match ingestion.params.revision {revision!r}"
         )
+        assert declared not in dataset["id"]
+        assert declared not in dataset["name"]
 
 
 def test_dataset_registry_accepts_supported_sync_kind(

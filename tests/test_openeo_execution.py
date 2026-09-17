@@ -1760,7 +1760,7 @@ def test_persist_result_auto_registers_missing_template(
         "Zarr",
         {
             "dataset_id": "worldpop_population_change_autogen",
-            "source_dataset_id": "worldpop_population_global2_R2025A_100m",
+            "source_dataset_id": "worldpop_population_global2_100m",
             "variable": "pop_change",
             "publish": False,
         },
@@ -1828,7 +1828,7 @@ def test_persist_result_reloads_template_after_concurrent_create(
         "Zarr",
         {
             "dataset_id": "worldpop_population_change_autogen",
-            "source_dataset_id": "worldpop_population_global2_R2025A_100m",
+            "source_dataset_id": "worldpop_population_global2_100m",
             "variable": "pop_change",
             "publish": False,
         },

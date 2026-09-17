@@ -1,5 +1,5 @@
-- id: worldpop_population_global2_R2025A_100m
-  name: Total population (WorldPop Global2 R2025A, 100m)
+- id: worldpop_population_global2_100m
+  name: Total population (WorldPop Global2, 100m)
   short_name: Total population
   variable: pop_total
   period_type: yearly
@@ -43,8 +43,8 @@
     colormap: reds
     range: [0.5, 100.0]
 
-- id: worldpop_agesex_global2_R2025A_100m
-  name: Population by age and sex (WorldPop Global2 R2025A, 100m)
+- id: worldpop_agesex_global2_100m
+  name: Population by age and sex (WorldPop Global2, 100m)
   short_name: Age/sex population
   variable: population
   period_type: yearly
