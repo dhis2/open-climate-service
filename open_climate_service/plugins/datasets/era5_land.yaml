@@ -310,8 +310,8 @@
   name: 2m temperature monthly normal (ERA5-Land, 1991–2020)
   short_name: Temperature monthly normal
   description: >-
-    Average ERA5-Land temperature for each calendar month over 1991-2020, computed by the
-    climate_normal workflow. The baseline a monthly anomaly is measured against.
+    Average ERA5-Land temperature for each calendar month over 1991-2020. The baseline a monthly
+    anomaly is measured against.
   variable: t2m
   period_type: climatology
   sync:
@@ -333,8 +333,8 @@
   name: Mean daily precipitation monthly normal (ERA5-Land, 1991–2020)
   short_name: Precipitation monthly normal
   description: >-
-    Average ERA5-Land rainfall for each calendar month over 1991-2020, computed by the
-    climate_normal workflow. The baseline a monthly anomaly is measured against.
+    Average ERA5-Land rainfall for each calendar month over 1991-2020. The baseline a monthly
+    anomaly is measured against.
   variable: tp
   period_type: climatology
   sync:
