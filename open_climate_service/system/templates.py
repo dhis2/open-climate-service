@@ -167,6 +167,63 @@ def _load_workflows() -> list[Any]:
         return []
 
 
+_PROCESS_ORIGINS = {
+    "ocs": "OCS",
+    "xclim": "Climate indicators (xclim)",
+    "earthkit": "Meteorology (earthkit)",
+    "core": "openEO core",
+}
+
+
+def _load_processes() -> list[dict[str, Any]]:
+    """The process catalogue this instance actually loaded, each tagged with where it comes from.
+
+    Grouped by origin rather than openEO `categories`, which most processes do not declare.
+    Origin is decided by which loader registered the callable that won, so an instance plugin
+    overriding an xclim indicator by id counts as OCS, not xclim.
+    """
+    try:
+        from open_climate_service.openeo import earthkit_processes, xclim_processes
+        from open_climate_service.openeo.plugin_processes import load_plugin_processes
+        from open_climate_service.openeo.processes import list_openeo_processes
+
+        processes = list_openeo_processes()
+        xclim = {id(func) for func in xclim_processes.scan()}
+        earthkit = {id(func) for func in earthkit_processes.scan()}
+        plugins = dict(load_plugin_processes())
+    except Exception:
+        _log.exception("Unexpected error loading processes")
+        return []
+
+    def origin(process_id: str) -> str:
+        func = plugins.get(process_id)
+        if func is None:
+            return "core"
+        if id(func) in xclim:
+            return "xclim"
+        if id(func) in earthkit:
+            return "earthkit"
+        return "ocs"
+
+    order = list(_PROCESS_ORIGINS)
+    views = []
+    for process in processes:
+        process_id = str(process.get("id") or "")
+        if not process_id:
+            continue
+        kind = origin(process_id)
+        views.append(
+            {
+                "id": process_id,
+                "summary": " ".join(str(process.get("summary") or "").split()),
+                "categories": [str(category) for category in process.get("categories") or []],
+                "origin": kind,
+                "origin_label": _PROCESS_ORIGINS[kind],
+            }
+        )
+    return sorted(views, key=lambda view: (order.index(view["origin"]), view["id"]))
+
+
 def _licence_label(template: dict[str, Any]) -> str | None:
     """The licence as a short label: an SPDX id as written, or a named licence's name."""
     licence = template.get("license")
@@ -317,6 +374,8 @@ def render_landing(version: str, mount: str) -> str:
         sources=catalogue["sources"],
         workflows=catalogue["workflows"],
         unattributed_outputs=catalogue["unattributed_outputs"],
+        processes=_load_processes(),
+        process_origins=_PROCESS_ORIGINS,
         # Shown on the overview, so a visitor knows why no page offers ingest or sync.
         read_only=api_config.is_read_only(),
     )

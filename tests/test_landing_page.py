@@ -20,7 +20,7 @@ from open_climate_service.data_registry.services import datasets as registry_dat
 from open_climate_service.openeo.workflows import _load_builtin_workflows
 from open_climate_service.system import templates as landing
 
-AREAS = ["overview", "explore", "datasets", "data-sources", "workflows"]
+AREAS = ["overview", "explore", "datasets", "data-sources", "workflows", "processes"]
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -581,3 +581,44 @@ def test_the_workflow_page_is_served(client: TestClient) -> None:
     assert "Climate normal" in response.text
     assert 'href="/process_graphs/climate_normal"' in response.text
     assert client.get("/workflows/does_not_exist").status_code == 404
+
+
+# --- processes ---------------------------------------------------------------------------
+
+
+def test_processes_are_tagged_with_their_origin() -> None:
+    processes = {p["id"]: p for p in landing._load_processes()}
+
+    assert processes["load_collection"]["origin"] == "core"
+    assert processes["add"]["origin"] == "core"
+    assert processes["spi"]["origin"] == "ocs"
+    assert {"xclim", "earthkit"} <= {p["origin"] for p in processes.values()}
+    # OCS first, openEO core last, so the default view leads with what is specific to OCS.
+    origins = [p["origin"] for p in processes.values()]
+    assert origins[0] == "ocs" and origins[-1] == "core"
+
+
+def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
+
+    def indicator() -> None: ...
+
+    def override() -> None: ...
+
+    monkeypatch.setattr(processes, "list_openeo_processes", lambda: [{"id": "tg_mean"}, {"id": "abs"}])
+    monkeypatch.setattr(xclim_processes, "scan", lambda: [indicator])
+    monkeypatch.setattr(earthkit_processes, "scan", lambda: [])
+    monkeypatch.setattr(plugin_processes, "load_plugin_processes", lambda: [("tg_mean", override)])
+
+    assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "ocs", "abs": "core"}
+
+
+def test_the_processes_area_hides_core_processes_by_default(client: TestClient) -> None:
+    html = client.get("/", headers={"Accept": "text/html"}).text
+    section = html.split('id="processes" data-area', 1)[1].split("</section>", 1)[0]
+
+    assert '<option value="!core" selected>' in section
+    assert 'data-origin="core"' in section, "core processes are listed, only filtered out"
+    assert 'data-views="processes"' in section
+    # A leading "!" in a filter value must be understood by the list script.
+    assert 'value.charAt(0) === "!"' in html

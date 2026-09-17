@@ -19,7 +19,7 @@ scheduled — see the [API reference](managed_data_api_guide.md).
 
 ## The landing page (`/`)
 
-The landing page is split into five areas, chosen from the navigation on the left (a row of tabs
+The landing page is split into six areas, chosen from the navigation on the left (a row of tabs
 on a narrow screen). One area shows at a time, and each has its own address, such as
 `/#data-sources`, so it can be bookmarked or linked.
 
@@ -30,6 +30,7 @@ on a narrow screen). One area shows at a time, and each has its own address, suc
 | **Datasets**     | The data this instance holds, with temporal coverage and publication status                         |
 | **Data sources** | Data the instance can fetch from outside providers, titled by dataset with the provider beneath     |
 | **Workflows**    | Each workflow and what it makes: a published dataset or an exported file                            |
+| **Processes**    | The processes this instance can run, by origin; openEO core ones are hidden unless selected         |
 
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript every area is shown in sequence and each list is complete.

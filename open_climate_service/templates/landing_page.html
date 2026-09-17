@@ -35,6 +35,11 @@
               >Workflows <span class="count">{{ workflows | length }}</span></a
             >
           </li>
+          <li>
+            <a href="#processes" data-area-link="processes"
+              >Processes <span class="count">{{ processes | length }}</span></a
+            >
+          </li>
         </ul>
       </nav>
 
@@ -289,6 +294,64 @@
           {% endif %}
         </section>
 
+        <!-- Processes -->
+        <section id="processes" data-area aria-labelledby="processes-title">
+          <h2 id="processes-title" tabindex="-1">Processes</h2>
+          <p class="lead">
+            The building blocks this instance can run inside workflows and openEO process graphs.
+          </p>
+          {% if processes %}
+          <div data-list data-page-size="24" data-views="processes">
+            <div class="toolbar">
+              <label
+                >Search
+                <input type="search" data-filter-text placeholder="Name or description" />
+              </label>
+              <label
+                >Origin
+                <select data-filter-field="origin">
+                  <option value="!core" selected>All except openEO core</option>
+                  {% for key, label in process_origins.items() %}
+                  <option value="{{ key }}">{{ label }}</option>
+                  {% endfor %}
+                  <option value="">All</option>
+                </select>
+              </label>
+              <div class="view-switch" role="group" aria-label="Layout">
+                <button type="button" data-view-button="tiles" aria-pressed="true">Tiles</button>
+                <button type="button" data-view-button="list" aria-pressed="false">List</button>
+              </div>
+              <span class="status" data-status aria-live="polite"></span>
+            </div>
+            <div class="collection view-tiles" data-view-target>
+              {% for p in processes %}
+              <article
+                class="panel item"
+                data-item
+                data-origin="{{ p.origin }}"
+                data-search="{{ [p.id, p.summary] | join(' ') | lower }}"
+              >
+                <div class="body">
+                  <h3><code>{{ p.id }}</code></h3>
+                  {% if p.summary %}<p class="description clamp">{{ p.summary }}</p>{% endif %}
+                  <div class="meta">
+                    <span class="chip{% if p.origin == 'ocs' %} chip-output{% endif %}">{{ p.origin_label }}</span>
+                    {% for category in p.categories %}<span class="chip">{{ category }}</span>{% endfor %}
+                  </div>
+                </div>
+              </article>
+              {% endfor %}
+            </div>
+            <p class="note" data-empty hidden>No processes match.</p>
+            <div class="pager" data-pager>
+              <button type="button" data-prev>Previous</button>
+              <button type="button" data-next>Next</button>
+            </div>
+          </div>
+          {% else %}
+          <p class="note">No processes could be loaded.</p>
+          {% endif %}
+        </section>
       </main>
     </div>
 
@@ -347,7 +410,11 @@
               if (query && item.getAttribute("data-search").indexOf(query) === -1) return false;
               return selects.every(function (select) {
                 var field = select.getAttribute("data-filter-field");
-                return !select.value || item.getAttribute("data-" + field) === select.value;
+                var value = select.value;
+                var actual = item.getAttribute("data-" + field);
+                // A leading "!" excludes a value, so a filter can default to "everything but".
+                if (value.charAt(0) === "!") return actual !== value.slice(1);
+                return !value || actual === value;
               });
             });
             var pages = Math.max(1, Math.ceil(matched.length / pageSize));
