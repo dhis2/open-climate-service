@@ -53,6 +53,8 @@
   --font-size-stat: 28px;
   --font-weight-medium: 500;
   --font-weight-bold: 700;
+  /* Just under dp16: above a table the gap runs into a ruled header row, which reads taller. */
+  --table-gap: 14px;
   --radius: 4px;
   --radius-chip: 12px;
   /* The DHIS2 header bar's own colour and height, from @dhis2-ui/header-bar 10.17.0, where
@@ -684,10 +686,10 @@ h3.table-title {
   margin-bottom: 0;
 }
 h3.table-title + table {
-  margin-top: var(--spacers-dp16);
+  margin-top: var(--table-gap);
 }
 p.note.table-title {
-  padding: var(--spacers-dp4) var(--spacers-dp16) var(--spacers-dp16);
+  padding: var(--spacers-dp4) var(--spacers-dp16) var(--table-gap);
 }
 .bullets {
   padding-left: var(--spacers-dp24);
