@@ -19,18 +19,17 @@ scheduled — see the [API reference](managed_data_api_guide.md).
 
 ## The landing page (`/`)
 
-The landing page is split into areas, chosen from the navigation on the left (a row of tabs
+The landing page is split into five areas, chosen from the navigation on the left (a row of tabs
 on a narrow screen). One area shows at a time, and each has its own address, such as
 `/#data-sources`, so it can be bookmarked or linked.
 
-| Area               | What it shows                                                                                       |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| **Overview**       | Counts of datasets, published datasets, data sources and workflows, plus the extent and access mode |
-| **Explore**        | The map viewer, openEO editor, STAC catalog, API docs and the JSON root                             |
-| **Datasets**       | The data this instance holds, with temporal coverage and publication status                         |
-| **Data sources**   | Data the instance can fetch from outside providers, titled by dataset with the provider beneath     |
-| **Workflows**      | Each workflow, with the datasets it produces (anomalies, normals, change rasters)                   |
-| **Operator tools** | Where to ingest and sync, and the ingestion and sync API. Absent on a read-only instance            |
+| Area             | What it shows                                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| **Overview**     | Counts of datasets, published datasets, data sources and workflows, plus the extent and access mode |
+| **Explore**      | The map viewer, openEO editor, STAC catalog, API docs and the JSON root                             |
+| **Datasets**     | The data this instance holds, with temporal coverage and publication status                         |
+| **Data sources** | Data the instance can fetch from outside providers, titled by dataset with the provider beneath     |
+| **Workflows**    | Each workflow, with the datasets it produces (anomalies, normals, change rasters)                   |
 
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript every area is shown in sequence and each list is complete.

@@ -307,7 +307,7 @@ def render_landing(version: str, mount: str) -> str:
         sources=catalogue["sources"],
         workflows=catalogue["workflows"],
         unattributed_outputs=catalogue["unattributed_outputs"],
-        # Read-only instances refuse ingest and sync, so the Operator tools area is left out.
+        # Shown on the overview, so a visitor knows why no page offers ingest or sync.
         read_only=api_config.is_read_only(),
     )
 

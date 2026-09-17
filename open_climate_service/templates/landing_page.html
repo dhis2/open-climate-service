@@ -35,9 +35,6 @@
               >Workflows <span class="count">{{ workflows | length }}</span></a
             >
           </li>
-          {% if not read_only %}
-          <li><a href="#operator" data-area-link="operator">Operator tools</a></li>
-          {% endif %}
         </ul>
       </nav>
 
@@ -298,31 +295,6 @@
           {% endif %}
         </section>
 
-        {% if not read_only %}
-        <!-- Operator tools -->
-        <section id="operator" data-area aria-labelledby="operator-title">
-          <h2 id="operator-title" tabindex="-1">Operator tools</h2>
-          <p class="lead">Adding and refreshing data on this instance.</p>
-          <div class="cards">
-            <a class="panel card" href="#data-sources">
-              <h3>Ingest data</h3>
-              <span class="note">Open a data source and ingest it for this instance's extent</span>
-            </a>
-            <a class="panel card" href="#datasets">
-              <h3>Sync datasets</h3>
-              <span class="note">Open a dataset to fetch what the source has published since</span>
-            </a>
-            <a class="panel card" href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post">
-              <h3>Ingestion API</h3>
-              <span class="note">Fetch a data source into this instance</span>
-            </a>
-            <a class="panel card" href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">
-              <h3>Sync API</h3>
-              <span class="note">Bring an ingested dataset up to date</span>
-            </a>
-          </div>
-        </section>
-        {% endif %}
       </main>
     </div>
 

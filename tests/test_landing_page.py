@@ -20,7 +20,7 @@ from open_climate_service.data_registry.services import datasets as registry_dat
 from open_climate_service.openeo.workflows import _load_builtin_workflows
 from open_climate_service.system import templates as landing
 
-AREAS = ["overview", "explore", "datasets", "data-sources", "workflows", "operator"]
+AREAS = ["overview", "explore", "datasets", "data-sources", "workflows"]
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -183,13 +183,12 @@ def test_the_page_offers_every_area_in_order(client: TestClient) -> None:
         assert f'id="{area}" data-area' in html
 
 
-def test_read_only_drops_the_operator_area(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_only_keeps_the_areas_and_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api_config, "is_read_only", lambda: True)
 
     html = landing.render_landing("0.0.0", "")
 
-    assert _area_ids(html) == AREAS[:-1]
-    assert 'id="operator"' not in html
+    assert _area_ids(html) == AREAS
     assert "read-only" in _visible_text(html)
 
 
@@ -218,7 +217,7 @@ def test_lists_carry_the_filter_and_pager_hooks(client: TestClient) -> None:
 
 def test_workflow_outputs_are_listed_under_their_workflow(client: TestClient) -> None:
     html = client.get("/", headers={"Accept": "text/html"}).text
-    section = html.split('id="workflows"', 1)[1].split('id="operator"', 1)[0]
+    section = html.split('id="workflows"', 1)[1].split("</section>", 1)[0]
     temporal_change = section.split('/process_graphs/temporal_change"', 1)[1].split("</article>", 1)[0]
 
     assert "Population change (WorldPop Global2)" in temporal_change
@@ -354,6 +353,7 @@ def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatc
     assert 'href="/ocs/zarr/chirps_monthly"' in html
     assert 'href="/ocs/datasets/chirps_monthly?f=json"' in html
     assert 'href="/ocs/#datasets" aria-current="page"' in html
+    assert "#operator" not in html
     assert "template" not in _visible_text(html).lower()
 
 
