@@ -117,8 +117,12 @@ header {
   padding: 0 var(--spacers-dp24);
   display: flex;
   align-items: center;
-  gap: var(--spacers-dp12);
+  gap: var(--spacers-dp8);
   flex-shrink: 0;
+}
+header .logo {
+  flex: none;
+  display: block;
 }
 header h1 {
   font-size: var(--font-size-h3);

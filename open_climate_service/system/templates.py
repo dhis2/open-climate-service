@@ -117,6 +117,23 @@ def wants_json(request: Request) -> bool:
     return json_q >= 0 and (html_q < 0 or json_q >= html_q)
 
 
+LOGO = Markup("""<svg class="logo" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
+  <defs><clipPath id="ocs-logo-globe"><circle cx="15" cy="17" r="12" /></clipPath></defs>
+  <g clip-path="url(#ocs-logo-globe)" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <path d="M-1 15c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".9" />
+    <path d="M-1 21c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".65" />
+    <path d="M-1 27c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".45" />
+  </g>
+  <circle cx="15" cy="17" r="12" fill="none" stroke="currentColor" stroke-width="2" />
+  <circle cx="26" cy="7" r="4.5" fill="#ffa902" />
+</svg>""")
+"""The instance mark: a climate over a globe, drawn inline so it needs no asset and no request.
+
+Monochrome in `currentColor` so it takes the header bar's white, with the sun in the DHIS2
+yellow400 token. Sized for the 48px bar, and legible at that size because it is three shapes.
+"""
+
+
 _NAV_ITEMS = (
     ("overview", "Overview", "/#overview"),
     ("datasets", "Datasets", "/#datasets"),
@@ -170,6 +187,7 @@ def render_maps(mount: str) -> str:
     return get_template("map-viewer.html").render(
         mount=mount,
         name=api_config.get_name(),
+        logo=LOGO,
         version=app_version,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "map"),
@@ -412,6 +430,7 @@ def render_landing(version: str, mount: str) -> str:
         version=version,
         mount=mount,
         name=api_config.get_name(),
+        logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         extent=_load_extent(),
         datasets=_dataset_views(datasets, templates),
@@ -583,6 +602,7 @@ def render_dataset_page(record: Any, mount: str) -> str:
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
+        logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "datasets"),
         job_script=_read_asset("ocs_jobs.js"),
@@ -716,6 +736,7 @@ def render_data_source_page(template: dict[str, Any], mount: str) -> str:
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
+        logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "data-sources"),
         job_script=_read_asset("ocs_jobs.js"),
@@ -899,6 +920,7 @@ def render_workflow_page(record: Any, mount: str) -> str:
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
+        logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "workflows"),
         **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_triggers()),
@@ -954,6 +976,7 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
+        logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "processes"),
         **_process_page_context(process, origins.get(process["id"], ""), _load_workflows()),
@@ -1044,6 +1067,7 @@ def render_api_page(schema: dict[str, Any], mount: str) -> str:
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
+        logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "api"),
         **_api_page_context(schema, read_only=api_config.is_read_only()),
