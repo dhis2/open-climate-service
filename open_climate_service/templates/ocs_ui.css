@@ -61,6 +61,8 @@
      they are literals rather than tokens: background #2c6693, white text, 48px tall. */
   --header-background: #2c6693;
   --header-height: 48px;
+  /* Darker than any grey token: the extent outline has to stay legible over land and sea both. */
+  --map-outline: #333;
 }
 
 *,
@@ -276,7 +278,7 @@ a.stat:hover {
 }
 .globe .extent {
   fill: none;
-  stroke: #333;
+  stroke: var(--map-outline);
   stroke-width: 2;
   stroke-linejoin: round;
 }
