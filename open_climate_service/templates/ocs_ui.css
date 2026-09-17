@@ -509,26 +509,34 @@ button:disabled {
 .view-list .item {
   flex-direction: row;
 }
+/* Every preview shows at the same 2:1 shape, whatever the extent's own proportions: the image
+   is taken out of flow so the box keeps its ratio instead of growing to the image's height,
+   and in the list view it must not stretch to the row either. */
 .thumb {
   display: block;
   position: relative;
   aspect-ratio: 2 / 1;
+  overflow: hidden;
   background: var(--ramp, var(--colors-grey300));
   flex: none;
 }
 .view-list .thumb {
   width: 160px;
-  aspect-ratio: auto;
-  min-height: 80px;
+  /* The row is taller than the preview; stretching it would undo the 2:1 shape. */
+  align-self: flex-start;
 }
 .thumb.has-image {
   background: var(--colors-grey100);
 }
+/* Cropped, not letterboxed: a preview is as wide as the extent happens to be, and contained
+   images left every tile a different shape with bars around them. */
 .thumb img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
 }
 .no-preview {
   position: absolute;
