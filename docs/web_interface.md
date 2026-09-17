@@ -4,17 +4,42 @@ Every Open Climate Service instance ships with a small built-in web interface �
 separate application to install. Once the instance is running, open its root URL
 (`http://127.0.0.1:9000` by default) and the landing page links to everything below.
 
-| Page           | URL       | What it does                                                                         |
-| -------------- | --------- | ------------------------------------------------------------------------------------ |
-| Landing page   | `/`       | Instance overview — name, extent, available dataset templates, and ingested datasets |
-| **Manage**     | `/manage` | Ingest data, sync datasets forward, and see what is already ingested                 |
-| **Map viewer** | `/map`    | View published datasets on an interactive map                                        |
-| openEO editor  | `/openeo` | Redirects to the openEO Web Editor, pre-connected to this instance                   |
-| API docs       | `/docs`   | Interactive Swagger documentation for the REST API                                   |
+| Page           | URL       | What it does                                                                       |
+| -------------- | --------- | ---------------------------------------------------------------------------------- |
+| Landing page   | `/`       | Instance overview, the datasets it holds, the data sources and workflows it offers |
+| **Manage**     | `/manage` | Ingest data, sync datasets forward, and see what is already ingested               |
+| **Map viewer** | `/map`    | View published datasets on an interactive map                                      |
+| openEO editor  | `/openeo` | Redirects to the openEO Web Editor, pre-connected to this instance                 |
+| API docs       | `/docs`   | Interactive Swagger documentation for the REST API                                 |
 
 The interface is intended for operators setting up and curating an instance. Everything
 it does is also available through the REST API, so the same operations can be scripted or
 scheduled — see the [API reference](managed_data_api_guide.md).
+
+---
+
+## The landing page (`/`)
+
+The landing page is split into areas, chosen from the navigation on the left (a row of tabs
+on a narrow screen). One area shows at a time, and each has its own address, such as
+`/#data-sources`, so it can be bookmarked or linked.
+
+| Area               | What it shows                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| **Overview**       | Counts of datasets, published datasets, data sources and workflows, plus the extent and access mode |
+| **Explore**        | The map viewer, openEO editor, STAC catalog, API docs and the JSON root                             |
+| **Datasets**       | The data this instance holds, with temporal coverage and publication status                         |
+| **Data sources**   | Data the instance can fetch from outside providers, titled by dataset with the provider beneath     |
+| **Workflows**      | Each workflow, with the datasets it produces (anomalies, normals, change rasters)                   |
+| **Operator tools** | Links to `/manage` and the ingestion and sync API. Absent on a read-only instance                   |
+
+The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
+time. Without JavaScript every area is shown in sequence and each list is complete.
+
+Data sources and Workflows together cover every dataset template registered on the
+instance: a template that can be ingested is a data source, and one that a workflow writes is
+listed under that workflow (see [Templates that are produced, not
+ingested](adding_custom_datasets.md#templates-that-are-produced-not-ingested)).
 
 ---
 

@@ -5,6 +5,62 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ name }}</title>
     <style>
+      /*
+        DHIS2 design tokens, copied from @dhis2/ui-constants 10.17.0 (colors, theme,
+        spacersNum, elevations) and named as @dhis2-ui/css names them. Copied rather than
+        imported: the design system publishes no plain CSS, and this page must work offline
+        with no build step. Update the version above when refreshing the values.
+      */
+      :root {
+        --colors-blue900: #093371;
+        --colors-blue800: #0d47a1;
+        --colors-blue700: #1565c0;
+        --colors-blue600: #147cd7;
+        --colors-blue100: #e3f2fd;
+        --colors-blue050: #f5fbff;
+        --colors-teal800: #004d40;
+        --colors-teal100: #e0f2f1;
+        --colors-green800: #1b5e20;
+        --colors-green100: #e8f5e9;
+        --colors-yellow900: #6f3205;
+        --colors-yellow100: #ffecb3;
+        --colors-grey900: #212934;
+        --colors-grey800: #404b5a;
+        --colors-grey700: #4a5768;
+        --colors-grey600: #6c7787;
+        --colors-grey500: #a0adba;
+        --colors-grey400: #d5dde5;
+        --colors-grey300: #e8edf2;
+        --colors-grey200: #f3f5f7;
+        --colors-grey100: #f8f9fa;
+        --colors-white: #ffffff;
+        --theme-fonts: Roboto, sans-serif;
+        --theme-primary800: #0d47a1;
+        --theme-primary600: #147cd7;
+        --theme-focus: #147cd7;
+        --spacers-dp4: 4px;
+        --spacers-dp8: 8px;
+        --spacers-dp12: 12px;
+        --spacers-dp16: 16px;
+        --spacers-dp24: 24px;
+        --spacers-dp32: 32px;
+        --spacers-dp48: 48px;
+        --elevations-e100: 0px 1px 2px rgba(33, 41, 52, 0.06), 0px 1px 3px rgba(33, 41, 52, 0.1);
+
+        /* Not in @dhis2/ui-constants: sizes follow the DHIS2 UI component defaults. */
+        --font-mono: ui-monospace, "Cascadia Code", Menlo, monospace;
+        --font-size-small: 12px;
+        --font-size-body: 14px;
+        --font-size-h3: 15px;
+        --font-size-h1: 18px;
+        --font-size-h2: 20px;
+        --font-size-stat: 28px;
+        --font-weight-medium: 500;
+        --radius: 4px;
+        --radius-chip: 12px;
+        --header-height: 52px;
+      }
+
       *,
       *::before,
       *::after {
@@ -12,349 +68,801 @@
         margin: 0;
         padding: 0;
       }
+      [hidden] {
+        display: none !important;
+      }
 
       body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 15px;
-        line-height: 1.6;
-        color: #1a2332;
-        background: #f5f7fa;
+        font-family: var(--theme-fonts);
+        font-size: var(--font-size-body);
+        line-height: 1.5;
+        color: var(--colors-grey900);
+        background: var(--colors-grey200);
         min-height: 100vh;
+      }
+      a {
+        color: var(--theme-primary800);
+      }
+      a:hover {
+        color: var(--colors-blue900);
+      }
+      :focus-visible {
+        outline: 3px solid var(--theme-focus);
+        outline-offset: 2px;
+      }
+      code {
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+        background: var(--colors-grey200);
+        padding: 0 var(--spacers-dp4);
+        border-radius: var(--radius);
+      }
+
+      .skip-link {
+        position: absolute;
+        left: var(--spacers-dp8);
+        top: -100px;
+        background: var(--colors-white);
+        padding: var(--spacers-dp8) var(--spacers-dp12);
+        z-index: 10;
+      }
+      .skip-link:focus {
+        top: var(--spacers-dp8);
       }
 
       header {
-        background: #1a2332;
-        color: #fff;
-        padding: 2rem 2.5rem;
+        background: var(--colors-blue800);
+        color: var(--colors-white);
+        padding: var(--spacers-dp12) var(--spacers-dp24);
         display: flex;
         align-items: baseline;
-        gap: 1rem;
+        gap: var(--spacers-dp12);
+        flex-wrap: wrap;
       }
       header h1 {
-        font-size: 1.5rem;
-        font-weight: 600;
-        letter-spacing: -0.01em;
+        font-size: var(--font-size-h1);
+        font-weight: var(--font-weight-medium);
       }
       header .version {
-        font-size: 0.78rem;
-        color: #8fa3b8;
-        font-family: ui-monospace, "Cascadia Code", monospace;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-small);
+        color: var(--colors-blue100);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        min-height: calc(100vh - var(--header-height));
+      }
+
+      nav.rail {
+        background: var(--colors-white);
+        border-right: 1px solid var(--colors-grey300);
+        padding: var(--spacers-dp16) var(--spacers-dp8);
+      }
+      nav.rail ul {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacers-dp4);
+      }
+      nav.rail a {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: var(--spacers-dp8);
+        padding: var(--spacers-dp8) var(--spacers-dp12);
+        border-radius: var(--radius);
+        color: var(--colors-grey800);
+        text-decoration: none;
+        font-weight: var(--font-weight-medium);
+        white-space: nowrap;
+      }
+      nav.rail a:hover {
+        background: var(--colors-grey200);
+        color: var(--colors-grey900);
+      }
+      nav.rail a[aria-current="page"] {
+        background: var(--colors-blue100);
+        color: var(--colors-blue900);
+      }
+      nav.rail .count {
+        font-size: var(--font-size-small);
+        font-weight: 400;
+        color: var(--colors-grey600);
       }
 
       main {
-        max-width: 860px;
-        margin: 2.5rem auto;
-        padding: 0 1.5rem;
+        padding: var(--spacers-dp24) var(--spacers-dp32) var(--spacers-dp48);
+        max-width: 1080px;
+        width: 100%;
+      }
+      main > section + section {
+        margin-top: var(--spacers-dp48);
+      }
+      .js main > section + section {
+        margin-top: 0;
+      }
+      /* One area shows at a time, so jumping to its anchor would only scroll the header away.
+         A margin taller than the page makes that jump land at the top. */
+      .js main > section {
+        scroll-margin-top: 100vh;
+      }
+      h2 {
+        font-size: var(--font-size-h2);
+        font-weight: var(--font-weight-medium);
+        margin-bottom: var(--spacers-dp4);
+      }
+      h2:focus {
+        outline: none;
+      }
+      h3 {
+        font-size: var(--font-size-h3);
+        font-weight: var(--font-weight-medium);
+      }
+      .lead {
+        color: var(--colors-grey700);
+        margin-bottom: var(--spacers-dp16);
+      }
+      .note {
+        color: var(--colors-grey700);
+      }
+
+      .panel {
+        background: var(--colors-white);
+        border: 1px solid var(--colors-grey300);
+        border-radius: var(--radius);
+        box-shadow: var(--elevations-e100);
+        padding: var(--spacers-dp16);
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: var(--spacers-dp12);
+        margin-bottom: var(--spacers-dp16);
+      }
+      .stat {
+        display: block;
+        text-decoration: none;
+        color: inherit;
+      }
+      a.stat:hover {
+        border-color: var(--colors-grey500);
+        color: inherit;
+      }
+      .stat .value {
+        display: block;
+        font-size: var(--font-size-stat);
+        font-weight: var(--font-weight-medium);
+        line-height: 1.2;
+        color: var(--colors-grey900);
+      }
+      .stat .label {
+        color: var(--colors-grey700);
+      }
+
+      dl.facts {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        column-gap: var(--spacers-dp24);
+        row-gap: var(--spacers-dp4);
+      }
+      dl.facts dt {
+        color: var(--colors-grey700);
+      }
+      dl.facts dd {
+        overflow-wrap: anywhere;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+        gap: var(--spacers-dp12);
+      }
+      .card {
         display: flex;
         flex-direction: column;
-        gap: 1.75rem;
+        gap: var(--spacers-dp4);
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
-
-      .card {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 1.5rem 1.75rem;
-      }
-
-      h2 {
-        font-size: 0.8rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.07em;
-        color: #64748b;
-        margin-bottom: 1rem;
-      }
-
-      .status-grid {
-        display: grid;
-        grid-template-columns: max-content 1fr;
-        column-gap: 1.5rem;
-        row-gap: 0.35rem;
-      }
-      .status-grid dt {
-        color: #64748b;
-        font-size: 0.875rem;
-      }
-      .status-grid dd {
-        font-size: 0.875rem;
-      }
-      .status-grid dd code {
-        background: #f1f5f9;
-        padding: 0.1em 0.4em;
-        border-radius: 4px;
-        font-family: ui-monospace, "Cascadia Code", monospace;
-        font-size: 0.825rem;
-      }
-
-      .note {
-        font-size: 0.875rem;
-        color: #64748b;
-      }
-      .note a,
-      a {
-        color: #0066cc;
+      a.card {
         text-decoration: none;
+        color: inherit;
       }
-      .note a:hover,
-      a:hover {
-        text-decoration: underline;
+      a.card:hover {
+        border-color: var(--colors-grey500);
+        color: inherit;
       }
-      .note code {
-        background: #f1f5f9;
-        padding: 0.1em 0.4em;
-        border-radius: 4px;
-        font-family: ui-monospace, "Cascadia Code", monospace;
-        font-size: 0.825rem;
+      a.card h3 {
+        color: var(--theme-primary800);
+      }
+      .card .provider {
+        color: var(--colors-grey700);
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        overflow: hidden;
+      }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--spacers-dp4);
+        margin-top: auto;
+        padding-top: var(--spacers-dp8);
       }
 
+      .chip {
+        display: inline-block;
+        border-radius: var(--radius-chip);
+        padding: 0 var(--spacers-dp8);
+        font-size: var(--font-size-small);
+        line-height: calc(var(--font-size-small) + var(--spacers-dp8));
+        background: var(--colors-grey200);
+        color: var(--colors-grey800);
+        white-space: nowrap;
+      }
+      .chip-published {
+        background: var(--colors-green100);
+        color: var(--colors-green800);
+      }
+      .chip-unpublished {
+        background: var(--colors-yellow100);
+        color: var(--colors-yellow900);
+      }
+      .chip-output {
+        background: var(--colors-teal100);
+        color: var(--colors-teal800);
+      }
+
+      .toolbar {
+        display: none;
+        flex-wrap: wrap;
+        align-items: end;
+        gap: var(--spacers-dp12);
+        margin-bottom: var(--spacers-dp12);
+      }
+      .js .toolbar {
+        display: flex;
+      }
+      .toolbar label {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacers-dp4);
+        font-size: var(--font-size-small);
+        color: var(--colors-grey700);
+      }
+      .toolbar input,
+      .toolbar select {
+        font: inherit;
+        color: var(--colors-grey900);
+        background: var(--colors-white);
+        border: 1px solid var(--colors-grey500);
+        border-radius: var(--radius);
+        padding: var(--spacers-dp4) var(--spacers-dp8);
+        min-width: 180px;
+      }
+      .toolbar .status {
+        margin-left: auto;
+        color: var(--colors-grey700);
+        align-self: center;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        padding: 0;
+      }
       table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 0.875rem;
       }
-      thead th {
+      th,
+      td {
         text-align: left;
-        font-weight: 600;
-        font-size: 0.78rem;
-        color: #64748b;
-        border-bottom: 1px solid #e2e8f0;
-        padding: 0 0.75rem 0.6rem 0;
-      }
-      tbody td {
-        padding: 0.55rem 0.75rem 0.55rem 0;
-        border-bottom: 1px solid #f1f5f9;
+        padding: var(--spacers-dp8) var(--spacers-dp12);
+        border-bottom: 1px solid var(--colors-grey300);
         vertical-align: top;
+      }
+      th {
+        font-weight: var(--font-weight-medium);
+        color: var(--colors-grey700);
+        background: var(--colors-grey100);
       }
       tbody tr:last-child td {
         border-bottom: none;
       }
 
-      .links-list {
+      .pager {
+        display: none;
+        align-items: center;
+        justify-content: flex-end;
+        gap: var(--spacers-dp8);
+        margin-top: var(--spacers-dp12);
+      }
+      .js .pager {
+        display: flex;
+      }
+      button {
+        font: inherit;
+        color: var(--colors-grey900);
+        background: var(--colors-white);
+        border: 1px solid var(--colors-grey500);
+        border-radius: var(--radius);
+        padding: var(--spacers-dp4) var(--spacers-dp12);
+        cursor: pointer;
+      }
+      button:disabled {
+        color: var(--colors-grey500);
+        border-color: var(--colors-grey300);
+        cursor: default;
+      }
+
+      .workflow + .workflow {
+        margin-top: var(--spacers-dp12);
+      }
+      .workflow .outputs {
+        margin-top: var(--spacers-dp8);
+        padding-top: var(--spacers-dp8);
+        border-top: 1px solid var(--colors-grey300);
+      }
+      .workflow .outputs ul {
         list-style: none;
         display: flex;
         flex-direction: column;
-        gap: 0.6rem;
+        gap: var(--spacers-dp4);
+        margin-top: var(--spacers-dp8);
       }
-      .links-list li {
+      .workflow .outputs li {
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
-        gap: 0.6rem;
-        font-size: 0.875rem;
-      }
-      .links-list .link-label {
-        font-weight: 500;
-        min-width: 160px;
-      }
-      .links-list .link-desc {
-        color: #64748b;
-      }
-
-      .badge {
-        display: inline-block;
-        background: #e2e8f0;
-        color: #475569;
-        border-radius: 99px;
-        font-size: 0.72rem;
-        font-weight: 600;
-        padding: 0.1em 0.55em;
-        vertical-align: middle;
-        margin-left: 0.4rem;
-      }
-      .badge-published {
-        background: #dcfce7;
-        color: #166534;
-      }
-      .badge-unpublished {
-        background: #fef9c3;
-        color: #854d0e;
+        gap: var(--spacers-dp8);
       }
 
       footer {
-        text-align: center;
-        font-size: 0.78rem;
-        color: #94a3b8;
-        padding: 1rem;
-        margin-top: 1rem;
+        color: var(--colors-grey600);
+        font-size: var(--font-size-small);
+        padding: var(--spacers-dp16) var(--spacers-dp32);
       }
       footer a {
-        color: #94a3b8;
+        color: var(--colors-grey700);
+      }
+
+      @media (max-width: 720px) {
+        .layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        nav.rail {
+          border-right: none;
+          border-bottom: 1px solid var(--colors-grey300);
+          padding: var(--spacers-dp8);
+          overflow-x: auto;
+        }
+        nav.rail ul {
+          flex-direction: row;
+        }
+        main {
+          padding: var(--spacers-dp16);
+        }
+        .toolbar .status {
+          margin-left: 0;
+        }
       }
     </style>
   </head>
   <body>
+    <a class="skip-link" href="#content">Skip to content</a>
     <header>
       <h1>{{ name }}</h1>
       <span class="version">v{{ version }}</span>
     </header>
 
-    <main>
-      <!-- Instance status -->
-      <div class="card">
-        <h2>Instance</h2>
-        {% if extent %}
-        <dl class="status-grid">
-          <dt>Extent</dt>
-          <dd>{{ extent.name or "Unnamed extent" }}</dd>
-          <dt>Bounding box</dt>
-          <dd><code>{{ extent.bbox | join(", ") }}</code></dd>
-          {% if extent.country_code %}
-          <dt>Country code</dt>
-          <dd><code>{{ extent.country_code }}</code></dd>
-          {% endif %}
-        </dl>
-        {% else %}
-        <p class="note">
-          No extent configured. Set <code>extent:</code> in
-          <code>CLIMATE_SERVICE_CONFIG</code> — see <a href="{{ mount }}/docs">API docs</a> for
-          details.
-        </p>
-        {% endif %}
-      </div>
-
-      <!-- Links -->
-      <div class="card">
-        <h2>Explore</h2>
-        <ul class="links-list">
+    <div class="layout">
+      <nav class="rail" aria-label="Sections">
+        <ul>
+          <li><a href="#overview" data-area-link="overview">Overview</a></li>
+          <li><a href="#explore" data-area-link="explore">Explore</a></li>
+          <li>
+            <a href="#datasets" data-area-link="datasets"
+              >Datasets <span class="count">{{ datasets | length }}</span></a
+            >
+          </li>
+          <li>
+            <a href="#data-sources" data-area-link="data-sources"
+              >Data sources <span class="count">{{ sources | length }}</span></a
+            >
+          </li>
+          <li>
+            <a href="#workflows" data-area-link="workflows"
+              >Workflows <span class="count">{{ workflows | length }}</span></a
+            >
+          </li>
           {% if not read_only %}
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/manage">Manage</a></span
-            >
-            <span class="link-desc"
-              >Ingest and sync datasets without using the API directly</span
-            >
-          </li>
+          <li><a href="#operator" data-area-link="operator">Operator tools</a></li>
           {% endif %}
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/docs">API documentation</a></span
-            >
-            <span class="link-desc"
-              >Interactive Swagger UI for all endpoints</span
-            >
-          </li>
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/map">Map viewer</a></span
-            >
-            <span class="link-desc"
-              >Browse published datasets on an interactive map</span
-            >
-          </li>
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/openeo" target="_blank" rel="noopener">openEO Editor</a></span
-            >
-            <span class="link-desc"
-              >Build and run openEO process graphs in the browser</span
-            >
-          </li>
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/stac/catalog.json">STAC Catalog</a></span
-            >
-            <span class="link-desc"
-              >SpatioTemporal Asset Catalog of published datasets</span
-            >
-          </li>
-          <li>
-            <span class="link-label"><a href="{{ mount }}/?f=json">Root (JSON)</a></span>
-            <span class="link-desc">This page as a JSON navigation object</span>
-          </li>
         </ul>
-      </div>
+      </nav>
 
-      <!-- Datasets -->
-      <div class="card">
-        <h2>Datasets <span class="badge">{{ datasets | length }}</span></h2>
-        {% if datasets %}
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Variable</th>
-              <th>Period</th>
-              <th>Temporal coverage</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for ds in datasets %}
-            <tr>
-              <td>
-                <a href="{{ mount }}/datasets/{{ ds.dataset_id }}"
-                  >{{ ds.dataset_name }}</a
-                >
-              </td>
-              <td>{{ ds.variable }}</td>
-              <td>{{ ds.period_type }}</td>
-              <td>
-                {{ ds.extent.temporal.start }} – {{ ds.extent.temporal.end }}
-              </td>
-              <td>
-                {% if ds.publication.status == "published" %}
-                <span class="badge badge-published">published</span>
-                {% else %}
-                <span class="badge badge-unpublished">unpublished</span>
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="note">
-          No datasets ingested yet. Use
-          <a href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post"
-            >POST /ingestions</a
-          >
-          to ingest data, or
-          <a href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">POST /sync</a>
-          to run an automated sync.
-        </p>
-        {% endif %}
-      </div>
+      <main id="content">
+        <!-- Overview -->
+        <section id="overview" data-area aria-labelledby="overview-title">
+          <h2 id="overview-title" tabindex="-1">Overview</h2>
+          <p class="lead">Climate and environmental data for this instance, ready to explore and use.</p>
+          <div class="stats">
+            <a class="panel stat" href="#datasets">
+              <span class="value">{{ datasets | length }}</span>
+              <span class="label">Datasets</span>
+            </a>
+            <a class="panel stat" href="#datasets">
+              <span class="value">{{ published_count }}</span>
+              <span class="label">Published</span>
+            </a>
+            <a class="panel stat" href="#data-sources">
+              <span class="value">{{ sources | length }}</span>
+              <span class="label">Data sources</span>
+            </a>
+            <a class="panel stat" href="#workflows">
+              <span class="value">{{ workflows | length }}</span>
+              <span class="label">Workflows</span>
+            </a>
+          </div>
+          <div class="panel">
+            <h3>Instance</h3>
+            {% if extent %}
+            <dl class="facts">
+              <dt>Extent</dt>
+              <dd>{{ extent.name or "Unnamed extent" }}</dd>
+              <dt>Bounding box</dt>
+              <dd><code>{{ extent.bbox | join(", ") }}</code></dd>
+              {% if extent.country_code %}
+              <dt>Country code</dt>
+              <dd><code>{{ extent.country_code }}</code></dd>
+              {% endif %}
+              <dt>Access</dt>
+              <dd>{% if read_only %}Read-only{% else %}Read and write{% endif %}</dd>
+              <dt>Version</dt>
+              <dd><code>{{ version }}</code></dd>
+            </dl>
+            {% else %}
+            <p class="note">
+              No extent configured. Set <code>extent:</code> in
+              <code>CLIMATE_SERVICE_CONFIG</code> — see <a href="{{ mount }}/docs">API docs</a> for
+              details.
+            </p>
+            {% endif %}
+            {% if read_only %}
+            <p class="note">This instance is read-only: data can be browsed and processed, but not ingested.</p>
+            {% endif %}
+          </div>
+        </section>
 
-      <!-- Available templates -->
-      <div class="card">
-        <h2>Available dataset templates <span class="badge">{{ templates | length }}</span></h2>
-        {% if templates %}
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Variable</th>
-              <th>Period</th>
-              <th>Source</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for t in templates %}
-            <tr>
-              <td>{{ t.name }}</td>
-              <td>{{ t.variable }}</td>
-              <td>{{ t.period_type }}</td>
-              <td>
-                {% if t.source_url %}
-                <a href="{{ t.source_url }}">{{ t.source or t.id }}</a>
-                {% else %}
-                {{ t.source or '—' }}
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="note">No dataset templates found.</p>
+        <!-- Explore -->
+        <section id="explore" data-area aria-labelledby="explore-title">
+          <h2 id="explore-title" tabindex="-1">Explore</h2>
+          <p class="lead">Ways to look at and work with the published data.</p>
+          <div class="cards">
+            <a class="panel card" href="{{ mount }}/map">
+              <h3>Map viewer</h3>
+              <span class="note">Browse published datasets on an interactive map</span>
+            </a>
+            <a class="panel card" href="{{ mount }}/openeo" target="_blank" rel="noopener">
+              <h3>openEO Editor</h3>
+              <span class="note">Build and run openEO process graphs in the browser</span>
+            </a>
+            <a class="panel card" href="{{ mount }}/stac/catalog.json">
+              <h3>STAC Catalog</h3>
+              <span class="note">SpatioTemporal Asset Catalog of published datasets</span>
+            </a>
+            <a class="panel card" href="{{ mount }}/docs">
+              <h3>API documentation</h3>
+              <span class="note">Interactive Swagger UI for all endpoints</span>
+            </a>
+            <a class="panel card" href="{{ mount }}/?f=json">
+              <h3>Root (JSON)</h3>
+              <span class="note">This page as a JSON navigation object</span>
+            </a>
+          </div>
+        </section>
+
+        <!-- Datasets -->
+        <section id="datasets" data-area aria-labelledby="datasets-title">
+          <h2 id="datasets-title" tabindex="-1">Datasets</h2>
+          <p class="lead">Data this instance holds.</p>
+          {% if datasets %}
+          <div data-list data-page-size="15">
+            <div class="toolbar">
+              <label
+                >Search
+                <input type="search" data-filter-text placeholder="Name, variable or period" />
+              </label>
+              <label
+                >Status
+                <select data-filter-field="status">
+                  <option value="">All</option>
+                  <option value="published">Published</option>
+                  <option value="unpublished">Unpublished</option>
+                </select>
+              </label>
+              <span class="status" data-status aria-live="polite"></span>
+            </div>
+            <div class="panel table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Variable</th>
+                    <th scope="col">Period</th>
+                    <th scope="col">Temporal coverage</th>
+                    <th scope="col">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for ds in datasets %}
+                  {% set status = "published" if ds.publication.status == "published" else "unpublished" %}
+                  <tr
+                    data-item
+                    data-status="{{ status }}"
+                    data-search="{{ [ds.dataset_name, ds.dataset_id, ds.variable, ds.period_type] | join(' ') | lower }}"
+                  >
+                    <td>
+                      <a href="{{ mount }}/datasets/{{ ds.dataset_id }}">{{ ds.dataset_name }}</a>
+                    </td>
+                    <td>{{ ds.variable }}</td>
+                    <td>{{ ds.period_type }}</td>
+                    <td>
+                      {% if ds.extent.temporal.start or ds.extent.temporal.end %}{{ ds.extent.temporal.start or "…" }} – {{ ds.extent.temporal.end or "…" }}{% else %}—{% endif %}
+                    </td>
+                    <td><span class="chip chip-{{ status }}">{{ status }}</span></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <p class="note" data-empty hidden>No datasets match.</p>
+            <div class="pager" data-pager>
+              <button type="button" data-prev>Previous</button>
+              <button type="button" data-next>Next</button>
+            </div>
+          </div>
+          {% else %}
+          <p class="note">
+            No datasets ingested yet. Use
+            <a href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post">POST /ingestions</a>
+            to ingest data, or
+            <a href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">POST /sync</a>
+            to run an automated sync.
+          </p>
+          {% endif %}
+        </section>
+
+        <!-- Data sources -->
+        <section id="data-sources" data-area aria-labelledby="data-sources-title">
+          <h2 id="data-sources-title" tabindex="-1">Data sources</h2>
+          <p class="lead">Data this instance can fetch from outside providers.</p>
+          {% if sources %}
+          {% set periods = sources | map(attribute="period_type") | reject("equalto", "") | unique | sort | list %}
+          <div data-list data-page-size="12">
+            <div class="toolbar">
+              <label
+                >Search
+                <input type="search" data-filter-text placeholder="Name, provider or variable" />
+              </label>
+              {% if periods | length > 1 %}
+              <label
+                >Period
+                <select data-filter-field="period">
+                  <option value="">All</option>
+                  {% for period in periods %}
+                  <option value="{{ period }}">{{ period }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              {% endif %}
+              <span class="status" data-status aria-live="polite"></span>
+            </div>
+            <div class="cards">
+              {% for s in sources %}
+              <article
+                class="panel card"
+                data-item
+                data-period="{{ s.period_type }}"
+                data-search="{{ [s.name, s.id, s.provider, s.variable] | join(' ') | lower }}"
+              >
+                <h3>{{ s.name }}</h3>
+                <span class="provider" title="{{ s.provider }}">
+                  {% if s.provider_url %}<a href="{{ s.provider_url }}">{{ s.provider or s.id }}</a>{% else %}{{ s.provider or "Unknown provider" }}{% endif %}
+                </span>
+                <div class="meta">
+                  {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
+                  {% if s.units %}<span class="chip">{{ s.units }}</span>{% endif %}
+                  {% if s.resolution %}<span class="chip">{{ s.resolution }}</span>{% endif %}
+                  {% if s.licence %}<span class="chip">{{ s.licence }}</span>{% endif %}
+                </div>
+              </article>
+              {% endfor %}
+            </div>
+            <p class="note" data-empty hidden>No data sources match.</p>
+            <div class="pager" data-pager>
+              <button type="button" data-prev>Previous</button>
+              <button type="button" data-next>Next</button>
+            </div>
+          </div>
+          {% else %}
+          <p class="note">No data sources are configured.</p>
+          {% endif %}
+        </section>
+
+        <!-- Workflows -->
+        <section id="workflows" data-area aria-labelledby="workflows-title">
+          <h2 id="workflows-title" tabindex="-1">Workflows</h2>
+          <p class="lead">Processing chains that turn data into new datasets and exports.</p>
+          {% if workflows %}
+          {% for w in workflows %}
+          <article class="panel workflow">
+            <h3><a href="{{ mount }}/process_graphs/{{ w.record.id }}">{{ w.record.id }}</a></h3>
+            {% if w.record.summary %}<p class="note">{{ w.record.summary }}</p>{% endif %}
+            {% if w.outputs %}
+            <div class="outputs">
+            <span class="chip chip-output" id="outputs-{{ w.record.id }}">Produces</span>
+            <ul aria-labelledby="outputs-{{ w.record.id }}">
+              {% for o in w.outputs %}
+              <li>
+                <span>{{ o.name }}</span>
+                {% if o.period_type %}<span class="chip">{{ o.period_type }}</span>{% endif %}
+                {% if o.units %}<span class="chip">{{ o.units }}</span>{% endif %}
+              </li>
+              {% endfor %}
+            </ul>
+            </div>
+            {% endif %}
+          </article>
+          {% endfor %}
+          {% else %}
+          <p class="note">No workflows are registered.</p>
+          {% endif %}
+          {% if unattributed_outputs %}
+          <article class="panel workflow">
+            <h3>Other workflow outputs</h3>
+            <p class="note">Datasets produced by a workflow that is not registered on this instance.</p>
+            <div class="outputs">
+            <ul>
+              {% for o in unattributed_outputs %}
+              <li><span>{{ o.name }}</span></li>
+              {% endfor %}
+            </ul>
+            </div>
+          </article>
+          {% endif %}
+        </section>
+
+        {% if not read_only %}
+        <!-- Operator tools -->
+        <section id="operator" data-area aria-labelledby="operator-title">
+          <h2 id="operator-title" tabindex="-1">Operator tools</h2>
+          <p class="lead">Adding and refreshing data on this instance.</p>
+          <div class="cards">
+            <a class="panel card" href="{{ mount }}/manage">
+              <h3>Manage</h3>
+              <span class="note">Ingest and sync datasets without using the API directly</span>
+            </a>
+            <a class="panel card" href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post">
+              <h3>Ingestion API</h3>
+              <span class="note">Fetch a data source into this instance</span>
+            </a>
+            <a class="panel card" href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">
+              <h3>Sync API</h3>
+              <span class="note">Bring an ingested dataset up to date</span>
+            </a>
+          </div>
+        </section>
         {% endif %}
-      </div>
-    </main>
+      </main>
+    </div>
 
     <footer>
       <a href="https://github.com/dhis2/open-climate-service">dhis2/open-climate-service</a>
     </footer>
+
+    <script>
+      // Progressive enhancement: without JavaScript every area is shown in sequence and every
+      // list is complete, and the rail links scroll to their section.
+      (function () {
+        document.documentElement.classList.add("js");
+
+        var areas = Array.prototype.slice.call(document.querySelectorAll("[data-area]"));
+        var links = Array.prototype.slice.call(document.querySelectorAll("[data-area-link]"));
+
+        function showArea(id, moveFocus) {
+          var known = areas.some(function (area) {
+            return area.id === id;
+          });
+          if (!known) id = "overview";
+          areas.forEach(function (area) {
+            area.hidden = area.id !== id;
+          });
+          links.forEach(function (link) {
+            if (link.getAttribute("data-area-link") === id) link.setAttribute("aria-current", "page");
+            else link.removeAttribute("aria-current");
+          });
+          window.scrollTo(0, 0);
+          if (moveFocus) {
+            var heading = document.getElementById(id + "-title");
+            if (heading) heading.focus({ preventScroll: true });
+          }
+        }
+
+        window.addEventListener("hashchange", function () {
+          showArea(location.hash.slice(1), true);
+        });
+        showArea(location.hash.slice(1), false);
+
+        function initList(root) {
+          var items = Array.prototype.slice.call(root.querySelectorAll("[data-item]"));
+          var pageSize = parseInt(root.getAttribute("data-page-size"), 10) || 12;
+          var text = root.querySelector("[data-filter-text]");
+          var selects = Array.prototype.slice.call(root.querySelectorAll("[data-filter-field]"));
+          var status = root.querySelector("[data-status]");
+          var empty = root.querySelector("[data-empty]");
+          var pager = root.querySelector("[data-pager]");
+          var prev = root.querySelector("[data-prev]");
+          var next = root.querySelector("[data-next]");
+          var page = 0;
+
+          function apply() {
+            var query = text ? text.value.trim().toLowerCase() : "";
+            var matched = items.filter(function (item) {
+              if (query && item.getAttribute("data-search").indexOf(query) === -1) return false;
+              return selects.every(function (select) {
+                var field = select.getAttribute("data-filter-field");
+                return !select.value || item.getAttribute("data-" + field) === select.value;
+              });
+            });
+            var pages = Math.max(1, Math.ceil(matched.length / pageSize));
+            page = Math.min(page, pages - 1);
+            var start = page * pageSize;
+            var visible = matched.slice(start, start + pageSize);
+            items.forEach(function (item) {
+              item.hidden = visible.indexOf(item) === -1;
+            });
+            if (status) {
+              status.textContent = matched.length
+                ? "Showing " + (start + 1) + "–" + (start + visible.length) + " of " + matched.length
+                : "";
+            }
+            if (empty) empty.hidden = matched.length > 0;
+            if (pager) pager.hidden = pages <= 1;
+            if (prev) prev.disabled = page === 0;
+            if (next) next.disabled = page >= pages - 1;
+          }
+
+          if (text)
+            text.addEventListener("input", function () {
+              page = 0;
+              apply();
+            });
+          selects.forEach(function (select) {
+            select.addEventListener("change", function () {
+              page = 0;
+              apply();
+            });
+          });
+          if (prev)
+            prev.addEventListener("click", function () {
+              page -= 1;
+              apply();
+            });
+          if (next)
+            next.addEventListener("click", function () {
+              page += 1;
+              apply();
+            });
+          apply();
+        }
+
+        Array.prototype.slice.call(document.querySelectorAll("[data-list]")).forEach(initList);
+      })();
+    </script>
   </body>
 </html>

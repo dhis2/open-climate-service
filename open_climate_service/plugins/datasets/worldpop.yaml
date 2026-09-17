@@ -95,6 +95,7 @@
   units: people
   resolution: 100m x 100m
   source: WorldPop Global2
+  produced_by: temporal_change
   source_url: https://hub.worldpop.org/project/categories?id=3
   license: CC-BY-4.0
   providers:

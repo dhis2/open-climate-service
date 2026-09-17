@@ -165,15 +165,88 @@ def _load_datasets() -> list[Any]:
         return []
 
 
+def _load_workflows() -> list[Any]:
+    try:
+        from open_climate_service.openeo.workflows import list_workflows
+
+        return sorted(list_workflows().processes, key=lambda workflow: workflow.id)
+    except Exception:
+        _log.exception("Unexpected error loading workflows")
+        return []
+
+
+def _licence_label(template: dict[str, Any]) -> str | None:
+    """The licence as a short label: an SPDX id as written, or a named licence's name."""
+    licence = template.get("license")
+    if isinstance(licence, str):
+        return licence
+    name = licence.get("name") if isinstance(licence, dict) else None
+    return name if isinstance(name, str) else None
+
+
+def _source_view(template: dict[str, Any]) -> dict[str, Any]:
+    """A data source card: titled by the dataset, with the provider beneath it."""
+    return {
+        "id": template["id"],
+        "name": template.get("name") or template["id"],
+        "provider": template.get("source") or "",
+        "provider_url": template.get("source_url"),
+        "variable": template.get("variable") or "",
+        "units": template.get("units") or "",
+        "period_type": template.get("period_type") or "",
+        "resolution": template.get("resolution") or "",
+        "licence": _licence_label(template),
+    }
+
+
+def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) -> dict[str, Any]:
+    """Split templates between Data sources and Workflows by whether they can be ingested.
+
+    A template is fetched or produced, never both (registration refuses `produced_by` beside
+    `ingestion.plugin`), so each appears in exactly one area. A non-ingestable template whose
+    `produced_by` names no known workflow — or that declares none — is still listed, under
+    Workflows as an output of an unknown workflow, rather than silently dropped.
+    """
+    sources = sorted(
+        (_source_view(t) for t in templates if registry_datasets.is_ingestable(t)),
+        key=lambda source: (source["provider"].lower(), source["name"].lower()),
+    )
+    workflow_ids = {workflow.id for workflow in workflows}
+    outputs: dict[str, list[dict[str, Any]]] = {workflow_id: [] for workflow_id in workflow_ids}
+    unattributed: list[dict[str, Any]] = []
+    for template in templates:
+        if registry_datasets.is_ingestable(template):
+            continue
+        view = _source_view(template)
+        produced_by = template.get("produced_by")
+        if isinstance(produced_by, str) and produced_by in workflow_ids:
+            outputs[produced_by].append(view)
+        else:
+            unattributed.append(view)
+    for views in outputs.values():
+        views.sort(key=lambda view: view["name"].lower())
+    unattributed.sort(key=lambda view: view["name"].lower())
+    return {
+        "sources": sources,
+        "workflows": [{"record": workflow, "outputs": outputs[workflow.id]} for workflow in workflows],
+        "unattributed_outputs": unattributed,
+    }
+
+
 def render_landing(version: str, mount: str) -> str:
     """Render the root landing page with live instance status."""
+    datasets = _load_datasets()
+    catalogue = _landing_catalogue(_load_templates(), _load_workflows())
     return get_template("landing_page.html").render(
         version=version,
         mount=mount,
         name=api_config.get_name(),
         extent=_load_extent(),
-        datasets=_load_datasets(),
-        templates=_load_templates(),
+        datasets=datasets,
+        published_count=sum(1 for dataset in datasets if dataset.publication.status == "published"),
+        sources=catalogue["sources"],
+        workflows=catalogue["workflows"],
+        unattributed_outputs=catalogue["unattributed_outputs"],
         # Read-only instances refuse /manage, so offering the link would advertise a 403.
         read_only=api_config.is_read_only(),
     )

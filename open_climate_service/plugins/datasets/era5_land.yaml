@@ -292,6 +292,7 @@
     kind: static
   units: degC
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -313,6 +314,7 @@
   # the days in each calendar month, so the result stays a mean daily rate.
   units: mm/d
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -340,6 +342,7 @@
     kind: static
   units: degC
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -359,6 +362,7 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -378,6 +382,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -403,6 +408,7 @@
     kind: static
   units: degC
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -422,6 +428,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -441,6 +448,7 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/

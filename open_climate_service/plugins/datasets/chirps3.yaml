@@ -95,6 +95,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -113,6 +114,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -136,6 +138,7 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -154,6 +157,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -172,6 +176,7 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -193,6 +198,7 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
