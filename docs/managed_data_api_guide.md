@@ -115,6 +115,7 @@ Example response:
     "dataset_name": "Total precipitation (CHIRPS3)",
     "short_name": "Total precipitation",
     "description": "CHIRPS v3 daily precipitation in mm.",
+    "itemType": "coverage",
     "variable": "precip",
     "period_type": "daily",
     "units": "mm",
@@ -228,6 +229,7 @@ Example response:
       "dataset_name": "Total precipitation (CHIRPS3)",
       "short_name": "Total precipitation",
       "description": "CHIRPS v3 daily precipitation in mm.",
+      "itemType": "coverage",
       "variable": "precip",
       "period_type": "daily",
       "units": "mm",
@@ -271,6 +273,16 @@ Example response:
 What this means:
 
 - `/datasets` is the public native catalog of managed datasets
+- `itemType` says what the dataset holds: `coverage` for a raster, `feature` for a feature
+  collection such as a boundary set. It is the field to filter a listing on, because `format`
+  sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
+  name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
+  the collection object; `coverage` is convention rather than conformance, since OGC API -
+  Coverages is a candidate draft and silent on the field. `/datasets` is Open Climate Service's
+  own API, so do not infer the rest of an OGC collection object from the borrowed name.
+- `variable` and `period_type` are both nullable, and are `null` together for a feature
+  collection: a boundary set measures nothing and has no temporal axis. Read `itemType` rather
+  than testing these two for absence.
 - `license` is an SPDX identifier, or `other` for a licence that has none — the Copernicus
   licence, for instance. It is never absent: a dataset whose template declares no licence
   reports `other` rather than something that reads as permissive. `license_url` points at the

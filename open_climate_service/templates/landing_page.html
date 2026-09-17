@@ -288,8 +288,8 @@
                   >{{ ds.dataset_name }}</a
                 >
               </td>
-              <td>{{ ds.variable }}</td>
-              <td>{{ ds.period_type }}</td>
+              <td>{{ ds.variable or "—" }}</td>
+              <td>{{ ds.period_type or "—" }}</td>
               <td>
                 {{ ds.extent.temporal.start }} – {{ ds.extent.temporal.end }}
               </td>

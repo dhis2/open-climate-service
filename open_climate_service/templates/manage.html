@@ -477,7 +477,7 @@
               <td>
                 <a href="{{ mount }}/datasets/{{ ds.dataset_id }}">{{ ds.dataset_name }}</a>
               </td>
-              <td>{{ ds.period_type }}</td>
+              <td>{{ ds.period_type or "—" }}</td>
               <td>{{ ds.extent.temporal.start }} – {{ ds.extent.temporal.end }}</td>
               <td>
                 {% if ds.publication.status == "published" %}

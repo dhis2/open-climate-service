@@ -9,7 +9,7 @@ import mimetypes
 import os
 import shutil
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,10 +40,12 @@ from open_climate_service.ingestions.schemas import (
     CoverageTemporal,
     DatasetAccessLink,
     DatasetDetailRecord,
+    DatasetItemType,
     DatasetListResponse,
     DatasetPublication,
     DatasetRecord,
     DatasetVersionRecord,
+    FeatureDetail,
     IngestionListResponse,
     IngestionResponse,
     PublicationStatus,
@@ -55,6 +57,7 @@ from open_climate_service.ingestions.schemas import (
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
+from open_climate_service.shared.crs import canonical_crs_code
 from open_climate_service.shared.licences import DatasetLicence
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -181,7 +184,8 @@ hides a dataset that works. `openeo/execution.py::_open_artifact` opens exactly 
 Icechunk through its own reader, a plain Zarr store through `open_zarr_dataset`.
 
 NETCDF is absent deliberately: nothing opens it as a datacube, and `_dataset_links` offers it
-as a download instead.
+as a download instead. GEOPARQUET is absent for a stronger reason: it is not a datacube at all,
+so no reader will ever open it here.
 """
 
 
@@ -227,11 +231,18 @@ def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
 def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     """Return the artifacts the STAC catalogue advertises.
 
-    Identical to the raster set today, and deliberately a separate function rather than an
-    alias: STAC describes what exists, while openEO advertises what `load_collection` can
-    consume, and those stop being the same question once a non-raster artifact can be
-    published. A feature collection is a STAC collection and is not an openEO datacube, so
-    it joins here (CLIM-1069) and nowhere else.
+    Identical to the raster set, and deliberately a separate function rather than an alias:
+    STAC describes what exists, while openEO advertises what `load_collection` can consume,
+    and those stop being the same question once a non-raster artifact is catalogued.
+
+    A GEOPARQUET record is deliberately *not* admitted here yet, even though it is a published
+    artifact and genuinely is a STAC collection. Admitting it would advertise a collection URL
+    whose document does not exist: `build_collection` is entirely raster — xstac opens the
+    store as an xarray dataset to derive `cube:dimensions`, and the assets, media types and
+    render hints are Zarr's. A catalogue that lists a child it cannot serve is worse than one
+    that lists nothing, so exposure lands atomically with the feature collection document and
+    the `table` extension in CLIM-1069, which widens this gate and builds that document
+    together.
     """
     return latest_published_raster_artifacts_by_dataset()
 
@@ -368,6 +379,243 @@ def create_artifact(
             periods=periods,
         )
     raise HTTPException(status_code=500, detail=f"Dataset '{dataset['id']}' does not define ingestion.plugin")
+
+
+DEFAULT_PRIMARY_GEOMETRY = "geometry"
+"""Geometry column name assumed when a caller does not name the one it wrote.
+
+The GeoParquet convention, and what every writer in scope produces. A parameter rather than a
+constant at the record site because a collection may carry more than one geometry column, and
+the writer is the only thing that knows which one is primary.
+"""
+
+
+def create_feature_artifact(
+    *,
+    template: dict[str, object],
+    features: Mapping[str, Any],
+    store_path: Path | str,
+    crs: str,
+    bbox: Sequence[float] | None = None,
+    primary_geometry: str = DEFAULT_PRIMARY_GEOMETRY,
+    publish: bool = True,
+) -> ArtifactRecord:
+    """Register one already-written feature collection as a managed dataset.
+
+    The vector sibling of `create_artifact`, and a separate door rather than a branch inside
+    it: `create_artifact` reads `period_type` on its first line and normalizes four period
+    arguments before dispatching, and none of that describes a bbox extract. What the two
+    share is everything *below* materialization — records, publication state, overwrite
+    semantics — which is why this ends at `register_artifact_record` rather than at a second
+    record store.
+
+    This does not write bytes. The GeoParquet file at `store_path` is the store's output
+    (CLIM-1068); what happens here is that a record starts existing, which is the only thing
+    that makes the file a collection. A GeoParquet file nothing registered is ignored: the
+    listing reads records, never the filesystem, so the store directory is not an inbox.
+
+    `features` is a GeoJSON FeatureCollection, the one form the provider contract needs —
+    both sources in scope (a country's Overture divisions, a DHIS2 hierarchy) are small enough
+    to hold in memory, so there is no streaming-to-file variant to serve.
+
+    `crs` is required rather than defaulted, and describes the geometry as the GeoParquet at
+    `store_path` stores it. ADR 0002 decision 9 makes an explicit CRS a property of every stored
+    collection; a default here would let a caller that reprojected before writing record WGS 84
+    by omission, and the extent below would then describe a store it does not match.
+
+    Raises ValueError for a template or collection that cannot produce a record: a missing
+    `id_property`, a payload that is not a FeatureCollection, a malformed member, an empty
+    collection, or a stored CRS this entry point cannot honestly describe. An empty collection
+    is refused rather than registered, because a provider that returned nothing is reporting a
+    failure, and a record for it would advertise a collection with no extent.
+    """
+    dataset_id = _require_template_str(template, "id")
+    dataset_name = _require_template_str(template, "name")
+    # Required by FeatureDetail too, but read here so the error names the template field the
+    # author has to fix rather than surfacing as a pydantic failure on a nested submodel.
+    id_property = _require_template_str(template, "id_property")
+    stored_crs = _require_wgs84_feature_crs(crs, dataset_id=dataset_id)
+    feature_list = _feature_collection_members(features, dataset_id=dataset_id)
+    # Deliberately not validated per feature here. That each id_property value is present and
+    # identifies exactly one feature is the identity contract, and it needs one implementation
+    # governing the stored collection, a provider's output and both export paths — CLIM-1068.
+    bounds = _feature_collection_bounds(feature_list, dataset_id=dataset_id)
+    resolved_path = Path(store_path).resolve()
+    record = ArtifactRecord(
+        artifact_id=str(uuid4()),
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        # A boundary set measures nothing and has no temporal axis. Both fields are optional
+        # precisely so this record does not have to invent values for them.
+        variable=None,
+        period_type=None,
+        version=_resolve_artifact_version(template),
+        format=ArtifactFormat.GEOPARQUET,
+        path=str(resolved_path),
+        asset_paths=[str(resolved_path)],
+        variables=[],
+        request_scope=ArtifactRequestScope(
+            start=None,
+            end=None,
+            bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None,
+        ),
+        coverage=ArtifactCoverage(
+            spatial=bounds,
+            # `spatial` is already the WGS 84 extent: it is computed from GeoJSON coordinates,
+            # which RFC 7946 defines as WGS 84, and the guard above has established that the
+            # store is in that CRS too. The field means "the WGS 84 extent when `spatial` is in
+            # some other CRS", so a separate copy would only repeat it.
+            spatial_wgs84=None,
+            temporal=CoverageTemporal(start=None, end=None),
+        ),
+        created_at=datetime.now(UTC),
+        publication=ArtifactPublication(),
+        features=FeatureDetail(
+            id_property=id_property,
+            feature_count=len(feature_list),
+            primary_geometry=primary_geometry,
+            crs=stored_crs,
+        ),
+    )
+    # Overwrite semantics, which is what a refresh is: replace this collection's name, extent
+    # and paths in place while keeping its artifact id and publication state. There is no
+    # version history for a feature collection — explaining why one run covered 47 districts
+    # and the next 48 needs a version string, not an archive.
+    return register_artifact_record(record, publish=publish)
+
+
+def _require_wgs84_feature_crs(crs: str, *, dataset_id: str) -> str:
+    """Return the canonical form of a declared store CRS, or refuse what this door cannot record.
+
+    Two CRSs meet here and this is the only place that can tell them apart. The incoming
+    `features` payload is GeoJSON, which RFC 7946 defines as WGS 84, and `crs` describes the
+    GeoParquet already written at `store_path`. The extent on the record is derived from the
+    GeoJSON, so it is a WGS 84 extent — and it only describes the store when the two agree.
+
+    So a declared non-WGS 84 store is refused rather than recorded. The alternative is
+    registering an extent in one CRS against a store in another, which is exactly the silent
+    mismatch ADR 0002 decision 9 exists to prevent. Reprojection-aware registration belongs
+    with the component that does the reprojecting: CLIM-1068 owns the writer and the
+    CRS-correct windowing, and widens this when a provider contract needs it.
+
+    CRS84 and its aliases canonicalize to EPSG:4326 first, so a provider declaring
+    'OGC:CRS84' — the spelling GeoJSON and GeoParquet both use — is accepted and stored once,
+    in one spelling.
+    """
+    canonical = canonical_crs_code(crs.strip()) if crs.strip() else ""
+    if not canonical:
+        raise ValueError(f"feature collection '{dataset_id}' must declare the CRS of its stored geometry")
+    if canonical.upper() != "EPSG:4326":
+        raise ValueError(
+            f"feature collection '{dataset_id}' declares stored CRS {canonical}, but its extent is "
+            "derived from GeoJSON, which RFC 7946 defines as WGS 84; registering a reprojected "
+            "store needs the CRS-correct path in CLIM-1068"
+        )
+    return canonical
+
+
+def _require_template_str(template: dict[str, object], key: str) -> str:
+    """Return a required string field from a feature collection template, verbatim.
+
+    Padding is rejected rather than stripped, and returning the value unchanged is the point:
+    `id` and `id_property` are compared exactly — against a managed dataset id and against a
+    property key in the stored file — so a helper that validated the stripped value and then
+    returned the padded one would pass a check the caller never made. `FeatureDetail` refuses
+    the padded name a few lines later regardless; failing here names the template field the
+    author has to fix instead.
+    """
+    value = template.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"feature collection template must declare a non-empty '{key}'")
+    if value != value.strip():
+        raise ValueError(
+            f"feature collection template declares '{key}' as {value!r}, with leading or "
+            "trailing whitespace; it is compared exactly, so declare it without padding"
+        )
+    return value
+
+
+def _feature_collection_members(features: Mapping[str, Any], *, dataset_id: str) -> list[Mapping[str, Any]]:
+    """Return the features of a GeoJSON FeatureCollection, or raise ValueError."""
+    if features.get("type") != "FeatureCollection":
+        raise ValueError(
+            f"feature collection '{dataset_id}' must be a GeoJSON FeatureCollection, got type {features.get('type')!r}"
+        )
+    members = features.get("features")
+    if not isinstance(members, list):
+        raise ValueError(f"feature collection '{dataset_id}' has no 'features' array")
+    if not members:
+        raise ValueError(
+            f"feature collection '{dataset_id}' is empty; a provider that returned no features "
+            "is reporting a failure, so nothing is registered"
+        )
+    # Structural only: a member must be a Mapping and must say it is a Feature. Rejected, not
+    # filtered — dropping one would leave `feature_count` describing what survived the filter
+    # rather than what the provider supplied or the store holds, and that count is what answers
+    # "why did yesterday cover 47 districts and today 48". What a member *contains* is a
+    # different question: that each id_property value is present and identifies exactly one
+    # feature is the identity contract, and stays in CLIM-1068.
+    malformed = [
+        index
+        for index, member in enumerate(members)
+        if not isinstance(member, Mapping) or member.get("type") != "Feature"
+    ]
+    if malformed:
+        raise ValueError(
+            f"feature collection '{dataset_id}' has malformed members at "
+            f"{', '.join(str(index) for index in malformed)}; each must be a GeoJSON object "
+            "with type 'Feature'"
+        )
+    return [cast(Mapping[str, Any], member) for member in members]
+
+
+def _feature_collection_bounds(features: Sequence[Mapping[str, Any]], *, dataset_id: str) -> CoverageSpatial:
+    """Return the spatial extent of a FeatureCollection, computed from its coordinates.
+
+    Computed rather than read from an advertised `bbox` member. RFC 7946 permits one on a
+    FeatureCollection but nothing keeps it in step with the geometries, and this extent is what
+    the catalogue publishes, so it is derived from the shapes themselves.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    for feature in features:
+        for x, y in _geometry_positions(feature.get("geometry")):
+            xs.append(x)
+            ys.append(y)
+    if not xs:
+        raise ValueError(f"feature collection '{dataset_id}' has no usable geometry, so it has no spatial extent")
+    return CoverageSpatial(xmin=min(xs), ymin=min(ys), xmax=max(xs), ymax=max(ys))
+
+
+def _geometry_positions(geometry: object) -> Iterator[tuple[float, float]]:
+    """Yield every (x, y) position in one GeoJSON geometry, whatever its type.
+
+    Walks the nested coordinate arrays rather than switching on `type`, so Point through
+    MultiPolygon are all handled by the same code and a position carrying elevation (RFC 7946
+    allows a third element) contributes only its x and y. GeometryCollection is the one shape
+    that nests geometries rather than coordinates, so it recurses.
+    """
+    if not isinstance(geometry, Mapping):
+        return
+    if geometry.get("type") == "GeometryCollection":
+        nested = geometry.get("geometries")
+        if isinstance(nested, list):
+            for member in nested:
+                yield from _geometry_positions(member)
+        return
+    yield from _coordinate_positions(geometry.get("coordinates"))
+
+
+def _coordinate_positions(coordinates: object) -> Iterator[tuple[float, float]]:
+    """Yield every (x, y) pair from an arbitrarily nested GeoJSON coordinate array."""
+    if not isinstance(coordinates, list) or not coordinates:
+        return
+    head = coordinates[0]
+    if isinstance(head, int | float) and len(coordinates) >= 2 and isinstance(coordinates[1], int | float):
+        yield float(head), float(coordinates[1])
+        return
+    for member in coordinates:
+        yield from _coordinate_positions(member)
 
 
 def _resolve_artifact_version(dataset: dict[str, object]) -> ArtifactVersion | None:
@@ -1174,6 +1422,7 @@ def sync_dataset(
     hands execution to `sync_engine.run_sync(...)`.
     """
     latest_artifact = get_latest_artifact_for_dataset_or_404(dataset_id)
+    _refuse_non_raster_sync(latest_artifact)
     source_dataset = registry_datasets.get_dataset(latest_artifact.dataset_id)
     if source_dataset is None:
         raise HTTPException(status_code=404, detail=f"Source dataset '{latest_artifact.dataset_id}' not found")
@@ -1203,6 +1452,7 @@ def plan_sync_dataset(
 ) -> SyncDetail:
     """Return the sync plan for a managed dataset without downloading or writing artifacts."""
     latest_artifact = get_latest_artifact_for_dataset_or_404(dataset_id)
+    _refuse_non_raster_sync(latest_artifact)
     source_dataset = registry_datasets.get_dataset(latest_artifact.dataset_id)
     if source_dataset is None:
         raise HTTPException(status_code=404, detail=f"Source dataset '{latest_artifact.dataset_id}' not found")
@@ -1216,6 +1466,29 @@ def plan_sync_dataset(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _refuse_non_raster_sync(artifact: ArtifactRecord) -> None:
+    """Refuse to plan or run a raster sync for a record that is not a raster.
+
+    The whole sync engine is period arithmetic: it resolves a target end, compares it against
+    `coverage.temporal.end` and appends or rematerializes the missing periods. A feature
+    collection has no temporal axis and no `period_type`, so every one of those steps is
+    meaningless for it, and rematerialize would call `create_artifact` — the raster door.
+
+    Refused here with a message that says so, rather than leaving it to fail further in. A
+    feature collection refreshes by re-running its provider (CLIM-926), which lands on
+    `create_feature_artifact` and replaces the record in place.
+    """
+    if artifact.format != ArtifactFormat.GEOPARQUET:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Dataset '{managed_dataset_id_for(artifact)}' is a feature collection and is not "
+            "synced on the raster period axis; refresh it by re-running its provider"
+        ),
+    )
 
 
 def get_dataset_zarr_store_file_or_404(
@@ -1856,8 +2129,9 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         dataset_name=latest.dataset_name,
         short_name=_as_optional_str(source_dataset.get("short_name")),
         description=_as_optional_text(source_dataset.get("description")),
+        item_type=_item_type_for(latest),
         variable=latest.variable,
-        period_type=_as_optional_str(source_dataset.get("period_type")) or latest.period_type or "unknown",
+        period_type=_as_optional_str(source_dataset.get("period_type")) or latest.period_type,
         units=_as_optional_str(source_dataset.get("units")),
         resolution=_as_optional_str(source_dataset.get("resolution")),
         source=_as_optional_str(source_dataset.get("source")),
@@ -1900,11 +2174,28 @@ def _build_dataset_detail_record(dataset_id: str, artifacts: list[ArtifactRecord
     )
 
 
+def _item_type_for(artifact: ArtifactRecord) -> DatasetItemType:
+    """Return the public `itemType` discriminator for one stored record.
+
+    Read from `format` rather than from the presence of `features`, so the discriminator and
+    the thing it discriminates cannot disagree: format is what every other branch in the
+    codebase dispatches on, and a record that somehow carried feature detail under a raster
+    format would still be opened as a raster.
+    """
+    if artifact.format == ArtifactFormat.GEOPARQUET:
+        return DatasetItemType.FEATURE
+    return DatasetItemType.COVERAGE
+
+
 def _dataset_links(dataset_id: str, latest: ArtifactRecord) -> list[DatasetAccessLink]:
     links = [DatasetAccessLink(href=f"/datasets/{dataset_id}", rel="self", title="Dataset detail")]
-    if latest.publication.status == PublicationStatus.PUBLISHED and latest.format in LOADABLE_RASTER_FORMATS:
+    published = latest.publication.status == PublicationStatus.PUBLISHED
+    if published and latest.format in LOADABLE_RASTER_FORMATS:
         links.append(DatasetAccessLink(href=f"/zarr/{dataset_id}", rel="zarr", title="Zarr store"))
-    if latest.publication.status == PublicationStatus.PUBLISHED and latest.format in LOADABLE_RASTER_FORMATS:
+    # Tracks `stac_eligible_artifacts_by_dataset` exactly, so `/datasets` never offers a
+    # catalogue link the catalogue itself does not serve. A feature collection therefore has
+    # no `stac` link until CLIM-1069 admits it to both at once.
+    if published and latest.format in LOADABLE_RASTER_FORMATS:
         links.append(DatasetAccessLink(href=f"/stac/collections/{dataset_id}", rel="stac", title="STAC collection"))
     if latest.format == ArtifactFormat.NETCDF:
         links.append(
