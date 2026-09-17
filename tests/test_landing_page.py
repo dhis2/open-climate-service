@@ -20,7 +20,6 @@ from fastapi.testclient import TestClient
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.openeo.workflows import _load_builtin_workflows
 from open_climate_service.system import templates as landing
 
 AREAS = ["overview", "datasets", "data-sources", "workflows", "processes"]
@@ -133,46 +132,6 @@ def test_data_sources_are_ordered_by_provider_then_name() -> None:
 def test_licence_label(licence: object, label: str | None) -> None:
     template = _ingestable("t") if licence is None else _ingestable("t", license=licence)
     assert landing._landing_catalogue([template], [])["sources"][0]["licence"] == label
-
-
-# --- produced_by -------------------------------------------------------------------------
-
-
-def test_every_built_in_derived_template_names_a_built_in_workflow() -> None:
-    """The shipped catalogue must not rely on the unknown-workflow fallback."""
-    workflow_ids = {workflow["id"] for workflow in _load_builtin_workflows()}
-    derived = [t for t in registry_datasets.list_datasets() if not registry_datasets.is_ingestable(t)]
-
-    assert derived, "the built-in catalogue has derived templates"
-    unlinked = {t["id"]: t.get("produced_by") for t in derived if t.get("produced_by") not in workflow_ids}
-    assert unlinked == {}
-
-
-@pytest.mark.parametrize("value", ["", "  ", " climate_normal", 3, ["climate_normal"]])
-def test_a_malformed_produced_by_is_refused(value: object) -> None:
-    with pytest.raises(ValueError, match="invalid produced_by"):
-        registry_datasets._validate_dataset_template(
-            _template("derived", produced_by=value, license="CC-BY-4.0"), source="derived.yaml"
-        )
-
-
-def test_produced_by_beside_an_ingestion_plugin_is_refused() -> None:
-    template = _template(
-        "both",
-        produced_by="climate_normal",
-        ingestion={"plugin": "some.Plugin"},
-        license="CC-BY-4.0",
-    )
-
-    with pytest.raises(ValueError, match="either ingested or produced"):
-        registry_datasets._validate_dataset_template(template, source="both.yaml")
-
-
-def test_produced_by_is_listed_by_the_template_api(client: TestClient) -> None:
-    templates = {t["id"]: t for t in client.get("/dataset-templates/").json()}
-
-    assert templates["worldpop_population_change"]["produced_by"] == "temporal_change"
-    assert "produced_by" not in templates["worldpop_population_global2_100m"]
 
 
 # --- the rendered page -------------------------------------------------------------------

@@ -40,7 +40,7 @@
   short_name: Precipitation
   description: >-
     Daily rainfall at 9 km, worldwide, from 1950 to a few days ago, stored as a mean daily rate.
-    Days run in UTC.
+    A day runs from midnight in the instance's own time zone.
   standard_name: lwe_precipitation_rate
   variable: tp
   period_type: daily
@@ -191,8 +191,8 @@
   name: Precipitation rate (ERA5-Land, local time)
   short_name: Precipitation
   description: >-
-    Daily rainfall totalled over the local day rather than the UTC day, as a mean daily rate. Use
-    this where the time zone matters more than a direct match with ERA5-Land.
+    Daily rainfall at 9 km, worldwide, from 1950 to a few days ago, stored as a mean daily rate.
+    A day runs from midnight in the instance's own time zone.
   standard_name: lwe_precipitation_rate
   variable: tp
   period_type: daily

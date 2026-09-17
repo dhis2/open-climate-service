@@ -170,6 +170,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `variable`   | Yes      | Name of the data variable in the Zarr store (e.g. `precip`, `t2m`, `rainfall`) |
 | `source`     | No       | Name of the upstream data source                                               |
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
+| `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /dataset-templates/`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
 | `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Templates that are produced, not ingested](#templates-that-are-produced-not-ingested) |
 
 **Period and sync**
