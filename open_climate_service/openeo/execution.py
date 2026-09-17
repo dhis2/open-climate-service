@@ -584,10 +584,14 @@ def _get_published_artifact(collection_id: str) -> Any:
 
 
 def _eligible_artifacts() -> dict[str, Any]:
-    return ingestion_services.latest_published_zarr_artifacts_by_dataset()
+    # The raster gate, not the STAC one: this resolves what load_collection will open as a
+    # datacube, which is a narrower question than what the catalogue describes.
+    return ingestion_services.latest_published_raster_artifacts_by_dataset()
 
 
 def _open_artifact(artifact: Any) -> xr.Dataset:
+    # Only reached for a record the raster gate admitted, so the formats here and
+    # LOADABLE_RASTER_FORMATS describe the same set from the two sides.
     path = _artifact_store_path(artifact)
     if artifact.format == ArtifactFormat.ICECHUNK:
         return open_icechunk_dataset(path)

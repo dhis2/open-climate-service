@@ -1302,11 +1302,14 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
             },
         }
         # Advertise the STAC collection only when the dataset is actually published.
+        # The raster gate rather than the STAC one, even though the asset points at STAC:
+        # the record is dereferenced as a Zarr store just below, to keep the media type in
+        # step with the collection's own asset.
         try:
             from open_climate_service.ingestions import services as _ingestion_services
             from open_climate_service.ingestions.schemas import ArtifactFormat
 
-            artifact = _ingestion_services.latest_published_zarr_artifacts_by_dataset().get(dataset_id)
+            artifact = _ingestion_services.latest_published_raster_artifacts_by_dataset().get(dataset_id)
             if artifact is not None:
                 assets["stac"] = {
                     "href": f"/stac/collections/{dataset_id}",

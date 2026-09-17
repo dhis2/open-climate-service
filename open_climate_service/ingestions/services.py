@@ -172,17 +172,68 @@ def group_datasets() -> dict[str, list[ArtifactRecord]]:
     return grouped
 
 
-def latest_published_zarr_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
-    """Return the latest published Zarr/Icechunk artifact for each dataset id."""
+LOADABLE_RASTER_FORMATS = frozenset({ArtifactFormat.ICECHUNK, ArtifactFormat.ZARR})
+"""Stored formats a raster reader can open as a datacube.
+
+Kept beside the gate that applies it so the two cannot drift: admitting a format no reader
+opens turns a catalogue entry into a runtime failure, and excluding one a reader handles
+hides a dataset that works. `openeo/execution.py::_open_artifact` opens exactly these two —
+Icechunk through its own reader, a plain Zarr store through `open_zarr_dataset`.
+
+NETCDF is absent deliberately: nothing opens it as a datacube, and `_dataset_links` offers it
+as a download instead.
+"""
+
+
+def _latest_published_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the latest published artifact for each dataset id, whatever its format.
+
+    Publication and recency are format-neutral questions, so they are answered once here.
+    What each surface then *does* with a given format is the surface's own question, asked
+    by the two gates below.
+
+    Publication is filtered *before* recency, not after. Picking the newest record first and
+    then testing it would drop a dataset entirely whenever its newest artifact happens to be
+    unpublished — an ingest with `publish: false` over an already-published dataset would
+    take it out of both catalogues, even though the earlier published record remains the
+    correct catalogue representative.
+    """
     result: dict[str, ArtifactRecord] = {}
     for dataset_id, artifacts in group_datasets().items():
-        latest = max(artifacts, key=lambda artifact: artifact.created_at)
-        if latest.publication.status != PublicationStatus.PUBLISHED:
+        published = [artifact for artifact in artifacts if artifact.publication.status == PublicationStatus.PUBLISHED]
+        if not published:
             continue
-        if latest.format != ArtifactFormat.ICECHUNK:
-            continue
-        result[dataset_id] = latest
+        result[dataset_id] = max(published, key=lambda artifact: artifact.created_at)
     return dict(sorted(result.items()))
+
+
+def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the published raster datacube for each dataset id.
+
+    This is the set that can actually be *opened* as a raster: openEO `/collections` and
+    `load_collection`, the native Zarr and Icechunk routes, and job-result assets all
+    dereference the record as a store, so all of them ask this question rather than the
+    catalogue one. Membership follows `LOADABLE_RASTER_FORMATS` — the shape a reader can
+    open, rather than one specific storage format — so a format that is not a datacube does
+    not belong here however it is catalogued.
+    """
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in LOADABLE_RASTER_FORMATS
+    }
+
+
+def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the artifacts the STAC catalogue advertises.
+
+    Identical to the raster set today, and deliberately a separate function rather than an
+    alias: STAC describes what exists, while openEO advertises what `load_collection` can
+    consume, and those stop being the same question once a non-raster artifact can be
+    published. A feature collection is a STAC collection and is not an openEO datacube, so
+    it joins here (CLIM-1069) and nowhere else.
+    """
+    return latest_published_raster_artifacts_by_dataset()
 
 
 def list_ingestions() -> IngestionListResponse:
@@ -1171,7 +1222,15 @@ def get_dataset_zarr_store_file_or_404(
     dataset_id: str, relative_path: str, range_header: str | None = None
 ) -> Response | dict[str, object]:
     """Serve a file, metadata document, or directory listing within a dataset Zarr store."""
-    artifact = get_latest_artifact_for_dataset_or_404(dataset_id)
+    artifact = latest_published_raster_artifacts_by_dataset().get(dataset_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+    if artifact.format == ArtifactFormat.ZARR:
+        return _get_filesystem_zarr_store_path_or_404(
+            artifact=artifact,
+            relative_path=relative_path,
+            range_header=range_header,
+        )
     session = _open_icechunk_store_or_404(artifact)
     return _get_icechunk_store_path_or_404(
         dataset_id=dataset_id, session=session, relative_path=relative_path, range_header=range_header
@@ -1208,7 +1267,7 @@ def _get_latest_published_icechunk_artifact_cached(dataset_id: str) -> ArtifactR
 
 def _get_latest_published_icechunk_artifact(dataset_id: str) -> ArtifactRecord:
     """Return the latest published Icechunk artifact for dataset_id, or raise 404/409."""
-    artifacts = latest_published_zarr_artifacts_by_dataset()
+    artifacts = latest_published_raster_artifacts_by_dataset()
     artifact = artifacts.get(dataset_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
@@ -1363,8 +1422,8 @@ def _build_icechunk_consolidated_metadata(session: _IcechunkSession) -> dict[str
     return result
 
 
-def _normalize_icechunk_relative_path(relative_path: str) -> str:
-    """Normalize a requested Icechunk key path and reject unsafe segments."""
+def _normalize_zarr_relative_path(relative_path: str) -> str:
+    """Normalize a requested Zarr key path and reject unsafe segments."""
     if "\\" in relative_path:
         raise HTTPException(status_code=400, detail="Zarr path must use '/' separators")
     target = relative_path.strip("/")
@@ -1422,7 +1481,7 @@ def _get_icechunk_store_path_or_404(
     dataset_id: str, session: _IcechunkSession, relative_path: str, range_header: str | None = None
 ) -> Response | dict[str, object]:
     store = session.store
-    target = _normalize_icechunk_relative_path(relative_path)
+    target = _normalize_zarr_relative_path(relative_path)
     if target == "":
         # The store root. A Zarr library never asks for it — it treats the URL as a base and
         # appends keys — but a person pasting the URL does, and FastAPI's redirect sends the
@@ -1447,6 +1506,44 @@ def _get_icechunk_store_path_or_404(
         return _serve_bytes_ranged(payload, media_type or "application/octet-stream", range_header)
 
     raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
+
+
+def _get_filesystem_zarr_store_path_or_404(
+    *,
+    artifact: ArtifactRecord,
+    relative_path: str,
+    range_header: str | None = None,
+) -> Response | dict[str, object]:
+    """Serve one key from a plain filesystem-backed Zarr store."""
+    store_path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
+    if store_path is None:
+        raise HTTPException(status_code=409, detail="Artifact has no resolvable store path")
+    store_root = Path(store_path).resolve()
+    if not store_root.is_dir():
+        raise HTTPException(status_code=404, detail="Zarr store path does not exist on disk")
+
+    target = _normalize_zarr_relative_path(relative_path)
+    if target == "":
+        # Prefer the Zarr v3 root document, while retaining access to legacy v2 stores.
+        for root_key in ("zarr.json", ".zgroup", ".zmetadata"):
+            if (store_root / root_key).is_file():
+                target = root_key
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Zarr root metadata not found")
+
+    full_path = (store_root / target).resolve()
+    if not full_path.is_relative_to(store_root) or not full_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
+
+    payload = full_path.read_bytes()
+    if full_path.name in {"zarr.json", ".zgroup", ".zarray", ".zattrs", ".zmetadata"}:
+        try:
+            return JSONResponse(content=json.loads(payload.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=500, detail=f"Invalid Zarr metadata at '{target}'") from exc
+    media_type, _ = mimetypes.guess_type(target)
+    return _serve_bytes_ranged(payload, media_type or "application/octet-stream", range_header)
 
 
 def _decode_record(item: dict[str, object]) -> ArtifactRecord:
@@ -1805,9 +1902,9 @@ def _build_dataset_detail_record(dataset_id: str, artifacts: list[ArtifactRecord
 
 def _dataset_links(dataset_id: str, latest: ArtifactRecord) -> list[DatasetAccessLink]:
     links = [DatasetAccessLink(href=f"/datasets/{dataset_id}", rel="self", title="Dataset detail")]
-    if latest.format == ArtifactFormat.ICECHUNK:
+    if latest.publication.status == PublicationStatus.PUBLISHED and latest.format in LOADABLE_RASTER_FORMATS:
         links.append(DatasetAccessLink(href=f"/zarr/{dataset_id}", rel="zarr", title="Zarr store"))
-    if latest.publication.status == PublicationStatus.PUBLISHED and latest.format == ArtifactFormat.ICECHUNK:
+    if latest.publication.status == PublicationStatus.PUBLISHED and latest.format in LOADABLE_RASTER_FORMATS:
         links.append(DatasetAccessLink(href=f"/stac/collections/{dataset_id}", rel="stac", title="STAC collection"))
     if latest.format == ArtifactFormat.NETCDF:
         links.append(
