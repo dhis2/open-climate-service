@@ -60,9 +60,9 @@
   /* The DHIS2 header bar's own colour and height, from @dhis2-ui/header-bar 10.17.0, where
      they are literals rather than tokens: background #2c6693, white text, 48px tall. */
   --header-background: #2c6693;
-  --header-height: 48px;
   /* Darker than any grey token: the extent outline has to stay legible over land and sea both. */
   --map-outline: #333;
+  --header-height: 48px;
 }
 
 *,
@@ -271,10 +271,10 @@ a.stat:hover {
 .globe .ocean {
   fill: var(--colors-blue100);
 }
-/* grey500, not grey400: against the pale blue ocean the lighter grey left the coastline
-   barely visible, and the extent outline is still well clear of both. */
+/* Between grey400 and grey500: grey400 left the coastline invisible against the pale blue
+   ocean, grey500 read as heavy for a map this small. */
 .globe .land {
-  fill: var(--colors-grey500);
+  fill: color-mix(in srgb, var(--colors-grey500) 70%, var(--colors-white));
 }
 .globe .extent {
   fill: none;
