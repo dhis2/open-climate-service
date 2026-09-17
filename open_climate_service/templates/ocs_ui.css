@@ -60,8 +60,6 @@
   /* The DHIS2 header bar's own colour and height, from @dhis2-ui/header-bar 10.17.0, where
      they are literals rather than tokens: background #2c6693, white text, 48px tall. */
   --header-background: #2c6693;
-  /* Darker than any grey token: the extent outline has to stay legible over land and sea both. */
-  --map-outline: #333;
   --header-height: 48px;
 }
 
@@ -278,7 +276,7 @@ a.stat:hover {
 }
 .globe .extent {
   fill: none;
-  stroke: var(--map-outline);
+  stroke: black;
   stroke-width: 2;
   stroke-linejoin: round;
 }
