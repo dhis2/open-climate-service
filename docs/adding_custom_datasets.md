@@ -258,6 +258,7 @@ Note `end` stays a plain `str`, so there is no missing-value case to handle.
 `ingestion.plugin` is what makes a template ingestable, and roughly half the shipped catalogue
 has none: anomalies, normals and change rasters are *produced* by a workflow through
 `save_result` and registered as static templates, so there is nothing upstream to fetch.
+A custom template without `ingestion.plugin` is not ingestable either, whatever produces it.
 
 `GET /dataset-templates/` reports this as `ingestable` on every template, the `/manage` ingest
 form offers only the ingestable ones, and asking to ingest one that is not returns `400` naming

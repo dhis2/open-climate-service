@@ -262,10 +262,10 @@ def ensure_ingestable(dataset: dict[str, object]) -> None:
         status_code=400,
         detail=(
             f"Dataset template '{dataset['id']}' cannot be ingested: it declares no "
-            "'ingestion.plugin', so there is no source to fetch from. It is a derived "
-            "product, published by a workflow through 'save_result' rather than ingested — "
-            "run the workflow that produces it (see GET /process_graphs). "
-            "GET /dataset-templates/ reports 'ingestable' for every template."
+            "'ingestion.plugin', so there is no source to fetch from. If it is a derived "
+            "product, it is published by a workflow through 'save_result' — run the workflow "
+            "that produces it (see GET /process_graphs). Otherwise, add an 'ingestion.plugin' "
+            "to the template. GET /dataset-templates/ reports 'ingestable' for every template."
         ),
     )
 

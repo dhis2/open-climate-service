@@ -149,8 +149,8 @@ def _load_templates() -> list[dict[str, Any]]:
 def _ingestable_templates() -> list[dict[str, Any]]:
     """Return only templates that can be ingested from a source.
 
-    Derived templates — workflow outputs published via ``save_result``, with no upstream
-    fetch path — are excluded so they do not appear in the ingest form. Shares the registry's
+    Templates without an ingestion plugin — typically workflow outputs published via
+    ``save_result`` — have no upstream fetch path, so they are excluded from the ingest form. Shares the registry's
     predicate with ``GET /dataset-templates/`` and with the ingest path that refuses them, so
     the form and the API cannot disagree about what is offerable.
     """
