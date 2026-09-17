@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ dataset.name }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <h1>{{ name }}</h1>
+      <span class="version">v{{ version }}</span>
+    </header>
+
+    <div class="layout">
+      <nav class="rail" aria-label="Sections">
+        <ul>
+          <li><a href="{{ mount }}/#overview">Overview</a></li>
+          <li><a href="{{ mount }}/#explore">Explore</a></li>
+          <li><a href="{{ mount }}/#datasets" aria-current="page">Datasets</a></li>
+          <li><a href="{{ mount }}/#data-sources">Data sources</a></li>
+          <li><a href="{{ mount }}/#workflows">Workflows</a></li>
+          {% if not read_only %}
+          <li><a href="{{ mount }}/#operator">Operator tools</a></li>
+          {% endif %}
+        </ul>
+      </nav>
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/#datasets">Datasets</a> / {{ dataset.id }}</p>
+        <div class="page-title">
+          <h2>{{ dataset.name }}</h2>
+          <span class="chip chip-{{ dataset.status }}">{{ dataset.status }}</span>
+        </div>
+
+        <div class="dataset-page">
+          <div class="stack">
+            <div class="panel item">
+              <div
+                class="thumb{% if dataset.has_thumbnail %} has-image{% endif %}"
+                style="--ramp: {{ dataset.ramp }}"
+              >
+                {% if dataset.has_thumbnail %}
+                <img
+                  src="{{ mount }}/datasets/{{ dataset.id }}/thumbnail.png"
+                  alt="Preview of {{ dataset.name }}"
+                />
+                {% else %}
+                <span class="no-preview">No preview yet</span>
+                {% endif %}
+              </div>
+            </div>
+
+            <section class="panel" aria-labelledby="description-title">
+              <h3 id="description-title">Description</h3>
+              {% if paragraphs %}
+              <div class="prose">
+                {% for paragraph in paragraphs %}
+                <p>{{ paragraph }}</p>
+                {% endfor %}
+              </div>
+              {% else %}
+              <p class="note">No description has been provided for this dataset.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="data-title">
+              <h3 id="data-title">Data</h3>
+              <dl class="facts">
+                {% for label, value, href in data %}
+                <dt>{{ label }}</dt>
+                <dd>{% if href %}<a href="{{ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}</dd>
+                {% endfor %}
+              </dl>
+            </section>
+
+            {% if versions %}
+            <section class="panel table-wrap" aria-labelledby="versions-title">
+              <h3 id="versions-title" style="padding: var(--spacers-dp16) var(--spacers-dp16) 0">Versions</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Created</th>
+                    <th scope="col">Format</th>
+                    <th scope="col">Temporal coverage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for v in versions %}
+                  <tr>
+                    <td>{{ v.created_at }}</td>
+                    <td>{{ v.format }}</td>
+                    <td>{{ v.coverage or "—" }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </section>
+            {% endif %}
+          </div>
+
+          <div class="stack">
+            <section class="panel" aria-labelledby="access-title">
+              <h3 id="access-title">Access</h3>
+              <div class="actions">
+                {% if published %}
+                <a class="button-link primary" href="{{ mount }}/map">Open map viewer</a>
+                {% endif %}
+                {% for link in links %}
+                <a class="button-link" href="{{ mount }}{{ link.href }}">{{ link.title }}</a>
+                {% endfor %}
+                <a class="button-link" href="{{ mount }}/datasets/{{ dataset.id }}?f=json">Metadata (JSON)</a>
+              </div>
+              {% if not published %}
+              <p class="note" style="margin-top: var(--spacers-dp8)">
+                This dataset is not published, so it is not in the map viewer or the STAC catalog.
+              </p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="about-title">
+              <h3 id="about-title">About</h3>
+              <dl class="facts">
+                {% for label, value, href in about %}
+                <dt>{{ label }}</dt>
+                <dd>
+                  {% if href %}<a href="{{ href if href.startswith('http') else mount ~ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}
+                </dd>
+                {% endfor %}
+              </dl>
+            </section>
+
+            <section class="panel" aria-labelledby="status-title">
+              <h3 id="status-title">Status and display</h3>
+              <dl class="facts">
+                {% for label, value, href in status_facts %}
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+                {% endfor %}
+              </dl>
+              <span class="ramp-bar" style="--ramp: {{ dataset.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <footer>
+      <a href="https://github.com/dhis2/open-climate-service">dhis2/open-climate-service</a>
+    </footer>
+  </body>
+</html>

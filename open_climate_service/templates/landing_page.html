@@ -5,451 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ name }}</title>
     <style>
-      /*
-        DHIS2 design tokens, copied from @dhis2/ui-constants 10.17.0 (colors, theme,
-        spacersNum, elevations) and named as @dhis2-ui/css names them. Copied rather than
-        imported: the design system publishes no plain CSS, and this page must work offline
-        with no build step. Update the version above when refreshing the values.
-      */
-      :root {
-        --colors-blue900: #093371;
-        --colors-blue800: #0d47a1;
-        --colors-blue700: #1565c0;
-        --colors-blue600: #147cd7;
-        --colors-blue100: #e3f2fd;
-        --colors-blue050: #f5fbff;
-        --colors-teal800: #004d40;
-        --colors-teal100: #e0f2f1;
-        --colors-green800: #1b5e20;
-        --colors-green100: #e8f5e9;
-        --colors-yellow900: #6f3205;
-        --colors-yellow100: #ffecb3;
-        --colors-grey900: #212934;
-        --colors-grey800: #404b5a;
-        --colors-grey700: #4a5768;
-        --colors-grey600: #6c7787;
-        --colors-grey500: #a0adba;
-        --colors-grey400: #d5dde5;
-        --colors-grey300: #e8edf2;
-        --colors-grey200: #f3f5f7;
-        --colors-grey100: #f8f9fa;
-        --colors-white: #ffffff;
-        --theme-fonts: Roboto, sans-serif;
-        --theme-primary800: #0d47a1;
-        --theme-primary600: #147cd7;
-        --theme-focus: #147cd7;
-        --spacers-dp4: 4px;
-        --spacers-dp8: 8px;
-        --spacers-dp12: 12px;
-        --spacers-dp16: 16px;
-        --spacers-dp24: 24px;
-        --spacers-dp32: 32px;
-        --spacers-dp48: 48px;
-        --elevations-e100: 0px 1px 2px rgba(33, 41, 52, 0.06), 0px 1px 3px rgba(33, 41, 52, 0.1);
-
-        /* Not in @dhis2/ui-constants: sizes follow the DHIS2 UI component defaults. */
-        --font-mono: ui-monospace, "Cascadia Code", Menlo, monospace;
-        --font-size-small: 12px;
-        --font-size-body: 14px;
-        --font-size-h3: 15px;
-        --font-size-h1: 18px;
-        --font-size-h2: 20px;
-        --font-size-stat: 28px;
-        --font-weight-medium: 500;
-        --radius: 4px;
-        --radius-chip: 12px;
-        --header-height: 52px;
-      }
-
-      *,
-      *::before,
-      *::after {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
-      [hidden] {
-        display: none !important;
-      }
-
-      body {
-        font-family: var(--theme-fonts);
-        font-size: var(--font-size-body);
-        line-height: 1.5;
-        color: var(--colors-grey900);
-        background: var(--colors-grey200);
-        min-height: 100vh;
-      }
-      a {
-        color: var(--theme-primary800);
-      }
-      a:hover {
-        color: var(--colors-blue900);
-      }
-      :focus-visible {
-        outline: 3px solid var(--theme-focus);
-        outline-offset: 2px;
-      }
-      code {
-        font-family: var(--font-mono);
-        font-size: 0.9em;
-        background: var(--colors-grey200);
-        padding: 0 var(--spacers-dp4);
-        border-radius: var(--radius);
-      }
-
-      .skip-link {
-        position: absolute;
-        left: var(--spacers-dp8);
-        top: -100px;
-        background: var(--colors-white);
-        padding: var(--spacers-dp8) var(--spacers-dp12);
-        z-index: 10;
-      }
-      .skip-link:focus {
-        top: var(--spacers-dp8);
-      }
-
-      header {
-        background: var(--colors-blue800);
-        color: var(--colors-white);
-        padding: var(--spacers-dp12) var(--spacers-dp24);
-        display: flex;
-        align-items: baseline;
-        gap: var(--spacers-dp12);
-        flex-wrap: wrap;
-      }
-      header h1 {
-        font-size: var(--font-size-h1);
-        font-weight: var(--font-weight-medium);
-      }
-      header .version {
-        font-family: var(--font-mono);
-        font-size: var(--font-size-small);
-        color: var(--colors-blue100);
-      }
-
-      .layout {
-        display: grid;
-        grid-template-columns: 220px minmax(0, 1fr);
-        min-height: calc(100vh - var(--header-height));
-      }
-
-      nav.rail {
-        background: var(--colors-white);
-        border-right: 1px solid var(--colors-grey300);
-        padding: var(--spacers-dp16) var(--spacers-dp8);
-      }
-      nav.rail ul {
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacers-dp4);
-      }
-      nav.rail a {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: var(--spacers-dp8);
-        padding: var(--spacers-dp8) var(--spacers-dp12);
-        border-radius: var(--radius);
-        color: var(--colors-grey800);
-        text-decoration: none;
-        font-weight: var(--font-weight-medium);
-        white-space: nowrap;
-      }
-      nav.rail a:hover {
-        background: var(--colors-grey200);
-        color: var(--colors-grey900);
-      }
-      nav.rail a[aria-current="page"] {
-        background: var(--colors-blue100);
-        color: var(--colors-blue900);
-      }
-      nav.rail .count {
-        font-size: var(--font-size-small);
-        font-weight: 400;
-        color: var(--colors-grey600);
-      }
-
-      main {
-        padding: var(--spacers-dp24) var(--spacers-dp32) var(--spacers-dp48);
-        max-width: 1080px;
-        width: 100%;
-      }
-      main > section + section {
-        margin-top: var(--spacers-dp48);
-      }
-      .js main > section + section {
-        margin-top: 0;
-      }
-      /* One area shows at a time, so jumping to its anchor would only scroll the header away.
-         A margin taller than the page makes that jump land at the top. */
-      .js main > section {
-        scroll-margin-top: 100vh;
-      }
-      h2 {
-        font-size: var(--font-size-h2);
-        font-weight: var(--font-weight-medium);
-        margin-bottom: var(--spacers-dp4);
-      }
-      h2:focus {
-        outline: none;
-      }
-      h3 {
-        font-size: var(--font-size-h3);
-        font-weight: var(--font-weight-medium);
-      }
-      .lead {
-        color: var(--colors-grey700);
-        margin-bottom: var(--spacers-dp16);
-      }
-      .note {
-        color: var(--colors-grey700);
-      }
-
-      .panel {
-        background: var(--colors-white);
-        border: 1px solid var(--colors-grey300);
-        border-radius: var(--radius);
-        box-shadow: var(--elevations-e100);
-        padding: var(--spacers-dp16);
-      }
-
-      .stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: var(--spacers-dp12);
-        margin-bottom: var(--spacers-dp16);
-      }
-      .stat {
-        display: block;
-        text-decoration: none;
-        color: inherit;
-      }
-      a.stat:hover {
-        border-color: var(--colors-grey500);
-        color: inherit;
-      }
-      .stat .value {
-        display: block;
-        font-size: var(--font-size-stat);
-        font-weight: var(--font-weight-medium);
-        line-height: 1.2;
-        color: var(--colors-grey900);
-      }
-      .stat .label {
-        color: var(--colors-grey700);
-      }
-
-      dl.facts {
-        display: grid;
-        grid-template-columns: max-content minmax(0, 1fr);
-        column-gap: var(--spacers-dp24);
-        row-gap: var(--spacers-dp4);
-      }
-      dl.facts dt {
-        color: var(--colors-grey700);
-      }
-      dl.facts dd {
-        overflow-wrap: anywhere;
-      }
-
-      .cards {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
-        gap: var(--spacers-dp12);
-      }
-      .card {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacers-dp4);
-        min-width: 0;
-        overflow-wrap: anywhere;
-      }
-      a.card {
-        text-decoration: none;
-        color: inherit;
-      }
-      a.card:hover {
-        border-color: var(--colors-grey500);
-        color: inherit;
-      }
-      a.card h3 {
-        color: var(--theme-primary800);
-      }
-      .card .provider {
-        color: var(--colors-grey700);
-        display: -webkit-box;
-        -webkit-box-orient: vertical;
-        -webkit-line-clamp: 2;
-        line-clamp: 2;
-        overflow: hidden;
-      }
-      .meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: var(--spacers-dp4);
-        margin-top: auto;
-        padding-top: var(--spacers-dp8);
-      }
-
-      .chip {
-        display: inline-block;
-        border-radius: var(--radius-chip);
-        padding: 0 var(--spacers-dp8);
-        font-size: var(--font-size-small);
-        line-height: calc(var(--font-size-small) + var(--spacers-dp8));
-        background: var(--colors-grey200);
-        color: var(--colors-grey800);
-        white-space: nowrap;
-      }
-      .chip-published {
-        background: var(--colors-green100);
-        color: var(--colors-green800);
-      }
-      .chip-unpublished {
-        background: var(--colors-yellow100);
-        color: var(--colors-yellow900);
-      }
-      .chip-output {
-        background: var(--colors-teal100);
-        color: var(--colors-teal800);
-      }
-
-      .toolbar {
-        display: none;
-        flex-wrap: wrap;
-        align-items: end;
-        gap: var(--spacers-dp12);
-        margin-bottom: var(--spacers-dp12);
-      }
-      .js .toolbar {
-        display: flex;
-      }
-      .toolbar label {
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacers-dp4);
-        font-size: var(--font-size-small);
-        color: var(--colors-grey700);
-      }
-      .toolbar input,
-      .toolbar select {
-        font: inherit;
-        color: var(--colors-grey900);
-        background: var(--colors-white);
-        border: 1px solid var(--colors-grey500);
-        border-radius: var(--radius);
-        padding: var(--spacers-dp4) var(--spacers-dp8);
-        min-width: 180px;
-      }
-      .toolbar .status {
-        margin-left: auto;
-        color: var(--colors-grey700);
-        align-self: center;
-      }
-
-      .table-wrap {
-        overflow-x: auto;
-        padding: 0;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      th,
-      td {
-        text-align: left;
-        padding: var(--spacers-dp8) var(--spacers-dp12);
-        border-bottom: 1px solid var(--colors-grey300);
-        vertical-align: top;
-      }
-      th {
-        font-weight: var(--font-weight-medium);
-        color: var(--colors-grey700);
-        background: var(--colors-grey100);
-      }
-      tbody tr:last-child td {
-        border-bottom: none;
-      }
-
-      .pager {
-        display: none;
-        align-items: center;
-        justify-content: flex-end;
-        gap: var(--spacers-dp8);
-        margin-top: var(--spacers-dp12);
-      }
-      .js .pager {
-        display: flex;
-      }
-      button {
-        font: inherit;
-        color: var(--colors-grey900);
-        background: var(--colors-white);
-        border: 1px solid var(--colors-grey500);
-        border-radius: var(--radius);
-        padding: var(--spacers-dp4) var(--spacers-dp12);
-        cursor: pointer;
-      }
-      button:disabled {
-        color: var(--colors-grey500);
-        border-color: var(--colors-grey300);
-        cursor: default;
-      }
-
-      .workflow + .workflow {
-        margin-top: var(--spacers-dp12);
-      }
-      .workflow .outputs {
-        margin-top: var(--spacers-dp8);
-        padding-top: var(--spacers-dp8);
-        border-top: 1px solid var(--colors-grey300);
-      }
-      .workflow .outputs ul {
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: var(--spacers-dp4);
-        margin-top: var(--spacers-dp8);
-      }
-      .workflow .outputs li {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: var(--spacers-dp8);
-      }
-
-      footer {
-        color: var(--colors-grey600);
-        font-size: var(--font-size-small);
-        padding: var(--spacers-dp16) var(--spacers-dp32);
-      }
-      footer a {
-        color: var(--colors-grey700);
-      }
-
-      @media (max-width: 720px) {
-        .layout {
-          grid-template-columns: minmax(0, 1fr);
-        }
-        nav.rail {
-          border-right: none;
-          border-bottom: 1px solid var(--colors-grey300);
-          padding: var(--spacers-dp8);
-          overflow-x: auto;
-        }
-        nav.rail ul {
-          flex-direction: row;
-        }
-        main {
-          padding: var(--spacers-dp16);
-        }
-        .toolbar .status {
-          margin-left: 0;
-        }
-      }
+{{ styles | safe }}
     </style>
   </head>
   <body>
@@ -571,11 +127,11 @@
           <h2 id="datasets-title" tabindex="-1">Datasets</h2>
           <p class="lead">Data this instance holds.</p>
           {% if datasets %}
-          <div data-list data-page-size="15">
+          <div data-list data-page-size="12" data-views="datasets">
             <div class="toolbar">
               <label
                 >Search
-                <input type="search" data-filter-text placeholder="Name, variable or period" />
+                <input type="search" data-filter-text placeholder="Name, source or variable" />
               </label>
               <label
                 >Status
@@ -585,40 +141,46 @@
                   <option value="unpublished">Unpublished</option>
                 </select>
               </label>
+              <div class="view-switch" role="group" aria-label="Layout">
+                <button type="button" data-view-button="tiles" aria-pressed="true">Tiles</button>
+                <button type="button" data-view-button="list" aria-pressed="false">List</button>
+              </div>
               <span class="status" data-status aria-live="polite"></span>
             </div>
-            <div class="panel table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">Name</th>
-                    <th scope="col">Variable</th>
-                    <th scope="col">Period</th>
-                    <th scope="col">Temporal coverage</th>
-                    <th scope="col">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for ds in datasets %}
-                  {% set status = "published" if ds.publication.status == "published" else "unpublished" %}
-                  <tr
-                    data-item
-                    data-status="{{ status }}"
-                    data-search="{{ [ds.dataset_name, ds.dataset_id, ds.variable, ds.period_type] | join(' ') | lower }}"
-                  >
-                    <td>
-                      <a href="{{ mount }}/datasets/{{ ds.dataset_id }}">{{ ds.dataset_name }}</a>
-                    </td>
-                    <td>{{ ds.variable }}</td>
-                    <td>{{ ds.period_type }}</td>
-                    <td>
-                      {% if ds.extent.temporal.start or ds.extent.temporal.end %}{{ ds.extent.temporal.start or "…" }} – {{ ds.extent.temporal.end or "…" }}{% else %}—{% endif %}
-                    </td>
-                    <td><span class="chip chip-{{ status }}">{{ status }}</span></td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
+            <div class="collection view-tiles" data-view-target>
+              {% for ds in datasets %}
+              <article
+                class="panel item"
+                data-item
+                data-status="{{ ds.status }}"
+                data-search="{{ [ds.name, ds.id, ds.source, ds.variable, ds.period_type] | join(' ') | lower }}"
+              >
+                <a
+                  class="thumb{% if ds.has_thumbnail %} has-image{% endif %}"
+                  href="{{ mount }}/datasets/{{ ds.id }}"
+                  tabindex="-1"
+                  aria-hidden="true"
+                  style="--ramp: {{ ds.ramp }}"
+                >
+                  {% if ds.has_thumbnail %}
+                  <img src="{{ mount }}/datasets/{{ ds.id }}/thumbnail.png" alt="" loading="lazy" />
+                  {% else %}
+                  <span class="no-preview">No preview yet</span>
+                  {% endif %}
+                </a>
+                <div class="body">
+                  <h3><a href="{{ mount }}/datasets/{{ ds.id }}">{{ ds.name }}</a></h3>
+                  {% if ds.source %}<span class="provider clamp">{{ ds.source }}</span>{% endif %}
+                  {% if ds.description %}<p class="description clamp">{{ ds.description }}</p>{% endif %}
+                  <div class="meta">
+                    <span class="chip chip-{{ ds.status }}">{{ ds.status }}</span>
+                    {% if ds.period_type %}<span class="chip">{{ ds.period_type }}</span>{% endif %}
+                    {% if ds.coverage %}<span class="chip">{{ ds.coverage }}</span>{% endif %}
+                    {% if ds.units %}<span class="chip">{{ ds.units }}</span>{% endif %}
+                  </div>
+                </div>
+              </article>
+              {% endfor %}
             </div>
             <p class="note" data-empty hidden>No datasets match.</p>
             <div class="pager" data-pager>
@@ -858,6 +420,34 @@
               page += 1;
               apply();
             });
+          var views = root.getAttribute("data-views");
+          var target = root.querySelector("[data-view-target]");
+          var viewButtons = Array.prototype.slice.call(root.querySelectorAll("[data-view-button]"));
+          function setView(view) {
+            if (!target) return;
+            target.classList.toggle("view-tiles", view !== "list");
+            target.classList.toggle("view-list", view === "list");
+            viewButtons.forEach(function (button) {
+              button.setAttribute("aria-pressed", String(button.getAttribute("data-view-button") === view));
+            });
+          }
+          if (views) {
+            var stored = null;
+            try {
+              stored = window.localStorage.getItem("ocs.view." + views);
+            } catch (e) {}
+            setView(stored === "list" ? "list" : "tiles");
+            viewButtons.forEach(function (button) {
+              button.addEventListener("click", function () {
+                var view = button.getAttribute("data-view-button");
+                setView(view);
+                try {
+                  window.localStorage.setItem("ocs.view." + views, view);
+                } catch (e) {}
+              });
+            });
+          }
+
           apply();
         }
 

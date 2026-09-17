@@ -1,5 +1,6 @@
 """Server-side HTML rendering and root resource representations for the Open Climate Service."""
 
+import functools
 import importlib.resources
 import logging
 from datetime import date
@@ -199,6 +200,73 @@ def _source_view(template: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@functools.lru_cache(maxsize=64)
+def _colormap_ramp(name: str | None) -> str:
+    """A CSS gradient through a colormap, drawn where a dataset has no thumbnail yet.
+
+    The same colormap the map viewer and the thumbnail use, so the placeholder already looks
+    like the layer will. Cached: a landing page lists the same few colormaps many times, and
+    resolving one imports matplotlib.
+    """
+    from matplotlib.colors import to_hex
+
+    from open_climate_service.shared.thumbnails import resolve_colormap
+
+    colormap = resolve_colormap(name)
+    stops = ", ".join(to_hex(colormap(i / 4)) for i in range(5))
+    return f"linear-gradient(90deg, {stops})"
+
+
+def _coverage_label(start: object, end: object) -> str:
+    if not start and not end:
+        return ""
+    return f"{start or '…'} – {end or '…'}"
+
+
+def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, Any]:
+    """A dataset tile or row: thumbnail (or colormap ramp), name, source and description.
+
+    The thumbnail is linked only when its file exists. It is written at ingest and sync, so a
+    dataset ingested before thumbnails existed has none until its next sync, and linking a
+    missing image would show a broken-image icon rather than the ramp.
+    """
+    from open_climate_service.shared.thumbnails import thumbnail_path
+
+    display = (template or {}).get("display")
+    colormap = display.get("colormap") if isinstance(display, dict) else None
+    status = "published" if dataset.publication.status == "published" else "unpublished"
+    try:
+        has_thumbnail = thumbnail_path(dataset.dataset_id).is_file()
+    except OSError:
+        has_thumbnail = False
+    description = " ".join((dataset.description or "").split())
+    return {
+        "id": dataset.dataset_id,
+        "name": dataset.dataset_name,
+        "description": description,
+        "source": dataset.source or "",
+        "variable": dataset.variable,
+        "units": dataset.units or "",
+        "period_type": dataset.period_type,
+        "coverage": _coverage_label(dataset.extent.temporal.start, dataset.extent.temporal.end),
+        "status": status,
+        "has_thumbnail": has_thumbnail,
+        "ramp": _colormap_ramp(colormap if isinstance(colormap, str) else None),
+    }
+
+
+def _dataset_views(datasets: list[Any], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id = {template["id"]: template for template in templates}
+    views = []
+    for dataset in datasets:
+        template = by_id.get(dataset.source_dataset_id) or by_id.get(dataset.dataset_id)
+        try:
+            views.append(_dataset_view(dataset, template))
+        except Exception:
+            _log.exception("Unexpected error preparing dataset '%s' for the landing page", dataset.dataset_id)
+    return views
+
+
 def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) -> dict[str, Any]:
     """Split templates between Data sources and Workflows by whether they can be ingested.
 
@@ -236,13 +304,15 @@ def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) ->
 def render_landing(version: str, mount: str) -> str:
     """Render the root landing page with live instance status."""
     datasets = _load_datasets()
-    catalogue = _landing_catalogue(_load_templates(), _load_workflows())
+    templates = _load_templates()
+    catalogue = _landing_catalogue(templates, _load_workflows())
     return get_template("landing_page.html").render(
         version=version,
         mount=mount,
         name=api_config.get_name(),
+        styles=_read_asset("ocs_ui.css"),
         extent=_load_extent(),
-        datasets=datasets,
+        datasets=_dataset_views(datasets, templates),
         published_count=sum(1 for dataset in datasets if dataset.publication.status == "published"),
         sources=catalogue["sources"],
         workflows=catalogue["workflows"],
@@ -250,6 +320,181 @@ def render_landing(version: str, mount: str) -> str:
         # Read-only instances refuse /manage, so offering the link would advertise a 403.
         read_only=api_config.is_read_only(),
     )
+
+
+@functools.lru_cache(maxsize=4)
+def _read_asset(name: str) -> str:
+    resource = importlib.resources.files("open_climate_service") / "templates" / name
+    return resource.read_text(encoding="utf-8")
+
+
+def _paragraphs(text: str | None) -> list[str]:
+    """Split prose on blank lines, joining the wrapped lines within each paragraph."""
+    blocks = (text or "").replace("\r\n", "\n").split("\n\n")
+    return [" ".join(block.split()) for block in blocks if block.strip()]
+
+
+def _format_timestamp(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return str(value.strftime("%Y-%m-%d %H:%M UTC"))
+    except AttributeError:
+        return str(value)
+
+
+Fact = tuple[str, str, str | None]
+"""A dataset page line: label, value, and an optional link."""
+
+_SYNC_KIND_LABELS = {
+    "temporal": "New periods are added as the source publishes them",
+    "release": "Replaced when the source issues a new release",
+    "static": "Does not update",
+}
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _record_licence_label(record: Any) -> str:
+    # "other" is what a record says when the licence has no SPDX id, including when none was
+    # declared at all; shown bare it reads like a licence called "other".
+    if record.license == "other":
+        return "See licence" if record.license_url else "Not specified"
+    return str(record.license)
+
+
+def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[str, Any]:
+    """Everything the dataset page shows: the managed record, plus what its template adds.
+
+    Each fact is a (label, value, href) triple and is dropped when it has no value, so the
+    page lists what is known rather than a column of dashes.
+    """
+    template = template or {}
+    summary = _dataset_view(record, template)
+    spatial = record.extent.spatial
+    display = _mapping(template.get("display"))
+    sync = _mapping(template.get("sync"))
+    sync_kind = str(sync.get("kind") or "")
+    providers = ", ".join(
+        str(provider["name"])
+        for provider in template.get("providers") or []
+        if isinstance(provider, dict) and provider.get("name")
+    )
+    version = sync.get("version")
+    version_label = (
+        f"{version.get('authority')}:{version.get('value')}"
+        if isinstance(version, dict) and version.get("value")
+        else (str(version) if version else "")
+    )
+    display_range = display.get("range")
+    range_label = (
+        f"{display_range[0]} – {display_range[1]}"
+        if isinstance(display_range, list | tuple) and len(display_range) == 2
+        else ""
+    )
+
+    if template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
+        origin: Fact = (
+            "Produced by",
+            f"{template['produced_by']} workflow",
+            f"/process_graphs/{template['produced_by']}",
+        )
+    elif template and registry_datasets.is_ingestable(template):
+        origin = ("Origin", "Fetched from the data source", None)
+    else:
+        origin = ("Origin", "", None)
+
+    about: list[Fact] = [
+        ("Identifier", record.dataset_id, None),
+        ("Short name", record.short_name or "", None),
+        ("Source", record.source or "", record.source_url),
+        origin,
+        ("Licence", _licence_label(template) or _record_licence_label(record), record.license_url),
+        ("Providers", providers, None),
+    ]
+    data: list[Fact] = [
+        ("Variable", record.variable, None),
+        ("Standard name", str(template.get("standard_name") or ""), None),
+        ("Units", record.units or "", None),
+        ("Cell methods", str(template.get("cell_methods") or ""), None),
+        ("Period", record.period_type, None),
+        ("Temporal coverage", summary["coverage"], None),
+        ("Direction", str(template.get("temporal_direction") or ""), None),
+        ("Resolution", record.resolution or "", None),
+        (
+            "Bounding box",
+            f"{spatial.xmin:.4f}, {spatial.ymin:.4f}, {spatial.xmax:.4f}, {spatial.ymax:.4f}",
+            None,
+        ),
+    ]
+    status: list[Fact] = [
+        ("Publication", summary["status"], None),
+        ("Published", _format_timestamp(record.publication.published_at), None),
+        ("Last updated", _format_timestamp(record.last_updated), None),
+        ("Updates", _SYNC_KIND_LABELS.get(sync_kind, sync_kind), None),
+        ("Release", version_label, None),
+        ("Colour scale", str(display.get("colormap") or ""), None),
+        ("Display range", range_label, None),
+    ]
+
+    def present(facts: list[Fact]) -> list[Fact]:
+        return [fact for fact in facts if fact[1]]
+
+    return {
+        "dataset": summary,
+        "paragraphs": _paragraphs(record.description),
+        "about": present(about),
+        "data": present(data),
+        "status_facts": present(status),
+        "links": [link for link in record.links if link.rel != "self"],
+        "published": summary["status"] == "published",
+        "versions": [
+            {
+                "created_at": _format_timestamp(version.created_at),
+                "format": str(getattr(version.format, "value", version.format)),
+                "coverage": _coverage_label(version.coverage.temporal.start, version.coverage.temporal.end),
+            }
+            for version in sorted(record.versions, key=lambda version: version.created_at, reverse=True)
+        ],
+    }
+
+
+def render_dataset_page(record: Any, mount: str) -> str:
+    """Render the HTML page for one managed dataset, linked from the landing page."""
+    try:
+        template = registry_datasets.get_dataset(record.source_dataset_id) or registry_datasets.get_dataset(
+            record.dataset_id
+        )
+    except Exception:
+        _log.exception("Unexpected error loading the template for dataset '%s'", record.dataset_id)
+        template = None
+    return get_template("dataset_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        styles=_read_asset("ocs_ui.css"),
+        read_only=api_config.is_read_only(),
+        **_dataset_page_context(record, template),
+    )
+
+
+def prefers_html(request: Request) -> bool:
+    """Whether a client asked for HTML over JSON, for an endpoint that is JSON by default.
+
+    Stricter than `wants_json` on purpose. `/` has always defaulted to HTML; a data endpoint
+    has always answered JSON, and scripts calling it may send no Accept header or `*/*`.
+    Those keep getting JSON, and only a client that ranks `text/html` above JSON — a browser —
+    gets the page. `?f=html` and `?f=json` override either way.
+    """
+    requested = request.query_params.get("f")
+    if requested in {"html", "json"}:
+        return requested == "html"
+    accept = request.headers.get("accept", "")
+    if not accept:
+        return False
+    return _media_type_q(accept, "text/html") > _media_type_q(accept, "application/json")
 
 
 def render_manage(version: str, mount: str, message: str | None = None, error: str | None = None) -> str:

@@ -36,6 +36,22 @@ on a narrow screen). One area shows at a time, and each has its own address, suc
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript every area is shown in sequence and each list is complete.
 
+Datasets can be shown as **tiles** or as a **list**; the choice is remembered in the browser.
+Each dataset shows its thumbnail, source, a short description, publication status, period,
+temporal coverage and units. A dataset ingested before thumbnails existed shows its colour
+scale instead, until its next sync renders one.
+
+### The dataset page (`/datasets/{dataset_id}`)
+
+Selecting a dataset opens its page: a larger preview, the full description, and everything
+known about it — variable, units, period, coverage, resolution and bounding box; source,
+licence, providers and how it is made (fetched, or produced by a named workflow); publication
+and update status; colour scale; and its version history. Links lead to the map viewer, the
+Zarr store, the STAC collection and the JSON metadata.
+
+The same URL still returns JSON to API clients. A browser, which asks for HTML first, gets the
+page; `?f=json` and `?f=html` choose explicitly.
+
 Data sources and Workflows together cover every dataset template registered on the
 instance: a template that can be ingested is a data source, and one that a workflow writes is
 listed under that workflow (see [Templates that are produced, not
