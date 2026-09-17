@@ -155,6 +155,9 @@ nav.rail a {
   font-weight: var(--font-weight-medium);
   white-space: nowrap;
 }
+nav.rail li.gap {
+  margin-top: var(--spacers-dp16);
+}
 nav.rail a:hover {
   background: var(--colors-grey200);
   color: var(--colors-grey900);
@@ -789,6 +792,10 @@ button.primary:disabled {
   }
   nav.rail ul {
     flex-direction: row;
+  }
+  nav.rail li.gap {
+    margin-top: 0;
+    margin-left: var(--spacers-dp16);
   }
   main {
     padding: var(--spacers-dp16);

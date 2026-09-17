@@ -735,7 +735,9 @@ def test_page_nav_marks_only_the_current_page() -> None:
     assert '<a href="/ocs/#workflows" aria-current="page">Workflows</a>' in nav
     assert '<a href="/ocs/map">Map viewer</a>' in nav
     assert '<a href="/ocs/openeo" target="_blank" rel="noopener">openEO editor</a>' in nav
-    assert nav.index("Map viewer") < nav.index("openEO editor")
+    assert nav.index("Map viewer") < nav.index("API") < nav.index("openEO editor")
+    # Set apart from the pages of this instance, because it leaves for another site.
+    assert '<li class="gap"><a href="/ocs/openeo"' in nav
 
 
 # --- the API page ------------------------------------------------------------------------

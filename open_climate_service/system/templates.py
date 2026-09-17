@@ -124,9 +124,12 @@ _NAV_ITEMS = (
     ("workflows", "Workflows", "/#workflows"),
     ("processes", "Processes", "/#processes"),
     ("map", "Map viewer", "/map"),
-    ("openeo", "openEO editor", "/openeo"),
     ("api", "API", "/api"),
+    ("openeo", "openEO editor", "/openeo"),
 )
+
+# Set apart by a gap: the only entry that leaves this instance for another site.
+_NAV_GAP_BEFORE = frozenset({"openeo"})
 
 # Leaves the instance for the hosted openEO Web Editor, so it opens in a new tab.
 _EXTERNAL_NAV_ITEMS = frozenset({"openeo"})
@@ -139,7 +142,8 @@ def page_nav(mount: str, current: str) -> Markup:
     navigate.
     """
     items = Markup("").join(
-        Markup('<li><a href="{}{}"{}{}>{}</a></li>').format(
+        Markup('<li{}><a href="{}{}"{}{}>{}</a></li>').format(
+            Markup(' class="gap"') if key in _NAV_GAP_BEFORE else "",
             mount,
             path,
             Markup(' aria-current="page"') if key == current else "",
