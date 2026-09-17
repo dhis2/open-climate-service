@@ -25,11 +25,11 @@ on a narrow screen). One area shows at a time, and each has its own address, suc
 
 | Area             | What it shows                                                                                                                      |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Overview**     | The instance's extent on a globe, counts of datasets, published datasets, data sources and workflows, plus access mode and version |
+| **Overview**     | The instance's extent on a globe, counts of datasets, data sources and workflows, the size of everything stored, plus access mode and version |
 | **Datasets**     | The data this instance holds, with temporal coverage and publication status                                                        |
 | **Data sources** | Data the instance can fetch from outside providers, titled by dataset with the provider beneath                                    |
 | **Workflows**    | Each workflow and what it makes: a published dataset or an exported file                                                           |
-| **Processes**    | The processes this instance can run, by origin; openEO core ones are hidden unless selected                                        |
+| **Processes**    | The processes this instance can run, tagged by origin and filterable by it                                                         |
 
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript every area is shown in sequence and each list is complete.

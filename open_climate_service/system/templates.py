@@ -817,7 +817,9 @@ def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
     """
     direction = str(template.get("temporal_direction") or "past")
     period = str(template.get("period_type") or "")
-    year_ago = today.replace(year=today.year - 1).isoformat()
+    # min(day, 28) rather than today.replace(year=...): on 29 February the previous year has no
+    # such day, and the page for every historical source would fail.
+    year_ago = today.replace(year=today.year - 1, day=min(today.day, 28)).isoformat()
     declared_end = _mapping(_mapping(template.get("extents")).get("temporal")).get("end")
     if direction == "future":
         return {"start": "", "end": "", "start_required": False, "direction": direction}

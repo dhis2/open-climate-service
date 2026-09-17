@@ -148,7 +148,7 @@ async def manage_ingest(request: Request) -> Response:
     from open_climate_service.data_registry.services import datasets as registry_datasets
     from open_climate_service.data_registry.services.datasets import get_dataset
     from open_climate_service.extents.services import get_extent_or_404
-    from open_climate_service.ingestions.services import create_artifact
+    from open_climate_service.ingestions.services import create_artifact, ensure_ingestable
 
     try:
         form = await request.form()
@@ -163,9 +163,11 @@ async def manage_ingest(request: Request) -> Response:
         if template is None:
             return _refusal(404, f"Data source '{dataset_id}' not found")
 
-        # Validate the blank start here rather than leaving it to create_artifact. The work
-        # below runs inside an event stream, and a failure there arrives as an event after a
-        # 200 rather than as the refusal it is. Only a forecast may omit it.
+        # Both checks belong here rather than inside create_artifact: the work below runs in an
+        # event stream, where a refusal arrives as an event after a 200 instead of as the
+        # refusal it is. A workflow output has nothing to fetch from...
+        ensure_ingestable(template)
+        # ...and only a forecast may leave the start blank.
         if start is None and not registry_datasets.is_future_facing(template):
             return _refusal(400, f"Start period is required for '{dataset_id}': its periods are not in the future")
 
@@ -195,17 +197,25 @@ async def manage_ingest(request: Request) -> Response:
 @router.post("/manage/sync", include_in_schema=False)
 async def manage_sync(request: Request) -> Response:
     """Sync a dataset from its page's form, streaming progress via SSE."""
-    from open_climate_service.ingestions.services import sync_dataset
+    from fastapi import HTTPException
+
+    from open_climate_service.ingestions.services import get_latest_artifact_for_dataset_or_404, sync_dataset
 
     try:
         form = await request.form()
         dataset_id = str(form.get("dataset_id", "")).strip()
         end = str(form.get("end", "")).strip() or None
         publish = "publish" in form
+        if not dataset_id:
+            return _refusal(400, "Dataset ID is required")
+        # Resolve the dataset before the stream opens, for the same reason as ingest: an id
+        # that names nothing is a client mistake, and inside the stream it would reach the page
+        # as an error event on a 200.
+        get_latest_artifact_for_dataset_or_404(dataset_id)
+    except HTTPException as exc:
+        return _refusal(exc.status_code, str(exc.detail))
     except Exception as exc:
         return _refusal(400, str(exc))
-    if not dataset_id:
-        return _refusal(400, "Dataset ID is required")
 
     return _job_stream(
         lambda on_progress: sync_dataset(dataset_id=dataset_id, end=end, publish=publish, on_progress=on_progress),

@@ -439,6 +439,32 @@ def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> Non
     assert "template" not in _visible_text(response.text).lower()
 
 
+def test_ingesting_a_workflow_output_is_refused_before_the_stream_opens(client: TestClient) -> None:
+    """A stream would report this as an event on a 200; it is a client mistake, so it is a 400."""
+    response = client.post(
+        "/manage/ingest",
+        data={"dataset_id": "chirps3_precipitation_daily_normal_1991_2020", "start": "2020-01-01"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "text/event-stream" not in response.headers.get("content-type", "")
+    assert "workflow" in response.json()["error"].lower() or "ingest" in response.json()["error"].lower()
+
+
+def test_syncing_an_unknown_dataset_is_refused_before_the_stream_opens(client: TestClient) -> None:
+    response = client.post("/manage/sync", data={"dataset_id": "not_a_dataset"})
+
+    assert response.status_code == 404, response.text
+    assert "text/event-stream" not in response.headers.get("content-type", "")
+
+
+def test_the_ingest_form_survives_a_leap_day(client: TestClient) -> None:
+    """The prefilled start is a year back, and 29 February has no anniversary."""
+    defaults = landing._ingest_defaults({"period_type": "daily"}, date(2024, 2, 29))
+
+    assert defaults["start"] == "2023-02-28"
+
+
 def test_the_overview_counts_what_the_instance_holds(client: TestClient) -> None:
     """Published is not a headline figure — how much data is stored is."""
     section = client.get("/", headers={"Accept": "text/html"}).text.split('id="overview"', 1)[1]

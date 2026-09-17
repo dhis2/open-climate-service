@@ -512,6 +512,9 @@
             setStatus(
               "No published datasets found. Ingest and publish a dataset first."
             );
+            // A deep link still names a dataset, and "not published" answers that question
+            // better than the generic empty-catalogue line.
+            openRequestedDataset();
             return;
           }
           for (const col of collections) {
@@ -534,12 +537,10 @@
         }
       }
 
-      async function loadDataset(href) {
-        if (!map || mapUnavailable) {
-          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
-          return;
-        }
-        setStatus("Loading...");
+      // Everything the map shows for one dataset, taken down together: the raster, its
+      // dimension controls, its metadata and its legend. Leaving any of it up after the
+      // selection changes would describe a dataset the map is no longer showing.
+      function clearDataset() {
         clearTimeout(_selectorDebounce);
         if (activeLayer) {
           try {
@@ -551,6 +552,15 @@
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
         legendEl.classList.add("hidden");
+      }
+
+      async function loadDataset(href) {
+        if (!map || mapUnavailable) {
+          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
+          return;
+        }
+        setStatus("Loading...");
+        clearDataset();
 
         let collection;
         try {
@@ -742,7 +752,12 @@
 
       selectEl.addEventListener("change", (e) => {
         reflectSelection();
-        if (e.target.value) loadDataset(e.target.value);
+        if (e.target.value) {
+          loadDataset(e.target.value);
+        } else {
+          clearDataset();
+          setStatus("Select a dataset to visualise it on the map.");
+        }
       });
 
       let _selectorDebounce = null;

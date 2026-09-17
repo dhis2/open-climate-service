@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable, Coroutine
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -56,6 +57,11 @@ async def test_manage_sync_forwards_provided_end(monkeypatch: pytest.MonkeyPatch
         return None
 
     monkeypatch.setattr(ingestion_services, "sync_dataset", fake_sync_dataset)
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_latest_artifact_for_dataset_or_404",
+        lambda dataset_id: SimpleNamespace(dataset_id=dataset_id),
+    )
     monkeypatch.setattr(system_routes.asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
 
@@ -98,6 +104,11 @@ async def test_manage_sync_treats_blank_end_as_none(monkeypatch: pytest.MonkeyPa
         return None
 
     monkeypatch.setattr(ingestion_services, "sync_dataset", fake_sync_dataset)
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_latest_artifact_for_dataset_or_404",
+        lambda dataset_id: SimpleNamespace(dataset_id=dataset_id),
+    )
     monkeypatch.setattr(system_routes.asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
 
@@ -169,7 +180,12 @@ async def test_manage_ingest_strips_string_inputs_and_treats_blank_end_as_none(
         scheduled.append(coro)
         return None
 
-    template = {"id": "chirps3_precipitation_daily", "name": "CHIRPS3 precipitation"}
+    template = {
+        "id": "chirps3_precipitation_daily",
+        "name": "CHIRPS3 precipitation",
+        # The route refuses a template with no fetch path before opening the stream.
+        "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+    }
     monkeypatch.setattr(system_routes.asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
     monkeypatch.setattr(ingestion_services, "create_artifact", fake_create_artifact)
@@ -214,7 +230,11 @@ async def test_manage_ingest_strips_string_inputs_and_treats_blank_end_as_none(
 async def test_manage_ingest_rejects_blank_start(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "open_climate_service.data_registry.services.datasets.get_dataset",
-        lambda dataset_id: {"id": dataset_id, "name": "CHIRPS3 precipitation"},
+        lambda dataset_id: {
+            "id": dataset_id,
+            "name": "CHIRPS3 precipitation",
+            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+        },
     )
     monkeypatch.setattr(
         "open_climate_service.extents.services.get_extent_or_404",
@@ -278,6 +298,11 @@ async def test_a_successful_sync_ends_the_stream_with_finished(monkeypatch: pyte
         return None
 
     monkeypatch.setattr(ingestion_services, "sync_dataset", fake_sync_dataset)
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_latest_artifact_for_dataset_or_404",
+        lambda dataset_id: SimpleNamespace(dataset_id=dataset_id),
+    )
     monkeypatch.setattr(system_routes.asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
 

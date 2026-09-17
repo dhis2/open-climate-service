@@ -52,7 +52,15 @@ function runJobForm(form, options) {
     var decoder = new TextDecoder();
     var buffer = "";
     while (true) {
-      var chunk = await reader.read();
+      // A connection that drops mid-stream rejects here. Without this the handler would exit on
+      // an unhandled rejection, leaving the form disabled and the progress bar running forever.
+      var chunk;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        fail("The connection was lost while the job was running.");
+        return;
+      }
       if (chunk.done) break;
       buffer += decoder.decode(chunk.value, { stream: true });
       var lines = buffer.split("\n");
