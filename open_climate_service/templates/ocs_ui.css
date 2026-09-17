@@ -520,9 +520,12 @@ button:disabled {
   background: var(--ramp, var(--colors-grey300));
   flex: none;
 }
+/* Square in the list: a row is about as tall as it is, so a 2:1 preview left a band of empty
+   space beside the text. */
 .view-list .thumb {
-  width: 160px;
-  /* The row is taller than the preview; stretching it would undo the 2:1 shape. */
+  width: 140px;
+  aspect-ratio: 1 / 1;
+  /* The row can be taller than the preview; stretching it would undo the square. */
   align-self: flex-start;
 }
 .thumb.has-image {
