@@ -734,3 +734,5 @@ def test_page_nav_marks_only_the_current_page() -> None:
     assert nav.count('aria-current="page"') == 1
     assert '<a href="/ocs/#workflows" aria-current="page">Workflows</a>' in nav
     assert '<a href="/ocs/map">Map viewer</a>' in nav
+    assert '<a href="/ocs/openeo" target="_blank" rel="noopener">openEO editor</a>' in nav
+    assert nav.index("Map viewer") < nav.index("openEO editor")
