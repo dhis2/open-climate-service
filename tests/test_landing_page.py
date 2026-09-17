@@ -20,7 +20,7 @@ from open_climate_service.data_registry.services import datasets as registry_dat
 from open_climate_service.openeo.workflows import _load_builtin_workflows
 from open_climate_service.system import templates as landing
 
-AREAS = ["overview", "explore", "datasets", "data-sources", "workflows", "processes"]
+AREAS = ["overview", "datasets", "data-sources", "workflows", "processes"]
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -736,3 +736,49 @@ def test_page_nav_marks_only_the_current_page() -> None:
     assert '<a href="/ocs/map">Map viewer</a>' in nav
     assert '<a href="/ocs/openeo" target="_blank" rel="noopener">openEO editor</a>' in nav
     assert nav.index("Map viewer") < nav.index("openEO editor")
+
+
+# --- the API page ------------------------------------------------------------------------
+
+
+def test_the_api_page_lists_the_instance_s_own_endpoints(client: TestClient) -> None:
+    html = client.get("/api").text
+    schema = client.get("/openapi.json").json()
+    served = {(method.upper(), path) for path, ops in schema["paths"].items() for method in ops}
+
+    for method, path in served:
+        assert f"<code>{path}</code>" in html, path
+        assert f"<code>{method}</code>" in html
+    # Entry points for the catalogues and the docs, which have no OpenAPI path of their own.
+    for href in ("/stac/catalog.json", "/docs", "/openapi.json", "/collections", "/?f=json"):
+        assert f'href="{href}"' in html
+    assert '<a href="/api" aria-current="page">API</a>' in html
+
+
+def test_endpoint_rows_prefer_the_docstring_over_the_generated_summary(client: TestClient) -> None:
+    html = client.get("/api").text
+
+    assert "Read Index" not in html, "FastAPI's function-name summary is not what a reader wants"
+    assert "Return openEO capabilities (JSON) or the landing page (HTML)." in html
+
+
+def test_the_api_page_marks_what_read_only_closes(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    monkeypatch.setattr(api_config, "is_read_only", lambda: True)
+
+    context = landing._api_page_context(schema, read_only=True)
+    closed = {(e["method"], e["path"]) for group in context["groups"] for e in group["endpoints"] if e["closed"]}
+    everything = {(e["method"], e["path"]) for group in context["groups"] for e in group["endpoints"]}
+
+    assert ("POST", "/ingestions") in closed
+    assert ("GET", "/jobs") in closed
+    assert ("GET", "/datasets") in everything - closed
+    assert "closed" in landing.render_api_page(schema, "")
+
+
+def test_a_writable_instance_marks_nothing_closed(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+
+    context = landing._api_page_context(schema, read_only=False)
+
+    assert not [e for group in context["groups"] for e in group["endpoints"] if e["closed"]]

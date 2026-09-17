@@ -119,13 +119,13 @@ def wants_json(request: Request) -> bool:
 
 _NAV_ITEMS = (
     ("overview", "Overview", "/#overview"),
-    ("explore", "Explore", "/#explore"),
     ("datasets", "Datasets", "/#datasets"),
     ("data-sources", "Data sources", "/#data-sources"),
     ("workflows", "Workflows", "/#workflows"),
     ("processes", "Processes", "/#processes"),
     ("map", "Map viewer", "/map"),
     ("openeo", "openEO editor", "/openeo"),
+    ("api", "API", "/api"),
 )
 
 # Leaves the instance for the hosted openEO Web Editor, so it opens in a new tab.
@@ -953,6 +953,96 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "processes"),
         **_process_page_context(process, origins.get(process["id"], ""), _load_workflows()),
+    )
+
+
+_API_GROUP_NOTES = {
+    "Datasets": "What this instance holds, and the metadata for each dataset.",
+    "Dataset templates": "The data sources this instance can ingest, and whether each one is ingestable.",
+    "Ingestions": "Fetch a data source into this instance, and follow the job it starts.",
+    "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
+    "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
+    "Icechunk": "The same stores for the Icechunk SDK, with version history.",
+    "STAC": "Catalogue metadata for discovery, one collection per published dataset.",
+    "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
+    "Extent": "The area this instance covers.",
+    "Schedules": "Scheduled dataset refreshes, as configured for this instance.",
+    "Exports": "Deliver an export to its destination, and follow the delivery job.",
+    "System": "Health, version and the landing page's JSON form.",
+}
+
+_API_GROUP_ORDER = list(_API_GROUP_NOTES)
+
+
+def _endpoint_summary(operation: dict[str, Any]) -> str:
+    """One line for an endpoint: its docstring's first line, or the generated summary.
+
+    FastAPI derives `summary` from the function name, so `read_index` becomes "Read Index".
+    The docstring says something, and is what the API docs show as the description.
+    """
+    description = str(operation.get("description") or "").strip()
+    if description:
+        return description.splitlines()[0].strip()
+    return str(operation.get("summary") or "")
+
+
+def _api_page_context(schema: dict[str, Any], *, read_only: bool) -> dict[str, Any]:
+    """Group the instance's own OpenAPI paths for the API page.
+
+    Built from the served schema rather than a written list, so the page describes the routes
+    this instance actually exposes — including those a plugin or an optional dependency adds.
+    """
+    from open_climate_service.read_only import is_blocked
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for path, operations in _mapping(schema.get("paths")).items():
+        for method, operation in _mapping(operations).items():
+            if not isinstance(operation, dict):
+                continue
+            tags = operation.get("tags") or ["Other"]
+            group = str(tags[0])
+            groups.setdefault(group, []).append(
+                {
+                    "method": method.upper(),
+                    "path": path,
+                    "summary": _endpoint_summary(operation),
+                    "closed": read_only and is_blocked(method.upper(), path),
+                }
+            )
+    ordered = sorted(
+        groups.items(),
+        key=lambda item: _API_GROUP_ORDER.index(item[0]) if item[0] in _API_GROUP_ORDER else len(_API_GROUP_ORDER),
+    )
+    entry_points = [
+        ("STAC catalogue", "/stac/catalog.json", "Browsable metadata for every published dataset"),
+        ("openEO capabilities", "/?f=json", "What this backend supports, for an openEO client"),
+        ("openEO collections", "/collections", "The datasets an openEO process graph can load"),
+        ("API documentation", "/docs", "Interactive Swagger UI for every endpoint below"),
+        ("OpenAPI schema", "/openapi.json", "The machine-readable description this page is built from"),
+    ]
+    return {
+        "entry_points": [{"title": title, "path": path, "note": note} for title, path, note in entry_points],
+        "groups": [
+            {
+                "name": name,
+                "note": _API_GROUP_NOTES.get(name, ""),
+                "endpoints": sorted(endpoints, key=lambda endpoint: (endpoint["path"], endpoint["method"])),
+            }
+            for name, endpoints in ordered
+        ],
+        "read_only": read_only,
+    }
+
+
+def render_api_page(schema: dict[str, Any], mount: str) -> str:
+    """Render the page listing this instance's API endpoints."""
+    return get_template("api_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "api"),
+        **_api_page_context(schema, read_only=api_config.is_read_only()),
     )
 
 

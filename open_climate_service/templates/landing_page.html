@@ -19,7 +19,6 @@
       <nav class="rail" aria-label="Sections">
         <ul>
           <li><a href="#overview" data-area-link="overview">Overview</a></li>
-          <li><a href="#explore" data-area-link="explore">Explore</a></li>
           <li>
             <a href="#datasets" data-area-link="datasets"
               >Datasets <span class="count">{{ datasets | length }}</span></a
@@ -42,6 +41,7 @@
           </li>
           <li><a href="{{ mount }}/map">Map viewer</a></li>
           <li><a href="{{ mount }}/openeo" target="_blank" rel="noopener">openEO editor</a></li>
+          <li><a href="{{ mount }}/api">API</a></li>
         </ul>
       </nav>
 
@@ -95,34 +95,6 @@
             {% if read_only %}
             <p class="note">This instance is read-only: data can be browsed and processed, but not ingested.</p>
             {% endif %}
-          </div>
-        </section>
-
-        <!-- Explore -->
-        <section id="explore" data-area aria-labelledby="explore-title">
-          <h2 id="explore-title" tabindex="-1">Explore</h2>
-          <p class="lead">Ways to look at and work with the published data.</p>
-          <div class="cards">
-            <a class="panel card" href="{{ mount }}/map">
-              <h3>Map viewer</h3>
-              <span class="note">Browse published datasets on an interactive map</span>
-            </a>
-            <a class="panel card" href="{{ mount }}/openeo" target="_blank" rel="noopener">
-              <h3>openEO Editor</h3>
-              <span class="note">Build and run openEO process graphs in the browser</span>
-            </a>
-            <a class="panel card" href="{{ mount }}/stac/catalog.json">
-              <h3>STAC Catalog</h3>
-              <span class="note">SpatioTemporal Asset Catalog of published datasets</span>
-            </a>
-            <a class="panel card" href="{{ mount }}/docs">
-              <h3>API documentation</h3>
-              <span class="note">Interactive Swagger UI for all endpoints</span>
-            </a>
-            <a class="panel card" href="{{ mount }}/?f=json">
-              <h3>Root (JSON)</h3>
-              <span class="note">This page as a JSON navigation object</span>
-            </a>
           </div>
         </section>
 

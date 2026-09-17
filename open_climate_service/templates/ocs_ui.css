@@ -629,6 +629,15 @@ pre.code code {
   background: none;
   padding: 0;
 }
+.endpoints + .endpoints {
+  margin-top: var(--spacers-dp16);
+}
+.endpoints {
+  margin-top: var(--spacers-dp16);
+}
+.endpoints td code {
+  white-space: nowrap;
+}
 .table-title {
   padding: var(--spacers-dp16) var(--spacers-dp16) 0;
 }

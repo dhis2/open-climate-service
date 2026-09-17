@@ -19,14 +19,13 @@ scheduled — see the [API reference](managed_data_api_guide.md).
 
 ## The landing page (`/`)
 
-The landing page is split into six areas, chosen from the navigation on the left (a row of tabs
+The landing page is split into five areas, chosen from the navigation on the left (a row of tabs
 on a narrow screen). One area shows at a time, and each has its own address, such as
 `/#data-sources`, so it can be bookmarked or linked.
 
 | Area             | What it shows                                                                                       |
 | ---------------- | --------------------------------------------------------------------------------------------------- |
 | **Overview**     | Counts of datasets, published datasets, data sources and workflows, plus the extent and access mode |
-| **Explore**      | The map viewer, openEO editor, STAC catalog, API docs and the JSON root                             |
 | **Datasets**     | The data this instance holds, with temporal coverage and publication status                         |
 | **Data sources** | Data the instance can fetch from outside providers, titled by dataset with the provider beneath     |
 | **Workflows**    | Each workflow and what it makes: a published dataset or an exported file                            |
@@ -54,6 +53,14 @@ and the full declared range for a source that runs into the future. Progress is 
 page; when ingestion finishes the dataset page opens, and an error is shown in place. Data is
 always fetched for the instance's configured extent. The form is not shown on a read-only
 instance or when no extent is configured.
+
+### The API page (`/api`)
+
+The API page is built from the instance's own OpenAPI schema, so it lists the endpoints that
+instance actually serves, grouped by area — datasets, ingestion, sync, Zarr and Icechunk
+access, STAC, openEO, and the rest — each with what it does. It also links the STAC catalogue,
+the openEO capabilities and collections, the Swagger documentation and the OpenAPI schema. On
+a read-only instance the endpoints that refuse are marked.
 
 ### The workflow page (`/workflows/{workflow_id}`)
 

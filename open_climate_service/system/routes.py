@@ -19,6 +19,7 @@ from .schemas import AppInfo, HealthStatus, Status
 from .templates import (
     ROOT_RESPONSES,
     app_version,
+    render_api_page,
     render_data_source_page,
     render_landing,
     render_maps,
@@ -72,6 +73,12 @@ def data_source_page(request: Request, dataset_id: str) -> HTMLResponse:
     if template is None:
         raise HTTPException(status_code=404, detail=f"Data source '{dataset_id}' not found")
     return HTMLResponse(render_data_source_page(template, mount_prefix(request)))
+
+
+@router.get("/api", response_class=HTMLResponse, include_in_schema=False)
+def api_page(request: Request) -> HTMLResponse:
+    """Return the page listing this instance's API endpoints, built from its own OpenAPI schema."""
+    return HTMLResponse(render_api_page(request.app.openapi(), mount_prefix(request)))
 
 
 @router.get("/workflows/{workflow_id}", response_class=HTMLResponse, include_in_schema=False)
