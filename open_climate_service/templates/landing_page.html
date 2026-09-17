@@ -57,10 +57,6 @@
               <span class="value">{{ datasets | length }}</span>
               <span class="label">Datasets</span>
             </a>
-            <a class="panel stat" href="#datasets">
-              <span class="value">{{ published_count }}</span>
-              <span class="label">Published</span>
-            </a>
             <a class="panel stat" href="#data-sources">
               <span class="value">{{ sources | length }}</span>
               <span class="label">Data sources</span>
@@ -68,6 +64,10 @@
             <a class="panel stat" href="#workflows">
               <span class="value">{{ workflows | length }}</span>
               <span class="label">Workflows</span>
+            </a>
+            <a class="panel stat" href="#datasets">
+              <span class="value">{{ stored_size }}</span>
+              <span class="label">Data stored</span>
             </a>
           </div>
           <div class="panel">

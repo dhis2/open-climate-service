@@ -5,10 +5,13 @@ import importlib.resources
 import json
 import logging
 import math
+import os
 import re
+import time
 from datetime import date
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 from typing import Any
 
 import jinja2
@@ -319,6 +322,74 @@ def _load_datasets() -> list[Any]:
         return []
 
 
+_SIZE_CACHE_SECONDS = 60.0
+_stored_bytes_cache: tuple[float, int] | None = None
+
+
+def _directory_bytes(path: Path) -> int:
+    """Bytes held under a store directory, following none of its symlinks."""
+    total = 0
+    stack = [path]
+    while stack:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    total += entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+    return total
+
+
+def _stored_bytes() -> int:
+    """Total size on disk of every store this instance's artifacts point at.
+
+    Walked rather than read from a record: nothing stores a size, and an Icechunk store grows
+    with each sync, so a recorded one would be stale. Distinct paths only — successive
+    ingestions of the same dataset append to a single store. Cached for a minute, because a
+    store is tens of thousands of chunk files and the overview is reloaded far more often than
+    the data changes.
+    """
+    global _stored_bytes_cache
+    now = time.monotonic()
+    if _stored_bytes_cache is not None and now - _stored_bytes_cache[0] < _SIZE_CACHE_SECONDS:
+        return _stored_bytes_cache[1]
+    try:
+        from open_climate_service.ingestions.services import list_artifacts
+
+        paths = {artifact.path for artifact in list_artifacts().items if artifact.path}
+        total = sum(_directory_bytes(Path(path)) if Path(path).is_dir() else _file_bytes(Path(path)) for path in paths)
+    except Exception:
+        _log.exception("Unexpected error measuring stored data")
+        total = 0
+    _stored_bytes_cache = (now, total)
+    return total
+
+
+def _file_bytes(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _format_bytes(total: int) -> str:
+    """A size a reader can take in at a glance: three significant figures at most."""
+    size = float(total)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1000 or unit == "TB":
+            if unit == "B":
+                return f"{int(size)} B"
+            return f"{size:.0f} {unit}" if size >= 100 else f"{size:.1f} {unit}"
+        size /= 1000
+    return f"{size:.1f} TB"
+
+
 def _load_workflows() -> list[Any]:
     try:
         from open_climate_service.openeo.workflows import list_workflows
@@ -535,7 +606,7 @@ def render_landing(version: str, mount: str) -> str:
         extent=extent,
         globe=_extent_globe(extent),
         datasets=_dataset_views(datasets, templates),
-        published_count=sum(1 for dataset in datasets if dataset.publication.status == "published"),
+        stored_size=_format_bytes(_stored_bytes()),
         sources=catalogue["sources"],
         workflows=catalogue["workflows"],
         unattributed_outputs=catalogue["unattributed_outputs"],
