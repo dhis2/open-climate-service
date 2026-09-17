@@ -7,7 +7,6 @@ separate application to install. Once the instance is running, open its root URL
 | Page           | URL       | What it does                                                                       |
 | -------------- | --------- | ---------------------------------------------------------------------------------- |
 | Landing page   | `/`       | Instance overview, the datasets it holds, the data sources and workflows it offers |
-| **Manage**     | `/manage` | Ingest data, sync datasets forward, and see what is already ingested               |
 | **Map viewer** | `/map`    | View published datasets on an interactive map                                      |
 | openEO editor  | `/openeo` | Redirects to the openEO Web Editor, pre-connected to this instance                 |
 | API docs       | `/docs`   | Interactive Swagger documentation for the REST API                                 |
@@ -31,7 +30,7 @@ on a narrow screen). One area shows at a time, and each has its own address, suc
 | **Datasets**       | The data this instance holds, with temporal coverage and publication status                         |
 | **Data sources**   | Data the instance can fetch from outside providers, titled by dataset with the provider beneath     |
 | **Workflows**      | Each workflow, with the datasets it produces (anomalies, normals, change rasters)                   |
-| **Operator tools** | Links to `/manage` and the ingestion and sync API. Absent on a read-only instance                   |
+| **Operator tools** | Where to ingest and sync, and the ingestion and sync API. Absent on a read-only instance            |
 
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript every area is shown in sequence and each list is complete.
@@ -74,34 +73,19 @@ ingested](adding_custom_datasets.md#templates-that-are-produced-not-ingested)).
 
 ---
 
-## Managing data (`/manage`)
+## Ingesting and syncing data
 
-The management page has two parts: an **ingest form** and a **dataset status table**.
+There is no separate console: data is added from the page of the thing it concerns.
 
-### Ingesting a dataset
-
-1. Choose a **dataset template** from the dropdown (the list comes from the templates
-   registered for this instance — the built-in catalogue plus any custom dataset plugins).
-2. Enter a **start** date. Daily datasets take `YYYY-MM-DD`, monthly `YYYY-MM`, yearly
-   `YYYY`.
-3. Optionally enter an **end** date — if left blank it defaults to today.
-4. Leave **Publish after ingestion** checked to make the dataset immediately discoverable
-   (via STAC) and visible in the map viewer. Uncheck it to ingest without publishing.
-5. Check **Overwrite if already ingested** to replace an existing store for the same scope.
-6. Click ingest. Progress streams live as the data downloads and materialises; the page
-   confirms when it finishes (or shows the error if it fails).
+- **Ingest** from a data source page (`/data-sources/{dataset_id}`): enter a start and an
+  optional end, choose whether to publish and whether to overwrite an existing store, and
+  start. Progress streams on the page; the dataset page opens when it finishes.
+- **Sync** from a dataset page (`/datasets/{dataset_id}`): the page shows what the source
+  has published since the last sync, and **Start sync** fetches it, optionally only up to a
+  cutoff date. The page reloads with the new coverage when it finishes.
 
 You do **not** enter a bounding box — ingestion always uses the spatial extent configured
-for the instance in `climate-service.yaml`.
-
-### Dataset status and sync
-
-Below the form, a table lists every dataset already ingested, with its period type,
-temporal coverage, and publication status. Each row has a **Sync** button that advances
-that dataset to the latest available upstream data — appending missing periods for
-temporal datasets, or rematerialising a newer release. You can set an optional cutoff
-date; otherwise sync goes as far as the source allows. Sync progress streams live, the
-same way ingestion does.
+for the instance in `climate-service.yaml`. On a read-only instance neither form is shown.
 
 ---
 

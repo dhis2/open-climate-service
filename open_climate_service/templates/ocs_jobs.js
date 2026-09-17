@@ -1,7 +1,6 @@
-// Runs a form against one of the /manage streaming endpoints (/manage/ingest, /manage/sync)
-// and reports progress in place. The endpoints answer with server-sent events: progress
-// updates, then either an error or a redirect meaning "finished". A request refused before it
-// starts comes back as a redirect to the console carrying the message in ?error=.
+// Runs a form against one of the streaming endpoints (/manage/ingest, /manage/sync) and
+// reports progress in place. A request that cannot start is refused with a JSON error; one that
+// starts answers with server-sent events: progress updates, then `finished` or `error`.
 function runJobForm(form, options) {
   if (!form) return;
   var progress = form.querySelector("[data-job-progress]");
@@ -40,12 +39,12 @@ function runJobForm(form, options) {
       fail("The request could not be sent.");
       return;
     }
-    if (response.redirected) {
-      fail(new URL(response.url).searchParams.get("error") || "The request could not start.");
-      return;
-    }
     if (!response.ok || !response.body) {
-      fail("The request could not start (HTTP " + response.status + ").");
+      var detail = null;
+      try {
+        detail = (await response.json()).error;
+      } catch (e) {}
+      fail(detail || "The request could not start (HTTP " + response.status + ").");
       return;
     }
 
@@ -70,7 +69,7 @@ function runJobForm(form, options) {
           fail(evt.error);
           return;
         }
-        if (evt.redirect) {
+        if (evt.finished) {
           options.onDone(form);
           return;
         }

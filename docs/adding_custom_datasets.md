@@ -314,8 +314,8 @@ has none: anomalies, normals and change rasters are *produced* by a workflow thr
 `save_result` and registered as static templates, so there is nothing upstream to fetch.
 A custom template without `ingestion.plugin` is not ingestable either, whatever produces it.
 
-`GET /dataset-templates/` reports this as `ingestable` on every template, the `/manage` ingest
-form offers only the ingestable ones, and asking to ingest one that is not returns `400` naming
+`GET /dataset-templates/` reports this as `ingestable` on every template, the landing page
+lists only the ingestable ones as data sources, and asking to ingest one that is not returns `400` naming
 the reason. Read the flag rather than inferring it from `sync.kind`: the two are not the same
 question, and `era5land_temperature_daily_normal_1991_2020` is `static` *and* ingestable.
 

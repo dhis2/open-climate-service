@@ -78,9 +78,11 @@ OCS owns two web surfaces with distinct purposes:
   published data, available templates, exploration tools, and documentation, and
   must remain useful without DHIS2. The root URL serves HTML to browsers and JSON
   discovery metadata to API clients through content negotiation.
-- **The `/manage` console provides operator administration.** It supports ingestion
-  and synchronization and is the OCS surface for dataset administration. It is
-  unavailable when the instance is configured as read-only.
+- **Operator actions live on the pages they concern.** A data source page ingests that
+  source and a dataset page syncs that dataset, both through the `/manage/ingest` and
+  `/manage/sync` streams. There is no separate console. Read-only closes the streams and
+  the pages leave their forms out; until authentication exists, that is the only boundary
+  between browsing and administering an instance.
 
 See [Using the web interface](web_interface.md) for the available views and actions.
 
@@ -91,7 +93,7 @@ The access model distinguishes three classes:
 | Access class | Intended responsibility |
 | --- | --- |
 | Public read | Discover and consume published datasets and instance metadata through the public API and landing page. |
-| Operator read and write | Inspect operational state and perform ingestion, synchronization, and lifecycle actions through the OCS API and `/manage`. |
+| Operator read and write | Inspect operational state and perform ingestion, synchronization, and lifecycle actions through the OCS API and the data source and dataset pages. |
 | Host operator | Configure the instance, including read-only policy and schedule definitions, and perform host maintenance. |
 
 Network-exposed operator reads and writes must be protected by authentication and
