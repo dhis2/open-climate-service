@@ -271,14 +271,6 @@ a.card:hover {
 a.card h3 {
   color: var(--theme-primary800);
 }
-.card .provider {
-  color: var(--colors-grey700);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-}
 .meta {
   display: flex;
   flex-wrap: wrap;

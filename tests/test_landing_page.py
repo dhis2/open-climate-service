@@ -209,6 +209,11 @@ def test_lists_carry_the_filter_and_pager_hooks(client: TestClient) -> None:
     # One filterable card per ingestable template, and no card for a workflow output.
     section = html.split('id="data-sources"', 1)[1].split('id="workflows"', 1)[0]
     assert section.count("data-item") == len(sources)
+    # Same tiles/list layout as datasets, without the preview: a data source holds no data yet.
+    assert 'data-views="sources"' in section
+    assert 'data-view-button="list"' in section
+    assert 'class="collection view-tiles" data-view-target' in section
+    assert 'class="thumb' not in section
 
 
 def test_workflow_outputs_are_listed_under_their_workflow(client: TestClient) -> None:

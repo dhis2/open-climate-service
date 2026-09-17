@@ -36,7 +36,9 @@ on a narrow screen). One area shows at a time, and each has its own address, suc
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript every area is shown in sequence and each list is complete.
 
-Datasets can be shown as **tiles** or as a **list**; the choice is remembered in the browser.
+Datasets and data sources can be shown as **tiles** or as a **list**; the choice is remembered
+in the browser. Data sources show their provider, description and details, with no preview,
+since they hold no data yet.
 Each dataset shows its thumbnail, source, a short description, publication status, period,
 temporal coverage and units. A dataset ingested before thumbnails existed shows its colour
 scale instead, until its next sync renders one.

@@ -205,7 +205,7 @@
           <p class="lead">Data this instance can fetch from outside providers.</p>
           {% if sources %}
           {% set periods = sources | map(attribute="period_type") | reject("equalto", "") | unique | sort | list %}
-          <div data-list data-page-size="12">
+          <div data-list data-page-size="12" data-views="sources">
             <div class="toolbar">
               <label
                 >Search
@@ -222,25 +222,32 @@
                 </select>
               </label>
               {% endif %}
+              <div class="view-switch" role="group" aria-label="Layout">
+                <button type="button" data-view-button="tiles" aria-pressed="true">Tiles</button>
+                <button type="button" data-view-button="list" aria-pressed="false">List</button>
+              </div>
               <span class="status" data-status aria-live="polite"></span>
             </div>
-            <div class="cards">
+            <div class="collection view-tiles" data-view-target>
               {% for s in sources %}
               <article
-                class="panel card"
+                class="panel item"
                 data-item
                 data-period="{{ s.period_type }}"
                 data-search="{{ [s.name, s.id, s.provider, s.variable] | join(' ') | lower }}"
               >
-                <h3>{{ s.name }}</h3>
-                <span class="provider" title="{{ s.provider }}">
-                  {% if s.provider_url %}<a href="{{ s.provider_url }}">{{ s.provider or s.id }}</a>{% else %}{{ s.provider or "Unknown provider" }}{% endif %}
-                </span>
-                <div class="meta">
-                  {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
-                  {% if s.units %}<span class="chip">{{ s.units }}</span>{% endif %}
-                  {% if s.resolution %}<span class="chip">{{ s.resolution }}</span>{% endif %}
-                  {% if s.licence %}<span class="chip">{{ s.licence }}</span>{% endif %}
+                <div class="body">
+                  <h3>{{ s.name }}</h3>
+                  <span class="provider clamp" title="{{ s.provider }}">
+                    {% if s.provider_url %}<a href="{{ s.provider_url }}">{{ s.provider or s.id }}</a>{% else %}{{ s.provider or "Unknown provider" }}{% endif %}
+                  </span>
+                  {% if s.description %}<p class="description clamp">{{ s.description }}</p>{% endif %}
+                  <div class="meta">
+                    {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
+                    {% if s.units %}<span class="chip">{{ s.units }}</span>{% endif %}
+                    {% if s.resolution %}<span class="chip">{{ s.resolution }}</span>{% endif %}
+                    {% if s.licence %}<span class="chip">{{ s.licence }}</span>{% endif %}
+                  </div>
                 </div>
               </article>
               {% endfor %}

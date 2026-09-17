@@ -192,6 +192,7 @@ def _source_view(template: dict[str, Any]) -> dict[str, Any]:
         "name": template.get("name") or template["id"],
         "provider": template.get("source") or "",
         "provider_url": template.get("source_url"),
+        "description": " ".join(str(template.get("description") or "").split()),
         "variable": template.get("variable") or "",
         "units": template.get("units") or "",
         "period_type": template.get("period_type") or "",
