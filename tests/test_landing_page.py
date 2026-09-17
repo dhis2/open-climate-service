@@ -802,3 +802,62 @@ def test_a_sync_leaves_an_unpublished_dataset_unpublished(monkeypatch: pytest.Mo
 
     assert 'name="publish"' not in html
     assert "The dataset stays unpublished." in _visible_text(html)
+
+
+# --- the extent globe --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("bbox", "zoom"),
+    [
+        ([-180, -90, 180, 90], 1.0),  # a global extent shows the whole hemisphere
+        ([-25, 34, 45, 72], 2.56),  # Europe
+        ([-13.5, 6.9, -10.1, 10.0], 12.0),  # a small country hits the magnification bound
+    ],
+)
+def test_the_globe_zooms_to_the_size_of_the_extent(bbox: list[float], zoom: float) -> None:
+    width, height = abs(bbox[2] - bbox[0]), abs(bbox[3] - bbox[1])
+
+    assert landing._globe_zoom(width, height, (bbox[1] + bbox[3]) / 2) == pytest.approx(zoom, abs=0.01)
+
+
+def test_the_globe_is_centred_on_the_extent() -> None:
+    """The extent's centre projects to the middle of the globe, wherever on Earth it is."""
+    for bbox in ([-13.5, 6.9, -10.1, 10.0], [80.05, 26.35, 88.2, 30.45], [-70, -40, -60, -30]):
+        lon0, lat0 = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+        point = landing._project(lon0, lat0, lon0, lat0, landing._GLOBE_RADIUS)
+        assert point == (landing._GLOBE_SIZE / 2, landing._GLOBE_SIZE / 2)
+
+
+def test_the_far_side_of_the_world_is_not_drawn() -> None:
+    """Orthographic shows one hemisphere; the antipode must not fold onto the front."""
+    assert landing._project(0.0, 0.0, 180.0, 0.0, 48) is None
+    assert landing._project(1.0, 1.0, 0.0, 0.0, 48) is not None
+
+
+def test_the_globe_draws_land_and_the_extent() -> None:
+    globe = landing._extent_globe({"bbox": [-13.5, 6.9, -10.1, 10.0]})
+
+    assert globe is not None
+    assert globe["land"].count("M") > 10, "the visible hemisphere's coastlines"
+    assert globe["extent"].startswith("M") and globe["extent"].endswith("Z")
+    # Every drawn point is inside the viewBox's circle-ish area, so nothing escapes the clip.
+    assert "-" not in globe["extent"], "the extent stays on the front of the globe"
+
+
+@pytest.mark.parametrize(
+    "extent",
+    [None, {}, {"bbox": "world"}, {"bbox": [1, 2, 3]}, {"bbox": [1, 2, 3, "x"]}, {"bbox": [10, 10, 5, 5]}],
+)
+def test_no_globe_without_a_usable_extent(extent: dict[str, Any] | None) -> None:
+    assert landing._extent_globe(extent) is None
+
+
+def test_the_overview_draws_the_globe_without_fetching_anything(client: TestClient) -> None:
+    html = client.get("/", headers={"Accept": "text/html"}).text
+    globe = re.search(r'<svg[^>]*class="globe".*?</svg>', html, re.S)
+
+    assert globe is not None
+    svg = globe.group(0)
+    assert 'class="land"' in svg and 'class="extent"' in svg
+    assert "http" not in svg, "no tiles, no external image: the page works offline"

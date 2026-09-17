@@ -4,6 +4,7 @@ import functools
 import importlib.resources
 import json
 import logging
+import math
 import re
 from datetime import date
 from importlib.metadata import PackageNotFoundError
@@ -192,6 +193,101 @@ def render_maps(mount: str) -> str:
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "map"),
     )
+
+
+# The extent globe: an orthographic sphere centred on the extent, so the mark sits where the
+# instance is rather than somewhere on a flat rectangle. Drawn in a 100x100 viewBox.
+_GLOBE_SIZE = 100
+_GLOBE_RADIUS = 48
+
+
+@functools.lru_cache(maxsize=1)
+def _world_rings() -> list[list[tuple[float, float]]]:
+    """Coastlines as (lon, lat) rings; see `templates/world_land.json` for what they are."""
+    data = json.loads(_read_asset("world_land.json"))
+    return [[(point[0], point[1]) for point in ring] for ring in data["rings"]]
+
+
+def _globe_zoom(width: float, height: float, latitude: float) -> float:
+    """How much to magnify the sphere so the extent reads as a place, not a dot.
+
+    1 shows the whole visible hemisphere. Bounded: past about 12 the curvature stops being
+    visible and the globe stops looking like one, and a sub-degree extent would otherwise ask
+    for far more than that.
+    """
+    span = max(width * math.cos(math.radians(latitude)), height, 0.5)
+    return max(1.0, min(0.6 * 180 / span, 12.0))
+
+
+def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float] | None:
+    """Orthographic projection onto the viewBox, or None for a point on the far side."""
+    lam, phi = math.radians(lon - lon0), math.radians(lat)
+    phi0 = math.radians(lat0)
+    cos_c = math.sin(phi0) * math.sin(phi) + math.cos(phi0) * math.cos(phi) * math.cos(lam)
+    if cos_c <= 0:
+        return None
+    x = math.cos(phi) * math.sin(lam)
+    y = math.cos(phi0) * math.sin(phi) - math.sin(phi0) * math.cos(phi) * math.cos(lam)
+    return _GLOBE_SIZE / 2 + scale * x, _GLOBE_SIZE / 2 - scale * y
+
+
+def _path(points: list[tuple[float, float] | None], *, close: bool) -> str:
+    """An SVG path through *points*, starting a new subpath wherever the horizon cut them."""
+    parts: list[str] = []
+    run: list[tuple[float, float]] = []
+    for point in [*points, None]:
+        if point is None:
+            if len(run) > 1:
+                parts.append("M" + "L".join(f"{x:.1f} {y:.1f}" for x, y in run) + ("Z" if close else ""))
+            run = []
+        else:
+            run.append(point)
+    return "".join(parts)
+
+
+def _densify(bbox: tuple[float, float, float, float], steps: int = 24) -> list[tuple[float, float]]:
+    """The bbox as a ring with points along each side, so its edges bend with the sphere."""
+    xmin, ymin, xmax, ymax = bbox
+    ring: list[tuple[float, float]] = []
+    for index in range(steps):
+        ring.append((xmin + (xmax - xmin) * index / steps, ymin))
+    for index in range(steps):
+        ring.append((xmax, ymin + (ymax - ymin) * index / steps))
+    for index in range(steps):
+        ring.append((xmax - (xmax - xmin) * index / steps, ymax))
+    for index in range(steps):
+        ring.append((xmin, ymax - (ymax - ymin) * index / steps))
+    return ring
+
+
+@functools.lru_cache(maxsize=8)
+def _globe(bbox: tuple[float, float, float, float]) -> dict[str, Any]:
+    """The globe for one extent: the land it shows, and the extent on it."""
+    xmin, ymin, xmax, ymax = bbox
+    lon0, lat0 = (xmin + xmax) / 2, (ymin + ymax) / 2
+    scale = _GLOBE_RADIUS * _globe_zoom(abs(xmax - xmin), abs(ymax - ymin), lat0)
+    land = "".join(
+        _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in ring], close=True) for ring in _world_rings()
+    )
+    marker = _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in _densify(bbox)], close=True)
+    if not marker:
+        marker = ""
+    return {"land": land, "extent": marker, "size": _GLOBE_SIZE, "radius": _GLOBE_RADIUS}
+
+
+def _extent_globe(extent: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The configured extent drawn on a globe, or None when there is no usable extent."""
+    bbox = (extent or {}).get("bbox")
+    if not isinstance(bbox, list | tuple) or len(bbox) != 4:
+        return None
+    try:
+        values = tuple(float(value) for value in bbox)
+    except (TypeError, ValueError):
+        return None
+    xmin, ymin, xmax, ymax = values
+    if xmax <= xmin or ymax <= ymin:
+        return None
+    return _globe((xmin, ymin, xmax, ymax))
 
 
 def _load_extent() -> dict[str, Any] | None:
@@ -424,6 +520,7 @@ def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) ->
 def render_landing(version: str, mount: str) -> str:
     """Render the root landing page with live instance status."""
     datasets = _load_datasets()
+    extent = _load_extent()
     templates = _load_templates()
     catalogue = _landing_catalogue(templates, _load_workflows())
     return get_template("landing_page.html").render(
@@ -432,7 +529,8 @@ def render_landing(version: str, mount: str) -> str:
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        extent=_load_extent(),
+        extent=extent,
+        globe=_extent_globe(extent),
         datasets=_dataset_views(datasets, templates),
         published_count=sum(1 for dataset in datasets if dataset.publication.status == "published"),
         sources=catalogue["sources"],

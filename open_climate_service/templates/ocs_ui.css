@@ -248,6 +248,36 @@ a.stat:hover {
   color: var(--colors-grey700);
 }
 
+.instance {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacers-dp16);
+}
+.instance-facts {
+  min-width: 0;
+  flex: 1;
+}
+.globe {
+  flex: none;
+}
+.globe .ocean {
+  fill: var(--colors-blue100);
+}
+.globe .land {
+  fill: var(--colors-grey400);
+}
+.globe .extent {
+  fill: var(--theme-primary600);
+  fill-opacity: 0.55;
+  stroke: var(--theme-primary800);
+  stroke-width: 1;
+}
+.globe .limb {
+  fill: none;
+  stroke: var(--colors-grey400);
+  stroke-width: 1;
+}
+
 dl.facts {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
