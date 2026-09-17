@@ -120,11 +120,11 @@ def wants_json(request: Request) -> bool:
 _NAV_ITEMS = (
     ("overview", "Overview", "/#overview"),
     ("explore", "Explore", "/#explore"),
-    ("map", "Map viewer", "/map"),
     ("datasets", "Datasets", "/#datasets"),
     ("data-sources", "Data sources", "/#data-sources"),
     ("workflows", "Workflows", "/#workflows"),
     ("processes", "Processes", "/#processes"),
+    ("map", "Map viewer", "/map"),
 )
 
 
