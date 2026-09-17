@@ -152,11 +152,16 @@ def test_ingesting_a_derived_template_is_a_client_error_not_a_server_error() -> 
 
 
 def test_every_built_in_derived_template_names_a_built_in_workflow() -> None:
-    """The shipped catalogue records where each produced dataset comes from."""
+    """The shipped catalogue records where each produced dataset comes from.
+
+    Read through the built-in loader, not `list_datasets()`: that merges installed plugins and
+    the instance's own `plugins_dir`, so a checkout with plugins configured would test someone
+    else's templates — which may legitimately name a workflow this repo does not ship.
+    """
     from open_climate_service.openeo.workflows import _load_builtin_workflows
 
     workflow_ids = {workflow["id"] for workflow in _load_builtin_workflows()}
-    derived = [t for t in registry.list_datasets() if not registry.is_ingestable(t)]
+    derived = [t for t in registry._load_builtin_datasets() if not registry.is_ingestable(t)]
 
     assert derived, "the built-in catalogue has derived templates"
     unlinked = {t["id"]: t.get("produced_by") for t in derived if t.get("produced_by") not in workflow_ids}
@@ -197,6 +202,6 @@ def test_produced_by_is_listed_by_the_template_api(client: TestClient) -> None:
 
 def test_every_built_in_template_has_a_description() -> None:
     """The description reaches the STAC collection, where it is all a consumer has to go on."""
-    missing = [t["id"] for t in registry.list_datasets() if not str(t.get("description") or "").strip()]
+    missing = [t["id"] for t in registry._load_builtin_datasets() if not str(t.get("description") or "").strip()]
 
     assert missing == []
