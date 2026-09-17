@@ -501,8 +501,29 @@ footer a {
 .item h3 a {
   text-decoration: none;
 }
-.item h3 a:hover {
+/* The whole tile or row opens the page: the title link's hit area is stretched over the item,
+   so there is still exactly one link per item for keyboard and screen-reader users. */
+.item.clickable {
+  position: relative;
+  cursor: pointer;
+}
+.item-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.item-link:focus-visible {
+  outline: none;
+}
+.item.clickable:hover {
+  border-color: var(--colors-grey500);
+}
+.item.clickable:hover .item-link {
   text-decoration: underline;
+}
+.item.clickable:focus-within {
+  outline: 3px solid var(--theme-focus);
+  outline-offset: 2px;
 }
 .clamp {
   display: -webkit-box;

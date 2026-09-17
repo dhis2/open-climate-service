@@ -450,3 +450,19 @@ def test_data_sources_link_to_their_page(client: TestClient) -> None:
     section = html.split('id="data-sources"', 1)[1].split('id="workflows"', 1)[0]
 
     assert 'href="/data-sources/chirps3_precipitation_daily"' in section
+
+
+def test_each_tile_is_one_link_to_its_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole tile opens the page through a stretched title link, so a tile holds no other link."""
+    monkeypatch.setattr(landing, "_load_datasets", lambda: [_record()])
+    html = landing.render_landing("0.0.0", "")
+
+    for area, prefix in (("datasets", "/datasets/"), ("data-sources", "/data-sources/")):
+        section = html.split(f'id="{area}" data-area', 1)[1].split("</section>", 1)[0]
+        items = section.split("data-item")[1:]
+        assert items, area
+        for item in items:
+            item = item.split("</article>", 1)[0]
+            links = re.findall(r'<a [^>]*href="([^"]+)"', item)
+            assert len(links) == 1 and links[0].startswith(prefix), (area, links)
+            assert 'class="item-link"' in item

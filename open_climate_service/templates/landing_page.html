@@ -150,26 +150,20 @@
             <div class="collection view-tiles" data-view-target>
               {% for ds in datasets %}
               <article
-                class="panel item"
+                class="panel item clickable"
                 data-item
                 data-status="{{ ds.status }}"
                 data-search="{{ [ds.name, ds.id, ds.source, ds.variable, ds.period_type] | join(' ') | lower }}"
               >
-                <a
-                  class="thumb{% if ds.has_thumbnail %} has-image{% endif %}"
-                  href="{{ mount }}/datasets/{{ ds.id }}"
-                  tabindex="-1"
-                  aria-hidden="true"
-                  style="--ramp: {{ ds.ramp }}"
-                >
+                <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}" style="--ramp: {{ ds.ramp }}">
                   {% if ds.has_thumbnail %}
                   <img src="{{ mount }}/datasets/{{ ds.id }}/thumbnail.png" alt="" loading="lazy" />
                   {% else %}
                   <span class="no-preview">No preview yet</span>
                   {% endif %}
-                </a>
+                </div>
                 <div class="body">
-                  <h3><a href="{{ mount }}/datasets/{{ ds.id }}">{{ ds.name }}</a></h3>
+                  <h3><a class="item-link" href="{{ mount }}/datasets/{{ ds.id }}">{{ ds.name }}</a></h3>
                   {% if ds.source %}<span class="provider clamp">{{ ds.source }}</span>{% endif %}
                   {% if ds.description %}<p class="description clamp">{{ ds.description }}</p>{% endif %}
                   <div class="meta">
@@ -231,16 +225,14 @@
             <div class="collection view-tiles" data-view-target>
               {% for s in sources %}
               <article
-                class="panel item"
+                class="panel item clickable"
                 data-item
                 data-period="{{ s.period_type }}"
                 data-search="{{ [s.name, s.id, s.provider, s.variable] | join(' ') | lower }}"
               >
                 <div class="body">
-                  <h3><a href="{{ mount }}/data-sources/{{ s.id }}">{{ s.name }}</a></h3>
-                  <span class="provider clamp" title="{{ s.provider }}">
-                    {% if s.provider_url %}<a href="{{ s.provider_url }}">{{ s.provider or s.id }}</a>{% else %}{{ s.provider or "Unknown provider" }}{% endif %}
-                  </span>
+                  <h3><a class="item-link" href="{{ mount }}/data-sources/{{ s.id }}">{{ s.name }}</a></h3>
+                  <span class="provider clamp" title="{{ s.provider }}">{{ s.provider or "Unknown provider" }}</span>
                   {% if s.description %}<p class="description clamp">{{ s.description }}</p>{% endif %}
                   <div class="meta">
                     {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
