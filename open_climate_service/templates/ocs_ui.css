@@ -55,7 +55,10 @@
   --font-weight-bold: 600;
   --radius: 4px;
   --radius-chip: 12px;
-  --header-height: 52px;
+  /* The DHIS2 header bar's own colour and height, from @dhis2-ui/header-bar 10.17.0, where
+     they are literals rather than tokens: background #2c6693, white text, 48px tall. */
+  --header-background: #2c6693;
+  --header-height: 48px;
 }
 
 *,
@@ -108,22 +111,26 @@ code {
 }
 
 header {
-  background: var(--colors-blue800);
+  background: var(--header-background);
   color: var(--colors-white);
-  padding: var(--spacers-dp12) var(--spacers-dp24);
+  height: var(--header-height);
+  padding: 0 var(--spacers-dp24);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--spacers-dp12);
-  flex-wrap: wrap;
+  flex-shrink: 0;
 }
 header h1 {
-  font-size: var(--font-size-h1);
+  font-size: var(--font-size-h3);
   font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 header .version {
   font-family: var(--font-mono);
   font-size: var(--font-size-small);
-  color: var(--colors-blue100);
+  color: var(--colors-grey300);
 }
 
 .layout {
