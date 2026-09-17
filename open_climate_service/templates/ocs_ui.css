@@ -52,7 +52,7 @@
   --font-size-h2: 20px;
   --font-size-stat: 28px;
   --font-weight-medium: 500;
-  --font-weight-bold: 600;
+  --font-weight-bold: 700;
   --radius: 4px;
   --radius-chip: 12px;
   /* The DHIS2 header bar's own colour and height, from @dhis2-ui/header-bar 10.17.0, where
