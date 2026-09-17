@@ -127,11 +127,6 @@ header h1 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-header .version {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-small);
-  color: var(--colors-grey300);
-}
 
 .layout {
   display: grid;
