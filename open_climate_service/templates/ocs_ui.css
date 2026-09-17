@@ -273,7 +273,8 @@ a.stat:hover {
 .globe .extent {
   fill: none;
   stroke: var(--theme-primary800);
-  stroke-width: 1.5;
+  stroke-width: 2;
+  stroke-linejoin: round;
 }
 
 dl.facts {

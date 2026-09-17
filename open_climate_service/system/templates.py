@@ -197,12 +197,12 @@ def render_maps(mount: str) -> str:
 
 # The extent map: an orthographic sphere centred on the extent, cropped to a square, so the
 # coastlines curve the way they do on a globe without the page showing a ball on a background.
-# Drawn in a 100x100 viewBox.
-_GLOBE_SIZE = 100
+# Drawn in a 144x100 viewBox: wider than tall, so the view carries the region around the extent.
+_GLOBE_WIDTH, _GLOBE_HEIGHT = 144, 100
 _GLOBE_RADIUS = 48
-# Below this the sphere's edge enters the square's corners (48 * 1.5 > the 70.7 half-diagonal),
-# and the map would read as a circle again.
-_MIN_ZOOM = 1.5
+# Below this the sphere's edge enters the corners (the half-diagonal is 87.7, and 48 * 1.85 is
+# above it), and the map would read as a ball on a background rather than a piece of the world.
+_MIN_ZOOM = 1.85
 
 
 @functools.lru_cache(maxsize=1)
@@ -213,13 +213,13 @@ def _world_rings() -> list[list[tuple[float, float]]]:
 
 
 def _globe_zoom(width: float, height: float, latitude: float) -> float:
-    """How much to magnify the sphere, so the extent is a quarter of the view and the rest context.
+    """How much to magnify the sphere, so the extent sits in its region rather than filling the view.
 
-    Bounded below so the sphere's edge stays outside the square, and above so a small extent
-    keeps a continent around it rather than filling the frame with coastline.
+    Bounded below so the sphere's edge stays outside the frame, and above at 2.2, which shows
+    roughly 40 degrees of longitude either side — a country with its continent around it.
     """
     span = max(width * math.cos(math.radians(latitude)), height, 0.5)
-    return max(_MIN_ZOOM, min(0.25 * 180 / span, 8.0))
+    return max(_MIN_ZOOM, min(0.1 * 180 / span, 2.2))
 
 
 def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float] | None:
@@ -231,7 +231,7 @@ def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> 
         return None
     x = math.cos(phi) * math.sin(lam)
     y = math.cos(phi0) * math.sin(phi) - math.sin(phi0) * math.cos(phi) * math.cos(lam)
-    return _GLOBE_SIZE / 2 + scale * x, _GLOBE_SIZE / 2 - scale * y
+    return _GLOBE_WIDTH / 2 + scale * x, _GLOBE_HEIGHT / 2 - scale * y
 
 
 def _path(points: list[tuple[float, float] | None], *, close: bool) -> str:
@@ -275,7 +275,7 @@ def _globe(bbox: tuple[float, float, float, float]) -> dict[str, Any]:
     marker = _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in _densify(bbox)], close=True)
     if not marker:
         marker = ""
-    return {"land": land, "extent": marker, "size": _GLOBE_SIZE, "radius": _GLOBE_RADIUS}
+    return {"land": land, "extent": marker, "width": _GLOBE_WIDTH, "height": _GLOBE_HEIGHT}
 
 
 def _extent_globe(extent: dict[str, Any] | None) -> dict[str, Any] | None:

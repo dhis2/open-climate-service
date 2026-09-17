@@ -810,10 +810,10 @@ def test_a_sync_leaves_an_unpublished_dataset_unpublished(monkeypatch: pytest.Mo
 @pytest.mark.parametrize(
     ("bbox", "zoom"),
     [
-        ([-180, -90, 180, 90], 1.5),  # a global extent shows as much as the square can hold
-        ([-25, 34, 45, 72], 1.5),  # Europe is wide enough to sit at the same bound
-        ([80.05, 26.35, 88.2, 30.45], 6.28),  # Nepal
-        ([-13.5, 6.9, -10.1, 10.0], 8.0),  # a small country hits the magnification bound
+        ([-180, -90, 180, 90], 1.85),  # a global extent shows as much as the frame can hold
+        ([-25, 34, 45, 72], 1.85),  # Europe is wide enough to sit at the same bound
+        ([80.05, 26.35, 88.2, 30.45], 2.2),  # Nepal, at the upper bound
+        ([-13.5, 6.9, -10.1, 10.0], 2.2),  # a small country keeps its continent around it
     ],
 )
 def test_the_globe_zooms_to_the_size_of_the_extent(bbox: list[float], zoom: float) -> None:
@@ -827,7 +827,7 @@ def test_the_globe_is_centred_on_the_extent() -> None:
     for bbox in ([-13.5, 6.9, -10.1, 10.0], [80.05, 26.35, 88.2, 30.45], [-70, -40, -60, -30]):
         lon0, lat0 = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
         point = landing._project(lon0, lat0, lon0, lat0, landing._GLOBE_RADIUS)
-        assert point == (landing._GLOBE_SIZE / 2, landing._GLOBE_SIZE / 2)
+        assert point == (landing._GLOBE_WIDTH / 2, landing._GLOBE_HEIGHT / 2)
 
 
 def test_the_far_side_of_the_world_is_not_drawn() -> None:
@@ -837,8 +837,8 @@ def test_the_far_side_of_the_world_is_not_drawn() -> None:
 
 
 def test_the_map_never_shows_the_sphere_s_edge() -> None:
-    """Cropped to a square rather than drawn as a ball: the sphere must overflow the corners."""
-    half_diagonal = (2**0.5) * landing._GLOBE_SIZE / 2
+    """Cropped to a rectangle rather than drawn as a ball: the sphere must overflow the corners."""
+    half_diagonal = ((landing._GLOBE_WIDTH / 2) ** 2 + (landing._GLOBE_HEIGHT / 2) ** 2) ** 0.5
 
     assert landing._GLOBE_RADIUS * landing._MIN_ZOOM > half_diagonal
 

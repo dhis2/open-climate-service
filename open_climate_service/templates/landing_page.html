@@ -103,13 +103,13 @@
               {% if globe %}
               <svg
                 class="globe"
-                viewBox="0 0 {{ globe.size }} {{ globe.size }}"
-                width="128"
-                height="128"
+                viewBox="0 0 {{ globe.width }} {{ globe.height }}"
+                width="176"
+                height="122"
                 role="img"
                 aria-label="Map centred on {{ extent.name or 'the configured extent' }}"
               >
-                <rect class="ocean" x="0" y="0" width="{{ globe.size }}" height="{{ globe.size }}" />
+                <rect class="ocean" x="0" y="0" width="{{ globe.width }}" height="{{ globe.height }}" />
                 <path class="land" d="{{ globe.land }}" />
                 {% if globe.extent %}<path class="extent" d="{{ globe.extent }}" />{% endif %}
               </svg>
