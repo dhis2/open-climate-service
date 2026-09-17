@@ -103,6 +103,40 @@
           </div>
 
           <div class="stack">
+            <section class="panel" aria-labelledby="sync-title">
+              <h3 id="sync-title">Sync</h3>
+              {% if syncable and not read_only %}
+              <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
+                Checking the source for new data…
+              </p>
+              <form id="sync-form" method="post" action="{{ mount }}/manage/sync">
+                <input type="hidden" name="dataset_id" value="{{ dataset.id }}" />
+                <div class="field" style="margin-top: var(--spacers-dp12)">
+                  <label for="sync-end">Sync through (optional)</label>
+                  <input type="text" id="sync-end" name="end" {% if format_hint %}placeholder="{{ format_hint }}"{% endif %} aria-describedby="sync-end-hint" />
+                  <span class="hint" id="sync-end-hint">Leave blank to sync through the latest available period.</span>
+                </div>
+                <div class="checks">
+                  <label><input type="checkbox" name="publish" {% if published %}checked{% endif %} /> Publish after sync</label>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="primary" id="sync-button">Start sync</button>
+                </div>
+                <div class="progress" data-job-progress hidden>
+                  <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
+                  <span class="progress-label" aria-live="polite">Starting…</span>
+                </div>
+                <div class="notice error" data-job-error role="alert" hidden></div>
+              </form>
+              {% elif not syncable %}
+              <p class="note">
+                {% if sync_kind == "static" %}This dataset does not update from a source, so there is nothing to sync.{% else %}This dataset has no source to sync from.{% endif %}
+              </p>
+              {% else %}
+              <p class="note">This instance is read-only, so datasets cannot be synced here.</p>
+              {% endif %}
+            </section>
+
             <section class="panel" aria-labelledby="access-title">
               <h3 id="access-title">Access</h3>
               <div class="actions">
@@ -151,5 +185,34 @@
     <footer>
       <a href="https://github.com/dhis2/open-climate-service">dhis2/open-climate-service</a>
     </footer>
+
+    {% if syncable and not read_only %}
+    <script>
+{{ job_script | safe }}
+      // Reload on success, so coverage and the version history show what the sync added.
+      runJobForm(document.getElementById("sync-form"), {
+        startLabel: "Starting sync…",
+        onDone: function () {
+          window.location.reload();
+        },
+      });
+
+      // The plan asks the provider what it has published, which can be slow, so it is fetched
+      // after the page has rendered rather than holding the page up.
+      (function () {
+        var line = document.getElementById("sync-plan");
+        fetch(line.getAttribute("data-plan-url"), { headers: { Accept: "application/json" } })
+          .then(function (response) {
+            return response.ok ? response.json() : Promise.reject(response.status);
+          })
+          .then(function (plan) {
+            line.textContent = plan.message || "";
+          })
+          .catch(function () {
+            line.textContent = "Could not check the source for new data.";
+          });
+      })();
+    </script>
+    {% endif %}
   </body>
 </html>

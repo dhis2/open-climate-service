@@ -466,3 +466,34 @@ def test_each_tile_is_one_link_to_its_page(monkeypatch: pytest.MonkeyPatch) -> N
             links = re.findall(r'<a [^>]*href="([^"]+)"', item)
             assert len(links) == 1 and links[0].startswith(prefix), (area, links)
             assert 'class="item-link"' in item
+
+
+# --- sync from the dataset page ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("template", "read_only", "form"),
+    [
+        (_ingestable("chirps_monthly", sync={"kind": "temporal"}), False, True),
+        (_ingestable("chirps_monthly", sync={"kind": "release"}), False, True),
+        (_ingestable("chirps_monthly", sync={"kind": "temporal"}), True, False),
+        (_template("chirps_monthly", sync={"kind": "static"}), False, False),
+        (None, False, False),
+    ],
+)
+def test_the_dataset_page_offers_sync_only_where_it_can_run(
+    monkeypatch: pytest.MonkeyPatch, template: dict[str, Any] | None, read_only: bool, form: bool
+) -> None:
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: template)
+    monkeypatch.setattr(api_config, "is_read_only", lambda: read_only)
+
+    html = landing.render_dataset_page(_record(), "/ocs")
+
+    assert ('id="sync-form"' in html) is form
+    if form:
+        assert 'action="/ocs/manage/sync"' in html
+        assert 'data-plan-url="/ocs/sync/chirps_monthly/plan"' in html
+        assert 'placeholder="YYYY-MM"' in html
+        assert "function runJobForm" in html
+    else:
+        assert "/manage" not in html

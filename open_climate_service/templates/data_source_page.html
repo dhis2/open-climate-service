@@ -107,11 +107,11 @@
                   <button type="submit" class="primary" id="ingest-button">Ingest</button>
                   <span class="note">Data is fetched for this instance's extent. This may take several minutes.</span>
                 </div>
-                <div class="progress" id="ingest-progress" hidden>
+                <div class="progress" data-job-progress hidden>
                   <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
                   <span class="progress-label" aria-live="polite">Starting…</span>
                 </div>
-                <div class="notice error" id="ingest-error" role="alert" hidden></div>
+                <div class="notice error" data-job-error role="alert" hidden></div>
               </form>
               {% elif not ingestable %}
               <p class="note">
@@ -181,92 +181,14 @@
 
     {% if can_ingest %}
     <script>
-      // Posts to the same streaming endpoint as the /manage console, but stays on this page:
-      // progress is shown here, a failure is shown here, and success opens the dataset.
-      (function () {
-        var form = document.getElementById("ingest-form");
-        var button = document.getElementById("ingest-button");
-        var progress = document.getElementById("ingest-progress");
-        var fill = progress.querySelector(".progress-fill");
-        var label = progress.querySelector(".progress-label");
-        var error = document.getElementById("ingest-error");
-        var controls = Array.prototype.slice.call(form.querySelectorAll("input:not([type=hidden]), button"));
-
-        function setBusy(busy) {
-          controls.forEach(function (control) {
-            control.disabled = busy;
-          });
-        }
-
-        function fail(message) {
-          setBusy(false);
-          progress.hidden = true;
-          error.textContent = message || "Ingestion failed.";
-          error.hidden = false;
-        }
-
-        form.addEventListener("submit", async function (event) {
-          event.preventDefault();
-          var data = new FormData(form);
-          error.hidden = true;
-          progress.hidden = false;
-          fill.className = "progress-fill indeterminate";
-          fill.style.width = "";
-          label.textContent = "Starting…";
-          setBusy(true);
-
-          var response;
-          try {
-            response = await fetch(form.action, { method: "POST", body: data });
-          } catch (e) {
-            fail("The request could not be sent.");
-            return;
-          }
-          // Validation failures answer with a redirect to the console carrying the message.
-          if (response.redirected) {
-            fail(new URL(response.url).searchParams.get("error") || "Ingestion could not start.");
-            return;
-          }
-          if (!response.ok || !response.body) {
-            fail("Ingestion could not start (HTTP " + response.status + ").");
-            return;
-          }
-
-          var reader = response.body.getReader();
-          var decoder = new TextDecoder();
-          var buffer = "";
-          while (true) {
-            var chunk = await reader.read();
-            if (chunk.done) break;
-            buffer += decoder.decode(chunk.value, { stream: true });
-            var lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-            for (var i = 0; i < lines.length; i++) {
-              if (lines[i].indexOf("data: ") !== 0) continue;
-              var evt;
-              try {
-                evt = JSON.parse(lines[i].slice(6));
-              } catch (e) {
-                continue;
-              }
-              if (evt.error) {
-                fail(evt.error);
-                return;
-              }
-              if (evt.redirect) {
-                window.location.href = form.getAttribute("data-dataset-url");
-                return;
-              }
-              if (typeof evt.done === "number" && typeof evt.total === "number" && evt.total > 0) {
-                fill.className = "progress-fill";
-                fill.style.width = Math.round((evt.done / evt.total) * 100) + "%";
-              }
-              if (evt.message) label.textContent = evt.message;
-            }
-          }
-          fail("Ingestion ended without a result.");
-        });
-      })();
+{{ job_script | safe }}
+      // Stays on this page: progress and failures are shown here, success opens the dataset.
+      runJobForm(document.getElementById("ingest-form"), {
+        startLabel: "Starting…",
+        onDone: function (form) {
+          window.location.href = form.getAttribute("data-dataset-url");
+        },
+      });
     </script>
     {% endif %}
   </body>

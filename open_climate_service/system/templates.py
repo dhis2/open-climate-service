@@ -445,6 +445,11 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
 
     return {
         "dataset": summary,
+        # Static datasets and workflow outputs have no upstream to sync from; the console offers
+        # the button for them and the planner answers "not syncable", which is noise here.
+        "syncable": bool(template) and sync_kind in {"temporal", "release"},
+        "sync_kind": sync_kind,
+        "format_hint": _PERIOD_FORMAT_HINTS.get(str(record.period_type), ""),
         "paragraphs": _paragraphs(record.description),
         "about": present(about),
         "data": present(data),
@@ -476,6 +481,7 @@ def render_dataset_page(record: Any, mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         styles=_read_asset("ocs_ui.css"),
+        job_script=_read_asset("ocs_jobs.js"),
         read_only=api_config.is_read_only(),
         **_dataset_page_context(record, template),
     )
@@ -607,6 +613,7 @@ def render_data_source_page(template: dict[str, Any], mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         styles=_read_asset("ocs_ui.css"),
+        job_script=_read_asset("ocs_jobs.js"),
         **_data_source_page_context(
             template,
             _load_datasets(),
