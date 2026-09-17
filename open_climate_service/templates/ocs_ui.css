@@ -259,10 +259,13 @@ a.stat:hover {
   min-width: 0;
   flex: 1;
 }
+/* The map sets the panel's height and the facts sit alongside it; the panel's own padding
+   and the flex gap are its margin. It may shrink, never grow, so it cannot push the facts
+   into a column of single words. */
 .globe {
-  flex: none;
-}
-.globe {
+  flex: 0 1 auto;
+  max-width: 100%;
+  height: auto;
   border: 1px solid var(--colors-grey300);
   border-radius: var(--radius);
 }
@@ -855,5 +858,9 @@ button.primary:disabled {
   }
   .toolbar .status {
     margin-left: 0;
+  }
+  /* Side by side, the facts are squeezed to one word per line before the map gives way. */
+  .instance {
+    flex-direction: column;
   }
 }
