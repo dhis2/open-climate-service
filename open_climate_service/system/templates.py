@@ -195,10 +195,14 @@ def render_maps(mount: str) -> str:
     )
 
 
-# The extent globe: an orthographic sphere centred on the extent, so the mark sits where the
-# instance is rather than somewhere on a flat rectangle. Drawn in a 100x100 viewBox.
+# The extent map: an orthographic sphere centred on the extent, cropped to a square, so the
+# coastlines curve the way they do on a globe without the page showing a ball on a background.
+# Drawn in a 100x100 viewBox.
 _GLOBE_SIZE = 100
 _GLOBE_RADIUS = 48
+# Below this the sphere's edge enters the square's corners (48 * 1.5 > the 70.7 half-diagonal),
+# and the map would read as a circle again.
+_MIN_ZOOM = 1.5
 
 
 @functools.lru_cache(maxsize=1)
@@ -209,14 +213,13 @@ def _world_rings() -> list[list[tuple[float, float]]]:
 
 
 def _globe_zoom(width: float, height: float, latitude: float) -> float:
-    """How much to magnify the sphere so the extent reads as a place, not a dot.
+    """How much to magnify the sphere, so the extent is a quarter of the view and the rest context.
 
-    1 shows the whole visible hemisphere. Bounded: past about 12 the curvature stops being
-    visible and the globe stops looking like one, and a sub-degree extent would otherwise ask
-    for far more than that.
+    Bounded below so the sphere's edge stays outside the square, and above so a small extent
+    keeps a continent around it rather than filling the frame with coastline.
     """
     span = max(width * math.cos(math.radians(latitude)), height, 0.5)
-    return max(1.0, min(0.6 * 180 / span, 12.0))
+    return max(_MIN_ZOOM, min(0.25 * 180 / span, 8.0))
 
 
 def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float] | None:

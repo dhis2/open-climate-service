@@ -73,28 +73,6 @@
           <div class="panel">
             <h3>Instance</h3>
             <div class="instance">
-              {% if globe %}
-              <svg
-                class="globe"
-                viewBox="0 0 {{ globe.size }} {{ globe.size }}"
-                width="112"
-                height="112"
-                role="img"
-                aria-label="Globe centred on {{ extent.name or 'the configured extent' }}"
-              >
-                <defs>
-                  <clipPath id="globe-clip">
-                    <circle cx="{{ globe.size / 2 }}" cy="{{ globe.size / 2 }}" r="{{ globe.radius }}" />
-                  </clipPath>
-                </defs>
-                <circle class="ocean" cx="{{ globe.size / 2 }}" cy="{{ globe.size / 2 }}" r="{{ globe.radius }}" />
-                <g clip-path="url(#globe-clip)">
-                  <path class="land" d="{{ globe.land }}" />
-                  {% if globe.extent %}<path class="extent" d="{{ globe.extent }}" />{% endif %}
-                </g>
-                <circle class="limb" cx="{{ globe.size / 2 }}" cy="{{ globe.size / 2 }}" r="{{ globe.radius }}" />
-              </svg>
-              {% endif %}
               <div class="instance-facts">
             {% if extent %}
             <dl class="facts">
@@ -122,6 +100,20 @@
             <p class="note">This instance is read-only: data can be browsed and processed, but not ingested.</p>
             {% endif %}
               </div>
+              {% if globe %}
+              <svg
+                class="globe"
+                viewBox="0 0 {{ globe.size }} {{ globe.size }}"
+                width="128"
+                height="128"
+                role="img"
+                aria-label="Map centred on {{ extent.name or 'the configured extent' }}"
+              >
+                <rect class="ocean" x="0" y="0" width="{{ globe.size }}" height="{{ globe.size }}" />
+                <path class="land" d="{{ globe.land }}" />
+                {% if globe.extent %}<path class="extent" d="{{ globe.extent }}" />{% endif %}
+              </svg>
+              {% endif %}
             </div>
           </div>
         </section>

@@ -260,6 +260,10 @@ a.stat:hover {
 .globe {
   flex: none;
 }
+.globe {
+  border: 1px solid var(--colors-grey300);
+  border-radius: var(--radius);
+}
 .globe .ocean {
   fill: var(--colors-blue100);
 }
@@ -267,15 +271,9 @@ a.stat:hover {
   fill: var(--colors-grey400);
 }
 .globe .extent {
-  fill: var(--theme-primary600);
-  fill-opacity: 0.55;
-  stroke: var(--theme-primary800);
-  stroke-width: 1;
-}
-.globe .limb {
   fill: none;
-  stroke: var(--colors-grey400);
-  stroke-width: 1;
+  stroke: var(--theme-primary800);
+  stroke-width: 1.5;
 }
 
 dl.facts {

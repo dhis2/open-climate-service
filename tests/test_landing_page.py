@@ -810,9 +810,10 @@ def test_a_sync_leaves_an_unpublished_dataset_unpublished(monkeypatch: pytest.Mo
 @pytest.mark.parametrize(
     ("bbox", "zoom"),
     [
-        ([-180, -90, 180, 90], 1.0),  # a global extent shows the whole hemisphere
-        ([-25, 34, 45, 72], 2.56),  # Europe
-        ([-13.5, 6.9, -10.1, 10.0], 12.0),  # a small country hits the magnification bound
+        ([-180, -90, 180, 90], 1.5),  # a global extent shows as much as the square can hold
+        ([-25, 34, 45, 72], 1.5),  # Europe is wide enough to sit at the same bound
+        ([80.05, 26.35, 88.2, 30.45], 6.28),  # Nepal
+        ([-13.5, 6.9, -10.1, 10.0], 8.0),  # a small country hits the magnification bound
     ],
 )
 def test_the_globe_zooms_to_the_size_of_the_extent(bbox: list[float], zoom: float) -> None:
@@ -833,6 +834,13 @@ def test_the_far_side_of_the_world_is_not_drawn() -> None:
     """Orthographic shows one hemisphere; the antipode must not fold onto the front."""
     assert landing._project(0.0, 0.0, 180.0, 0.0, 48) is None
     assert landing._project(1.0, 1.0, 0.0, 0.0, 48) is not None
+
+
+def test_the_map_never_shows_the_sphere_s_edge() -> None:
+    """Cropped to a square rather than drawn as a ball: the sphere must overflow the corners."""
+    half_diagonal = (2**0.5) * landing._GLOBE_SIZE / 2
+
+    assert landing._GLOBE_RADIUS * landing._MIN_ZOOM > half_diagonal
 
 
 def test_the_globe_draws_land_and_the_extent() -> None:
