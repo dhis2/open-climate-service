@@ -95,8 +95,7 @@
   name: Population change (WorldPop Global2)
   short_name: Population change
   description: >-
-    Difference in population between two years of an ingested WorldPop dataset, produced by the
-    temporal_change workflow.
+    Change in the number of people per 100 m grid cell between two years, worldwide.
   variable: pop_change
   period_type: yearly
   sync:

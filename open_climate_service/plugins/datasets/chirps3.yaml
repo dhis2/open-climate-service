@@ -92,8 +92,8 @@
   name: Precipitation daily normal (CHIRPS3, 1991–2020)
   short_name: Precipitation daily normal
   description: >-
-    Average CHIRPS rainfall for each day of the year over 1991-2020, computed by the climate_normal
-    workflow. The baseline an anomaly is measured against.
+    Average CHIRPS rainfall for each day of the year over 1991-2020. The baseline a daily anomaly
+    is measured against.
   variable: precip
   period_type: climatology
   sync:
@@ -114,8 +114,8 @@
   name: Precipitation monthly normal (CHIRPS3, 1991–2020)
   short_name: Precipitation monthly normal
   description: >-
-    Average CHIRPS rainfall for each calendar month over 1991-2020, computed by the climate_normal
-    workflow. The baseline a monthly anomaly is measured against.
+    Average CHIRPS rainfall for each calendar month over 1991-2020. The baseline a monthly anomaly
+    is measured against.
   variable: precip
   period_type: climatology
   sync:
