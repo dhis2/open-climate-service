@@ -623,12 +623,13 @@ def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.Monk
     assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "ocs", "abs": "core"}
 
 
-def test_the_processes_area_hides_core_processes_by_default(client: TestClient) -> None:
+def test_the_processes_area_lists_every_process_by_default(client: TestClient) -> None:
     html = client.get("/", headers={"Accept": "text/html"}).text
     section = html.split('id="processes" data-area', 1)[1].split("</section>", 1)[0]
 
-    assert '<option value="!core" selected>' in section
-    assert 'data-origin="core"' in section, "core processes are listed, only filtered out"
+    assert '<option value="" selected>All</option>' in section
+    assert 'data-origin="core"' in section, "core processes are listed, not filtered out"
+    assert '<option value="!core">' in section, "hiding the core processes is still offered"
     assert 'data-views="processes"' in section
     # A leading "!" in a filter value must be understood by the list script.
     assert 'value.charAt(0) === "!"' in html

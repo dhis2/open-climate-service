@@ -304,11 +304,11 @@
               <label
                 >Origin
                 <select data-filter-field="origin">
-                  <option value="!core" selected>All except openEO core</option>
+                  <option value="" selected>All</option>
+                  <option value="!core">All except openEO core</option>
                   {% for key, label in process_origins.items() %}
                   <option value="{{ key }}">{{ label }}</option>
                   {% endfor %}
-                  <option value="">All</option>
                 </select>
               </label>
               <div class="view-switch" role="group" aria-label="Layout">

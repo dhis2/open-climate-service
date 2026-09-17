@@ -1,6 +1,9 @@
 - id: worldpop_population_global2_100m
   name: Total population (WorldPop Global2, 100m)
   short_name: Total population
+  description: >-
+    Modelled number of people living in each 100 m grid cell, worldwide. Yearly estimates and
+    projections for 2015-2030 from the WorldPop Global2 R2025A release.
   variable: pop_total
   period_type: yearly
   # Runs 2015-2030, so periods straddle now. Requires an explicit start
@@ -46,6 +49,9 @@
 - id: worldpop_agesex_global2_100m
   name: Population by age and sex (WorldPop Global2, 100m)
   short_name: Age/sex population
+  description: >-
+    People per 100 m grid cell split by age band and sex, worldwide. Yearly estimates and
+    projections for 2015-2030 from the WorldPop Global2 R2025A release.
   variable: population
   period_type: yearly
   # Runs 2015-2030, so periods straddle now. Requires an explicit start
@@ -88,6 +94,9 @@
 - id: worldpop_population_change
   name: Population change (WorldPop Global2)
   short_name: Population change
+  description: >-
+    Difference in population between two years of an ingested WorldPop dataset, produced by the
+    temporal_change workflow.
   variable: pop_change
   period_type: yearly
   sync:
