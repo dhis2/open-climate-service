@@ -269,8 +269,10 @@ a.stat:hover {
 .globe .ocean {
   fill: var(--colors-blue100);
 }
+/* grey500, not grey400: against the pale blue ocean the lighter grey left the coastline
+   barely visible, and the extent outline is still well clear of both. */
 .globe .land {
-  fill: var(--colors-grey400);
+  fill: var(--colors-grey500);
 }
 .globe .extent {
   fill: none;
