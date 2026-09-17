@@ -146,3 +146,57 @@ def test_ingesting_a_derived_template_is_a_client_error_not_a_server_error() -> 
     assert "worldpop_population_change" in detail
     assert "ingestion.plugin" in detail
     assert "save_result" in detail, "the message should say what does produce it"
+
+
+# -- and it names what produces it ------------------------------------------------------------
+
+
+def test_every_built_in_derived_template_names_a_built_in_workflow() -> None:
+    """The shipped catalogue records where each produced dataset comes from."""
+    from open_climate_service.openeo.workflows import _load_builtin_workflows
+
+    workflow_ids = {workflow["id"] for workflow in _load_builtin_workflows()}
+    derived = [t for t in registry.list_datasets() if not registry.is_ingestable(t)]
+
+    assert derived, "the built-in catalogue has derived templates"
+    unlinked = {t["id"]: t.get("produced_by") for t in derived if t.get("produced_by") not in workflow_ids}
+    assert unlinked == {}
+
+
+@pytest.mark.parametrize("value", ["", "  ", " climate_normal", 3, ["climate_normal"]])
+def test_a_malformed_produced_by_is_refused(value: object) -> None:
+    with pytest.raises(ValueError, match="invalid produced_by"):
+        registry._validate_dataset_template(
+            _template(sync={"kind": "static"}, produced_by=value, license="CC-BY-4.0"),
+            source="derived.yaml",
+        )
+
+
+def test_produced_by_beside_an_ingestion_plugin_is_refused() -> None:
+    """A dataset is either fetched or produced, never both."""
+    template = _template(
+        sync={"kind": "static"},
+        produced_by="climate_normal",
+        ingestion={"plugin": "some.Plugin"},
+        license="CC-BY-4.0",
+    )
+
+    with pytest.raises(ValueError, match="either ingested or produced"):
+        registry._validate_dataset_template(template, source="both.yaml")
+
+
+def test_produced_by_is_listed_by_the_template_api(client: TestClient) -> None:
+    templates = {t["id"]: t for t in client.get("/dataset-templates/").json()}
+
+    assert templates["worldpop_population_change"]["produced_by"] == "temporal_change"
+    assert "produced_by" not in templates["worldpop_population_global2_100m"]
+
+
+# -- every template says what it holds --------------------------------------------------------
+
+
+def test_every_built_in_template_has_a_description() -> None:
+    """The description reaches the STAC collection, where it is all a consumer has to go on."""
+    missing = [t["id"] for t in registry.list_datasets() if not str(t.get("description") or "").strip()]
+
+    assert missing == []

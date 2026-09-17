@@ -1,6 +1,9 @@
 - id: era5land_temperature_daily
   name: 2m temperature (ERA5-Land)
   short_name: 2m temperature
+  description: >-
+    Daily mean air temperature 2 m above the ground at 9 km, worldwide, from 1950 to a few days ago.
+    Days run in UTC.
   standard_name: air_temperature
   variable: t2m
   period_type: daily
@@ -35,6 +38,9 @@
 - id: era5land_precipitation_daily
   name: Precipitation rate (ERA5-Land)
   short_name: Precipitation
+  description: >-
+    Daily rainfall at 9 km, worldwide, from 1950 to a few days ago, stored as a mean daily rate.
+    Days run in UTC.
   standard_name: lwe_precipitation_rate
   variable: tp
   period_type: daily
@@ -72,6 +78,8 @@
 - id: era5land_temperature_monthly
   name: 2m temperature (ERA5-Land)
   short_name: 2m temperature
+  description: >-
+    Monthly mean air temperature 2 m above the ground at 9 km, worldwide, from 1950 onwards.
   standard_name: air_temperature
   variable: t2m
   period_type: monthly
@@ -106,6 +114,9 @@
 - id: era5land_precipitation_monthly
   name: Precipitation rate (ERA5-Land)
   short_name: Precipitation
+  description: >-
+    Monthly rainfall at 9 km, worldwide, from 1950 onwards, stored as a mean daily rate rather than
+    a monthly total.
   standard_name: lwe_precipitation_rate
   variable: tp
   period_type: monthly
@@ -143,6 +154,9 @@
 - id: era5land_temperature_daily_from_hourly
   name: 2m temperature (ERA5-Land, local time)
   short_name: 2m temperature
+  description: >-
+    Daily mean air temperature 2 m above the ground, averaged over the local day rather than the UTC
+    day. Use this where the time zone matters more than a direct match with ERA5-Land.
   standard_name: air_temperature
   variable: t2m
   period_type: daily
@@ -176,6 +190,9 @@
 - id: era5land_precipitation_daily_from_hourly
   name: Precipitation rate (ERA5-Land, local time)
   short_name: Precipitation
+  description: >-
+    Daily rainfall totalled over the local day rather than the UTC day, as a mean daily rate. Use
+    this where the time zone matters more than a direct match with ERA5-Land.
   standard_name: lwe_precipitation_rate
   variable: tp
   period_type: daily
@@ -211,6 +228,9 @@
 - id: era5land_temperature_daily_normal_1991_2020
   name: 2m temperature daily normal (ERA5-Land, 1991–2020)
   short_name: Temperature daily normal
+  description: >-
+    Average ERA5-Land temperature for each day of the year over 1991-2020, smoothed over a 31-day
+    window. The baseline an anomaly is measured against.
   variable: t2m
   period_type: climatology
   sync:
@@ -243,6 +263,9 @@
 - id: era5land_precipitation_daily_normal_1991_2020
   name: Total precipitation daily normal (ERA5-Land, 1991–2020)
   short_name: Precipitation daily normal
+  description: >-
+    Average ERA5-Land rainfall for each day of the year over 1991-2020, smoothed over a 31-day
+    window. The baseline an anomaly is measured against.
   variable: tp
   period_type: climatology
   sync:
@@ -286,12 +309,16 @@
 - id: era5land_temperature_monthly_normal_1991_2020
   name: 2m temperature monthly normal (ERA5-Land, 1991–2020)
   short_name: Temperature monthly normal
+  description: >-
+    Average ERA5-Land temperature for each calendar month over 1991-2020, computed by the
+    climate_normal workflow. The baseline a monthly anomaly is measured against.
   variable: t2m
   period_type: climatology
   sync:
     kind: static
   units: degC
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -305,6 +332,9 @@
 - id: era5land_precipitation_monthly_normal_1991_2020
   name: Mean daily precipitation monthly normal (ERA5-Land, 1991–2020)
   short_name: Precipitation monthly normal
+  description: >-
+    Average ERA5-Land rainfall for each calendar month over 1991-2020, computed by the
+    climate_normal workflow. The baseline a monthly anomaly is measured against.
   variable: tp
   period_type: climatology
   sync:
@@ -313,6 +343,7 @@
   # the days in each calendar month, so the result stays a mean daily rate.
   units: mm/d
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -334,12 +365,16 @@
 - id: era5land_temperature_daily_anomaly_1991_2020
   name: 2m temperature daily anomaly (ERA5-Land, vs 1991–2020 normal)
   short_name: Temperature anomaly
+  description: >-
+    A day's ERA5-Land temperature minus its 1991-2020 normal. Negative is colder than usual,
+    positive warmer.
   variable: t2m
   period_type: daily
   sync:
     kind: static
   units: degC
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -353,12 +388,16 @@
 - id: era5land_precipitation_daily_relative_anomaly_1991_2020
   name: Precipitation daily relative anomaly (ERA5-Land, vs 1991–2020 normal)
   short_name: Precipitation anomaly (%)
+  description: >-
+    How far a day's ERA5-Land rainfall sits from its 1991-2020 normal, as a percentage of that
+    normal. Negative is drier than usual, positive wetter.
   variable: tp
   period_type: daily
   sync:
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -372,12 +411,16 @@
 - id: era5land_precipitation_daily_anomaly_1991_2020
   name: Precipitation daily anomaly (ERA5-Land, vs 1991–2020 normal)
   short_name: Precipitation anomaly
+  description: >-
+    A day's ERA5-Land rainfall minus its 1991-2020 normal. Negative is drier than usual, positive
+    wetter.
   variable: tp
   period_type: daily
   sync:
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -397,12 +440,16 @@
 - id: era5land_temperature_monthly_anomaly_1991_2020
   name: 2m temperature monthly anomaly (ERA5-Land, vs 1991–2020 normal)
   short_name: Temperature monthly anomaly
+  description: >-
+    A month's ERA5-Land temperature minus its 1991-2020 normal. Negative is colder than usual,
+    positive warmer.
   variable: t2m
   period_type: monthly
   sync:
     kind: static
   units: degC
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -416,12 +463,16 @@
 - id: era5land_precipitation_monthly_anomaly_1991_2020
   name: Precipitation monthly anomaly (ERA5-Land, vs 1991–2020 normal)
   short_name: Precipitation monthly anomaly
+  description: >-
+    A month's ERA5-Land rainfall minus its 1991-2020 normal, as a mean daily rate. Negative is drier
+    than usual, positive wetter.
   variable: tp
   period_type: monthly
   sync:
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -435,12 +486,16 @@
 - id: era5land_precipitation_monthly_relative_anomaly_1991_2020
   name: Precipitation monthly relative anomaly (ERA5-Land, vs 1991–2020 normal)
   short_name: Precipitation anomaly (%)
+  description: >-
+    How far a month's ERA5-Land rainfall sits from its 1991-2020 normal, as a percentage of that
+    normal. Negative is drier than usual, positive wetter.
   variable: tp
   period_type: monthly
   sync:
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
