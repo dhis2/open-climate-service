@@ -196,7 +196,6 @@ def plan_sync(
     # case is the reason this field exists — see ArtifactRecord.version.
     current_version = latest_artifact.version
     target_version = _declared_release_version(source_dataset)
-    release_label = _release_label(target_version or current_version)
 
     # Compared as a whole, not on `value`: the authority is half the identity, so
     # `worldpop:R2025A` and `ocs:R2025A` name different releases that happen to share a
@@ -243,10 +242,11 @@ def plan_sync(
         # executes REMATERIALIZE (start=current_start, no download window).
         #
         # This guard is only as strong as the plugin's own period reporting, and a plugin
-        # whose periods() ignores the revision it was configured with — WorldPop's returns
-        # a fixed 2015..2030 year list — reports every period as available even for a
-        # revision the upstream hub has not published. Advancing such a template to an
-        # unpublished revision therefore still fails at fetch time rather than waiting here.
+        # whose periods() ignores the revision it was configured with — WorldPop's clamps
+        # the requested range to its 2015..2030 window without checking that revision —
+        # reports every in-range period as available even for a revision the upstream hub
+        # has not published. Advancing such a template to an unpublished revision therefore
+        # still fails at fetch time rather than waiting here.
         # That is a property of the plugin contract, unchanged by release tracking: making
         # availability revision-aware belongs with the plugin, not the planner.
         release_start = current_start or current_end
@@ -330,7 +330,7 @@ def plan_sync(
                 sync_kind=sync_kind,
                 action=SyncAction.NO_OP,
                 reason="no_new_release",
-                message=f"No new release available beyond {release_label or current_end}.",
+                message=f"No new data is available beyond {current_end}.",
                 current_start=current_start,
                 current_end=current_end,
                 target_end=target_end,
@@ -348,7 +348,7 @@ def plan_sync(
             action=SyncAction.NO_OP,
             reason="no_new_release",
             message=(
-                f"Release {release_label or current_end} is already available locally; target {target_end} "
+                f"Data through {current_end} is already available locally; target {target_end} "
                 "does not require a new download."
             ),
             current_start=current_start,
@@ -364,7 +364,7 @@ def plan_sync(
         sync_kind=sync_kind,
         action=SyncAction.REMATERIALIZE,
         reason="new_release_available",
-        message=f"A newer release is available: {release_label or target_end}. Sync will rematerialize the dataset.",
+        message=f"New data is available through {target_end}. Sync will rematerialize the dataset.",
         current_start=current_start,
         current_end=current_end,
         target_end=target_end,

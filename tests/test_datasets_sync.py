@@ -814,7 +814,7 @@ def test_release_planner_reports_version_decoupled_from_period_type(monkeypatch:
 
     WorldPop's revision (e.g. 'R2025A') is not a calendar period, so it must not be read
     from coverage.temporal.end. The planner reports it via SyncDetail.current_version,
-    and the NO_OP message names the release rather than the period.
+    while the period-based NO_OP message continues to describe temporal coverage.
     """
     dataset_id = "worldpop_population_yearly_sle"
     latest = _artifact(
@@ -842,7 +842,45 @@ def test_release_planner_reports_version_decoupled_from_period_type(monkeypatch:
     assert result.sync_detail.action == SyncAction.NO_OP
     assert result.sync_detail.current_version == _version("R2025A")
     assert result.sync_detail.target_version == _version("R2025A")
-    assert result.sync_detail.message.startswith("Release worldpop:R2025A is already available locally")
+    assert result.sync_detail.message.startswith("Data through 2024 is already available locally")
+
+
+@pytest.mark.parametrize(
+    ("available", "expected_action", "expected_message"),
+    [
+        ([], SyncAction.NO_OP, "No new data is available beyond 2024."),
+        (["2025"], SyncAction.REMATERIALIZE, "New data is available through 2025."),
+    ],
+)
+def test_release_period_path_messages_name_periods_not_the_matching_version(
+    monkeypatch: pytest.MonkeyPatch,
+    available: list[str],
+    expected_action: SyncAction,
+    expected_message: str,
+) -> None:
+    """A matching release falls through to coverage comparison, whose messages name periods."""
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        end="2024",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: available)
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end="2025",
+    )
+
+    assert result.action == expected_action
+    assert result.message.startswith(expected_message)
+    assert "worldpop:R2025A" not in result.message
 
 
 def test_release_planner_rematerializes_when_declared_version_changes(monkeypatch: pytest.MonkeyPatch) -> None:
