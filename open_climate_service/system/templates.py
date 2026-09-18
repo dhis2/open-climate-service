@@ -1,12 +1,17 @@
 """Server-side HTML rendering and root resource representations for the Open Climate Service."""
 
+import functools
 import importlib.resources
 import json
 import logging
+import math
+import os
 import re
+import time
 from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -118,6 +123,7 @@ def wants_json(request: Request) -> bool:
     return json_q >= 0 and (html_q < 0 or json_q >= html_q)
 
 
+@functools.lru_cache(maxsize=4)
 def _read_asset(name: str) -> str:
     resource = importlib.resources.files("open_climate_service") / "templates" / name
     return resource.read_text(encoding="utf-8")
@@ -131,6 +137,7 @@ def _read_asset(name: str) -> str:
 LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
+    ("overview", "Overview", "/"),
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Dataset templates", "/dataset-templates"),
     ("workflows", "Workflows", "/workflows"),
@@ -176,6 +183,7 @@ def _licence_label(template: dict[str, Any]) -> str | None:
     return name if isinstance(name, str) else None
 
 
+@functools.lru_cache(maxsize=64)
 def _colormap_ramp(name: str | None) -> str:
     """A CSS gradient through a colormap, drawn where a dataset has no thumbnail yet.
 
@@ -1197,6 +1205,171 @@ def render_api_page(schema: dict[str, Any], mount: str) -> str:
     )
 
 
+# coastlines curve the way they do on a globe without the page showing a ball on a background.
+# Drawn in a 144x100 viewBox: wider than tall, so the view carries the region around the extent.
+_GLOBE_WIDTH, _GLOBE_HEIGHT = 144, 100
+_GLOBE_RADIUS = 48
+# Below this the sphere's edge enters the corners (the half-diagonal is 87.7, and 48 * 1.85 is
+# above it), and the map would read as a ball on a background rather than a piece of the world.
+_MIN_ZOOM = 1.85
+
+
+@functools.lru_cache(maxsize=1)
+def _world_rings() -> list[list[tuple[float, float]]]:
+    """Coastlines as (lon, lat) rings; see `templates/world_land.json` for what they are."""
+    data = json.loads(_read_asset("world_land.json"))
+    return [[(point[0], point[1]) for point in ring] for ring in data["rings"]]
+
+
+def _globe_zoom(width: float, height: float, latitude: float) -> float:
+    """How much to magnify the sphere, so the extent sits in its region rather than filling the view.
+
+    Bounded below so the sphere's edge stays outside the frame, and above at 2.2, which shows
+    roughly 40 degrees of longitude either side — a country with its continent around it.
+    """
+    span = max(width * math.cos(math.radians(latitude)), height, 0.5)
+    return max(_MIN_ZOOM, min(0.1 * 180 / span, 2.2))
+
+
+def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float] | None:
+    """Orthographic projection onto the viewBox, or None for a point on the far side."""
+    lam, phi = math.radians(lon - lon0), math.radians(lat)
+    phi0 = math.radians(lat0)
+    cos_c = math.sin(phi0) * math.sin(phi) + math.cos(phi0) * math.cos(phi) * math.cos(lam)
+    if cos_c <= 0:
+        return None
+    x = math.cos(phi) * math.sin(lam)
+    y = math.cos(phi0) * math.sin(phi) - math.sin(phi0) * math.cos(phi) * math.cos(lam)
+    return _GLOBE_WIDTH / 2 + scale * x, _GLOBE_HEIGHT / 2 - scale * y
+
+
+def _path(points: list[tuple[float, float] | None], *, close: bool) -> str:
+    """An SVG path through *points*, starting a new subpath wherever the horizon cut them."""
+    parts: list[str] = []
+    run: list[tuple[float, float]] = []
+    for point in [*points, None]:
+        if point is None:
+            if len(run) > 1:
+                parts.append("M" + "L".join(f"{x:.1f} {y:.1f}" for x, y in run) + ("Z" if close else ""))
+            run = []
+        else:
+            run.append(point)
+    return "".join(parts)
+
+
+def _densify(bbox: tuple[float, float, float, float], steps: int = 24) -> list[tuple[float, float]]:
+    """The bbox as a ring with points along each side, so its edges bend with the sphere."""
+    xmin, ymin, xmax, ymax = bbox
+    ring: list[tuple[float, float]] = []
+    for index in range(steps):
+        ring.append((xmin + (xmax - xmin) * index / steps, ymin))
+    for index in range(steps):
+        ring.append((xmax, ymin + (ymax - ymin) * index / steps))
+    for index in range(steps):
+        ring.append((xmax - (xmax - xmin) * index / steps, ymax))
+    for index in range(steps):
+        ring.append((xmin, ymax - (ymax - ymin) * index / steps))
+    return ring
+
+
+@functools.lru_cache(maxsize=8)
+def _globe(bbox: tuple[float, float, float, float]) -> dict[str, Any]:
+    """The globe for one extent: the land it shows, and the extent on it."""
+    xmin, ymin, xmax, ymax = bbox
+    lon0, lat0 = (xmin + xmax) / 2, (ymin + ymax) / 2
+    scale = _GLOBE_RADIUS * _globe_zoom(abs(xmax - xmin), abs(ymax - ymin), lat0)
+    land = "".join(
+        _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in ring], close=True) for ring in _world_rings()
+    )
+    marker = _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in _densify(bbox)], close=True)
+    return {"land": land, "extent": marker, "width": _GLOBE_WIDTH, "height": _GLOBE_HEIGHT}
+
+
+def _extent_globe(extent: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The configured extent drawn on a globe, or None when there is no usable extent."""
+    bbox = (extent or {}).get("bbox")
+    if not isinstance(bbox, list | tuple) or len(bbox) != 4:
+        return None
+    try:
+        values = tuple(float(value) for value in bbox)
+    except (TypeError, ValueError):
+        return None
+    xmin, ymin, xmax, ymax = values
+    if xmax <= xmin or ymax <= ymin:
+        return None
+    return _globe((xmin, ymin, xmax, ymax))
+
+
+_SIZE_CACHE_SECONDS = 60.0
+
+
+def _directory_bytes(path: Path) -> int:
+    """Bytes held under a store directory, following none of its symlinks."""
+    total = 0
+    stack = [path]
+    while stack:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    total += entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+    return total
+
+
+_stored_bytes_cache: tuple[float, int] | None = None
+
+
+def _stored_bytes() -> int:
+    """Total size on disk of every store this instance's artifacts point at.
+
+    Walked rather than read from a record: nothing stores a size, and an Icechunk store grows
+    with each sync, so a recorded one would be stale. Distinct paths only — successive
+    ingestions of the same dataset append to a single store. Cached for a minute, because a
+    store is tens of thousands of chunk files and the overview is reloaded far more often than
+    the data changes.
+    """
+    global _stored_bytes_cache
+    now = time.monotonic()
+    if _stored_bytes_cache is not None and now - _stored_bytes_cache[0] < _SIZE_CACHE_SECONDS:
+        return _stored_bytes_cache[1]
+    try:
+        from open_climate_service.ingestions.services import list_artifacts
+
+        paths = {artifact.path for artifact in list_artifacts().items if artifact.path}
+        total = sum(_directory_bytes(Path(path)) if Path(path).is_dir() else _file_bytes(Path(path)) for path in paths)
+    except Exception:
+        _log.exception("Unexpected error measuring stored data")
+        total = 0
+    _stored_bytes_cache = (now, total)
+    return total
+
+
+def _file_bytes(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _format_bytes(total: int) -> str:
+    """A size a reader can take in at a glance: three significant figures at most."""
+    size = float(total)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1000:
+            if unit == "B":
+                return f"{int(size)} B"
+            return f"{size:.0f} {unit}" if size >= 100 else f"{size:.1f} {unit}"
+        size /= 1000
+    return f"{size:.0f} TB" if size >= 100 else f"{size:.1f} TB"
+
+
 def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) -> dict[str, Any]:
     """Split templates between the Dataset templates and Workflows areas by what can be ingested.
 
@@ -1339,32 +1512,28 @@ def _load_datasets() -> list[Any]:
 
 
 def render_landing(version: str, mount: str) -> str:
-    """Render the root landing page with live instance status."""
+    """Render the root overview: what this instance holds, and how much of it.
+
+    The lists it used to carry are pages of their own now, so this counts them and links to
+    them rather than repeating them. It still loads each collection, because a count is what
+    the overview is for.
+    """
+    extent = _load_extent()
+    templates = _load_templates()
+    catalogue = _landing_catalogue(templates, _load_workflows())
     return get_template("landing_page.html").render(
         version=version,
         mount=mount,
         name=api_config.get_name(),
-        extent=_load_extent(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "overview"),
+        extent=extent,
+        globe=_extent_globe(extent),
         datasets=_load_datasets(),
-        templates=_load_templates(),
-        # Read-only instances refuse /manage, so offering the link would advertise a 403.
+        stored_size=_format_bytes(_stored_bytes()),
+        sources=catalogue["sources"],
+        workflows=catalogue["workflows"],
+        # Shown on the overview, so a visitor knows why no page offers ingest or sync.
         read_only=api_config.is_read_only(),
-    )
-
-
-def render_manage(version: str, mount: str, message: str | None = None, error: str | None = None) -> str:
-    """Render the management page."""
-    today = date.today().isoformat()
-    year_ago = date.today().replace(year=date.today().year - 1).isoformat()
-    return get_template("manage.html").render(
-        version=version,
-        mount=mount,
-        name=api_config.get_name(),
-        extent=_load_extent(),
-        templates=_ingestable_templates(_load_templates()),
-        datasets=_load_datasets(),
-        today=today,
-        year_ago=year_ago,
-        message=message,
-        error=error,
     )

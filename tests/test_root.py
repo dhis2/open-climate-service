@@ -20,9 +20,14 @@ def test_root_html_shows_extent(client: TestClient) -> None:
 
 
 def test_root_html_links_to_key_endpoints(client: TestClient) -> None:
+    """The catalogues and the API docs now live one click away, on the API page."""
     response = client.get("/", headers={"accept": "text/html"})
-    assert "/docs" in response.text
-    assert "/stac/catalog.json" in response.text
+    assert 'href="/api"' in response.text
+    assert 'href="/map"' in response.text
+
+    api_page = client.get("/api").text
+    assert "/docs" in api_page
+    assert "/stac/catalog.json" in api_page
 
 
 def test_root_f_json_returns_openeo_capabilities(client: TestClient) -> None:

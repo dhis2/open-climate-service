@@ -21,7 +21,6 @@ from .templates import (
     app_version,
     render_api_page,
     render_landing,
-    render_manage,
     render_maps,
     render_workflow_page,
     render_workflows_page,
@@ -90,16 +89,6 @@ def openeo_editor(request: Request) -> RedirectResponse:
     base = absolute_base(request)
     params = urllib.parse.urlencode({"server": base, "server-title": api_config.get_name()})
     return RedirectResponse(f"https://editor.openeo.org/?{params}", status_code=302)
-
-
-@router.get("/manage", response_class=HTMLResponse, include_in_schema=False)
-def manage(
-    request: Request,
-    message: str | None = None,
-    error: str | None = None,
-) -> HTMLResponse:
-    """Return the management interface for ingestion and sync operations."""
-    return HTMLResponse(render_manage(app_version, mount_prefix(request), message=message, error=error))
 
 
 def _refusal(status_code: int, message: str) -> JSONResponse:
