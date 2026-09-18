@@ -184,7 +184,9 @@ def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
 
 def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
-    monkeypatch.setattr(landing, "_load_datasets", lambda: [_record()])
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
 
     body = client.get("/datasets/chirps_monthly", headers={"Accept": BROWSER_ACCEPT}).text
 
