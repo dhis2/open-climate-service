@@ -404,6 +404,37 @@ def prefers_html(request: Request) -> bool:
     return _media_type_q(accept, "text/html") > _media_type_q(accept, "application/json")
 
 
+def _dataset_views(datasets: list[Any], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id = {template["id"]: template for template in templates}
+    views = []
+    for dataset in datasets:
+        template = by_id.get(dataset.source_dataset_id) or by_id.get(dataset.dataset_id)
+        try:
+            views.append(_dataset_view(dataset, template))
+        except Exception:
+            _log.exception("Unexpected error preparing dataset '%s' for the landing page", dataset.dataset_id)
+    return views
+
+
+def render_datasets_page(mount: str) -> str:
+    """Render the list of datasets this instance holds.
+
+    The area that lived at `/#datasets` as its own page, so it can be linked to, bookmarked and
+    reached without JavaScript. `GET /datasets` still answers JSON to anything that does not ask
+    for a page.
+    """
+    return get_template("datasets_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        list_script=_read_asset("ocs_list.js"),
+        nav=page_nav(mount, "datasets"),
+        datasets=_dataset_views(_load_datasets(), _load_templates()),
+    )
+
+
 def render_maps(mount: str) -> str:
     """Render the map viewer page.
 
