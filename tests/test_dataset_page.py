@@ -157,13 +157,16 @@ def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
     [(BROWSER_ACCEPT, True), ("*/*", False), ("", False), ("application/json", False)],
 )
 def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
-    client: TestClient, accept: str, html: bool
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, accept: str, html: bool
 ) -> None:
     """The area that lived at `/#datasets`, as its own URL — linkable and JavaScript-free.
 
     `GET /datasets` has always answered JSON, so it still does for anything that does not ask
     for a page.
     """
+    # Stubbed rather than read from the instance: with nothing ingested the page renders its
+    # empty branch, so the assertions below would depend on whoever ran the suite.
+    monkeypatch.setattr(landing, "_load_datasets", lambda: [_record()])
     headers = {"Accept": accept} if accept else {}
 
     response = client.get("/datasets", headers=headers)
