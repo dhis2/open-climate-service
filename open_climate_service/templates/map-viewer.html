@@ -557,20 +557,31 @@
         legendEl.classList.add("hidden");
       }
 
+      // Each load takes a number, and every step after an await checks it is still the current
+      // one. Two selections made in quick succession both run to completion otherwise, and the
+      // slower one finishes last — adding the shared `zarr-layer` after the newer request, so
+      // the map ends up showing the dataset that was not chosen, or fails as a duplicate layer.
+      let loadGeneration = 0;
+
       async function loadDataset(href) {
         if (!map || mapUnavailable) {
           setStatus(MAP_UNAVAILABLE_MESSAGE, true);
           return;
         }
+        const generation = ++loadGeneration;
+        const superseded = () => generation !== loadGeneration;
         setStatus("Loading...");
         clearDataset();
 
         let collection;
         try {
           const res = await fetch(href);
+          if (superseded()) return;
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           collection = await res.json();
+          if (superseded()) return;
         } catch (err) {
+          if (superseded()) return;
           setStatus(`Failed to load collection: ${err.message}`, true);
           return;
         }
@@ -652,6 +663,9 @@
             ...(fillValue !== null && { fillValue }),
             crs: nativeCrs,
           });
+          // Nothing awaits between the check above and here, but this is the step that would
+          // actually go wrong, so it says so itself.
+          if (superseded()) return;
           map.addLayer(activeLayer);
           for (const layer of map.getStyle().layers) {
             if ((layer.type === "line" && layer.id.startsWith("boundary")) || layer.type === "symbol") {
