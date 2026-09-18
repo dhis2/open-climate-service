@@ -386,6 +386,35 @@ def test_manage_page_dropdown_excludes_static_templates(client: TestClient, monk
     assert 'value="worldpop_population_change"' not in response.text
 
 
+def test_the_shared_navigation_marks_the_current_page_and_carries_the_mount() -> None:
+    nav = str(system_templates.page_nav("/ocs", "map"))
+
+    assert 'href="/ocs/map"' in nav, "every link resolves under the mount prefix"
+    assert 'aria-current="page"' in nav
+    # The openEO editor is hosted elsewhere, so it opens in a new tab and is set apart.
+    assert 'target="_blank" rel="noopener"' in nav
+    assert '<li class="gap">' in nav
+
+
+def test_the_navigation_links_only_where_this_instance_serves_a_page() -> None:
+    """The rail grows as the pages it names arrive; a link to a 404 is worse than no link."""
+    nav = str(system_templates.page_nav("", "map"))
+
+    for path in ('href="/map"', 'href="/openeo"'):
+        assert path in nav
+
+
+def test_the_map_viewer_wears_the_shared_chrome(client: TestClient) -> None:
+    response = client.get("/map")
+
+    assert response.status_code == 200
+    assert '<svg class="logo"' in response.text, "the mark is inline, so the page needs no asset"
+    assert 'class="rail"' in response.text
+    # The stylesheet is inlined rather than linked: the page must work with no outside request.
+    assert "--theme-primary600" in response.text
+    assert "{{" not in response.text, "no unrendered placeholder reaches the browser"
+
+
 def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     response = client.get("/map")
 

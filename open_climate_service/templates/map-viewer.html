@@ -6,62 +6,35 @@
     <title>Map viewer — {{ name }}</title>
     <link href="https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
-      *,
-      *::before,
-      *::after {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
+{{ styles | safe }}
 
-      html,
-      body {
-        height: 100%;
+      /* The map fills the space beside the navigation and below the header, without scrolling. */
+      body.map-page {
+        height: 100vh;
         overflow: hidden;
-      }
-
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 15px;
-        color: #1a2332;
-      }
-
-      .layout {
         display: flex;
         flex-direction: column;
-        height: 100%;
       }
-
-      header {
-        background: #1a2332;
-        color: #fff;
-        padding: 0.85rem 1.5rem;
+      .map-page .layout {
+        flex: 1;
+        min-height: 0;
+      }
+      .map-page main {
+        padding: 0;
+        max-width: none;
+        position: relative;
         display: flex;
-        align-items: center;
-        gap: 1rem;
-        flex-shrink: 0;
-        z-index: 10;
+        min-height: 0;
       }
-      header h1 {
-        font-size: 1rem;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-      }
-      header h1 a {
-        color: inherit;
-        text-decoration: none;
-      }
-      header h1 a:hover {
-        text-decoration: underline;
-      }
-      header .subtitle {
-        font-size: 0.825rem;
-        color: #8fa3b8;
+      @media (max-width: 720px) {
+        .map-page .layout {
+          grid-template-rows: auto minmax(0, 1fr);
+        }
       }
       .map-container {
         position: relative;
         flex: 1;
+        min-height: 0;
       }
 
       #map {
@@ -69,10 +42,10 @@
         inset: 0;
       }
 
-      .panel {
+      .map-panel {
         position: absolute;
         top: 1rem;
-        left: 1rem;
+        right: 1rem;
         width: 272px;
         background: #fff;
         border: 1px solid #e2e8f0;
@@ -83,6 +56,17 @@
         display: flex;
         flex-direction: column;
         gap: 0.9rem;
+        max-height: calc(100% - 2rem);
+        overflow-y: auto;
+      }
+      @media (max-width: 720px) {
+        .map-panel {
+          top: 0.5rem;
+          left: 0.5rem;
+          right: 0.5rem;
+          width: auto;
+          max-height: 45%;
+        }
       }
 
       .panel-section label {
@@ -197,17 +181,19 @@
       }
     </style>
   </head>
-  <body>
+  <body class="map-page">
+    <a class="skip-link" href="#dataset-select">Skip to the map controls</a>
+    <header>
+      {{ logo }}
+      <h1>{{ name }}</h1>
+    </header>
     <div class="layout">
-      <header>
-        <h1><a href="{{ mount }}/">{{ name }}</a></h1>
-        <span class="subtitle">Map viewer</span>
-      </header>
-
+      {{ nav }}
+      <main id="content">
       <div class="map-container">
         <div id="map"></div>
 
-        <div class="panel">
+        <div class="map-panel">
           <div class="panel-section">
             <label for="dataset-select">Dataset</label>
             <select id="dataset-select">
@@ -243,6 +229,7 @@
           <div id="status" class="status">Loading datasets...</div>
         </div>
       </div>
+      </main>
     </div>
 
     <script type="module">
@@ -536,12 +523,10 @@
         }
       }
 
-      async function loadDataset(href) {
-        if (!map || mapUnavailable) {
-          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
-          return;
-        }
-        setStatus("Loading...");
+      // Everything the map shows for one dataset, taken down together: the raster, its
+      // dimension controls, its metadata and its legend. Leaving any of it up after the
+      // selection changes would describe a dataset the map is no longer showing.
+      function clearDataset() {
         clearTimeout(_selectorDebounce);
         if (activeLayer) {
           try {
@@ -553,6 +538,15 @@
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
         legendEl.classList.add("hidden");
+      }
+
+      async function loadDataset(href) {
+        if (!map || mapUnavailable) {
+          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
+          return;
+        }
+        setStatus("Loading...");
+        clearDataset();
 
         let collection;
         try {
