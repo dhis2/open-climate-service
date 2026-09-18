@@ -350,14 +350,6 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         "status_facts": present(status),
         "links": [link for link in record.links if link.rel != "self"],
         "published": summary["status"] == "published",
-        "versions": [
-            {
-                "created_at": _format_timestamp(version.created_at),
-                "format": str(getattr(version.format, "value", version.format)),
-                "coverage": _coverage_label(version.coverage.temporal.start, version.coverage.temporal.end),
-            }
-            for version in sorted(record.versions, key=lambda version: version.created_at, reverse=True)
-        ],
     }
 
 

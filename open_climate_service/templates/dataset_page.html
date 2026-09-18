@@ -68,29 +68,6 @@
               </dl>
             </section>
 
-            {% if versions %}
-            <section class="panel table-wrap" aria-labelledby="versions-title">
-              <h3 id="versions-title" style="padding: var(--spacers-dp16) var(--spacers-dp16) 0">Versions</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">Created</th>
-                    <th scope="col">Format</th>
-                    <th scope="col">Temporal coverage</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for v in versions %}
-                  <tr>
-                    <td>{{ v.created_at }}</td>
-                    <td>{{ v.format }}</td>
-                    <td>{{ v.coverage or "—" }}</td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </section>
-            {% endif %}
           </div>
 
           <div class="stack">
