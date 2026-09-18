@@ -112,6 +112,25 @@ def test_the_dataset_endpoint_serves_a_page_only_to_clients_that_ask_for_one(
         assert response.json()["dataset_id"] == "chirps_monthly"
 
 
+def test_both_representations_declare_that_they_vary_by_accept(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One URL, two representations: a cache keyed on the URL alone would cross them over.
+
+    Without `Vary: Accept` a shared proxy can hand an API client the HTML page it cached for a
+    browser, which is exactly the JSON compatibility this endpoint promises to keep.
+    """
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
+
+    for accept in (BROWSER_ACCEPT, "application/json"):
+        response = client.get("/datasets/chirps_monthly", headers={"Accept": accept})
+
+        assert response.status_code == 200
+        assert response.headers["vary"] == "Accept", accept
+
+
 def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp() -> None:
     view = landing._dataset_view(_record("never_rendered"), {"display": {"colormap": "blues"}})
 
