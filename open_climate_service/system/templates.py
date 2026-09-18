@@ -161,6 +161,7 @@ def page_nav(mount: str, current: str) -> Markup:
     )
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
 
+
 def _read_asset(name: str) -> str:
     resource = importlib.resources.files("open_climate_service") / "templates" / name
     return resource.read_text(encoding="utf-8")
