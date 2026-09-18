@@ -45,7 +45,7 @@
               {% if ingested %}
               <p class="note">
                 Already ingested{% if ingested.coverage %} for {{ ingested.coverage }}{% endif %}.
-                <a href="{{ mount }}/datasets/{{ source.id }}">View the dataset</a>.
+                <a href="{{ mount }}/datasets/{{ ingested.id }}">View the dataset</a>.
                 Ingesting again adds to it, or replaces it when <em>Overwrite</em> is checked.
               </p>
               {% endif %}
@@ -154,7 +154,7 @@
               <h3 id="links-title">Links</h3>
               <div class="actions">
                 {% if ingested %}
-                <a class="button-link" href="{{ mount }}/datasets/{{ source.id }}">Ingested dataset</a>
+                <a class="button-link" href="{{ mount }}/datasets/{{ ingested.id }}">Ingested dataset</a>
                 {% endif %}
                 <a class="button-link" href="{{ mount }}/dataset-templates/{{ source.id }}">Metadata (JSON)</a>
               </div>

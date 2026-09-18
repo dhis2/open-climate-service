@@ -385,7 +385,11 @@ def test_the_form_is_offered_only_where_ingesting_can_work(
 def test_an_ingested_source_links_to_its_dataset() -> None:
     context = _source_context(_ingestable("chirps_monthly"), datasets=[_record("chirps_monthly")])
 
-    assert context["ingested"] == {"coverage": "2020-01 – 2026-07", "status": "published"}
+    assert context["ingested"] == {
+        "id": "chirps_monthly",
+        "coverage": "2020-01 – 2026-07",
+        "status": "published",
+    }
 
 
 def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:
@@ -490,6 +494,36 @@ def test_a_prefilled_date_is_cut_to_the_period(value: str, period: str, expected
 
 def test_an_unknown_data_source_is_a_404(client: TestClient) -> None:
     assert client.get("/data-sources/does_not_exist").status_code == 404
+
+
+def test_a_source_ingested_under_another_id_still_shows_as_ingested(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dataset a source produced need not carry the source's id.
+
+    A managed dataset records the template it came from in `source_dataset_id` and is free to
+    use a different `dataset_id`. Matching only on `dataset_id` left the page claiming the
+    source had never been ingested, and offering a first ingest for data that already exists.
+    """
+    ingested = _record("chirps3_nepal", source_dataset_id="chirps3_precipitation_daily")
+    monkeypatch.setattr(landing, "_load_datasets", lambda: [ingested])
+
+    html = landing.render_data_source_page(_ingestable("chirps3_precipitation_daily"), "")
+
+    assert "Already ingested" in html
+    assert 'href="/datasets/chirps3_nepal"' in html
+
+
+def test_a_release_version_without_a_value_is_left_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A half-populated version dict must not reach the reader as "chirps:None"."""
+    monkeypatch.setattr(landing, "_load_datasets", list)
+    template = _ingestable(
+        "chirps3_precipitation_daily",
+        sync={"kind": "release", "version": {"authority": "chirps"}},
+    )
+
+    text = _visible_text(landing.render_data_source_page(template, ""))
+
+    assert "None" not in text
+    assert "chirps:" not in text
 
 
 def test_read_only_pages_offer_no_ingest(monkeypatch: pytest.MonkeyPatch) -> None:

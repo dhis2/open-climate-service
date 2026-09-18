@@ -276,8 +276,6 @@ def _globe(bbox: tuple[float, float, float, float]) -> dict[str, Any]:
         _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in ring], close=True) for ring in _world_rings()
     )
     marker = _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in _densify(bbox)], close=True)
-    if not marker:
-        marker = ""
     return {"land": land, "extent": marker, "width": _GLOBE_WIDTH, "height": _GLOBE_HEIGHT}
 
 
@@ -381,13 +379,13 @@ def _file_bytes(path: Path) -> int:
 def _format_bytes(total: int) -> str:
     """A size a reader can take in at a glance: three significant figures at most."""
     size = float(total)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1000 or unit == "TB":
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1000:
             if unit == "B":
                 return f"{int(size)} B"
             return f"{size:.0f} {unit}" if size >= 100 else f"{size:.1f} {unit}"
         size /= 1000
-    return f"{size:.1f} TB"
+    return f"{size:.0f} TB" if size >= 100 else f"{size:.1f} TB"
 
 
 def _load_workflows() -> list[Any]:
@@ -849,7 +847,14 @@ def _data_source_page_context(
         if isinstance(provider, dict) and provider.get("name")
     )
     ingestable = registry_datasets.is_ingestable(template)
-    ingested = next((dataset for dataset in datasets if dataset.dataset_id == template["id"]), None)
+    # A managed dataset records the template it came from in `source_dataset_id`, and its own
+    # `dataset_id` can differ; match on the source first and fall back, as the dataset page and
+    # the STAC path both do. Matching only `dataset_id` hid the ingested state of any dataset
+    # ingested under a different id, and offered a first ingest for one that already exists.
+    ingested = next(
+        (dataset for dataset in datasets if (dataset.source_dataset_id or dataset.dataset_id) == template["id"]),
+        None,
+    )
     display_range = display.get("range")
 
     about: list[Fact] = [
@@ -878,7 +883,9 @@ def _data_source_page_context(
         ("Updates", _SYNC_KIND_LABELS.get(sync_kind, sync_kind), None),
         (
             "Release",
-            f"{version.get('authority')}:{version.get('value')}" if isinstance(version, dict) else str(version or ""),
+            f"{version.get('authority')}:{version.get('value')}"
+            if isinstance(version, dict) and version.get("value")
+            else str(version or ""),
             None,
         ),
         ("Colour scale", str(display.get("colormap") or ""), None),
@@ -910,6 +917,9 @@ def _data_source_page_context(
         "produced_by": template.get("produced_by") if not ingestable else None,
         "ingested": (
             {
+                # The dataset's own id, not the template's: the two differ whenever a source was
+                # ingested under a different name, and the links below have to reach the dataset.
+                "id": ingested.dataset_id,
                 "coverage": _coverage_label(ingested.extent.temporal.start, ingested.extent.temporal.end),
                 "status": "published" if ingested.publication.status == "published" else "unpublished",
             }
