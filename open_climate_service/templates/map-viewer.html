@@ -458,15 +458,32 @@
         statusEl.className = isError ? "status error" : "status";
       }
 
-      function initMap() {
+      async function extentBounds() {
+        try {
+          const res = await fetch("{{ mount }}/extent");
+          if (!res.ok) return null;
+          const [xmin, ymin, xmax, ymax] = (await res.json()).bbox;
+          return [
+            [xmin, ymin],
+            [xmax, ymax],
+          ];
+        } catch {
+          return null;
+        }
+      }
+
+      // The extent is read before the map is built, so it opens on the instance's own area.
+      // Fitting afterwards meant a world view that then moved, which reads as the map
+      // wandering off on its own while a dataset is already being requested.
+      async function initMap() {
+        const bounds = await extentBounds();
         try {
           map = new maplibregl.Map({
             container: "map",
             style: "https://tiles.openfreemap.org/styles/positron",
-            center: [20, 20],
-            zoom: 1.5,
+            ...(bounds ? { bounds } : { center: [20, 20], zoom: 1.5 }),
             projection: { type: "globe" },
-            fitBoundsOptions: { padding: 40 },
+            fitBoundsOptions: { padding: 40, maxZoom: 10, animate: false, duration: 0 },
             attributionControl: { compact: true },
           });
         } catch (err) {
@@ -477,7 +494,6 @@
 
         map.on("load", () => {
           map.setProjection({ type: "globe" });
-          fitToExtent();
         });
 
         map.on("error", (event) => {
@@ -487,17 +503,6 @@
             setStatus(MAP_UNAVAILABLE_MESSAGE, true);
           }
         });
-      }
-
-      async function fitToExtent() {
-        if (!map || mapUnavailable) return;
-        try {
-          const res = await fetch("{{ mount }}/extent");
-          if (!res.ok) return;
-          const extent = await res.json();
-          const [xmin, ymin, xmax, ymax] = extent.bbox;
-          map.fitBounds([[xmin, ymin], [xmax, ymax]], { padding: 40, maxZoom: 10 });
-        } catch {}
       }
 
       async function loadCatalog() {
@@ -535,9 +540,9 @@
         }
       }
 
-      // Everything the panel says about a dataset: its layer, dimension controls, metadata and
-      // legend. Leaving any of it up after the selection changes would describe a dataset the
-      // map is no longer showing.
+      // Everything the map shows for one dataset, taken down together: the raster, its
+      // dimension controls, its metadata and its legend. Leaving any of it up after the
+      // selection changes would describe a dataset the map is no longer showing.
       function clearDataset() {
         clearTimeout(_selectorDebounce);
         if (activeLayer) {
@@ -837,8 +842,12 @@
         dimControls.classList.remove("hidden");
       }
 
-      initMap();
-      loadCatalog();
+      // Sequential: the catalogue's deep link loads a dataset onto the map, so the map has to
+      // exist first.
+      (async () => {
+        await initMap();
+        await loadCatalog();
+      })();
     </script>
   </body>
 </html>

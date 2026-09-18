@@ -423,6 +423,21 @@ def test_the_header_is_a_way_back_to_the_landing_page(client: TestClient) -> Non
     assert body.index('<a class="home"') < body.index('<svg class="logo"'), "the mark is inside the link"
 
 
+def test_the_map_viewer_opens_framed_on_the_instance_extent(client: TestClient) -> None:
+    """The extent is read *before* the map is built, so the view never starts global.
+
+    Fitting after construction showed a world view that then moved — which reads as the map
+    wandering off while a dataset is already being requested.
+    """
+    body = client.get("/map").text
+
+    assert "const bounds = await extentBounds();" in body
+    assert "...(bounds ? { bounds } : { center: [20, 20], zoom: 1.5 })" in body
+    # No animation: the opening view is the destination, not somewhere to travel to.
+    assert "animate: false" in body
+    assert "fitToExtent" not in body, "the post-build fit is what this replaces"
+
+
 def test_the_map_viewer_reads_and_writes_the_dataset_in_the_address(client: TestClient) -> None:
     """`/map?dataset=<id>` opens on one dataset, and choosing one writes the parameter back."""
     body = client.get("/map", params={"dataset": "chirps3_precipitation_daily"}).text
