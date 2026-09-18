@@ -518,6 +518,20 @@ def test_the_console_understands_the_stream_it_is_served(client: TestClient) -> 
     assert "refusal.error" in body, "the refusal's reason is read from the body"
 
 
+def test_a_superseded_load_does_not_reach_the_map(client: TestClient) -> None:
+    """The guard after the style has loaded, where `whenMapReady` no longer helps.
+
+    Two selections in quick succession both run: whichever finishes last adds the shared
+    `zarr-layer`, so without this the map can settle on the dataset that was not chosen.
+    """
+    body = client.get("/map").text
+
+    assert "const generation = ++loadGeneration;" in body
+    assert "const superseded = () => generation !== loadGeneration;" in body
+    # Checked after every await, and again at the step that would actually go wrong.
+    assert body.count("if (superseded()) return;") >= 4
+
+
 def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     response = client.get("/map")
 
