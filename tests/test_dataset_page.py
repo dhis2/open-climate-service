@@ -182,6 +182,16 @@ def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
         assert "items" in response.json()
 
 
+def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
+    monkeypatch.setattr(landing, "_load_datasets", lambda: [_record()])
+
+    body = client.get("/datasets/chirps_monthly", headers={"Accept": BROWSER_ACCEPT}).text
+
+    assert '<a href="/datasets">Datasets</a>' in body
+    assert "/#datasets" not in body
+
+
 def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp() -> None:
     view = landing._dataset_view(_record("never_rendered"), {"display": {"colormap": "blues"}})
 
