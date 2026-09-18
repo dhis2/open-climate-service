@@ -122,6 +122,14 @@ header {
   gap: var(--spacers-dp8);
   flex-shrink: 0;
 }
+/* The global focus outline is --theme-focus, which is only 1.43:1 against the header bar and so
+   misses the 3:1 a focus indicator has to meet. On the bar the indicator is white — 6.12:1, and
+   already the colour of everything else there. Scoped to the bar, not to .home, so anything
+   added beside it later inherits a visible focus rather than the invisible one. */
+header :focus-visible {
+  outline-color: var(--colors-white);
+}
+
 header .logo {
   flex: none;
   display: block;
