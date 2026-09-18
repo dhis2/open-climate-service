@@ -642,6 +642,10 @@
         }
       }
 
+      function consoleUrl(form) {
+        return form.action.replace('/manage/ingest', '/manage').replace('/manage/sync', '/manage');
+      }
+
       async function runJob(event, form, btnId, progressId, statusId = null) {
         event.preventDefault();
         const btn = document.getElementById(btnId);
@@ -673,8 +677,15 @@
             body: formData,
           });
 
+          // A request that cannot start is refused before the stream opens, with the reason in
+          // the body. Read it rather than reporting a bare "Request failed".
           if (!resp.ok || !resp.body) {
-            window.location.href = form.action.replace('/manage/ingest', '/manage').replace('/manage/sync', '/manage') + '?error=' + encodeURIComponent('Request failed');
+            let detail = 'Request failed';
+            try {
+              const refusal = await resp.json();
+              if (refusal && refusal.error) detail = refusal.error;
+            } catch {}
+            window.location.href = consoleUrl(form) + '?error=' + encodeURIComponent(detail);
             return;
           }
 
@@ -692,8 +703,19 @@
               if (!line.startsWith('data: ')) continue;
               let evt;
               try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+              // The stream ends with exactly one of `finished` or `error`. (`redirect` is the
+              // older spelling of success and is still accepted, so a console left open across
+              // a deploy does not strand a running job.)
               if (evt.redirect) {
                 window.location.href = evt.redirect;
+                return;
+              }
+              if (evt.finished) {
+                window.location.href = consoleUrl(form) + '?message=' + encodeURIComponent(evt.message || 'Done');
+                return;
+              }
+              if (evt.error) {
+                window.location.href = consoleUrl(form) + '?error=' + encodeURIComponent(evt.error);
                 return;
               }
               if (typeof evt.done === 'number' && typeof evt.total === 'number' && evt.total > 0) {
