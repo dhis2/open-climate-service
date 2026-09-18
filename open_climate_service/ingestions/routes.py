@@ -135,7 +135,7 @@ def list_datasets() -> DatasetListResponse:
     response_model=DatasetDetailRecord,
     responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
 )
-def get_dataset(dataset_id: str, request: Request) -> DatasetDetailRecord | HTMLResponse:
+def get_dataset(dataset_id: str, request: Request, response: Response) -> DatasetDetailRecord | HTMLResponse:
     """Get managed dataset metadata and available versions.
 
     JSON by default. A browser, which ranks `text/html` first, gets the dataset page the landing
@@ -144,8 +144,14 @@ def get_dataset(dataset_id: str, request: Request) -> DatasetDetailRecord | HTML
     record = services.get_dataset_or_404(dataset_id)
     from open_climate_service.system.templates import prefers_html, render_dataset_page
 
+    # Two representations share this URL, so a cache keyed on the URL alone would serve one
+    # client the other's. Set on both arms: the JSON arm is a model FastAPI serialises, so the
+    # header goes on the shared `response` rather than on a response object of our own.
+    response.headers["Vary"] = "Accept"
     if prefers_html(request):
-        return HTMLResponse(render_dataset_page(record, mount_prefix(request)))
+        page = HTMLResponse(render_dataset_page(record, mount_prefix(request)))
+        page.headers["Vary"] = "Accept"
+        return page
     return record
 
 
