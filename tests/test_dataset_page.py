@@ -131,6 +131,27 @@ def test_both_representations_declare_that_they_vary_by_accept(
         assert response.headers["vary"] == "Accept", accept
 
 
+def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Artifact records for one dataset are ingest events, not versions anyone can fetch.
+
+    They all name the same Icechunk store, and a sync appends to it, so a row reading
+    "2025-01 – 2025-04" describes a state the store no longer holds and nothing can serve. On
+    all but the most-synced dataset the table was also a single row. The field stays in the
+    JSON, which is an API contract; only the table is gone.
+    """
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
+
+    page = client.get("/datasets/chirps_monthly", headers={"Accept": BROWSER_ACCEPT}).text
+    assert "versions-title" not in page
+    assert "Versions" not in _visible_text(page)
+
+    assert "versions" in client.get("/datasets/chirps_monthly").json()
+
+
 def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp() -> None:
     view = landing._dataset_view(_record("never_rendered"), {"display": {"colormap": "blues"}})
 
