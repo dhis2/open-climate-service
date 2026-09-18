@@ -865,28 +865,50 @@ def _from_rst(text: str) -> str:
     return "\n".join(out).strip()
 
 
+def _split_fences(text: str) -> list[tuple[str, bool]]:
+    """Split *text* into runs, flagging which are fenced code.
+
+    Taken before paragraphs are, because a fence may contain a blank line: splitting on blank
+    lines first cut such a block in two, leaving the remainder as prose with a stray closing
+    fence in it.
+    """
+    runs: list[tuple[str, bool]] = []
+    buffer: list[str] = []
+    fenced = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            runs.append(("\n".join(buffer), fenced))
+            buffer = []
+            fenced = not fenced
+            continue
+        buffer.append(line)
+    runs.append(("\n".join(buffer), fenced))
+    return [(run, is_code) for run, is_code in runs if run.strip()]
+
+
 def _description_blocks(text: str | None) -> list[dict[str, Any]]:
     """Blocks of a workflow or process description: paragraphs, bullet lists and code.
 
-    A block that is a JSON example, or fenced with backticks, becomes code; a block whose lines
-    all start with a list marker becomes a list.
+    A fenced region is one block whatever it contains; outside them, a block that is a JSON
+    example becomes code, and a block whose lines all start with a list marker becomes a list.
     """
     blocks: list[dict[str, Any]] = []
-    for block in _from_rst(text or "").split("\n\n"):
-        stripped = block.strip()
-        if not stripped:
+    for run, is_code in _split_fences(_from_rst(text or "")):
+        if is_code:
+            blocks.append({"code": run.strip("\n") + "\n"})
             continue
-        if stripped.startswith("```"):
-            code = stripped.strip("`").split("\n", 1)
-            blocks.append({"code": code[1] if len(code) > 1 else code[0]})
-        elif stripped[0] in "{[" and not _MARKDOWN_LINK.match(stripped):
-            blocks.append({"code": stripped})
-        elif all(_LIST_ITEM.match(line) for line in stripped.splitlines()):
-            blocks.append(
-                {"bullets": [_inline_code(_LIST_ITEM.sub("", line).strip()) for line in stripped.splitlines()]}
-            )
-        else:
-            blocks.append({"html": _inline_code(" ".join(stripped.split()))})
+        for block in run.split("\n\n"):
+            stripped = block.strip()
+            if not stripped:
+                continue
+            if stripped[0] in "{[" and not _MARKDOWN_LINK.match(stripped):
+                blocks.append({"code": stripped})
+            elif all(_LIST_ITEM.match(line) for line in stripped.splitlines()):
+                blocks.append(
+                    {"bullets": [_inline_code(_LIST_ITEM.sub("", line).strip()) for line in stripped.splitlines()]}
+                )
+            else:
+                blocks.append({"html": _inline_code(" ".join(stripped.split()))})
     return blocks
 
 

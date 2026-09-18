@@ -371,3 +371,32 @@ def test_the_process_list_serves_a_page_only_to_browsers(client: TestClient, acc
         assert "data-origin=" in response.text, "the origin filter needs the origins passed in"
     else:
         assert "processes" in response.json()
+
+
+def test_a_fenced_block_survives_a_blank_line_inside_it() -> None:
+    """Fences are taken whole before paragraphs are.
+
+    Splitting on blank lines first cut such a block in two: the opening half became code and
+    the rest was rendered as prose, carrying the closing fence into the text.
+    """
+    blocks = landing._description_blocks("Text.\n\n```\nline one\n\nline two\n```\n\nAfter.")
+
+    assert [b.get("code") or str(b.get("html")) for b in blocks] == [
+        "Text.",
+        "line one\n\nline two\n",
+        "After.",
+    ]
+
+
+def test_the_negotiated_process_endpoints_still_publish_a_json_schema(client: TestClient) -> None:
+    """Serving two representations must not cost the machine-readable contract.
+
+    `response_model=None` silences FastAPI's inference, which would drop the JSON schema these
+    endpoints published before they learned to answer HTML.
+    """
+    paths = client.get("/openapi.json").json()["paths"]
+
+    for path in ("/processes", "/processes/{process_id}"):
+        content = paths[path]["get"]["responses"]["200"]["content"]
+        assert "application/json" in content, path
+        assert "text/html" in content, path
