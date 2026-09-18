@@ -67,7 +67,7 @@ must not duplicate OCS lifecycle rules or maintain a parallel copy of operationa
 state.
 
 Domain services and persistent stores are the source of truth. HTTP routes, the
-built-in web console, and future host CLI commands must reuse those services rather
+built-in web pages, and future host CLI commands must reuse those services rather
 than implement separate lifecycle rules. External clients use the HTTP API.
 
 ### Built-in web surfaces
