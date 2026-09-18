@@ -152,6 +152,33 @@ def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
     assert "versions" in client.get("/datasets/chirps_monthly").json()
 
 
+@pytest.mark.parametrize(
+    ("accept", "html"),
+    [(BROWSER_ACCEPT, True), ("*/*", False), ("", False), ("application/json", False)],
+)
+def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
+    client: TestClient, accept: str, html: bool
+) -> None:
+    """The area that lived at `/#datasets`, as its own URL — linkable and JavaScript-free.
+
+    `GET /datasets` has always answered JSON, so it still does for anything that does not ask
+    for a page.
+    """
+    headers = {"Accept": accept} if accept else {}
+
+    response = client.get("/datasets", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html" if html else "application/json")
+    assert response.headers["vary"] == "Accept"
+    if html:
+        assert 'data-list data-page-size="12" data-views="datasets"' in response.text
+        # Served from the shared asset, so the list behaves the same here as on the landing page.
+        assert "initList" in response.text
+    else:
+        assert "items" in response.json()
+
+
 def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp() -> None:
     view = landing._dataset_view(_record("never_rendered"), {"display": {"colormap": "blues"}})
 

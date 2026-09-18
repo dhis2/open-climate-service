@@ -124,9 +124,25 @@ def get_ingestion(ingestion_id: str) -> IngestionResponse:
     return services.get_ingestion_or_404(ingestion_id)
 
 
-@datasets_router.get("", response_model=DatasetListResponse)
-def list_datasets() -> DatasetListResponse:
-    """List managed datasets."""
+@datasets_router.get(
+    "",
+    response_model=DatasetListResponse,
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
+def list_datasets(request: Request, response: Response) -> DatasetListResponse | HTMLResponse:
+    """List managed datasets.
+
+    JSON by default, as it has always been. A browser gets the page the rail links to, on the
+    same terms as a single dataset: only a client ranking `text/html` above JSON, with `?f=html`
+    and `?f=json` deciding outright.
+    """
+    from open_climate_service.system.templates import prefers_html, render_datasets_page
+
+    response.headers["Vary"] = "Accept"
+    if prefers_html(request):
+        page = HTMLResponse(render_datasets_page(mount_prefix(request)))
+        page.headers["Vary"] = "Accept"
+        return page
     return services.list_datasets()
 
 
