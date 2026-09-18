@@ -189,7 +189,13 @@ def get_collection(collection_id: str, request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@processes_router.get("", response_model=None)
+@processes_router.get(
+    "",
+    # The JSON schema FastAPI inferred before, kept explicitly: `response_model=None` alone
+    # would drop it, so a negotiated endpoint would quietly lose its machine-readable contract.
+    response_model=dict[str, Any],
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
 def list_processes(request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
     """Return all available openEO processes.
 
@@ -211,7 +217,11 @@ def list_processes(request: Request, response: Response) -> dict[str, Any] | HTM
     }
 
 
-@processes_router.get("/{process_id}", response_model=None)
+@processes_router.get(
+    "/{process_id}",
+    response_model=dict[str, Any],
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
 def get_process_spec(process_id: str, request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
     """Return one openEO process description by id.
 
