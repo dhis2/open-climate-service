@@ -312,7 +312,7 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         ("Standard name", str(template.get("standard_name") or ""), None),
         ("Units", record.units or "", None),
         ("Cell methods", str(template.get("cell_methods") or ""), None),
-        ("Period", record.period_type, None),
+        ("Period type", record.period_type, None),
         ("Temporal coverage", summary["coverage"], None),
         ("Direction", str(template.get("temporal_direction") or ""), None),
         ("Resolution", record.resolution or "", None),
