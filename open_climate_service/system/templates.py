@@ -2,7 +2,7 @@
 
 import importlib.resources
 import logging
-from datetime import date
+from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import Any
@@ -15,6 +15,7 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
+from open_climate_service.shared.time import datetime_to_period_string
 
 from .schemas import Link, RootResponse
 
@@ -385,7 +386,7 @@ _PERIOD_FORMAT_HINTS = {
     "hourly": "YYYY-MM-DDTHH",
     "daily": "YYYY-MM-DD",
     "dekadal": "YYYY-MM-DD",
-    "weekly": "YYYY-MM-DD",
+    "weekly": "YYYY-Www",
     "monthly": "YYYY-MM",
     "yearly": "YYYY",
 }
@@ -409,18 +410,24 @@ def prefers_html(request: Request) -> bool:
 
 
 def _period_value(value: str, period: str) -> str:
-    """A date cut down to the source's own precision.
+    """A date as the source's own period identifier.
 
-    The field asks for a period identifier, not a date: a monthly source takes `2025-09`, a
-    yearly one `2025`. Prefilling the full ISO date contradicted the format stated right under
-    the field, and left the reader to work out which of the two the form actually wanted.
+    The field asks for a period, not a date: a monthly source takes `2025-09`, a yearly one
+    `2025`, a weekly one `2025-W38`. Through the shared converter rather than by trimming the
+    string, because a week's identifier is not a prefix of the date it falls in — truncating
+    left `2026-09-17` unchanged and the form then asked for something the source cannot read.
     """
-    hint = _PERIOD_FORMAT_HINTS.get(period, "")
-    if not value or not hint:
+    if not value or not period:
         return value
-    if hint.endswith("THH"):
-        return f"{value[:10]}T00" if len(value) >= 10 else value
-    return value[: len(hint)]
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    try:
+        return datetime_to_period_string(moment, period)
+    except Exception:
+        _log.exception("Unexpected error formatting %r as a %s period", value, period)
+        return value
 
 
 def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:

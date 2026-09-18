@@ -73,10 +73,14 @@ def data_source_page(request: Request, dataset_id: str) -> HTMLResponse:
     """
     from fastapi import HTTPException
 
+    from open_climate_service.data_registry.services import datasets as registry_datasets
     from open_climate_service.data_registry.services.datasets import get_dataset
 
     template = get_dataset(dataset_id)
-    if template is None:
+    # A data source is a template this instance can fetch. A workflow output is a template too,
+    # so resolving by id alone served one as a source — it has a page, under the workflow that
+    # produces it, and it belongs there rather than behind an ingest form it cannot use.
+    if template is None or not registry_datasets.is_ingestable(template):
         raise HTTPException(status_code=404, detail=f"Data source '{dataset_id}' not found")
     return HTMLResponse(render_data_source_page(template, mount_prefix(request)))
 
