@@ -328,8 +328,10 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         ("Last updated", _format_timestamp(record.last_updated), None),
         ("Updates", _SYNC_KIND_LABELS.get(sync_kind, sync_kind), None),
         ("Release", version_label, None),
-        ("Colour scale", str(display.get("colormap") or ""), None),
+        # Above the scale it describes, and above the bar below the list: the range is what makes
+        # the colours mean anything, so it reads before the name of the ramp rather than after.
         ("Display range", range_label, None),
+        ("Colour scale", str(display.get("colormap") or ""), None),
     ]
 
     def present(facts: list[Fact]) -> list[Fact]:
