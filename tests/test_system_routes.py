@@ -490,6 +490,34 @@ def test_a_chosen_dataset_waits_for_the_style_as_a_deep_link_does(client: TestCl
     assert "whenMapReady(() => loadDataset(option.value));" in body
 
 
+def test_only_the_latest_selection_survives_the_wait_for_the_style(client: TestClient) -> None:
+    """One listener, not one per selection.
+
+    Registering a callback per selection meant two choices made before the style loaded both
+    ran on `load`, each clearing and then racing to add the same layer id.
+    """
+    body = client.get("/map").text
+
+    assert "let pendingWhenReady = null;" in body
+    assert "if (alreadyWaiting) return;" in body
+    # Emptying the selection cancels a load still waiting, rather than letting it arrive later.
+    assert "pendingWhenReady = null;\n          clearDataset();" in body
+
+
+def test_the_console_understands_the_stream_it_is_served(client: TestClient) -> None:
+    """`/manage` is still served until it is removed, and consumes the same endpoints.
+
+    It recognised only the old `redirect` event, so a successful run under the new contract
+    reached EOF and reported "Sync ended unexpectedly", and a pre-stream refusal lost its
+    reason to a generic "Request failed".
+    """
+    body = client.get("/manage").text
+
+    assert "if (evt.finished)" in body
+    assert "if (evt.error)" in body
+    assert "refusal.error" in body, "the refusal's reason is read from the body"
+
+
 def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     response = client.get("/map")
 

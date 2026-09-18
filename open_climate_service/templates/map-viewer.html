@@ -735,9 +735,25 @@
         if (id) datasetLink.href = `{{ mount }}/datasets/${encodeURIComponent(id)}`;
       }
 
+      // Only the most recent pending selection survives the wait. Registering a listener per
+      // selection meant two choices made before the style loaded both ran on `load`, each
+      // clearing and then racing to add the same `zarr-layer` id — so the map could end up
+      // showing the dataset that was not chosen, or fail on a duplicate layer.
+      let pendingWhenReady = null;
+
       function whenMapReady(callback) {
-        if (!map || mapUnavailable || map.isStyleLoaded()) callback();
-        else map.once("load", callback);
+        if (!map || mapUnavailable || map.isStyleLoaded()) {
+          callback();
+          return;
+        }
+        const alreadyWaiting = pendingWhenReady !== null;
+        pendingWhenReady = callback;
+        if (alreadyWaiting) return;
+        map.once("load", () => {
+          const run = pendingWhenReady;
+          pendingWhenReady = null;
+          if (run) run();
+        });
       }
 
       function openRequestedDataset() {
@@ -760,6 +776,9 @@
           // constructed, not once its style has loaded, and `addLayer` before that is rejected.
           whenMapReady(() => loadDataset(e.target.value));
         } else {
+          // Cancels a selection still waiting on the style, which would otherwise load onto a
+          // map the reader has just emptied.
+          pendingWhenReady = null;
           clearDataset();
           setStatus("Select a dataset to visualise it on the map.");
         }
