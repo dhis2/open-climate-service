@@ -513,12 +513,15 @@ def _sync_plan_message(
     delta_start: str,
     delta_end: str,
 ) -> str:
-    """Return a human-readable sync plan summary."""
+    """Return a human-readable sync plan summary.
+
+    Says each period once. An append covers exactly [delta_start, delta_end] and the caller
+    passes `delta_end=target_end`, so naming the target as well only repeated the same month:
+    "append missing periods 2026-08 through 2026-08 and extend coverage through 2026-08".
+    """
     if action == SyncAction.APPEND:
-        return (
-            f"Data exists through {current_end}. Sync will append missing periods "
-            f"{delta_start} through {delta_end} and extend coverage through {target_end}."
-        )
+        added = delta_start if delta_start == delta_end else f"{delta_start} through {delta_end}"
+        return f"Data exists through {current_end}. Sync will add {added}."
     return f"Data exists through {current_end}. Sync will rematerialize the dataset through {target_end}."
 
 
