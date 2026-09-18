@@ -474,6 +474,24 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
         if not has_plugin:
             raise ValueError(f"Dataset template '{dataset_id}' in {source} must define ingestion.plugin")
 
+    # produced_by names the workflow that writes a non-ingestable template, so a reader can
+    # get from the dataset to the way it is made. A dataset is either fetched or produced, and
+    # a template claiming both would be listed as a data source and as a workflow output at
+    # once. The workflow id itself is not resolved here: workflows can be registered at
+    # runtime, after templates load, so an unknown id is a presentation concern, not an error.
+    produced_by = dataset.get("produced_by")
+    if produced_by is not None:
+        if not isinstance(produced_by, str) or not produced_by.strip() or produced_by != produced_by.strip():
+            raise ValueError(
+                f"Dataset template '{dataset_id}' in {source} has an invalid produced_by "
+                f"{produced_by!r}; it must be a workflow id"
+            )
+        if is_ingestable(dataset):
+            raise ValueError(
+                f"Dataset template '{dataset_id}' in {source} declares both produced_by and "
+                "ingestion.plugin; a dataset is either ingested or produced by a workflow"
+            )
+
     # Surface non-CF/udunits units so unit-aware processes (xclim indices) don't fail
     # cryptically later. Warn rather than reject — not every variable is a physical
     # quantity (e.g. population counts) (#280).

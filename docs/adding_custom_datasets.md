@@ -170,6 +170,8 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `variable`   | Yes      | Name of the data variable in the Zarr store (e.g. `precip`, `t2m`, `rainfall`) |
 | `source`     | No       | Name of the upstream data source                                               |
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
+| `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /dataset-templates/`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
+| `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Templates that are produced, not ingested](#templates-that-are-produced-not-ingested) |
 
 **Period and sync**
 
@@ -317,6 +319,21 @@ A custom template without `ingestion.plugin` is not ingestable either, whatever 
 form offers only the ingestable ones, and asking to ingest one that is not returns `400` naming
 the reason. Read the flag rather than inferring it from `sync.kind`: the two are not the same
 question, and `era5land_temperature_daily_normal_1991_2020` is `static` *and* ingestable.
+
+Name the workflow that produces such a template with `produced_by`:
+
+```yaml
+- id: chirps3_precipitation_monthly_normal_1991_2020
+  sync:
+    kind: static
+  produced_by: climate_normal
+```
+
+It is metadata, not behaviour: it records where the data comes from, so a reader can get from
+the dataset to the way it is made, and `GET /dataset-templates/` reports it. A template that
+declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
+either fetched or produced. The workflow id itself is not checked, because workflows can be
+registered later at runtime.
 
 `temporal_direction` is separate from `sync.kind` on purpose: a forecast is still `temporal` for sync (re-run it and you get fresher data); what differs is which way its periods run. It cannot be combined with `sync.kind: static`, which has no upstream to look ahead into.
 
