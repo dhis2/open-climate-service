@@ -423,6 +423,30 @@ def test_the_header_is_a_way_back_to_the_landing_page(client: TestClient) -> Non
     assert body.index('<a class="home"') < body.index('<svg class="logo"'), "the mark is inside the link"
 
 
+def test_the_map_viewer_reads_and_writes_the_dataset_in_the_address(client: TestClient) -> None:
+    """`/map?dataset=<id>` opens on one dataset, and choosing one writes the parameter back."""
+    body = client.get("/map", params={"dataset": "chirps3_precipitation_daily"}).text
+
+    assert 'new URLSearchParams(window.location.search).get("dataset")' in body
+    assert 'url.searchParams.set("dataset", id)' in body
+    # Each option carries its collection id, which is what a deep link names.
+    assert "opt.dataset.id = col.id;" in body
+
+
+def test_the_map_panel_links_to_the_dataset_page(client: TestClient) -> None:
+    """The other half of the round trip: the dataset page links to the map, and the map back."""
+    body = client.get("/map").text
+
+    assert 'id="dataset-link"' in body
+    assert "datasetLink.href = `/datasets/${encodeURIComponent(id)}`" in body
+
+
+def test_an_unpublished_dataset_in_the_address_is_reported_not_ignored(client: TestClient) -> None:
+    body = client.get("/map").text
+
+    assert "is not published, so it cannot be shown on the map" in body
+
+
 def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     response = client.get("/map")
 
