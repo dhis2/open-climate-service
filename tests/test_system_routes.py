@@ -415,6 +415,14 @@ def test_the_map_viewer_wears_the_shared_chrome(client: TestClient) -> None:
     assert "{{" not in response.text, "no unrendered placeholder reaches the browser"
 
 
+def test_the_header_is_a_way_back_to_the_landing_page(client: TestClient) -> None:
+    """The mark and the instance name link home, as the title did before the header was shared."""
+    body = client.get("/map").text
+
+    assert '<a class="home" href="/">' in body
+    assert body.index('<a class="home"') < body.index('<svg class="logo"'), "the mark is inside the link"
+
+
 def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     response = client.get("/map")
 
