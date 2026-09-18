@@ -85,6 +85,14 @@ def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
 TODAY = date(2026, 9, 17)
 
 
+class _FrozenDate(date):
+    """`date` with today pinned, so a prefilled value is the same on every run."""
+
+    @classmethod
+    def today(cls) -> date:
+        return TODAY
+
+
 def _source_context(template: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     options: dict[str, Any] = {"read_only": False, "has_extent": True, "today": TODAY, **overrides}
     datasets = options.pop("datasets", [])
@@ -170,12 +178,21 @@ def test_the_ingest_form_survives_a_leap_day(client: TestClient) -> None:
     assert defaults["start"] == "2023-02-28"
 
 
-def test_the_ingest_form_prefills_dates_in_the_format_it_states(client: TestClient) -> None:
-    """The field takes a period identifier, so a monthly source must not be prefilled with a day."""
+def test_the_ingest_form_prefills_dates_in_the_format_it_states(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The field takes a period identifier, so a monthly source must not be prefilled with a day.
+
+    The date is frozen rather than derived from today: computing the expected value with
+    `replace(year=...)` raises on 29 February, so the test failed on the one day of the year
+    whose handling it was meant to cover.
+    """
+    monkeypatch.setattr(landing, "date", _FrozenDate)
+
     body = client.get("/data-sources/era5land_temperature_monthly").text
     form = body.split('id="ingest-form"', 1)[1]
 
-    assert 'value="{}"'.format(date.today().replace(year=date.today().year - 1).strftime("%Y-%m")) in form
+    assert 'value="2025-09"' in form
     assert "Format YYYY-MM." in form
 
 
@@ -254,6 +271,31 @@ def test_the_data_source_list_is_its_own_page(client: TestClient) -> None:
 
 def test_an_unknown_data_source_is_a_404(client: TestClient) -> None:
     assert client.get("/data-sources/does_not_exist").status_code == 404
+
+
+def test_a_workflow_output_is_not_a_data_source(client: TestClient) -> None:
+    """A data source is a template this instance can fetch.
+
+    Resolving by id alone served a workflow output as one, behind an ingest form it cannot use.
+    It has a page already, under the workflow that produces it.
+    """
+    assert client.get("/data-sources/chirps3_precipitation_daily").status_code == 200
+    assert client.get("/data-sources/chirps3_precipitation_daily_normal_1991_2020").status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("period", "expected"),
+    [
+        ("monthly", "2026-09"),
+        ("yearly", "2026"),
+        ("daily", "2026-09-17"),
+        # Not a prefix of the date it falls in, which is why trimming the string was wrong.
+        ("weekly", "2026-W38"),
+        ("dekadal", "2026-09-11"),
+    ],
+)
+def test_a_prefilled_date_becomes_the_sources_own_period(period: str, expected: str) -> None:
+    assert landing._period_value("2026-09-17", period) == expected
 
 
 def test_a_source_ingested_under_another_id_still_shows_as_ingested(monkeypatch: pytest.MonkeyPatch) -> None:
