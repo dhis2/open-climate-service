@@ -329,12 +329,15 @@ Name the workflow that produces such a template with `produced_by`:
   produced_by: climate_normal
 ```
 
-The landing page lists ingestable templates under **Data sources** and the rest under
-**Workflows**, as outputs of the workflow `produced_by` names. A template that declares
-`produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is either
-fetched or produced. The workflow id is not checked at registration, because workflows can be
-registered later at runtime; an output whose workflow is unknown is still listed, under
-"Other workflow outputs".
+It is metadata, not behaviour: it records where the data comes from, so a reader can get from
+the dataset to the way it is made, and `GET /dataset-templates/` reports it. A template that
+declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
+either fetched or produced. The workflow id itself is not checked, because workflows can be
+registered later at runtime.
+
+The landing page uses it to place a template: ingestable ones under **Data sources**, the rest
+under **Workflows**, as outputs of the workflow `produced_by` names. An output whose workflow is
+unknown is still listed, under "Other workflow outputs".
 
 `temporal_direction` is separate from `sync.kind` on purpose: a forecast is still `temporal` for sync (re-run it and you get fresher data); what differs is which way its periods run. It cannot be combined with `sync.kind: static`, which has no upstream to look ahead into.
 
