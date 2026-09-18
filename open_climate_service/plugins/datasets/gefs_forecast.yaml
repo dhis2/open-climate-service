@@ -1,0 +1,83 @@
+# NOAA GEFS 35-day ensemble forecast, via dynamical.org's public Zarr store.
+# No credentials required, which is what makes it the reference forecast source for testing
+# the two-axis forecast shape (see shared/forecast.py).
+- id: gefs_temperature_forecast
+  name: Temperature forecast, 35-day ensemble (GEFS)
+  short_name: Temp forecast
+  standard_name: air_temperature
+  variable: temperature_2m
+  period_type: daily
+  temporal_direction: future
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.gefs_forecast.GefsForecastPlugin
+    params:
+      variable: temperature_2m
+      # Ensemble spread as a quantile axis rather than a mean: the spread is the point of an
+      # ensemble forecast, and one axis serves every variable.
+      quantiles: [0.1, 0.5, 0.9]
+  units: degC
+  cell_methods: "time: mean"
+  resolution: 0.25° x 0.25° (~28 km)
+  source: NOAA GEFS via dynamical.org
+  source_url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+  license: CC-BY-4.0
+  providers:
+    - name: dynamical.org
+      url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+      roles: [processor, licensor]
+    - name: NOAA NWS NCEP
+      url: https://www.ncep.noaa.gov/
+      roles: [producer]
+  display:
+    colormap: RdYlBu_r
+    range: [-10, 40]
+
+- id: gefs_precipitation_forecast
+  name: Precipitation forecast, 35-day ensemble (GEFS)
+  short_name: Precip forecast
+  standard_name: precipitation_amount
+  variable: precipitation_surface
+  period_type: daily
+  temporal_direction: future
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.gefs_forecast.GefsForecastPlugin
+    params:
+      variable: precipitation_surface
+      # Upstream is an average rate in kg m-2 s-1, so a daily total is the day's mean rate
+      # integrated over the day — not a sum of its steps.
+      accumulate: true
+      quantiles: [0.1, 0.5, 0.9]
+  # mm/d rather than mm, matching CHIRPS: a daily total in mm is the same number as the mean
+  # daily rate, and the rate spelling says which period the total is over.
+  units: mm/d
+  cell_methods: "time: sum"
+  resolution: 0.25° x 0.25° (~28 km)
+  source: NOAA GEFS via dynamical.org
+  source_url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+  license: CC-BY-4.0
+  providers:
+    - name: dynamical.org
+      url: https://dynamical.org/catalog/noaa-gefs-forecast-35-day/
+      roles: [processor, licensor]
+    - name: NOAA NWS NCEP
+      url: https://www.ncep.noaa.gov/
+      roles: [producer]
+  display:
+    colormap: YlGnBu
+    range: [0, 50]

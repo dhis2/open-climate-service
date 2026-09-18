@@ -314,14 +314,51 @@
       }
 
       function dimLabel(key, dim) {
+        // A forecast cube has two temporal axes; calling either one "Time step" invites the
+        // reading that it is the date being predicted, which neither is.
+        if (key === "reference_time") return "Forecast issued";
+        // "day" for a medium-range run, "month" for a seasonal one — the axis declares which.
+        if (key === "lead_time") return "Forecast " + (dim?.unit === "month" ? "month" : "day");
         if (dim.type === "temporal") return "Time step";
         if (key === "dayofyear") return "Day of year";
         return key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " ");
       }
 
+      // The unit the lead axis counts in, as STAC declares it. A seasonal forecast steps in
+      // months, so nothing below may assume days.
+      function leadUnit() {
+        const lead = dimStates.find((d) => d.key === "lead_time");
+        return lead?.dim?.unit === "month" ? "month" : "day";
+      }
+
+      // The period a lead step describes: the selected issue time plus the lead. Returns null
+      // when there is no issue-time axis to add to, so a lead-only cube still labels its steps
+      // rather than showing nothing.
+      function validDateForLead(lead) {
+        const ref = dimStates.find((d) => d.key === "reference_time");
+        if (!ref || !Number.isFinite(lead)) return null;
+        const issued = new Date(String(stepLabelAt(ref.steps, ref.index)).replace(" ", "T"));
+        if (Number.isNaN(issued.getTime())) return null;
+        if (leadUnit() === "month") {
+          // Day 1 first: adding a month to the 31st otherwise lands two months out.
+          issued.setUTCDate(1);
+          issued.setUTCMonth(issued.getUTCMonth() + lead);
+          return issued.toISOString().slice(0, 7);
+        }
+        issued.setUTCDate(issued.getUTCDate() + lead);
+        return issued.toISOString().slice(0, 10);
+      }
+
       // Human label for one step. Integer age bands render as ranges (0, 1–4, …, 90+).
       function stepDisplay(key, steps, i) {
         const v = stepLabelAt(steps, i);
+        if (key === "lead_time" && Array.isArray(steps)) {
+          // Show the date the step is about, derived from the selected issue time, with the
+          // lead kept in view so "how far ahead is this" stays answerable.
+          const suffix = leadUnit() === "month" ? "m" : "d";
+          const valid = validDateForLead(Number(v));
+          return valid ? `${valid} (+${v}${suffix})` : `+${v}${suffix}`;
+        }
         if (key === "age_group" && Array.isArray(steps)) {
           const next = steps[i + 1];
           if (next === undefined) return `${v}+`;
@@ -389,19 +426,39 @@
         return Array.isArray(steps) ? steps.length : steps.count;
       }
 
+      // A date, or a timestamp at exactly midnight UTC. An axis made only of these is daily or
+      // coarser, so the time of day carries no information: "2026-08-11T00:00:00Z" is
+      // "2026-08-11" with nine characters of noise after it.
+      const DATE_OR_MIDNIGHT = /^\d{4}-\d{2}-\d{2}([T ]00:00(:00(\.0+)?)?(Z|\+00:00)?)?$/;
+      // Cached per steps array: an axis can hold tens of thousands of daily steps and every
+      // label would otherwise rescan all of them.
+      const datelikeAxes = new WeakMap();
+
+      function stepsAreDateOnly(steps) {
+        let known = datelikeAxes.get(steps);
+        if (known === undefined) {
+          known = steps.every((v) => typeof v === "string" && DATE_OR_MIDNIGHT.test(v));
+          datelikeAxes.set(steps, known);
+        }
+        return known;
+      }
+
       function stepLabelAt(steps, i) {
+        // Explicit `values` cover two kinds of axis. Ordinal ones list numbers (day-of-year) or
+        // category names (sex) and pass through untouched; an irregular temporal axis lists ISO
+        // timestamps, which want the same granularity trimming the generated branches below
+        // apply — so a dekadal axis reads "2024-12-21", not "2024-12-21T00:00:00Z".
+        //
+        // The granularity is decided for the axis as a whole, not per value: trimming value by
+        // value would leave an hourly axis showing "2026-08-11" for its 00:00 step and
+        // "2026-08-11 01:00" for the next one, which reads as two different kinds of label in
+        // one slider. So an all-midnight axis loses the time everywhere, and a sub-daily axis
+        // keeps it everywhere.
         if (Array.isArray(steps)) {
           const v = steps[i];
-          // Explicit `values` cover two kinds of axis: ordinal ones list numbers
-          // (day-of-year) or category names (sex), which pass through untouched, while an
-          // irregular temporal axis lists ISO timestamps. Those want the same granularity
-          // trimming the generated branches below apply, so a dekadal axis reads
-          // "2024-12-21" rather than "2024-12-21T00:00:00Z" on every step.
-          if (typeof v === "string") {
-            const midnight = v.match(/^(\d{4}-\d{2}-\d{2})T00:00(?::00(?:\.0+)?)?Z?$/);
-            if (midnight) return midnight[1];
-            if (/^\d{4}-\d{2}-\d{2}T/.test(v)) return v.slice(0, 16).replace("T", " ");
-          }
+          if (typeof v !== "string") return v;
+          if (stepsAreDateOnly(steps)) return v.slice(0, 10);
+          if (/^\d{4}-\d{2}-\d{2}T/.test(v)) return v.slice(0, 16).replace("T", " ");
           return v;
         }
         const sd = new Date(steps.start);
@@ -588,7 +645,9 @@
           const control = controlForDim(dim);
           const count = stepCount(steps);
           // A slider defaults to its last step (e.g. latest time); a dropdown to its first.
-          const index = control === "slider" ? Math.max(0, count - 1) : 0;
+          // `lead_time` is the exception: its last step is the furthest ahead and least
+          // reliable, so a forecast opens on the nearest day.
+          const index = key === "lead_time" ? 0 : control === "slider" ? Math.max(0, count - 1) : 0;
           return { key, dim, steps, control, count, label: dimLabel(key, dim), index };
         });
         selector = {};
@@ -667,6 +726,7 @@
         const units = collection["cube:variables"]?.[variable]?.unit ?? "";
         metaSource.textContent = source ?? "—";
         metaUnits.textContent = units || "—";
+        renderPinnedDims();
         datasetMeta.classList.remove("hidden");
 
         // The collection description, which is where a dataset states what its values actually
@@ -719,6 +779,26 @@
         }, 150);
       }
 
+      // A single-step axis gets no control, but a forecast's issue time is identity rather than
+      // a choice: with one run ingested, hiding it leaves nothing on the page saying which
+      // forecast is on screen. So it is shown as a static line instead.
+      function renderPinnedDims() {
+        // Cleared first: switching dataset re-runs this, and the Source/Units rows are static
+        // siblings, so appending blindly would stack a new pair on every switch.
+        for (const stale of datasetMeta.querySelectorAll("[data-pinned-dim]")) stale.remove();
+        const pinned = dimStates.filter((d) => d.count === 1 && d.key === "reference_time");
+        for (const d of pinned) {
+          const dt = document.createElement("dt");
+          dt.textContent = d.label;
+          dt.dataset.pinnedDim = d.key;
+          const dd = document.createElement("dd");
+          dd.textContent = stepDisplay(d.key, d.steps, 0);
+          dd.dataset.pinnedDim = d.key;
+          datasetMeta.prepend(dd);
+          datasetMeta.prepend(dt);
+        }
+      }
+
       // Render one control per non-spatial dimension with more than one step.
       // Sliders for temporal/regular-ordinal axes, dropdowns for categorical/irregular
       // ones; each writes its index into the shared `selector` and re-renders the layer.
@@ -729,6 +809,15 @@
           dimControls.classList.add("hidden");
           return;
         }
+        // One axis's label can depend on another's position: a forecast lead is labelled with
+        // the date it describes, which is the *selected* issue time plus the lead. So every
+        // control re-renders its own label whenever any of them moves, rather than only the one
+        // that was touched — otherwise moving "Forecast issued" leaves the lead steps showing
+        // the previous run's dates.
+        const refreshers = [];
+        const refreshAll = () => {
+          for (const refresh of refreshers) refresh();
+        };
         for (const d of stepping) {
           const block = document.createElement("div");
           block.style.marginBottom = "0.8rem";
@@ -751,6 +840,10 @@
             valueEl.textContent = stepDisplay(d.key, d.steps, d.index);
             valueWrap.append(valueEl);
             count.textContent = `${d.index + 1} / ${d.count}`;
+            refreshers.push(() => {
+              valueEl.textContent = stepDisplay(d.key, d.steps, d.index) ?? "—";
+              count.textContent = `${d.index + 1} / ${d.count}`;
+            });
 
             const slider = document.createElement("input");
             slider.type = "range";
@@ -762,8 +855,7 @@
               const i = parseInt(e.target.value, 10);
               d.index = i;
               selector[d.key] = indexSelection(i);
-              valueEl.textContent = stepDisplay(d.key, d.steps, i) ?? "—";
-              count.textContent = `${i + 1} / ${d.count}`;
+              refreshAll();
               applySelector();
             });
             block.append(valueWrap, slider);
@@ -776,10 +868,17 @@
               if (i === d.index) opt.selected = true;
               select.append(opt);
             }
+            // Option text can depend on another axis too, so it is rebuilt on any change.
+            refreshers.push(() => {
+              for (let i = 0; i < d.count; i++) select.options[i].textContent = stepDisplay(d.key, d.steps, i);
+              count.textContent = `${d.index + 1} / ${d.count}`;
+            });
+            count.textContent = `${d.index + 1} / ${d.count}`;
             select.addEventListener("change", (e) => {
               const i = parseInt(e.target.value, 10);
               d.index = i;
               selector[d.key] = indexSelection(i);
+              refreshAll();
               applySelector();
             });
             block.append(select);
