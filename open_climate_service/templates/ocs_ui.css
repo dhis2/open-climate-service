@@ -1,0 +1,902 @@
+/*
+  DHIS2 design tokens, copied from @dhis2/ui-constants 10.17.0 (colors, theme,
+  spacersNum, elevations) and named as @dhis2-ui/css names them. Copied rather than
+  imported: the design system publishes no plain CSS, and this page must work offline
+  with no build step. Update the version above when refreshing the values.
+*/
+:root {
+  --colors-blue900: #093371;
+  --colors-blue800: #0d47a1;
+  --colors-blue700: #1565c0;
+  --colors-blue600: #147cd7;
+  --colors-blue100: #e3f2fd;
+  --colors-blue050: #f5fbff;
+  --colors-teal800: #004d40;
+  --colors-teal100: #e0f2f1;
+  --colors-red800: #891515;
+  --colors-red600: #c62828;
+  --colors-red050: #fff5f6;
+  --colors-green800: #1b5e20;
+  --colors-green100: #e8f5e9;
+  --colors-yellow900: #6f3205;
+  --colors-yellow100: #ffecb3;
+  --colors-grey900: #212934;
+  --colors-grey800: #404b5a;
+  --colors-grey700: #4a5768;
+  --colors-grey600: #6c7787;
+  --colors-grey500: #a0adba;
+  --colors-grey400: #d5dde5;
+  --colors-grey300: #e8edf2;
+  --colors-grey200: #f3f5f7;
+  --colors-grey100: #f8f9fa;
+  --colors-white: #ffffff;
+  --theme-fonts: Roboto, sans-serif;
+  --theme-primary800: #0d47a1;
+  --theme-primary600: #147cd7;
+  --theme-focus: #147cd7;
+  --spacers-dp4: 4px;
+  --spacers-dp8: 8px;
+  --spacers-dp12: 12px;
+  --spacers-dp16: 16px;
+  --spacers-dp24: 24px;
+  --spacers-dp32: 32px;
+  --spacers-dp48: 48px;
+  --elevations-e100: 0px 1px 2px rgba(33, 41, 52, 0.06), 0px 1px 3px rgba(33, 41, 52, 0.1);
+
+  /* Not in @dhis2/ui-constants: sizes follow the DHIS2 UI component defaults. */
+  --font-mono: ui-monospace, "Cascadia Code", Menlo, monospace;
+  --font-size-small: 12px;
+  --font-size-body: 14px;
+  --font-size-h3: 15px;
+  --font-size-h1: 18px;
+  --font-size-h2: 20px;
+  --font-size-stat: 28px;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+  /* Just under dp16: above a table the gap runs into a ruled header row, which reads taller. */
+  --table-gap: 14px;
+  --radius: 4px;
+  --radius-chip: 12px;
+  /* The DHIS2 header bar's own colour and height, from @dhis2-ui/header-bar 10.17.0, where
+     they are literals rather than tokens: background #2c6693, white text, 48px tall. */
+  --header-background: #2c6693;
+  --header-height: 48px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+[hidden] {
+  display: none !important;
+}
+
+body {
+  font-family: var(--theme-fonts);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+  color: var(--colors-grey900);
+  background: var(--colors-grey200);
+  min-height: 100vh;
+}
+a {
+  color: var(--theme-primary800);
+}
+a:hover {
+  color: var(--colors-blue900);
+}
+:focus-visible {
+  outline: 3px solid var(--theme-focus);
+  outline-offset: 2px;
+}
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--colors-grey200);
+  padding: 0 var(--spacers-dp4);
+  border-radius: var(--radius);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--spacers-dp8);
+  top: -100px;
+  background: var(--colors-white);
+  padding: var(--spacers-dp8) var(--spacers-dp12);
+  z-index: 10;
+}
+.skip-link:focus {
+  top: var(--spacers-dp8);
+}
+
+header {
+  background: var(--header-background);
+  color: var(--colors-white);
+  height: var(--header-height);
+  padding: 0 var(--spacers-dp24);
+  display: flex;
+  align-items: center;
+  gap: var(--spacers-dp8);
+  flex-shrink: 0;
+}
+/* The global focus outline is --theme-focus, which is only 1.43:1 against the header bar and so
+   misses the 3:1 a focus indicator has to meet. On the bar the indicator is white — 6.12:1, and
+   already the colour of everything else there. Scoped to the bar, not to .home, so anything
+   added beside it later inherits a visible focus rather than the invisible one. */
+header :focus-visible {
+  outline-color: var(--colors-white);
+}
+
+header .logo {
+  flex: none;
+  display: block;
+  /* The mark's globe sits low in its own viewBox, so it reads a touch below the name it stands
+     beside. Nudged rather than re-centred: a transform moves the paint without moving the
+     flex row, so the header's height and the name's baseline stay exactly where they are. */
+  transform: translateY(-2px);
+}
+/* The mark and the instance name are one target back to the landing page, as the title was
+   before the header was shared. Undecorated in both rest and hover: it is the page's identity
+   first and a link second, and the bar has no other text to distinguish it from. Keyboard focus
+   still shows, through the global :focus-visible outline. */
+header .home {
+  display: flex;
+  align-items: center;
+  gap: var(--spacers-dp8);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+header h1 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: calc(100vh - var(--header-height));
+}
+
+nav.rail {
+  background: var(--colors-white);
+  border-right: 1px solid var(--colors-grey300);
+  padding: var(--spacers-dp16) var(--spacers-dp8);
+}
+nav.rail ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp4);
+}
+nav.rail a {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacers-dp8);
+  padding: var(--spacers-dp8) var(--spacers-dp12);
+  border-radius: var(--radius);
+  color: var(--colors-grey800);
+  text-decoration: none;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+nav.rail li.gap {
+  margin-top: var(--spacers-dp16);
+}
+nav.rail a:hover {
+  background: var(--colors-grey200);
+  color: var(--colors-grey900);
+}
+nav.rail a[aria-current="page"] {
+  background: var(--colors-blue100);
+  color: var(--colors-blue900);
+}
+nav.rail .count {
+  font-size: var(--font-size-small);
+  font-weight: 400;
+  color: var(--colors-grey600);
+}
+
+main {
+  padding: var(--spacers-dp24) var(--spacers-dp32) var(--spacers-dp48);
+  max-width: 1080px;
+  width: 100%;
+}
+main > section + section {
+  margin-top: var(--spacers-dp48);
+}
+.js main > section + section {
+  margin-top: 0;
+}
+/* One area shows at a time, so jumping to its anchor would only scroll the header away.
+   A margin taller than the page makes that jump land at the top. */
+.js main > section {
+  scroll-margin-top: 100vh;
+}
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  margin-bottom: var(--spacers-dp4);
+}
+h2:focus {
+  outline: none;
+}
+h3 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-bold);
+}
+.lead {
+  color: var(--colors-grey700);
+  margin-bottom: var(--spacers-dp16);
+}
+.note {
+  color: var(--colors-grey700);
+}
+
+.panel {
+  background: var(--colors-white);
+  border: 1px solid var(--colors-grey300);
+  border-radius: var(--radius);
+  box-shadow: var(--elevations-e100);
+  padding: var(--spacers-dp16);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--spacers-dp12);
+  margin-bottom: var(--spacers-dp16);
+}
+.stat {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+a.stat:hover {
+  border-color: var(--colors-grey500);
+  color: inherit;
+}
+.stat .value {
+  display: block;
+  font-size: var(--font-size-stat);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.2;
+  color: var(--colors-grey900);
+}
+.stat .label {
+  color: var(--colors-grey700);
+}
+
+.instance {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacers-dp16);
+}
+.instance-facts {
+  min-width: 0;
+  flex: 1;
+}
+/* The map sets the panel's height and the facts sit alongside it; the panel's own padding
+   and the flex gap are its margin. It may shrink, never grow, so it cannot push the facts
+   into a column of single words. */
+.globe {
+  flex: 0 1 auto;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--colors-grey300);
+  border-radius: var(--radius);
+}
+.globe .ocean {
+  fill: var(--colors-blue100);
+}
+/* Between grey400 and grey500: grey400 left the coastline invisible against the pale blue
+   ocean, grey500 read as heavy for a map this small. */
+.globe .land {
+  fill: color-mix(in srgb, var(--colors-grey500) 70%, var(--colors-white));
+}
+.globe .extent {
+  fill: none;
+  stroke: black;
+  /* The viewBox is scaled up ~1.8x on screen, so this lands near 2 device pixels. */
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+dl.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--spacers-dp24);
+  row-gap: var(--spacers-dp4);
+}
+dl.facts dt {
+  color: var(--colors-grey700);
+}
+dl.facts dd {
+  overflow-wrap: anywhere;
+}
+/* The note under the facts is a separate statement, not another row of the list. */
+dl.facts + .note {
+  margin-top: var(--spacers-dp12);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: var(--spacers-dp12);
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp4);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+a.card {
+  text-decoration: none;
+  color: inherit;
+}
+a.card:hover {
+  border-color: var(--colors-grey500);
+  color: inherit;
+}
+a.card h3 {
+  color: var(--theme-primary800);
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacers-dp4);
+  margin-top: auto;
+  padding-top: var(--spacers-dp8);
+}
+
+.chip {
+  display: inline-block;
+  border-radius: var(--radius-chip);
+  padding: 0 var(--spacers-dp8);
+  font-size: var(--font-size-small);
+  line-height: calc(var(--font-size-small) + var(--spacers-dp8));
+  background: var(--colors-grey200);
+  color: var(--colors-grey800);
+  white-space: nowrap;
+}
+.chip-published {
+  background: var(--colors-green100);
+  color: var(--colors-green800);
+}
+.chip-unpublished {
+  background: var(--colors-yellow100);
+  color: var(--colors-yellow900);
+}
+.chip-output {
+  background: var(--colors-teal100);
+  color: var(--colors-teal800);
+}
+
+.toolbar {
+  display: none;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--spacers-dp12);
+  margin-bottom: var(--spacers-dp12);
+}
+.js .toolbar {
+  display: flex;
+}
+.toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp4);
+  font-size: var(--font-size-small);
+  color: var(--colors-grey700);
+}
+.toolbar input,
+.toolbar select {
+  font: inherit;
+  color: var(--colors-grey900);
+  background: var(--colors-white);
+  border: 1px solid var(--colors-grey500);
+  border-radius: var(--radius);
+  padding: var(--spacers-dp4) var(--spacers-dp8);
+  min-width: 180px;
+}
+.toolbar .status {
+  margin-left: auto;
+  color: var(--colors-grey700);
+  align-self: center;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  padding: 0;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th,
+td {
+  text-align: left;
+  padding: var(--spacers-dp8) var(--spacers-dp12);
+  border-bottom: 1px solid var(--colors-grey300);
+  vertical-align: top;
+}
+th:first-child,
+td:first-child {
+  padding-left: var(--spacers-dp16);
+}
+th:last-child,
+td:last-child {
+  padding-right: var(--spacers-dp16);
+}
+th {
+  font-weight: var(--font-weight-medium);
+  color: var(--colors-grey700);
+  background: var(--colors-grey100);
+}
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.pager {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacers-dp8);
+  margin-top: var(--spacers-dp12);
+}
+.js .pager {
+  display: flex;
+}
+button {
+  font: inherit;
+  color: var(--colors-grey900);
+  background: var(--colors-white);
+  border: 1px solid var(--colors-grey500);
+  border-radius: var(--radius);
+  padding: var(--spacers-dp4) var(--spacers-dp12);
+  cursor: pointer;
+}
+button:disabled {
+  color: var(--colors-grey500);
+  border-color: var(--colors-grey300);
+  cursor: default;
+}
+
+.workflow + .workflow {
+  margin-top: var(--spacers-dp12);
+}
+.workflow .outputs {
+  margin-top: var(--spacers-dp8);
+  padding-top: var(--spacers-dp8);
+  border-top: 1px solid var(--colors-grey300);
+}
+.workflow .outputs ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp4);
+  margin-top: var(--spacers-dp8);
+}
+.workflow .outputs li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacers-dp8);
+}
+
+/* Dataset collection: tiles or list, switched on the container. */
+.view-switch {
+  display: inline-flex;
+}
+.view-switch button + button {
+  margin-left: -1px;
+}
+.view-switch button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+.view-switch button:last-child {
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.view-switch button[aria-pressed="true"] {
+  background: var(--colors-blue100);
+  border-color: var(--colors-blue600);
+  color: var(--colors-blue900);
+  position: relative;
+}
+
+.collection.view-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  gap: var(--spacers-dp12);
+}
+.collection.view-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp8);
+}
+.item {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.view-list .item {
+  flex-direction: row;
+}
+/* Every preview shows at the same 2:1 shape, whatever the extent's own proportions: the image
+   is taken out of flow so the box keeps its ratio instead of growing to the image's height,
+   and in the list view it must not stretch to the row either. */
+.thumb {
+  display: block;
+  position: relative;
+  aspect-ratio: 2 / 1;
+  overflow: hidden;
+  background: var(--ramp, var(--colors-grey300));
+  flex: none;
+}
+/* Square in the list: a row is about as tall as it is, so a 2:1 preview left a band of empty
+   space beside the text. */
+.view-list .thumb {
+  width: 140px;
+  aspect-ratio: 1 / 1;
+  /* The row can be taller than the preview; stretching it would undo the square. */
+  align-self: flex-start;
+}
+.thumb.has-image {
+  background: var(--colors-grey100);
+}
+/* Cropped, not letterboxed: a preview is as wide as the extent happens to be, and contained
+   images left every tile a different shape with bars around them. */
+.thumb img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.no-preview {
+  position: absolute;
+  left: var(--spacers-dp8);
+  bottom: var(--spacers-dp8);
+  background: var(--colors-white);
+  color: var(--colors-grey700);
+  border-radius: var(--radius);
+  padding: 0 var(--spacers-dp4);
+  font-size: var(--font-size-small);
+}
+.item .body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp4);
+  padding: var(--spacers-dp12) var(--spacers-dp16);
+  flex: 1;
+  min-width: 0;
+}
+.item h3 a {
+  text-decoration: none;
+}
+/* The whole tile or row opens the page: the title link's hit area is stretched over the item,
+   so there is still exactly one link per item for keyboard and screen-reader users. */
+.item.clickable {
+  position: relative;
+  cursor: pointer;
+}
+.item-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.item-link:focus-visible {
+  outline: none;
+}
+.item.clickable:hover {
+  border-color: var(--colors-grey500);
+}
+.item.clickable:focus-within {
+  outline: 3px solid var(--theme-focus);
+  outline-offset: 2px;
+}
+.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.view-list .clamp {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.provider {
+  color: var(--colors-grey700);
+}
+.description {
+  color: var(--colors-grey800);
+}
+
+/* Dataset page */
+.breadcrumb {
+  color: var(--colors-grey700);
+  margin-bottom: var(--spacers-dp8);
+}
+.page-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacers-dp8);
+  margin-bottom: var(--spacers-dp16);
+}
+.page-title h2 {
+  margin: 0;
+}
+.dataset-page {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--spacers-dp16);
+  align-items: start;
+}
+.dataset-page > * {
+  min-width: 0;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp16);
+}
+.prose p + p {
+  margin-top: var(--spacers-dp8);
+}
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp8);
+}
+.button-link {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  border: 1px solid var(--colors-grey500);
+  border-radius: var(--radius);
+  padding: var(--spacers-dp8) var(--spacers-dp12);
+  color: var(--colors-grey900);
+  background: var(--colors-white);
+}
+.button-link.primary {
+  background: var(--theme-primary600);
+  border-color: var(--theme-primary600);
+  color: var(--colors-white);
+}
+.button-link:hover {
+  border-color: var(--colors-grey700);
+  color: var(--colors-grey900);
+}
+.button-link.primary:hover {
+  background: var(--theme-primary800);
+  color: var(--colors-white);
+}
+.ramp-bar {
+  display: block;
+  height: var(--spacers-dp12);
+  border-radius: var(--radius);
+  background: var(--ramp, var(--colors-grey300));
+}
+/* Panel and section headings, but not tile titles: a tile's body spaces itself with a gap. */
+.panel > h3,
+main > h2 {
+  margin-bottom: var(--spacers-dp4);
+}
+
+/* Workflow page */
+pre.code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+  background: var(--colors-grey100);
+  border: 1px solid var(--colors-grey300);
+  border-radius: var(--radius);
+  padding: var(--spacers-dp12);
+  overflow-x: auto;
+  margin: var(--spacers-dp8) 0;
+}
+pre.code code {
+  background: none;
+  padding: 0;
+}
+.endpoints + .endpoints {
+  margin-top: var(--spacers-dp16);
+}
+.endpoints {
+  margin-top: var(--spacers-dp16);
+}
+.endpoints td code {
+  white-space: nowrap;
+}
+/* A table runs edge to edge inside its panel, so the heading and note above it carry the
+   panel's padding themselves, and the gap over the table belongs to whichever of them it
+   follows. */
+.table-title {
+  padding: var(--spacers-dp16) var(--spacers-dp16) 0;
+}
+h3.table-title {
+  margin-bottom: 0;
+}
+h3.table-title + table {
+  margin-top: var(--table-gap);
+}
+p.note.table-title {
+  padding: var(--spacers-dp4) var(--spacers-dp16) var(--table-gap);
+}
+.bullets {
+  padding-left: var(--spacers-dp24);
+  margin: var(--spacers-dp8) 0;
+}
+.plain-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp4);
+}
+.trigger + .trigger {
+  margin-top: var(--spacers-dp12);
+}
+.collection + .workflow {
+  margin-top: var(--spacers-dp12);
+}
+
+/* Ingest form on the data source page */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: var(--spacers-dp12);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp4);
+}
+.field > label {
+  font-weight: var(--font-weight-medium);
+}
+.field input[type="text"] {
+  font: inherit;
+  color: var(--colors-grey900);
+  background: var(--colors-white);
+  border: 1px solid var(--colors-grey500);
+  border-radius: var(--radius);
+  padding: var(--spacers-dp8);
+}
+.hint {
+  font-size: var(--font-size-small);
+  color: var(--colors-grey700);
+}
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacers-dp8) var(--spacers-dp24);
+  margin-top: var(--spacers-dp12);
+}
+.checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacers-dp8);
+}
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacers-dp12);
+  margin-top: var(--spacers-dp16);
+}
+button.primary {
+  background: var(--theme-primary600);
+  border-color: var(--theme-primary600);
+  color: var(--colors-white);
+  padding: var(--spacers-dp8) var(--spacers-dp16);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--theme-primary800);
+}
+button.primary:disabled {
+  background: var(--colors-grey300);
+  border-color: var(--colors-grey300);
+  color: var(--colors-grey600);
+}
+.progress {
+  margin-top: var(--spacers-dp12);
+}
+.progress-track {
+  height: var(--spacers-dp8);
+  background: var(--colors-grey300);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--theme-primary600);
+  transition: width 0.3s ease;
+}
+.progress-fill.indeterminate {
+  width: 30%;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill.indeterminate {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+}
+.progress-label {
+  display: block;
+  margin-top: var(--spacers-dp4);
+  color: var(--colors-grey700);
+}
+.notice {
+  border-left: var(--spacers-dp4) solid var(--colors-grey500);
+  padding: var(--spacers-dp8) var(--spacers-dp12);
+  background: var(--colors-grey100);
+  margin-top: var(--spacers-dp12);
+}
+.notice.error {
+  border-left-color: var(--colors-red600);
+  background: var(--colors-red050);
+  color: var(--colors-red800);
+}
+.notice.success {
+  border-left-color: var(--colors-green800);
+  background: var(--colors-green100);
+}
+
+@media (max-width: 720px) {
+  .dataset-page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .view-list .thumb {
+    width: 96px;
+  }
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  nav.rail {
+    border-right: none;
+    border-bottom: 1px solid var(--colors-grey300);
+    padding: var(--spacers-dp8);
+    overflow-x: auto;
+  }
+  nav.rail ul {
+    flex-direction: row;
+  }
+  nav.rail li.gap {
+    margin-top: 0;
+    margin-left: var(--spacers-dp16);
+  }
+  main {
+    padding: var(--spacers-dp16);
+  }
+  .toolbar .status {
+    margin-left: 0;
+  }
+  /* Side by side, the facts are squeezed to one word per line before the map gives way. */
+  .instance {
+    flex-direction: column;
+  }
+}
