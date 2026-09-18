@@ -133,6 +133,8 @@ LOGO = Markup(_read_asset("ocs_logo.svg"))
 _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Dataset templates", "/dataset-templates"),
+    ("workflows", "Workflows", "/workflows"),
+    ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
     ("openeo", "openEO editor", "/openeo"),
@@ -1126,6 +1128,85 @@ def render_api_page(schema: dict[str, Any], mount: str) -> str:
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "api"),
         **_api_page_context(schema, read_only=api_config.is_read_only()),
+    )
+
+
+def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) -> dict[str, Any]:
+    """Split templates between Data sources and Workflows by whether they can be ingested.
+
+    A template is fetched or produced, never both (registration refuses `produced_by` beside
+    `ingestion.plugin`), so each appears in exactly one area. A non-ingestable template whose
+    `produced_by` names no known workflow — or that declares none — is still listed, under
+    Workflows as an output of an unknown workflow, rather than silently dropped.
+    """
+    sources = sorted(
+        (_source_view(t) for t in templates if registry_datasets.is_ingestable(t)),
+        key=lambda source: (source["provider"].lower(), source["name"].lower()),
+    )
+    workflow_ids = {workflow.id for workflow in workflows}
+    outputs: dict[str, list[dict[str, Any]]] = {workflow_id: [] for workflow_id in workflow_ids}
+    unattributed: list[dict[str, Any]] = []
+    for template in templates:
+        if registry_datasets.is_ingestable(template):
+            continue
+        view = _source_view(template)
+        produced_by = template.get("produced_by")
+        if isinstance(produced_by, str) and produced_by in workflow_ids:
+            outputs[produced_by].append(view)
+        else:
+            unattributed.append(view)
+    for views in outputs.values():
+        views.sort(key=lambda view: view["name"].lower())
+    unattributed.sort(key=lambda view: view["name"].lower())
+    return {
+        "sources": sources,
+        "workflows": [
+            {
+                "record": workflow,
+                "title": _workflow_title(workflow.id),
+                "results": _workflow_results(workflow),
+                "outputs": outputs[workflow.id],
+            }
+            for workflow in workflows
+        ],
+        "unattributed_outputs": unattributed,
+    }
+
+
+def render_workflows_page(mount: str) -> str:
+    """Render the list of workflows, with the datasets each one produces.
+
+    HTML only: the machine-readable list stays at `GET /process_graphs`.
+    """
+    catalogue = _landing_catalogue(_load_templates(), _load_workflows())
+    return get_template("workflows_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        list_script=_read_asset("ocs_list.js"),
+        nav=page_nav(mount, "workflows"),
+        workflows=catalogue["workflows"],
+        unattributed_outputs=catalogue["unattributed_outputs"],
+    )
+
+
+def render_processes_page(mount: str) -> str:
+    """Render the process catalogue this instance loaded, tagged by origin.
+
+    `GET /processes` answers the openEO JSON as it always has; only a browser gets this.
+    """
+    return get_template("processes_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        list_script=_read_asset("ocs_list.js"),
+        nav=page_nav(mount, "processes"),
+        processes=_load_processes(),
+        process_origins=_PROCESS_ORIGINS,
     )
 
 
