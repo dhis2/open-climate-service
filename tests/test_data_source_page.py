@@ -233,6 +233,25 @@ def test_one_facts_panel_holds_both_what_and_where(client: TestClient) -> None:
     assert 'id="data-title"' not in body
 
 
+def test_the_data_source_list_is_its_own_page(client: TestClient) -> None:
+    """The area that lived at `/#data-sources`, as a URL that can be linked to.
+
+    HTML only, like a single data source: the machine-readable list of the same thing stays at
+    `GET /dataset-templates/`, which this neither renames nor duplicates.
+    """
+    response = client.get("/data-sources")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert 'data-views="sources"' in response.text
+    assert "initList" in response.text, "the shared list script, not a second copy"
+    # Only what can be fetched: a workflow output is not a data source.
+    assert 'href="/data-sources/chirps3_precipitation_daily"' in response.text
+    assert "chirps3_precipitation_daily_normal_1991_2020" not in response.text
+
+    assert client.get("/dataset-templates/").status_code == 200
+
+
 def test_an_unknown_data_source_is_a_404(client: TestClient) -> None:
     assert client.get("/data-sources/does_not_exist").status_code == 404
 

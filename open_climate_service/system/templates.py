@@ -128,6 +128,7 @@ LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
+    ("data-sources", "Data sources", "/data-sources"),
     ("map", "Map viewer", "/map"),
     ("openeo", "openEO editor", "/openeo"),
 )
@@ -620,6 +621,41 @@ def render_datasets_page(mount: str) -> str:
         list_script=_read_asset("ocs_list.js"),
         nav=page_nav(mount, "datasets"),
         datasets=_dataset_views(_load_datasets(), _load_templates()),
+    )
+
+
+def _source_view(template: dict[str, Any]) -> dict[str, Any]:
+    """A data source card: titled by the dataset, with the provider beneath it."""
+    return {
+        "id": template["id"],
+        "name": template.get("name") or template["id"],
+        "provider": template.get("source") or "",
+        "provider_url": template.get("source_url"),
+        "description": " ".join(str(template.get("description") or "").split()),
+        "variable": template.get("variable") or "",
+        "units": template.get("units") or "",
+        "period_type": template.get("period_type") or "",
+        "resolution": template.get("resolution") or "",
+        "licence": _licence_label(template),
+    }
+
+
+def render_data_sources_page(mount: str) -> str:
+    """Render the list of data sources this instance can fetch from.
+
+    HTML only, like a single data source: the machine-readable list of the same thing is
+    `GET /dataset-templates/`, which this does not rename or duplicate.
+    """
+    templates = _load_templates()
+    return get_template("data_sources_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        list_script=_read_asset("ocs_list.js"),
+        nav=page_nav(mount, "data-sources"),
+        sources=[_source_view(t) for t in templates if registry_datasets.is_ingestable(t)],
     )
 
 
