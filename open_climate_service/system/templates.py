@@ -114,21 +114,17 @@ def wants_json(request: Request) -> bool:
     return json_q >= 0 and (html_q < 0 or json_q >= html_q)
 
 
-LOGO = Markup("""<svg class="logo" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
-  <defs><clipPath id="ocs-logo-globe"><circle cx="15" cy="17" r="12" /></clipPath></defs>
-  <g clip-path="url(#ocs-logo-globe)" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-    <path d="M-1 15c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".9" />
-    <path d="M-1 21c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".65" />
-    <path d="M-1 27c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".45" />
-  </g>
-  <circle cx="15" cy="17" r="12" fill="none" stroke="currentColor" stroke-width="2" />
-  <circle cx="26" cy="7" r="4.5" fill="#ffa902" />
-</svg>""")
-"""The instance mark: a climate over a globe, drawn inline so it needs no asset and no request.
+def _read_asset(name: str) -> str:
+    resource = importlib.resources.files("open_climate_service") / "templates" / name
+    return resource.read_text(encoding="utf-8")
 
-Monochrome in `currentColor` so it takes the header bar's white, with the sun in the DHIS2
-yellow400 token. Sized for the 48px bar, and legible at that size because it is three shapes.
-"""
+
+# The instance mark: a climate over a globe. Monochrome in `currentColor` so it takes the header
+# bar's white, with the sun in the DHIS2 yellow400 token; sized for the 48px bar, and legible at
+# that size because it is three shapes. Inlined into the page rather than linked, so it costs no
+# request and works offline — the rationale lives here rather than in the file, because an XML
+# comment in the file would be served to every viewer.
+LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
     ("map", "Map viewer", "/map"),
@@ -160,11 +156,6 @@ def page_nav(mount: str, current: str) -> Markup:
         for key, label, path in _NAV_ITEMS
     )
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
-
-
-def _read_asset(name: str) -> str:
-    resource = importlib.resources.files("open_climate_service") / "templates" / name
-    return resource.read_text(encoding="utf-8")
 
 
 def render_maps(mount: str) -> str:
