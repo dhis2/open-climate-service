@@ -5,356 +5,97 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ name }}</title>
     <style>
-      *,
-      *::before,
-      *::after {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
-
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 15px;
-        line-height: 1.6;
-        color: #1a2332;
-        background: #f5f7fa;
-        min-height: 100vh;
-      }
-
-      header {
-        background: #1a2332;
-        color: #fff;
-        padding: 2rem 2.5rem;
-        display: flex;
-        align-items: baseline;
-        gap: 1rem;
-      }
-      header h1 {
-        font-size: 1.5rem;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-      }
-      header .version {
-        font-size: 0.78rem;
-        color: #8fa3b8;
-        font-family: ui-monospace, "Cascadia Code", monospace;
-      }
-
-      main {
-        max-width: 860px;
-        margin: 2.5rem auto;
-        padding: 0 1.5rem;
-        display: flex;
-        flex-direction: column;
-        gap: 1.75rem;
-      }
-
-      .card {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 1.5rem 1.75rem;
-      }
-
-      h2 {
-        font-size: 0.8rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.07em;
-        color: #64748b;
-        margin-bottom: 1rem;
-      }
-
-      .status-grid {
-        display: grid;
-        grid-template-columns: max-content 1fr;
-        column-gap: 1.5rem;
-        row-gap: 0.35rem;
-      }
-      .status-grid dt {
-        color: #64748b;
-        font-size: 0.875rem;
-      }
-      .status-grid dd {
-        font-size: 0.875rem;
-      }
-      .status-grid dd code {
-        background: #f1f5f9;
-        padding: 0.1em 0.4em;
-        border-radius: 4px;
-        font-family: ui-monospace, "Cascadia Code", monospace;
-        font-size: 0.825rem;
-      }
-
-      .note {
-        font-size: 0.875rem;
-        color: #64748b;
-      }
-      .note a,
-      a {
-        color: #0066cc;
-        text-decoration: none;
-      }
-      .note a:hover,
-      a:hover {
-        text-decoration: underline;
-      }
-      .note code {
-        background: #f1f5f9;
-        padding: 0.1em 0.4em;
-        border-radius: 4px;
-        font-family: ui-monospace, "Cascadia Code", monospace;
-        font-size: 0.825rem;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.875rem;
-      }
-      thead th {
-        text-align: left;
-        font-weight: 600;
-        font-size: 0.78rem;
-        color: #64748b;
-        border-bottom: 1px solid #e2e8f0;
-        padding: 0 0.75rem 0.6rem 0;
-      }
-      tbody td {
-        padding: 0.55rem 0.75rem 0.55rem 0;
-        border-bottom: 1px solid #f1f5f9;
-        vertical-align: top;
-      }
-      tbody tr:last-child td {
-        border-bottom: none;
-      }
-
-      .links-list {
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: 0.6rem;
-      }
-      .links-list li {
-        display: flex;
-        align-items: baseline;
-        gap: 0.6rem;
-        font-size: 0.875rem;
-      }
-      .links-list .link-label {
-        font-weight: 500;
-        min-width: 160px;
-      }
-      .links-list .link-desc {
-        color: #64748b;
-      }
-
-      .badge {
-        display: inline-block;
-        background: #e2e8f0;
-        color: #475569;
-        border-radius: 99px;
-        font-size: 0.72rem;
-        font-weight: 600;
-        padding: 0.1em 0.55em;
-        vertical-align: middle;
-        margin-left: 0.4rem;
-      }
-      .badge-published {
-        background: #dcfce7;
-        color: #166534;
-      }
-      .badge-unpublished {
-        background: #fef9c3;
-        color: #854d0e;
-      }
-
-      footer {
-        text-align: center;
-        font-size: 0.78rem;
-        color: #94a3b8;
-        padding: 1rem;
-        margin-top: 1rem;
-      }
-      footer a {
-        color: #94a3b8;
-      }
+{{ styles | safe }}
     </style>
   </head>
   <body>
+    <a class="skip-link" href="#content">Skip to content</a>
     <header>
-      <h1>{{ name }}</h1>
-      <span class="version">v{{ version }}</span>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
     </header>
 
-    <main>
-      <!-- Instance status -->
-      <div class="card">
-        <h2>Instance</h2>
-        {% if extent %}
-        <dl class="status-grid">
-          <dt>Extent</dt>
-          <dd>{{ extent.name or "Unnamed extent" }}</dd>
-          <dt>Bounding box</dt>
-          <dd><code>{{ extent.bbox | join(", ") }}</code></dd>
-          {% if extent.country_code %}
-          <dt>Country code</dt>
-          <dd><code>{{ extent.country_code }}</code></dd>
-          {% endif %}
-        </dl>
-        {% else %}
-        <p class="note">
-          No extent configured. Set <code>extent:</code> in
-          <code>CLIMATE_SERVICE_CONFIG</code> — see <a href="{{ mount }}/docs">API docs</a> for
-          details.
-        </p>
-        {% endif %}
-      </div>
+    <div class="layout">
+      {{ nav }}
 
-      <!-- Links -->
-      <div class="card">
-        <h2>Explore</h2>
-        <ul class="links-list">
-          {% if not read_only %}
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/manage">Manage</a></span
-            >
-            <span class="link-desc"
-              >Ingest and sync datasets without using the API directly</span
-            >
-          </li>
-          {% endif %}
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/docs">API documentation</a></span
-            >
-            <span class="link-desc"
-              >Interactive Swagger UI for all endpoints</span
-            >
-          </li>
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/map">Map viewer</a></span
-            >
-            <span class="link-desc"
-              >Browse published datasets on an interactive map</span
-            >
-          </li>
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/openeo" target="_blank" rel="noopener">openEO Editor</a></span
-            >
-            <span class="link-desc"
-              >Build and run openEO process graphs in the browser</span
-            >
-          </li>
-          <li>
-            <span class="link-label"
-              ><a href="{{ mount }}/stac/catalog.json">STAC Catalog</a></span
-            >
-            <span class="link-desc"
-              >SpatioTemporal Asset Catalog of published datasets</span
-            >
-          </li>
-          <li>
-            <span class="link-label"><a href="{{ mount }}/?f=json">Root (JSON)</a></span>
-            <span class="link-desc">This page as a JSON navigation object</span>
-          </li>
-        </ul>
-      </div>
+      <main id="content">
+        <!-- Overview -->
+        <section id="overview" aria-labelledby="overview-title">
+          <h2 id="overview-title" tabindex="-1">Overview</h2>
+          <p class="lead">Climate and environmental data for this instance, ready to explore and use.</p>
+          <div class="stats">
+            <a class="panel stat" href="#datasets">
+              <span class="value">{{ datasets | length }}</span>
+              <span class="label">Datasets</span>
+            </a>
+            <a class="panel stat" href="#data-sources">
+              <span class="value">{{ sources | length }}</span>
+              <span class="label">Data sources</span>
+            </a>
+            <a class="panel stat" href="#workflows">
+              <span class="value">{{ workflows | length }}</span>
+              <span class="label">Workflows</span>
+            </a>
+            <a class="panel stat" href="#datasets">
+              <span class="value">{{ stored_size }}</span>
+              <span class="label">Data stored</span>
+            </a>
+          </div>
+          <div class="panel">
+            <h3>Instance</h3>
+            <div class="instance">
+              <div class="instance-facts">
+            {% if extent %}
+            <dl class="facts">
+              <dt>Extent</dt>
+              <dd>{{ extent.name or "Unnamed extent" }}</dd>
+              <dt>Bounding box</dt>
+              <dd><code>{{ extent.bbox | join(", ") }}</code></dd>
+              {% if extent.country_code %}
+              <dt>Country code</dt>
+              <dd><code>{{ extent.country_code }}</code></dd>
+              {% endif %}
+              <dt>Access</dt>
+              <dd>{% if read_only %}Read-only{% else %}Read and write{% endif %}</dd>
+              <dt>Version</dt>
+              <dd><code>{{ version }}</code></dd>
+            </dl>
+            {% else %}
+            <p class="note">
+              No extent configured. Set <code>extent:</code> in
+              <code>CLIMATE_SERVICE_CONFIG</code> — see <a href="{{ mount }}/docs">API docs</a> for
+              details.
+            </p>
+            {% endif %}
+            {% if read_only %}
+            <p class="note">This instance is read-only: data can be browsed and processed, but not ingested.</p>
+            {% endif %}
+              </div>
+              {% if globe %}
+              <svg
+                class="globe"
+                viewBox="0 0 {{ globe.width }} {{ globe.height }}"
+                width="264"
+                height="183"
+                role="img"
+                aria-label="Map centred on {{ extent.name or 'the configured extent' }}"
+              >
+                <rect class="ocean" x="0" y="0" width="{{ globe.width }}" height="{{ globe.height }}" />
+                <path class="land" d="{{ globe.land }}" />
+                {% if globe.extent %}<path class="extent" d="{{ globe.extent }}" />{% endif %}
+              </svg>
+              {% endif %}
+            </div>
+          </div>
+        </section>
 
-      <!-- Datasets -->
-      <div class="card">
-        <h2>Datasets <span class="badge">{{ datasets | length }}</span></h2>
-        {% if datasets %}
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Variable</th>
-              <th>Period</th>
-              <th>Temporal coverage</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for ds in datasets %}
-            <tr>
-              <td>
-                <a href="{{ mount }}/datasets/{{ ds.dataset_id }}"
-                  >{{ ds.dataset_name }}</a
-                >
-              </td>
-              <td>{{ ds.variable }}</td>
-              <td>{{ ds.period_type }}</td>
-              <td>
-                {{ ds.extent.temporal.start }} – {{ ds.extent.temporal.end }}
-              </td>
-              <td>
-                {% if ds.publication.status == "published" %}
-                <span class="badge badge-published">published</span>
-                {% else %}
-                <span class="badge badge-unpublished">unpublished</span>
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="note">
-          No datasets ingested yet. Use
-          <a href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post"
-            >POST /ingestions</a
-          >
-          to ingest data, or
-          <a href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">POST /sync</a>
-          to run an automated sync.
-        </p>
-        {% endif %}
-      </div>
 
-      <!-- Available templates -->
-      <div class="card">
-        <h2>Available dataset templates <span class="badge">{{ templates | length }}</span></h2>
-        {% if templates %}
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Variable</th>
-              <th>Period</th>
-              <th>Source</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for t in templates %}
-            <tr>
-              <td>{{ t.name }}</td>
-              <td>{{ t.variable }}</td>
-              <td>{{ t.period_type }}</td>
-              <td>
-                {% if t.source_url %}
-                <a href="{{ t.source_url }}">{{ t.source or t.id }}</a>
-                {% else %}
-                {{ t.source or '—' }}
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <p class="note">No dataset templates found.</p>
-        {% endif %}
-      </div>
-    </main>
 
-    <footer>
-      <a href="https://github.com/dhis2/open-climate-service">dhis2/open-climate-service</a>
-    </footer>
+
+      </main>
+    </div>
+
   </body>
 </html>
