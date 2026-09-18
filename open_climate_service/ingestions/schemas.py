@@ -255,13 +255,35 @@ def _describe_version_error(exc: ValidationError) -> str:
     return "; ".join(problems)
 
 
-_CRS_CODE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.+-]+$")
+_CRS_CODE_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9_.-]*):([A-Za-z0-9_.+-]+)$")
 """Shape of a coordinate reference system code: an authority, then its code.
 
 Structural only. It separates 'EPSG:4326' and 'ESRI:102008' from blank space, a bare label or
 a sentence; whether the authority publishes that code, and whether the stored file agrees, is
 the reader's question (CLIM-1068).
 """
+
+
+def canonical_feature_crs(declared: object) -> str | None:
+    """Return one spelling of a declared CRS, or None when it is not a CRS code at all.
+
+    The single normalizer for a stored collection's CRS, shared by `FeatureDetail` and by the
+    vector entry point that builds one. Two callers each doing "most of" this is how a record
+    ends up holding `epsg:4326` while another holds `EPSG:4326`, and those compare unequal.
+
+    Three steps. `canonical_crs_code` collapses the CRS84 aliases GeoJSON and GeoParquet both
+    use, and prefixes a bare EPSG number. The authority is then uppercased, since authorities
+    are conventionally uppercase and case is not part of their identity — `epsg` and `EPSG`
+    name the same register. The code half is left exactly as declared: it is a token the
+    authority defines, and this has no standing to recase it.
+    """
+    if not isinstance(declared, str) or not declared.strip():
+        return None
+    match = _CRS_CODE_PATTERN.match(canonical_crs_code(declared.strip()))
+    if match is None:
+        return None
+    authority, code = match.groups()
+    return f"{authority.upper()}:{code}"
 
 
 class FeatureDetail(BaseModel):
@@ -363,20 +385,21 @@ class FeatureDetail(BaseModel):
 
         Canonicalized rather than rejected for padding, unlike the column names above: this
         field's value is an identifier of a known thing rather than a name that must match
-        bytes in a file, and `canonical_crs_code` already collapses the CRS84 aliases that
-        GeoJSON and GeoParquet both use into the one spelling. Two records naming WGS 84
-        differently would otherwise compare unequal.
+        bytes in a file. Padding, a CRS84 alias, a bare EPSG number and a lowercase authority
+        all resolve to the one spelling, because two records naming WGS 84 differently would
+        otherwise compare unequal — which is the whole reason this normalizes at all.
 
         The check is structural — an authority and a code — not a registry lookup. Whether
         EPSG:1234567 exists, and whether it is the CRS the GeoParquet actually persists, is a
         question for the reader that opens the file (CLIM-1068); this rules out the inputs that
         are not a CRS at all.
         """
-        canonical = canonical_crs_code(value.strip()) if value.strip() else ""
-        if not _CRS_CODE_PATTERN.match(canonical):
+        canonical = canonical_feature_crs(value)
+        if canonical is None:
             raise ValueError(
                 f"invalid crs {value!r}; declare an authority code such as 'EPSG:4326' "
-                "(a CRS84 alias or a bare EPSG number is accepted and canonicalized)"
+                "(a CRS84 alias, a bare EPSG number, or a lowercase authority is accepted "
+                "and canonicalized)"
             )
         return canonical
 
@@ -442,10 +465,19 @@ class ArtifactRecord(BaseModel):
         if self.format == ArtifactFormat.GEOPARQUET:
             if self.features is None:
                 raise ValueError("a geoparquet artifact must carry a 'features' detail, including its id_property")
+            # Not merely unused. Each of these three says "raster" to something that reads it:
+            # `variable` and `variables` name measured data variables, and `period_type` is the
+            # period axis the sync planner does arithmetic on. A feature record carrying any of
+            # them would read as a coverage to anything scanning for one, and `itemType` would
+            # then disagree with the record it is derived from.
             if self.variable is not None:
-                # Not merely unused: `variable` names the measured raster variable, and a
-                # record claiming one would read as a coverage to anything scanning for it.
                 raise ValueError("a geoparquet artifact has properties rather than a measured variable")
+            if self.variables:
+                raise ValueError("a geoparquet artifact has properties rather than data variables")
+            if self.period_type is not None:
+                # Not a statement about time-varying collections: CLIM-1095 gives an observed
+                # collection a time column or a version, neither of which is a raster period.
+                raise ValueError("a geoparquet artifact has no period axis, so it declares no period_type")
             return self
         if self.features is not None:
             raise ValueError(f"a {self.format} artifact is a raster and must not carry feature detail")

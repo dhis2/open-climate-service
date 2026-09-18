@@ -478,7 +478,11 @@
                 <a href="{{ mount }}/datasets/{{ ds.dataset_id }}">{{ ds.dataset_name }}</a>
               </td>
               <td>{{ ds.period_type or "—" }}</td>
-              <td>{{ ds.extent.temporal.start }} – {{ ds.extent.temporal.end }}</td>
+              <td>
+                {% if ds.extent.temporal.start or ds.extent.temporal.end %}
+                {{ ds.extent.temporal.start or "—" }} – {{ ds.extent.temporal.end or "—" }}
+                {% else %}—{% endif %}
+              </td>
               <td>
                 {% if ds.publication.status == "published" %}
                 <span class="badge badge-published">published</span>
@@ -487,6 +491,9 @@
                 {% endif %}
               </td>
               <td>
+                {% if ds.item_type == "feature" %}
+                <span class="badge badge-unpublished">Not syncable</span>
+                {% else %}
                 <form
                   method="post"
                   action="{{ mount }}/manage/sync"
@@ -537,6 +544,7 @@
                     <span class="progress-label">Starting…</span>
                   </div>
                 </form>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}

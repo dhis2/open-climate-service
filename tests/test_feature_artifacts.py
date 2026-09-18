@@ -162,12 +162,30 @@ def test_feature_detail_refuses_a_value_no_reader_could_use(overrides: dict[str,
         FeatureDetail(**fields)
 
 
-@pytest.mark.parametrize("declared", ["OGC:CRS84", "CRS84", "urn:ogc:def:crs:OGC:1.3:CRS84", "4326", " EPSG:4326 "])
+@pytest.mark.parametrize(
+    "declared",
+    ["OGC:CRS84", "CRS84", "urn:ogc:def:crs:OGC:1.3:CRS84", "4326", " EPSG:4326 ", "epsg:4326", "ePsG:4326"],
+)
 def test_feature_detail_stores_one_spelling_of_wgs84(declared: str) -> None:
     """Canonicalized at the boundary, so two records naming WGS 84 do not compare unequal."""
     detail = FeatureDetail(id_property="orgUnitCode", feature_count=2, primary_geometry="geometry", crs=declared)
 
     assert detail.crs == "EPSG:4326"
+
+
+def test_feature_detail_uppercases_the_authority_but_leaves_the_code_alone() -> None:
+    """The authority is a register name and case is not part of it; the code is its token."""
+    detail = FeatureDetail(id_property="orgUnitCode", feature_count=2, primary_geometry="geometry", crs="esri:102008")
+
+    assert detail.crs == "ESRI:102008"
+
+
+_FEATURE_DETAIL_FIELDS: dict[str, Any] = {
+    "id_property": "orgUnitCode",
+    "feature_count": 2,
+    "primary_geometry": "geometry",
+    "crs": "EPSG:4326",
+}
 
 
 def _record_fields(**overrides: Any) -> dict[str, Any]:
@@ -187,27 +205,36 @@ def _record_fields(**overrides: Any) -> dict[str, Any]:
         pytest.param(
             {
                 "format": ArtifactFormat.GEOPARQUET,
-                "features": {
-                    "id_property": "orgUnitCode",
-                    "feature_count": 2,
-                    "primary_geometry": "geometry",
-                    "crs": "EPSG:4326",
-                },
+                "features": _FEATURE_DETAIL_FIELDS,
             },
             "properties rather than a measured variable",
             id="geoparquet_claiming_a_raster_variable",
         ),
         pytest.param(
-            {
-                "features": {
-                    "id_property": "orgUnitCode",
-                    "feature_count": 2,
-                    "primary_geometry": "geometry",
-                    "crs": "EPSG:4326",
-                }
-            },
+            {"features": _FEATURE_DETAIL_FIELDS},
             "must not carry feature detail",
             id="zarr_carrying_feature_detail",
+        ),
+        pytest.param(
+            {
+                "format": ArtifactFormat.GEOPARQUET,
+                "variable": None,
+                "variables": ["precip"],
+                "features": _FEATURE_DETAIL_FIELDS,
+            },
+            "rather than data variables",
+            id="geoparquet_listing_data_variables",
+        ),
+        pytest.param(
+            {
+                "format": ArtifactFormat.GEOPARQUET,
+                "variable": None,
+                "variables": [],
+                "period_type": "daily",
+                "features": _FEATURE_DETAIL_FIELDS,
+            },
+            "no period axis",
+            id="geoparquet_claiming_a_period_axis",
         ),
         pytest.param({"variable": None}, "must name the raster variable", id="raster_without_a_variable"),
         pytest.param({"variable": "   "}, "must name the raster variable", id="raster_with_a_blank_variable"),
@@ -391,8 +418,14 @@ def test_create_feature_artifact_refreshes_a_collection_in_place(
         pytest.param(
             DISTRICTS_TEMPLATE,
             {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": None}]},
-            "no usable geometry",
-            id="features_without_geometry",
+            "unlocated feature at 0",
+            id="unlocated_feature",
+        ),
+        pytest.param(
+            DISTRICTS_TEMPLATE,
+            [{"type": "Feature", "properties": {}, "geometry": None}],
+            "must be a GeoJSON FeatureCollection object, got list",
+            id="payload_that_is_not_even_a_mapping",
         ),
         pytest.param(
             DISTRICTS_TEMPLATE,
@@ -480,6 +513,168 @@ def test_create_feature_artifact_refuses_a_reprojected_store_it_cannot_describe(
             store_path=store_path,
             crs="EPSG:3857",
         )
+
+
+@pytest.mark.parametrize(
+    ("bbox", "expected"),
+    [
+        pytest.param([-13.5, 6.9, -10.1, 10.0, 0.0, 120.0], "6-element bbox", id="three_dimensional_bbox"),
+        pytest.param([-13.5, 6.9, -10.1], "3-element bbox", id="too_few_numbers"),
+    ],
+)
+def test_create_feature_artifact_refuses_a_bbox_that_is_not_four_numbers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bbox: list[float], expected: str
+) -> None:
+    """Truncating a 3D bbox would record minx, miny, minz, maxx — plausible and wrong."""
+    store_path = _tmp_record_store(monkeypatch, tmp_path)
+
+    with pytest.raises(ValueError, match=expected):
+        services.create_feature_artifact(
+            template=DISTRICTS_TEMPLATE,
+            features=_feature_collection(),
+            store_path=store_path,
+            crs="EPSG:4326",
+            bbox=bbox,
+        )
+
+
+@pytest.mark.parametrize(
+    ("geometry", "expected"),
+    [
+        pytest.param(
+            {"type": "Polygon", "coordinates": [-13.5, 6.9]},
+            "malformed Polygon",
+            id="polygon_carrying_a_bare_position",
+        ),
+        pytest.param(
+            {"type": "Point", "coordinates": [[[-13.5, 6.9]]]},
+            "malformed Point",
+            id="point_carrying_a_ring",
+        ),
+        pytest.param(
+            {"type": "Bogus", "coordinates": [-13.5, 6.9]},
+            "geometry type 'Bogus'",
+            id="type_that_is_not_a_geojson_geometry",
+        ),
+        pytest.param(
+            {"type": "Point", "coordinates": ["-13.5", "6.9"]},
+            "must hold numbers",
+            id="position_of_strings",
+        ),
+        pytest.param(
+            {"type": "Point", "coordinates": [-13.5]},
+            "at least two numbers",
+            id="position_of_one_number",
+        ),
+        pytest.param(
+            {"type": "Polygon", "coordinates": []},
+            "non-empty array",
+            id="polygon_with_no_rings",
+        ),
+        pytest.param(
+            {"type": "GeometryCollection", "geometries": []},
+            "declares no 'geometries' array",
+            id="empty_geometry_collection",
+        ),
+    ],
+)
+def test_create_feature_artifact_refuses_a_geometry_it_cannot_interpret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, geometry: dict[str, Any], expected: str
+) -> None:
+    """The extent is what the catalogue publishes, so a shape OCS cannot read has to fail here.
+
+    A Polygon holding a bare position is the case a numbers-only walker accepts: it yields one
+    point and registers an area dataset whose extent is a dot.
+    """
+    store_path = _tmp_record_store(monkeypatch, tmp_path)
+    collection = {
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature", "properties": {"orgUnitCode": "SL-W"}, "geometry": geometry}],
+    }
+
+    with pytest.raises(ValueError, match=expected):
+        services.create_feature_artifact(
+            template=DISTRICTS_TEMPLATE, features=collection, store_path=store_path, crs="EPSG:4326"
+        )
+
+
+def test_create_feature_artifact_accepts_every_geometry_type_at_its_own_nesting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The complement of the refusals: each RFC 7946 type parses at the depth it declares."""
+    store_path = _tmp_record_store(monkeypatch, tmp_path)
+    geometries = [
+        {"type": "Point", "coordinates": [0.0, 0.0]},
+        {"type": "MultiPoint", "coordinates": [[1.0, 1.0]]},
+        {"type": "LineString", "coordinates": [[2.0, 2.0], [3.0, 3.0]]},
+        {"type": "MultiLineString", "coordinates": [[[4.0, 4.0], [5.0, 5.0]]]},
+        {"type": "Polygon", "coordinates": [[[6.0, 6.0], [7.0, 6.0], [7.0, 7.0], [6.0, 6.0]]]},
+        {"type": "MultiPolygon", "coordinates": [[[[8.0, 8.0], [9.0, 8.0], [9.0, 9.0], [8.0, 8.0]]]]},
+    ]
+    collection = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "properties": {"orgUnitCode": str(index)}, "geometry": geometry}
+            for index, geometry in enumerate(geometries)
+        ],
+    }
+
+    record = services.create_feature_artifact(
+        template=DISTRICTS_TEMPLATE, features=collection, store_path=store_path, crs="EPSG:4326"
+    )
+
+    assert record.coverage.spatial == CoverageSpatial(xmin=0.0, ymin=0.0, xmax=9.0, ymax=9.0)
+    assert record.features is not None
+    assert record.features.feature_count == len(geometries)
+
+
+def test_a_refresh_replaces_the_collection_even_when_the_extract_window_changed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A feature collection has no version history, so its identity cannot be the request scope.
+
+    Matching on request scope would let a widened bbox append a second record: the collection
+    would gain a version, and the older record would keep the publication state.
+    """
+    store_path = _tmp_record_store(monkeypatch, tmp_path)
+    first = services.create_feature_artifact(
+        template=DISTRICTS_TEMPLATE,
+        features=_feature_collection(),
+        store_path=store_path,
+        crs="EPSG:4326",
+        bbox=[-13.5, 6.9, -10.1, 10.0],
+    )
+
+    second = services.create_feature_artifact(
+        template=DISTRICTS_TEMPLATE,
+        features=_feature_collection(),
+        store_path=store_path,
+        crs="EPSG:4326",
+        bbox=[-20.0, 0.0, 0.0, 20.0],
+    )
+    third = services.create_feature_artifact(
+        template=DISTRICTS_TEMPLATE, features=_feature_collection(), store_path=store_path, crs="EPSG:4326"
+    )
+
+    assert second.artifact_id == first.artifact_id
+    assert third.artifact_id == first.artifact_id
+    assert third.request_scope.bbox is None
+    assert len(services._load_records()) == 1
+
+
+def test_a_raster_still_keeps_one_record_per_request_scope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The feature identity rule is narrow: raster version history is untouched by it."""
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
+    monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
+    january = _raster_artifact(artifact_id="r1")
+    february = _raster_artifact(artifact_id="r2")
+    february.request_scope.start = "2026-02-01"
+
+    services.register_artifact_record(january, publish=False)
+    services.register_artifact_record(february, publish=False)
+
+    assert len(services._load_records()) == 2
 
 
 # --- the gates ---------------------------------------------------------------------------
@@ -571,6 +766,49 @@ def test_raster_sync_refuses_a_feature_collection(monkeypatch: pytest.MonkeyPatc
     assert "feature collection" in excinfo.value.detail
 
 
+@pytest.mark.parametrize(
+    "refused",
+    [fmt for fmt in ArtifactFormat if fmt is not ArtifactFormat.NETCDF],
+    ids=lambda fmt: str(fmt),
+)
+def test_download_route_refuses_every_format_it_cannot_describe(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, refused: ArtifactFormat
+) -> None:
+    """The allowlist itself, not just the format that exposed it.
+
+    GeoParquet is what broke the old denylist — Parquet bytes came back as
+    application/x-netcdf named .nc — but the fix was to name the one format the response is
+    built for, so this enumerates `ArtifactFormat` and holds every other member to a refusal.
+    Adding a format to the enum without a branch here fails this test rather than shipping a
+    wrong media type.
+    """
+    artifact = _feature_artifact() if refused is ArtifactFormat.GEOPARQUET else _raster_artifact()
+    artifact.format = refused
+    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[artifact]))
+
+    response = client.get(f"/datasets/{services.managed_dataset_id_for(artifact)}/download")
+
+    assert response.status_code == 409
+    assert str(refused) in response.json()["detail"]
+
+
+def test_download_route_still_serves_a_netcdf_artifact(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The one format the response is actually built for keeps working."""
+    stored = tmp_path / "legacy.nc"
+    stored.write_bytes(b"CDF\x01")
+    netcdf = _raster_artifact(artifact_id="n1", dataset_id="legacy_netcdf")
+    netcdf.format = ArtifactFormat.NETCDF
+    netcdf.path = str(stored)
+    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[netcdf]))
+
+    response = client.get("/datasets/legacy_netcdf/download")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/x-netcdf"
+
+
 # --- itemType on the dataset record -------------------------------------------------------
 
 
@@ -606,6 +844,19 @@ def test_dataset_list_response_spells_the_discriminator_as_ogc_does(
         "districts": "feature",
     }
     assert all("item_type" not in item for item in payload["items"])
+
+
+def test_a_raster_with_no_declared_period_type_still_reports_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The nullable change was for feature collections; it must not alter a raster response."""
+    raster = _raster_artifact()
+    raster.period_type = None
+    monkeypatch.setattr(services, "_load_records", lambda: [raster, _feature_artifact()])
+    monkeypatch.setattr(services.registry_datasets, "get_dataset", lambda _: None)
+
+    by_id = {dataset.dataset_id: dataset for dataset in services.list_datasets().items}
+
+    assert by_id["chirps3_precipitation_daily"].period_type == "unknown"
+    assert by_id["districts"].period_type is None
 
 
 def test_dataset_detail_omits_variable_and_period_type_for_a_feature_collection(
@@ -653,3 +904,41 @@ def test_stac_collection_builder_still_serves_a_raster(client: TestClient, monke
 
     assert response.status_code == 200
     assert response.json()["id"] == "chirps3_precipitation_daily"
+
+
+# --- the server-rendered pages ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["/", "/manage"])
+def test_the_rendered_tables_show_absences_rather_than_python_nulls(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """A feature collection has no variable, period type or temporal extent to show."""
+    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
+
+    body = client.get(path, headers={"Accept": "text/html"}).text
+
+    assert "District boundaries" in body
+    assert "None" not in body.split("District boundaries")[1].split("</tr>")[0]
+
+
+def test_the_management_page_does_not_offer_a_sync_that_would_be_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_refuse_non_raster_sync` always 409s a feature collection, so the control is not drawn."""
+    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
+
+    row = client.get("/manage").text.split("District boundaries")[1].split("</tr>")[0]
+
+    assert "Start sync" not in row
+    assert "Not syncable" in row
+
+
+def test_the_management_page_still_offers_a_sync_for_a_raster(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_raster_artifact()]))
+
+    row = client.get("/manage").text.split("CHIRPS3 precipitation")[1].split("</tr>")[0]
+
+    assert "Start sync" in row

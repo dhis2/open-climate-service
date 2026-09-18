@@ -53,11 +53,11 @@ from open_climate_service.ingestions.schemas import (
     SyncDetail,
     SyncKind,
     SyncResponse,
+    canonical_feature_crs,
     parse_declared_artifact_version,
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
-from open_climate_service.shared.crs import canonical_crs_code
 from open_climate_service.shared.licences import DatasetLicence
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -411,8 +411,9 @@ def create_feature_artifact(
 
     This does not write bytes. The GeoParquet file at `store_path` is the store's output
     (CLIM-1068); what happens here is that a record starts existing, which is the only thing
-    that makes the file a collection. A GeoParquet file nothing registered is ignored: the
-    listing reads records, never the filesystem, so the store directory is not an inbox.
+    that makes the file a collection. An unregistered GeoParquet file is ignored, however it
+    got there: the listing reads records, never the filesystem, so the store directory is not
+    an inbox.
 
     `features` is a GeoJSON FeatureCollection, the one form the provider contract needs —
     both sources in scope (a country's Overture divisions, a DHIS2 hierarchy) are small enough
@@ -435,6 +436,7 @@ def create_feature_artifact(
     # author has to fix rather than surfacing as a pydantic failure on a nested submodel.
     id_property = _require_template_str(template, "id_property")
     stored_crs = _require_wgs84_feature_crs(crs, dataset_id=dataset_id)
+    requested_bbox = _requested_extract_bbox(bbox, dataset_id=dataset_id)
     feature_list = _feature_collection_members(features, dataset_id=dataset_id)
     # Deliberately not validated per feature here. That each id_property value is present and
     # identifies exactly one feature is the identity contract, and it needs one implementation
@@ -454,11 +456,7 @@ def create_feature_artifact(
         path=str(resolved_path),
         asset_paths=[str(resolved_path)],
         variables=[],
-        request_scope=ArtifactRequestScope(
-            start=None,
-            end=None,
-            bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None,
-        ),
+        request_scope=ArtifactRequestScope(start=None, end=None, bbox=requested_bbox),
         coverage=ArtifactCoverage(
             spatial=bounds,
             # `spatial` is already the WGS 84 extent: it is computed from GeoJSON coordinates,
@@ -480,7 +478,8 @@ def create_feature_artifact(
     # Overwrite semantics, which is what a refresh is: replace this collection's name, extent
     # and paths in place while keeping its artifact id and publication state. There is no
     # version history for a feature collection — explaining why one run covered 47 districts
-    # and the next 48 needs a version string, not an archive.
+    # and the next 48 needs a version string, not an archive. `_find_replaceable_artifact`
+    # is what makes that true across a changed extract window; see it for why.
     return register_artifact_record(record, publish=publish)
 
 
@@ -498,20 +497,45 @@ def _require_wgs84_feature_crs(crs: str, *, dataset_id: str) -> str:
     with the component that does the reprojecting: CLIM-1068 owns the writer and the
     CRS-correct windowing, and widens this when a provider contract needs it.
 
-    CRS84 and its aliases canonicalize to EPSG:4326 first, so a provider declaring
-    'OGC:CRS84' — the spelling GeoJSON and GeoParquet both use — is accepted and stored once,
-    in one spelling.
+    Normalized through `canonical_feature_crs`, the same function `FeatureDetail` validates
+    with, so a provider declaring 'OGC:CRS84' — the spelling GeoJSON and GeoParquet both use —
+    or a lowercase 'epsg:4326' is accepted here and stored in the one spelling there.
     """
-    canonical = canonical_crs_code(crs.strip()) if crs.strip() else ""
-    if not canonical:
-        raise ValueError(f"feature collection '{dataset_id}' must declare the CRS of its stored geometry")
-    if canonical.upper() != "EPSG:4326":
+    canonical = canonical_feature_crs(crs)
+    if canonical is None:
+        raise ValueError(
+            f"feature collection '{dataset_id}' must declare the CRS of its stored geometry as an "
+            "authority code such as 'EPSG:4326'"
+        )
+    if canonical != "EPSG:4326":
         raise ValueError(
             f"feature collection '{dataset_id}' declares stored CRS {canonical}, but its extent is "
             "derived from GeoJSON, which RFC 7946 defines as WGS 84; registering a reprojected "
             "store needs the CRS-correct path in CLIM-1068"
         )
     return canonical
+
+
+def _requested_extract_bbox(
+    bbox: Sequence[float] | None, *, dataset_id: str
+) -> tuple[float, float, float, float] | None:
+    """Return the requested extract window as a west/south/east/north tuple, or None.
+
+    Checked rather than indexed. A six-element bbox is GeoJSON's 3D form (RFC 7946 allows
+    elevation bounds in positions 2 and 5), and taking its first four numbers would silently
+    record `minx, miny, minz, maxx` — an extent that looks plausible and is wrong. Fewer than
+    four would raise IndexError from inside the record constructor rather than the ValueError
+    this entry point documents.
+    """
+    if bbox is None:
+        return None
+    values = list(bbox)
+    if len(values) != 4:
+        raise ValueError(
+            f"feature collection '{dataset_id}' was given a {len(values)}-element bbox; it must be "
+            "the four numbers west, south, east, north (a 3D bbox is not supported here)"
+        )
+    return (float(values[0]), float(values[1]), float(values[2]), float(values[3]))
 
 
 def _require_template_str(template: dict[str, object], key: str) -> str:
@@ -535,8 +559,22 @@ def _require_template_str(template: dict[str, object], key: str) -> str:
     return value
 
 
-def _feature_collection_members(features: Mapping[str, Any], *, dataset_id: str) -> list[Mapping[str, Any]]:
-    """Return the features of a GeoJSON FeatureCollection, or raise ValueError."""
+def _feature_collection_members(features: object, *, dataset_id: str) -> list[Mapping[str, Any]]:
+    """Return the features of a GeoJSON FeatureCollection, or raise ValueError.
+
+    Takes `object` rather than the `Mapping` the caller's signature advertises, and that is the
+    point: this is the boundary where a provider's return value stops being trusted. A provider
+    is ordinary Python returning whatever it returns, so a list or None reaching here is a live
+    possibility rather than a type-system impossibility, and `.get` on one would raise
+    AttributeError — the wrong error, from the wrong layer, for a caller this module promises
+    ValueError to. Narrowing here also keeps the annotation on `create_feature_artifact` honest
+    about what it expects, without that annotation being mistaken for a guarantee.
+    """
+    if not isinstance(features, Mapping):
+        raise ValueError(
+            f"feature collection '{dataset_id}' must be a GeoJSON FeatureCollection object, got "
+            f"{type(features).__name__}"
+        )
     if features.get("type") != "FeatureCollection":
         raise ValueError(
             f"feature collection '{dataset_id}' must be a GeoJSON FeatureCollection, got type {features.get('type')!r}"
@@ -578,8 +616,8 @@ def _feature_collection_bounds(features: Sequence[Mapping[str, Any]], *, dataset
     """
     xs: list[float] = []
     ys: list[float] = []
-    for feature in features:
-        for x, y in _geometry_positions(feature.get("geometry")):
+    for index, feature in enumerate(features):
+        for x, y in _geometry_positions(feature.get("geometry"), dataset_id=dataset_id, index=index):
             xs.append(x)
             ys.append(y)
     if not xs:
@@ -587,35 +625,109 @@ def _feature_collection_bounds(features: Sequence[Mapping[str, Any]], *, dataset
     return CoverageSpatial(xmin=min(xs), ymin=min(ys), xmax=max(xs), ymax=max(ys))
 
 
-def _geometry_positions(geometry: object) -> Iterator[tuple[float, float]]:
-    """Yield every (x, y) position in one GeoJSON geometry, whatever its type.
+_GEOMETRY_COORDINATE_DEPTH = {
+    "Point": 1,
+    "MultiPoint": 2,
+    "LineString": 2,
+    "MultiLineString": 3,
+    "Polygon": 3,
+    "MultiPolygon": 4,
+}
+"""How deeply each RFC 7946 geometry nests its coordinate arrays, positions included.
 
-    Walks the nested coordinate arrays rather than switching on `type`, so Point through
-    MultiPolygon are all handled by the same code and a position carrying elevation (RFC 7946
-    allows a third element) contributes only its x and y. GeometryCollection is the one shape
-    that nests geometries rather than coordinates, so it recurses.
+A Point is one position; a Polygon is rings of positions, so three. Checking the depth is what
+separates a real geometry from one that merely looks like JSON: a Polygon carrying a bare
+position reads as a valid shape to a walker that only looks for numbers, and would contribute
+a point to the extent of a collection that is supposed to hold areas.
+
+GeometryCollection is absent deliberately — it nests *geometries*, not coordinates, and is
+handled on its own branch.
+"""
+
+
+def _geometry_positions(geometry: object, *, dataset_id: str, index: int) -> Iterator[tuple[float, float]]:
+    """Yield every (x, y) position in one feature's geometry, rejecting anything that is not one.
+
+    Validated rather than best-effort. The extent computed from these positions is what the
+    catalogue publishes and what a spatial read is checked against, so a geometry OCS cannot
+    interpret has to fail here: silently skipping it would publish an extent derived from the
+    features that happened to parse, and `feature_count` would still claim all of them.
+
+    An unlocated feature is refused too. RFC 7946 permits `geometry: null`, but a boundary with
+    no boundary cannot be aggregated over, joined to, or drawn, so a provider that emitted one
+    is reporting a failure rather than a feature.
+
+    What stays out of scope here: whether a polygon ring is closed and has four positions, and
+    whether coordinates fall in a plausible range for the declared CRS. Those are read against
+    the stored file by the reader that opens it (CLIM-1068); this rules out the payloads that
+    are not geometry at all.
     """
+    if geometry is None:
+        raise ValueError(
+            f"feature collection '{dataset_id}' has an unlocated feature at {index}; every feature "
+            "must carry a geometry"
+        )
     if not isinstance(geometry, Mapping):
-        return
-    if geometry.get("type") == "GeometryCollection":
+        raise ValueError(
+            f"feature collection '{dataset_id}' has a feature at {index} whose geometry is "
+            f"{type(geometry).__name__}, not a GeoJSON geometry object"
+        )
+    geometry_type = geometry.get("type")
+    if geometry_type == "GeometryCollection":
         nested = geometry.get("geometries")
-        if isinstance(nested, list):
-            for member in nested:
-                yield from _geometry_positions(member)
+        if not isinstance(nested, list) or not nested:
+            raise ValueError(
+                f"feature collection '{dataset_id}' has a feature at {index} whose "
+                "GeometryCollection declares no 'geometries' array"
+            )
+        for member in nested:
+            yield from _geometry_positions(member, dataset_id=dataset_id, index=index)
         return
-    yield from _coordinate_positions(geometry.get("coordinates"))
+    if not isinstance(geometry_type, str) or geometry_type not in _GEOMETRY_COORDINATE_DEPTH:
+        raise ValueError(
+            f"feature collection '{dataset_id}' has a feature at {index} with geometry type "
+            f"{geometry_type!r}; expected one of "
+            f"{', '.join(sorted([*_GEOMETRY_COORDINATE_DEPTH, 'GeometryCollection']))}"
+        )
+    yield from _coordinate_positions(
+        geometry.get("coordinates"),
+        depth=_GEOMETRY_COORDINATE_DEPTH[geometry_type],
+        dataset_id=dataset_id,
+        index=index,
+        geometry_type=geometry_type,
+    )
 
 
-def _coordinate_positions(coordinates: object) -> Iterator[tuple[float, float]]:
-    """Yield every (x, y) pair from an arbitrarily nested GeoJSON coordinate array."""
+def _coordinate_positions(
+    coordinates: object, *, depth: int, dataset_id: str, index: int, geometry_type: str
+) -> Iterator[tuple[float, float]]:
+    """Yield the (x, y) pairs of a coordinate array nested exactly *depth* levels deep."""
+
+    def fail(detail: str) -> ValueError:
+        return ValueError(f"feature collection '{dataset_id}' has a malformed {geometry_type} at {index}: {detail}")
+
+    if depth == 1:
+        if not isinstance(coordinates, list) or len(coordinates) < 2:
+            raise fail("a position must be an array of at least two numbers")
+        x, y = coordinates[0], coordinates[1]
+        # bool is an int in Python, and `[True, False]` is not a position.
+        if (
+            isinstance(x, bool)
+            or isinstance(y, bool)
+            or not isinstance(x, int | float)
+            or not isinstance(y, int | float)
+        ):
+            raise fail(f"a position must hold numbers, got {coordinates[:2]!r}")
+        # A third element is elevation (RFC 7946 permits one); the extent is 2D, so it is read
+        # past rather than rejected.
+        yield float(x), float(y)
+        return
     if not isinstance(coordinates, list) or not coordinates:
-        return
-    head = coordinates[0]
-    if isinstance(head, int | float) and len(coordinates) >= 2 and isinstance(coordinates[1], int | float):
-        yield float(head), float(coordinates[1])
-        return
+        raise fail(f"expected a non-empty array {depth} levels deep, got {coordinates!r}")
     for member in coordinates:
-        yield from _coordinate_positions(member)
+        yield from _coordinate_positions(
+            member, depth=depth - 1, dataset_id=dataset_id, index=index, geometry_type=geometry_type
+        )
 
 
 def _resolve_artifact_version(dataset: dict[str, object]) -> ArtifactVersion | None:
@@ -1869,11 +1981,7 @@ def _upsert_artifact_record(
         return _store_artifact_record(record)
 
     def mutate(records: list[ArtifactRecord]) -> ArtifactRecord:
-        existing = _find_artifact_by_request_scope(
-            records=records,
-            dataset_id=record.dataset_id,
-            request_scope=record.request_scope,
-        )
+        existing = _find_replaceable_artifact(records=records, record=record)
         if existing is None:
             records.append(record)
             return record
@@ -2040,6 +2148,33 @@ def _validate_download_scope(
         raise HTTPException(status_code=400, detail="download_end must be less than or equal to end")
 
 
+def _find_replaceable_artifact(*, records: list[ArtifactRecord], record: ArtifactRecord) -> ArtifactRecord | None:
+    """Return the stored record an overwrite should replace, by that format's own identity.
+
+    A raster is identified by its request scope: two ingests of the same dataset over different
+    periods or extents are different materializations, and both are kept, which is what gives a
+    dataset its version history.
+
+    A feature collection has no version history by design — a refresh updates in place — so its
+    identity is the managed dataset itself. Matching it on request scope instead would make a
+    refresh that widened the extract window, or omitted the bbox, append a second record rather
+    than replace the first: the collection would gain a "version", the older record would keep
+    the publication state, and `feature_count` would answer for whichever record won the
+    recency test. Format is part of the match so this can never reach across a dataset id that
+    holds both, which nothing produces today and nothing should silently start doing.
+    """
+    if record.format == ArtifactFormat.GEOPARQUET:
+        for stored in reversed(records):
+            if stored.dataset_id == record.dataset_id and stored.format == ArtifactFormat.GEOPARQUET:
+                return stored
+        return None
+    return _find_artifact_by_request_scope(
+        records=records,
+        dataset_id=record.dataset_id,
+        request_scope=record.request_scope,
+    )
+
+
 def _find_artifact_by_request_scope(
     *,
     records: list[ArtifactRecord],
@@ -2131,7 +2266,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         description=_as_optional_text(source_dataset.get("description")),
         item_type=_item_type_for(latest),
         variable=latest.variable,
-        period_type=_as_optional_str(source_dataset.get("period_type")) or latest.period_type,
+        period_type=_dataset_period_type(latest, source_dataset),
         units=_as_optional_str(source_dataset.get("units")),
         resolution=_as_optional_str(source_dataset.get("resolution")),
         source=_as_optional_str(source_dataset.get("source")),
@@ -2172,6 +2307,25 @@ def _build_dataset_detail_record(dataset_id: str, artifacts: list[ArtifactRecord
             for artifact in ordered_artifacts
         ],
     )
+
+
+def _dataset_period_type(latest: ArtifactRecord, source_dataset: dict[str, Any]) -> str | None:
+    """Return the dataset's period type, or None only where there genuinely is no period axis.
+
+    `period_type` became optional for feature collections, and the fallback below is what keeps
+    that from quietly changing an existing raster response. A raster whose template has been
+    removed has always reported "unknown" here rather than omitting the field, and a client
+    reading that string is entitled to keep receiving it; a null would be a new value to handle
+    for a case that has nothing to do with this work.
+
+    A feature collection gets None instead, which is not a missing value but the true one: a
+    boundary set has no temporal axis to name. `itemType` is the field that says which of the
+    two a null means, which is why the discriminator exists.
+    """
+    declared = _as_optional_str(source_dataset.get("period_type")) or latest.period_type
+    if declared is not None:
+        return declared
+    return None if latest.format == ArtifactFormat.GEOPARQUET else "unknown"
 
 
 def _item_type_for(artifact: ArtifactRecord) -> DatasetItemType:
