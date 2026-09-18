@@ -189,9 +189,20 @@ def get_collection(collection_id: str, request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@processes_router.get("")
-def list_processes(request: Request) -> dict[str, Any]:
-    """Return all available openEO processes."""
+@processes_router.get("", response_model=None)
+def list_processes(request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
+    """Return all available openEO processes.
+
+    The openEO JSON by default, as clients expect. A browser gets the catalogue page the rail
+    links to, on the same terms as a single process.
+    """
+    from open_climate_service.system.templates import prefers_html, render_processes_page
+
+    response.headers["Vary"] = "Accept"
+    if prefers_html(request):
+        page = HTMLResponse(render_processes_page(mount_prefix(request)))
+        page.headers["Vary"] = "Accept"
+        return page
     procs = processes_service.list_openeo_processes()
     base_url = absolute_base(request)
     return {

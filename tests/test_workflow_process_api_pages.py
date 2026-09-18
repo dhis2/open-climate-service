@@ -338,3 +338,36 @@ def test_a_writable_instance_marks_nothing_closed(client: TestClient) -> None:
     context = landing._api_page_context(schema, read_only=False)
 
     assert not [e for group in context["groups"] for e in group["endpoints"] if e["closed"]]
+
+
+# --- the list pages ------------------------------------------------------------------------
+
+
+def test_the_workflow_list_is_its_own_page(client: TestClient) -> None:
+    """HTML only: the machine-readable list stays at `GET /process_graphs`."""
+    response = client.get("/workflows")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert 'href="/workflows/climate_normal"' in response.text
+    assert client.get("/process_graphs").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("accept", "html"),
+    [(BROWSER_ACCEPT, True), ("*/*", False), ("", False), ("application/json", False)],
+)
+def test_the_process_list_serves_a_page_only_to_browsers(client: TestClient, accept: str, html: bool) -> None:
+    """openEO clients keep the JSON catalogue they have always had at this URL."""
+    headers = {"Accept": accept} if accept else {}
+
+    response = client.get("/processes", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html" if html else "application/json")
+    assert response.headers["vary"] == "Accept"
+    if html:
+        assert 'data-views="processes"' in response.text
+        assert "data-origin=" in response.text, "the origin filter needs the origins passed in"
+    else:
+        assert "processes" in response.json()

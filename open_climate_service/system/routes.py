@@ -26,6 +26,7 @@ from .templates import (
     render_manage,
     render_maps,
     render_workflow_page,
+    render_workflows_page,
     wants_json,
 )
 
@@ -91,6 +92,12 @@ def data_source_page(request: Request, dataset_id: str) -> HTMLResponse:
 def api_page(request: Request) -> HTMLResponse:
     """Return the page listing this instance's API endpoints, built from its own OpenAPI schema."""
     return HTMLResponse(render_api_page(request.app.openapi(), mount_prefix(request)))
+
+
+@router.get("/workflows", response_class=HTMLResponse, include_in_schema=False)
+def workflows_page(request: Request) -> HTMLResponse:
+    """Return the list of workflows. The machine-readable form is `GET /process_graphs`."""
+    return HTMLResponse(render_workflows_page(mount_prefix(request)))
 
 
 @router.get("/workflows/{workflow_id}", response_class=HTMLResponse, include_in_schema=False)
