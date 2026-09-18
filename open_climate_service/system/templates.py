@@ -127,6 +127,7 @@ def _read_asset(name: str) -> str:
 LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
+    ("datasets", "Datasets", "/datasets"),
     ("map", "Map viewer", "/map"),
     ("openeo", "openEO editor", "/openeo"),
 )
