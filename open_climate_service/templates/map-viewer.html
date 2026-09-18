@@ -525,10 +525,12 @@
         }
       }
 
-      // Everything the map shows for one dataset, taken down together: the raster, its
-      // dimension controls, its metadata and its legend. Leaving any of it up after the
-      // selection changes would describe a dataset the map is no longer showing.
-      function clearDataset() {
+      async function loadDataset(href) {
+        if (!map || mapUnavailable) {
+          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
+          return;
+        }
+        setStatus("Loading...");
         clearTimeout(_selectorDebounce);
         if (activeLayer) {
           try {
@@ -540,15 +542,6 @@
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
         legendEl.classList.add("hidden");
-      }
-
-      async function loadDataset(href) {
-        if (!map || mapUnavailable) {
-          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
-          return;
-        }
-        setStatus("Loading...");
-        clearDataset();
 
         let collection;
         try {
