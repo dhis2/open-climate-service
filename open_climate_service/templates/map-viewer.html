@@ -69,6 +69,10 @@
         }
       }
 
+      .map-panel .dataset-link {
+        font-size: 0.8rem;
+      }
+
       .panel-section label {
         font-size: 0.72rem;
         font-weight: 600;
@@ -217,6 +221,7 @@
             <dd id="meta-licence">—</dd>
           </dl>
           <p id="meta-description" class="meta-description hidden"></p>
+          <a id="dataset-link" class="dataset-link hidden" href="#">About this dataset</a>
 
           <div id="legend" class="panel-section hidden">
             <label>Legend</label>
@@ -505,12 +510,16 @@
             setStatus(
               "No published datasets found. Ingest and publish a dataset first."
             );
+            // A deep link still names a dataset, and "not published" answers that question
+            // better than the generic empty-catalogue line.
+            openRequestedDataset();
             return;
           }
           for (const col of collections) {
             const href = `{{ mount }}/collections/${col.id}`;
             const opt = document.createElement("option");
             opt.value = href;
+            opt.dataset.id = col.id;
             opt.textContent = col.title ?? col.id;
             selectEl.appendChild(opt);
           }
@@ -520,17 +529,16 @@
               : "Select a dataset to visualise it on the map.",
             mapUnavailable
           );
+          openRequestedDataset();
         } catch (err) {
           setStatus(`Failed to load catalog: ${err.message}`, true);
         }
       }
 
-      async function loadDataset(href) {
-        if (!map || mapUnavailable) {
-          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
-          return;
-        }
-        setStatus("Loading...");
+      // Everything the panel says about a dataset: its layer, dimension controls, metadata and
+      // legend. Leaving any of it up after the selection changes would describe a dataset the
+      // map is no longer showing.
+      function clearDataset() {
         clearTimeout(_selectorDebounce);
         if (activeLayer) {
           try {
@@ -542,6 +550,15 @@
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
         legendEl.classList.add("hidden");
+      }
+
+      async function loadDataset(href) {
+        if (!map || mapUnavailable) {
+          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
+          return;
+        }
+        setStatus("Loading...");
+        clearDataset();
 
         let collection;
         try {
@@ -695,8 +712,50 @@
         setStatus("");
       }
 
+      // `/map?dataset=<id>` opens the viewer on one dataset, and choosing a dataset writes the
+      // same parameter back, so the address in the bar is always a link to what is shown.
+      const datasetLink = document.getElementById("dataset-link");
+
+      function selectedDatasetId() {
+        return selectEl.selectedOptions[0]?.dataset.id ?? "";
+      }
+
+      function reflectSelection() {
+        const id = selectedDatasetId();
+        const url = new URL(window.location.href);
+        if (id) url.searchParams.set("dataset", id);
+        else url.searchParams.delete("dataset");
+        history.replaceState(null, "", url);
+        datasetLink.classList.toggle("hidden", !id);
+        if (id) datasetLink.href = `{{ mount }}/datasets/${encodeURIComponent(id)}`;
+      }
+
+      function whenMapReady(callback) {
+        if (!map || mapUnavailable || map.isStyleLoaded()) callback();
+        else map.once("load", callback);
+      }
+
+      function openRequestedDataset() {
+        const requested = new URLSearchParams(window.location.search).get("dataset");
+        if (!requested) return;
+        const option = [...selectEl.options].find((o) => o.dataset.id === requested);
+        if (!option) {
+          setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
+          return;
+        }
+        selectEl.value = option.value;
+        reflectSelection();
+        whenMapReady(() => loadDataset(option.value));
+      }
+
       selectEl.addEventListener("change", (e) => {
-        if (e.target.value) loadDataset(e.target.value);
+        reflectSelection();
+        if (e.target.value) {
+          loadDataset(e.target.value);
+        } else {
+          clearDataset();
+          setStatus("Select a dataset to visualise it on the map.");
+        }
       });
 
       let _selectorDebounce = null;
