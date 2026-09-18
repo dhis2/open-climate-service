@@ -125,6 +125,10 @@ header {
 header .logo {
   flex: none;
   display: block;
+  /* The mark's globe sits low in its own viewBox, so it reads a touch below the name it stands
+     beside. Nudged rather than re-centred: a transform moves the paint without moving the
+     flex row, so the header's height and the name's baseline stay exactly where they are. */
+  transform: translateY(-2px);
 }
 /* The mark and the instance name are one target back to the landing page, as the title was
    before the header was shared. Undecorated in both rest and hover: it is the page's identity
