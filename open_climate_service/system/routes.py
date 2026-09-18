@@ -20,6 +20,7 @@ from .templates import (
     ROOT_RESPONSES,
     app_version,
     render_data_source_page,
+    render_data_sources_page,
     render_landing,
     render_manage,
     render_maps,
@@ -55,6 +56,12 @@ def read_index(request: Request) -> Response:
 def maps(request: Request) -> HTMLResponse:
     """Return the interactive map viewer."""
     return HTMLResponse(render_maps(mount_prefix(request)))
+
+
+@router.get("/data-sources", response_class=HTMLResponse, include_in_schema=False)
+def data_sources_page(request: Request) -> HTMLResponse:
+    """Return the list of data sources. The machine-readable form is `GET /dataset-templates/`."""
+    return HTMLResponse(render_data_sources_page(mount_prefix(request)))
 
 
 @router.get("/data-sources/{dataset_id}", response_class=HTMLResponse, include_in_schema=False)

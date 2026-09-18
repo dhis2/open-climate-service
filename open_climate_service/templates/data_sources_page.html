@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Data sources · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <h2 id="data-sources-title" tabindex="-1">Data sources</h2>
+        <p class="lead">Data this instance can fetch from outside providers.</p>
+        {% if sources %}
+        {% set periods = sources | map(attribute="period_type") | reject("equalto", "") | unique | sort | list %}
+        <div data-list data-page-size="12" data-views="sources">
+          <div class="toolbar">
+            <label
+              >Search
+              <input type="search" data-filter-text placeholder="Name, provider or variable" />
+            </label>
+            {% if periods | length > 1 %}
+            <label
+              >Period
+              <select data-filter-field="period">
+                <option value="">All</option>
+                {% for period in periods %}
+                <option value="{{ period }}">{{ period }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            {% endif %}
+            <div class="view-switch" role="group" aria-label="Layout">
+              <button type="button" data-view-button="tiles" aria-pressed="true">Tiles</button>
+              <button type="button" data-view-button="list" aria-pressed="false">List</button>
+            </div>
+            <span class="status" data-status aria-live="polite"></span>
+          </div>
+          <div class="collection view-tiles" data-view-target>
+            {% for s in sources %}
+            <article
+              class="panel item clickable"
+              data-item
+              data-period="{{ s.period_type }}"
+              data-search="{{ [s.name, s.id, s.provider, s.variable] | join(' ') | lower }}"
+            >
+              <div class="body">
+                <h3><a class="item-link" href="{{ mount }}/data-sources/{{ s.id }}">{{ s.name }}</a></h3>
+                <span class="provider clamp" title="{{ s.provider }}">{{ s.provider or "Unknown provider" }}</span>
+                {% if s.description %}<p class="description clamp">{{ s.description }}</p>{% endif %}
+                <div class="meta">
+                  {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
+                  {% if s.units %}<span class="chip">{{ s.units }}</span>{% endif %}
+                  {% if s.resolution %}<span class="chip">{{ s.resolution }}</span>{% endif %}
+                  {% if s.licence %}<span class="chip">{{ s.licence }}</span>{% endif %}
+                </div>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          <p class="note" data-empty hidden>No data sources match.</p>
+          <div class="pager" data-pager>
+            <button type="button" data-prev>Previous</button>
+            <button type="button" data-next>Next</button>
+          </div>
+        </div>
+        {% else %}
+        <p class="note">No data sources are configured.</p>
+        {% endif %}
+
+      </main>
+    </div>
+<script>
+{{ list_script | safe }}
+</script>
+  </body>
+</html>
