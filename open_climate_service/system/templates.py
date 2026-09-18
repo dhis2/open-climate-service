@@ -1,15 +1,18 @@
 """Server-side HTML rendering and root resource representations for the Open Climate Service."""
 
 import importlib.resources
+import json
 import logging
+import re
 from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from textwrap import dedent
 from typing import Any
 
 import jinja2
 from fastapi import Request
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
@@ -131,6 +134,7 @@ _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Dataset templates", "/dataset-templates"),
     ("map", "Map viewer", "/map"),
+    ("api", "API", "/api"),
     ("openeo", "openEO editor", "/openeo"),
 )
 
@@ -664,6 +668,464 @@ def render_data_sources_page(mount: str) -> str:
         list_script=_read_asset("ocs_list.js"),
         nav=page_nav(mount, "data-sources"),
         sources=[_source_view(t) for t in _ingestable_templates(templates)],
+    )
+
+
+def _load_workflows() -> list[Any]:
+    try:
+        from open_climate_service.openeo.workflows import list_workflows
+
+        return sorted(list_workflows().processes, key=lambda workflow: workflow.id)
+    except Exception:
+        _log.exception("Unexpected error loading workflows")
+        return []
+
+
+_PROCESS_ORIGINS = {
+    "ocs": "OCS",
+    "xclim": "Climate indicators (xclim)",
+    "earthkit": "Meteorology (earthkit)",
+    "core": "openEO core",
+}
+
+
+def _load_processes() -> list[dict[str, Any]]:
+    """The process catalogue this instance actually loaded, each tagged with where it comes from.
+
+    Grouped by origin rather than openEO `categories`, which most processes do not declare.
+    Origin is decided by which loader registered the callable that won, so an instance plugin
+    overriding an xclim indicator by id counts as OCS, not xclim.
+    """
+    try:
+        from open_climate_service.openeo import earthkit_processes, xclim_processes
+        from open_climate_service.openeo.plugin_processes import load_plugin_processes
+        from open_climate_service.openeo.processes import list_openeo_processes
+
+        processes = list_openeo_processes()
+        xclim = {id(func) for func in xclim_processes.scan()}
+        earthkit = {id(func) for func in earthkit_processes.scan()}
+        plugins = dict(load_plugin_processes())
+    except Exception:
+        _log.exception("Unexpected error loading processes")
+        return []
+
+    def origin(process_id: str) -> str:
+        func = plugins.get(process_id)
+        if func is None:
+            return "core"
+        if id(func) in xclim:
+            return "xclim"
+        if id(func) in earthkit:
+            return "earthkit"
+        return "ocs"
+
+    order = list(_PROCESS_ORIGINS)
+    views = []
+    for process in processes:
+        process_id = str(process.get("id") or "")
+        if not process_id:
+            continue
+        kind = origin(process_id)
+        views.append(
+            {
+                "id": process_id,
+                "summary": " ".join(str(process.get("summary") or "").split()),
+                "categories": [str(category) for category in process.get("categories") or []],
+                "origin": kind,
+                "origin_label": _PROCESS_ORIGINS[kind],
+            }
+        )
+    return sorted(views, key=lambda view: (order.index(view["origin"]), view["id"]))
+
+
+def _workflow_title(workflow_id: str) -> str:
+    """`aggregate_to_chap_csv` → `Aggregate to CHAP CSV`: workflows declare no title of their own."""
+    words = [_TITLE_WORDS.get(word, word) for word in workflow_id.split("_")]
+    return " ".join([words[0][:1].upper() + words[0][1:], *words[1:]]) if words else workflow_id
+
+
+def _workflow_results(record: Any) -> list[tuple[str, str]]:
+    """What the workflow's `save_result` nodes produce, as (kind, label) pairs."""
+    results = []
+    for node in (getattr(record, "process_graph", None) or {}).values():
+        if not isinstance(node, dict) or node.get("process_id") != "save_result":
+            continue
+        fmt = str(_mapping(node.get("arguments")).get("format") or "")
+        results.append(_RESULT_FORMATS.get(fmt.lower(), ("other", f"Returns {fmt}" if fmt else "Returns a result")))
+    return list(dict.fromkeys(results))
+
+
+_MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
+def _inline_code(text: str) -> Markup:
+    """Escape *text*, rendering the inline markdown descriptions use: code spans and web links.
+
+    Only `code`, ``code``, **bold** and [text](http…) are recognised; anything else stays
+    literal text.
+    Links are limited to http(s), so a description cannot smuggle in a `javascript:` URL.
+    """
+    parts = str(text).replace("``", "`").split("`")
+    rendered = []
+    for index, part in enumerate(parts):
+        if index % 2:
+            rendered.append(Markup("<code>{}</code>").format(part))
+            continue
+        pieces, last = [], 0
+        for match in _MARKDOWN_LINK.finditer(part):
+            pieces.append(_bold(part[last : match.start()]))
+            pieces.append(Markup('<a href="{}">{}</a>').format(match.group(2), match.group(1)))
+            last = match.end()
+        pieces.append(_bold(part[last:]))
+        rendered.append(Markup("").join(pieces))
+    return Markup("").join(rendered)
+
+
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _bold(text: str) -> Markup:
+    # Applied to escaped text, so the markup it adds is the only markup there is.
+    return Markup(_BOLD.sub(r"<strong>\1</strong>", str(escape(text))))
+
+
+_LIST_ITEM = re.compile(r"^\s*(?:[*-]|\d+\.)\s+")
+
+
+_RST_ROLE = re.compile(r":[a-z]+:`([^`]+)`")
+# Not a run of three: a Markdown fence is backticks too, and matching inside one would break
+# a description that was already Markdown.
+_RST_LITERAL = re.compile(r"(?<!`)``([^`]+)``(?!`)")
+_RST_DIRECTIVE = re.compile(r"^\s*\.\. [a-z]+::\s*$")
+
+# Rendered as tables further down the page, so repeating them as prose only duplicates the
+# content and leaves the numpydoc underline showing as a row of dashes.
+_DOC_SECTIONS_SHOWN_ELSEWHERE = frozenset({"parameters", "returns", "yields", "raises", "other parameters"})
+
+
+def _is_section_heading(lines: list[str], index: int) -> bool:
+    """A numpydoc heading: a title on its own line, underlined with --- or ===."""
+    if index + 1 >= len(lines) or not lines[index].strip():
+        return False
+    rule = lines[index + 1].strip()
+    return len(rule) >= 3 and set(rule) in ({"-"}, {"="})
+
+
+def _from_rst(text: str) -> str:
+    """Turn the reStructuredText in a Python docstring into the Markdown the renderer reads.
+
+    Process descriptions are docstrings, and the ones from earthkit are numpydoc: section
+    headings underlined with dashes, `.. math::` directives, ``literals`` and :role:`links`.
+    Rendered as Markdown those leak — a row of dashes in a paragraph, a bare ".. math::", and
+    every role name printed before its argument.
+
+    Only the constructs that actually occur are handled. Anything else passes through, because
+    a docstring that is already Markdown must come out unchanged.
+    """
+    # Inline first: ``literal`` and :role:`x` become `x` before any fence exists, or the
+    # literal pattern would match the pair of backticks inside a fence this function adds.
+    text = _RST_LITERAL.sub(r"`\1`", text.replace("\r\n", "\n"))
+    text = _RST_ROLE.sub(r"`\1`", text)
+    lines = text.split("\n")
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        if _is_section_heading(lines, index):
+            title = lines[index].strip()
+            index += 2
+            body: list[str] = []
+            # The body runs to the next section, or to a blank-line break — numpydoc separates
+            # the last section from any closing prose that way, and that prose is real content.
+            while index < len(lines) and not _is_section_heading(lines, index):
+                if not lines[index].strip() and index + 1 < len(lines) and not lines[index + 1].strip():
+                    break
+                body.append(lines[index])
+                index += 1
+            if title.lower() in _DOC_SECTIONS_SHOWN_ELSEWHERE:
+                continue
+            out += ["", f"**{title}**", ""] + body
+            continue
+        if _RST_DIRECTIVE.match(lines[index]):
+            index += 1
+            while index < len(lines) and not lines[index].strip():
+                index += 1
+            body = []
+            while index < len(lines) and (lines[index].startswith((" ", "\t")) or not lines[index].strip()):
+                body.append(lines[index])
+                index += 1
+            block = dedent("\n".join(body)).strip()
+            # A formula is not prose: keep it whole rather than folding its whitespace away.
+            if block:
+                out += ["", "```", block, "```", ""]
+            continue
+        out.append(lines[index])
+        index += 1
+    return "\n".join(out).strip()
+
+
+def _description_blocks(text: str | None) -> list[dict[str, Any]]:
+    """Blocks of a workflow or process description: paragraphs, bullet lists and code.
+
+    A block that is a JSON example, or fenced with backticks, becomes code; a block whose lines
+    all start with a list marker becomes a list.
+    """
+    blocks: list[dict[str, Any]] = []
+    for block in _from_rst(text or "").split("\n\n"):
+        stripped = block.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("```"):
+            code = stripped.strip("`").split("\n", 1)
+            blocks.append({"code": code[1] if len(code) > 1 else code[0]})
+        elif stripped[0] in "{[" and not _MARKDOWN_LINK.match(stripped):
+            blocks.append({"code": stripped})
+        elif all(_LIST_ITEM.match(line) for line in stripped.splitlines()):
+            blocks.append(
+                {"bullets": [_inline_code(_LIST_ITEM.sub("", line).strip()) for line in stripped.splitlines()]}
+            )
+        else:
+            blocks.append({"html": _inline_code(" ".join(stripped.split()))})
+    return blocks
+
+
+def _parameter_type(schema: object) -> str:
+    """A short label for a parameter's schema: type or subtype, and the allowed values."""
+    schemas = schema if isinstance(schema, list) else [schema]
+    labels = []
+    for item in schemas:
+        item = _mapping(item)
+        label = str(item.get("subtype") or item.get("type") or "")
+        if isinstance(item.get("enum"), list):
+            label = " | ".join(str(value) for value in item["enum"])
+        if label:
+            labels.append(label)
+    return " or ".join(dict.fromkeys(labels))
+
+
+def _parameter_views(record: Any) -> list[dict[str, Any]]:
+    """Rows for a parameters table, from an openEO process or workflow description."""
+    return [
+        {
+            "name": str(parameter.get("name") or ""),
+            "required": not parameter.get("optional", False),
+            "type": _parameter_type(parameter.get("schema")),
+            "default": json.dumps(parameter["default"]) if "default" in parameter else "",
+            "description": _inline_code(" ".join(str(parameter.get("description") or "").split())),
+        }
+        for parameter in record.parameters
+        if isinstance(parameter, dict)
+    ]
+
+
+def _workflow_page_context(
+    record: Any, templates: list[dict[str, Any]], datasets: list[Any], triggers: list[Any]
+) -> dict[str, Any]:
+    held = {dataset.dataset_id for dataset in datasets}
+    outputs = sorted(
+        (
+            {"id": t["id"], "name": t.get("name") or t["id"], "ingested": t["id"] in held}
+            for t in templates
+            if t.get("produced_by") == record.id and not registry_datasets.is_ingestable(t)
+        ),
+        key=lambda output: str(output["name"]).lower(),
+    )
+    parameters = _parameter_views(record)
+    return {
+        "workflow": {
+            "id": record.id,
+            "title": _workflow_title(record.id),
+            "summary": record.summary or "",
+            "results": _workflow_results(record),
+        },
+        "blocks": _description_blocks(record.description),
+        "parameters": parameters,
+        "outputs": outputs,
+        "triggers": [
+            {
+                "id": trigger.id,
+                "on_update_of": trigger.on_update_of,
+                "held": trigger.on_update_of in held,
+                "arguments": json.dumps(trigger.arguments, indent=2) if trigger.arguments else "",
+            }
+            for trigger in triggers
+            if trigger.workflow_id == record.id
+        ],
+    }
+
+
+def _load_triggers() -> list[Any]:
+    try:
+        from open_climate_service.automation.config import get_automation_config
+
+        return list(get_automation_config().workflow_triggers)
+    except Exception:
+        _log.exception("Unexpected error loading workflow triggers")
+        return []
+
+
+def render_workflow_page(record: Any, mount: str) -> str:
+    """Render the page for one workflow: what it does, its parameters and what it produces."""
+    return get_template("workflow_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "workflows"),
+        **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_triggers()),
+    )
+
+
+def _uses_process(graph: object, process_id: str) -> bool:
+    """Whether a process graph calls *process_id*, including inside callbacks."""
+    if isinstance(graph, dict):
+        if graph.get("process_id") == process_id:
+            return True
+        return any(_uses_process(value, process_id) for value in graph.values())
+    if isinstance(graph, list):
+        return any(_uses_process(value, process_id) for value in graph)
+    return False
+
+
+def _process_page_context(process: dict[str, Any], origin_label: str, workflows: list[Any]) -> dict[str, Any]:
+    returns = _mapping(process.get("returns"))
+    record = type("ProcessParameters", (), {"parameters": process.get("parameters") or []})
+    summary = " ".join(str(process.get("summary") or "").split())
+    blocks = _description_blocks(process.get("description"))
+    # A docstring's first line is its summary, so for every process that has one the page led
+    # with the same sentence twice — once as the lead, once as the opening paragraph.
+    if summary and blocks and blocks[0].get("html") == summary:
+        blocks = blocks[1:]
+    return {
+        "process": {
+            "id": process["id"],
+            "summary": summary,
+            "origin": origin_label,
+            "categories": [str(category) for category in process.get("categories") or []],
+            "experimental": bool(process.get("experimental")),
+            "deprecated": bool(process.get("deprecated")),
+        },
+        "blocks": blocks,
+        "parameters": _parameter_views(record),
+        "returns": {
+            "type": _parameter_type(returns.get("schema")),
+            "description": _inline_code(" ".join(str(returns.get("description") or "").split())),
+        },
+        "links": [
+            {"href": str(link["href"]), "title": str(link.get("title") or link["href"])}
+            for link in process.get("links") or []
+            if isinstance(link, dict) and str(link.get("href", "")).startswith(("http://", "https://"))
+        ],
+        "used_by": [
+            {"id": workflow.id, "title": _workflow_title(workflow.id)}
+            for workflow in workflows
+            if _uses_process(workflow.process_graph, process["id"])
+        ],
+    }
+
+
+def render_process_page(process: dict[str, Any], mount: str) -> str:
+    """Render the page for one process: what it does, its parameters and where it is used."""
+    origins = {view["id"]: view["origin_label"] for view in _load_processes()}
+    return get_template("process_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "processes"),
+        **_process_page_context(process, origins.get(process["id"], ""), _load_workflows()),
+    )
+
+
+_API_GROUP_NOTES = {
+    "Datasets": "What this instance holds, and the metadata for each dataset.",
+    "Dataset templates": "The data sources this instance can ingest, and whether each one is ingestable.",
+    "Ingestions": "Fetch a data source into this instance, and follow the job it starts.",
+    "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
+    "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
+    "Icechunk": "The same stores for the Icechunk SDK, with version history.",
+    "STAC": "Catalogue metadata for discovery, one collection per published dataset.",
+    "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
+    "Extent": "The area this instance covers.",
+    "Schedules": "Scheduled dataset refreshes, as configured for this instance.",
+    "Exports": "Deliver an export to its destination, and follow the delivery job.",
+    "System": "Health, version and the landing page's JSON form.",
+}
+
+_API_GROUP_ORDER = list(_API_GROUP_NOTES)
+
+
+def _endpoint_summary(operation: dict[str, Any]) -> str:
+    """One line for an endpoint: its docstring's first line, or the generated summary.
+
+    FastAPI derives `summary` from the function name, so `read_index` becomes "Read Index".
+    The docstring says something, and is what the API docs show as the description.
+    """
+    description = str(operation.get("description") or "").strip()
+    if description:
+        return description.splitlines()[0].strip()
+    return str(operation.get("summary") or "")
+
+
+def _api_page_context(schema: dict[str, Any], *, read_only: bool) -> dict[str, Any]:
+    """Group the instance's own OpenAPI paths for the API page.
+
+    Built from the served schema rather than a written list, so the page describes the routes
+    this instance actually exposes — including those a plugin or an optional dependency adds.
+    """
+    from open_climate_service.read_only import is_blocked
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for path, operations in _mapping(schema.get("paths")).items():
+        for method, operation in _mapping(operations).items():
+            if not isinstance(operation, dict):
+                continue
+            tags = operation.get("tags") or ["Other"]
+            group = str(tags[0])
+            groups.setdefault(group, []).append(
+                {
+                    "method": method.upper(),
+                    "path": path,
+                    "summary": _endpoint_summary(operation),
+                    "closed": read_only and is_blocked(method.upper(), path),
+                }
+            )
+    ordered = sorted(
+        groups.items(),
+        key=lambda item: _API_GROUP_ORDER.index(item[0]) if item[0] in _API_GROUP_ORDER else len(_API_GROUP_ORDER),
+    )
+    entry_points = [
+        ("STAC catalogue", "/stac/catalog.json", "Browsable metadata for every published dataset"),
+        ("openEO capabilities", "/?f=json", "What this backend supports, for an openEO client"),
+        ("openEO collections", "/collections", "The datasets an openEO process graph can load"),
+        ("API documentation", "/docs", "Interactive Swagger UI for every endpoint below"),
+        ("OpenAPI schema", "/openapi.json", "The machine-readable description this page is built from"),
+    ]
+    return {
+        "entry_points": [{"title": title, "path": path, "note": note} for title, path, note in entry_points],
+        "groups": [
+            {
+                "name": name,
+                "note": _API_GROUP_NOTES.get(name, ""),
+                "endpoints": sorted(endpoints, key=lambda endpoint: (endpoint["path"], endpoint["method"])),
+            }
+            for name, endpoints in ordered
+        ],
+        "read_only": read_only,
+    }
+
+
+def render_api_page(schema: dict[str, Any], mount: str) -> str:
+    """Render the page listing this instance's API endpoints."""
+    return get_template("api_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "api"),
+        **_api_page_context(schema, read_only=api_config.is_read_only()),
     )
 
 

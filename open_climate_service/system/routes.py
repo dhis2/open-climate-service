@@ -19,9 +19,11 @@ from .schemas import AppInfo, HealthStatus, Status
 from .templates import (
     ROOT_RESPONSES,
     app_version,
+    render_api_page,
     render_landing,
     render_manage,
     render_maps,
+    render_workflow_page,
     wants_json,
 )
 
@@ -54,6 +56,25 @@ def read_index(request: Request) -> Response:
 def maps(request: Request) -> HTMLResponse:
     """Return the interactive map viewer."""
     return HTMLResponse(render_maps(mount_prefix(request)))
+
+
+@router.get("/api", response_class=HTMLResponse, include_in_schema=False)
+def api_page(request: Request) -> HTMLResponse:
+    """Return the page listing this instance's API endpoints, built from its own OpenAPI schema."""
+    return HTMLResponse(render_api_page(request.app.openapi(), mount_prefix(request)))
+
+
+@router.get("/workflows/{workflow_id}", response_class=HTMLResponse, include_in_schema=False)
+def workflow_page(request: Request, workflow_id: str) -> HTMLResponse:
+    """Return the page for one workflow. The machine-readable form is `GET /process_graphs/{id}`."""
+    from fastapi import HTTPException
+
+    from open_climate_service.openeo.workflows import get_workflow
+
+    record = get_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+    return HTMLResponse(render_workflow_page(record, mount_prefix(request)))
 
 
 @router.get("/openeo", response_class=HTMLResponse, include_in_schema=False)
