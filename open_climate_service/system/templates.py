@@ -345,8 +345,10 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         "sync_kind": sync_kind,
         "format_hint": _PERIOD_FORMAT_HINTS.get(str(record.period_type), ""),
         "paragraphs": _paragraphs(record.description),
-        "about": present(about),
-        "data": present(data),
+        # One list: what the dataset measures, then where it came from. Two panels of facts side
+        # by side in the same column read as one region anyway, and splitting them meant a
+        # reader hunting two places for "what is this".
+        "data": present(data + about),
         "status_facts": present(status),
         "links": [link for link in record.links if link.rel != "self"],
         "published": summary["status"] == "published",

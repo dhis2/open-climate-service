@@ -177,17 +177,17 @@ def test_the_dataset_page_names_the_workflow_that_produced_it() -> None:
     template = _template("normal", produced_by="climate_normal", sync={"kind": "static"})
     context = landing._dataset_page_context(_record("normal"), template)
 
-    assert ("Produced by", "climate_normal workflow", "/process_graphs/climate_normal") in context["about"]
+    assert ("Produced by", "climate_normal workflow", "/process_graphs/climate_normal") in context["data"]
 
 
 def test_the_dataset_page_lists_only_what_is_known() -> None:
     context = landing._dataset_page_context(_record(short_name=None, resolution=None), None)
-    labels = [label for label, _, _ in context["about"] + context["data"] + context["status_facts"]]
+    labels = [label for label, _, _ in context["data"] + context["status_facts"]]
 
     assert "Short name" not in labels
     assert "Resolution" not in labels
     assert {"Identifier", "Variable", "Bounding box", "Publication"} <= set(labels)
-    assert ("Licence", "Not specified", None) in context["about"]
+    assert ("Licence", "Not specified", None) in context["data"]
     assert context["paragraphs"] == ["First line wraps here.", "Second paragraph."]
     assert [link.rel for link in context["links"]] == ["zarr"]
 
