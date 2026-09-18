@@ -291,6 +291,19 @@ def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the artifacts this builder may describe: published rasters, and only those.
+
+    This module's answer for `ArtifactFormat.GEOPARQUET` is that it never arrives. Everything
+    below is raster — xstac opens the store as an xarray dataset to derive `cube:dimensions`
+    and `cube:variables`, and the assets, media types and render hints are all Zarr's — so a
+    feature collection needs the STAC table extension (`table:row_count`,
+    `table:primary_geometry`, `table:columns`) and no datacube fields at all. That is a second
+    builder, not a branch through this one.
+
+    CLIM-1069 adds it, and widens the gate in the same change so the catalogue never advertises
+    a child it cannot serve. Until then a GeoParquet record is absent from this set and its
+    collection URL is a plain 404, which is true rather than merely unimplemented.
+    """
     return ingestion_services.stac_eligible_artifacts_by_dataset()
 
 
@@ -913,7 +926,9 @@ def _remove_helper_variables(collection: dict[str, Any]) -> None:
 
 
 def _keywords(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> list[str]:
-    keywords = [artifact.dataset_id, artifact.variable, "zarr", "stac"]
+    # `variable` is optional on the record since CLIM-1067, so it is only a keyword when the
+    # artifact actually names one. Reached only for a raster, which normally does.
+    keywords = [artifact.dataset_id, *([artifact.variable] if artifact.variable else []), "zarr", "stac"]
     for key in ("source", "short_name"):
         value = source_dataset.get(key)
         if isinstance(value, str) and value:
