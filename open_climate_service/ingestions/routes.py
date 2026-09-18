@@ -1,7 +1,7 @@
 """Routes for EO ingestion, datasets, and sync operations."""
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from starlette.responses import Response
 
 from open_climate_service.data_registry.routes import _get_dataset_or_404
@@ -21,6 +21,7 @@ from open_climate_service.ingestions.schemas import (
 from open_climate_service.jobs.models import JobLink, JobRecord
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.shared.thumbnails import thumbnail_path
+from open_climate_service.shared.urls import mount_prefix
 
 ingestions_router = APIRouter()
 datasets_router = APIRouter()
@@ -129,10 +130,23 @@ def list_datasets() -> DatasetListResponse:
     return services.list_datasets()
 
 
-@datasets_router.get("/{dataset_id}", response_model=DatasetDetailRecord)
-def get_dataset(dataset_id: str) -> DatasetDetailRecord:
-    """Get managed dataset metadata and available versions."""
-    return services.get_dataset_or_404(dataset_id)
+@datasets_router.get(
+    "/{dataset_id}",
+    response_model=DatasetDetailRecord,
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
+def get_dataset(dataset_id: str, request: Request) -> DatasetDetailRecord | HTMLResponse:
+    """Get managed dataset metadata and available versions.
+
+    JSON by default. A browser, which ranks `text/html` first, gets the dataset page the landing
+    page links to; `?f=html` and `?f=json` choose explicitly.
+    """
+    record = services.get_dataset_or_404(dataset_id)
+    from open_climate_service.system.templates import prefers_html, render_dataset_page
+
+    if prefers_html(request):
+        return HTMLResponse(render_dataset_page(record, mount_prefix(request)))
+    return record
 
 
 @datasets_router.get("/{dataset_id}/thumbnail.png", response_class=FileResponse)
