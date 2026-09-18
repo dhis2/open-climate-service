@@ -268,8 +268,9 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
     assert result.sync_detail.action == SyncAction.APPEND
     assert result.sync_detail.reason == "new_periods_available_for_append"
     assert "Data exists through 2026-01-31" in result.sync_detail.message
-    assert "Sync will append missing periods 2026-02-01 through 2026-02-10" in result.sync_detail.message
-    assert "extend coverage through 2026-02-10" in result.sync_detail.message
+    assert "Sync will add 2026-02-01 through 2026-02-10" in result.sync_detail.message
+    # Said once: an append covers exactly that range, so naming the target again repeated it.
+    assert result.sync_detail.message.count("2026-02-10") == 1
     assert result.message is not None
     assert "appending missing periods" in result.message
     assert "committed store" in result.message

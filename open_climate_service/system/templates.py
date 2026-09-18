@@ -127,6 +127,7 @@ def _read_asset(name: str) -> str:
 LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
+    ("datasets", "Datasets", "/datasets"),
     ("map", "Map viewer", "/map"),
     ("openeo", "openEO editor", "/openeo"),
 )
@@ -156,6 +157,283 @@ def page_nav(mount: str, current: str) -> Markup:
         for key, label, path in _NAV_ITEMS
     )
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
+
+
+def _licence_label(template: dict[str, Any]) -> str | None:
+    """The licence as a short label: an SPDX id as written, or a named licence's name."""
+    licence = template.get("license")
+    if isinstance(licence, str):
+        return licence
+    name = licence.get("name") if isinstance(licence, dict) else None
+    return name if isinstance(name, str) else None
+
+
+def _colormap_ramp(name: str | None) -> str:
+    """A CSS gradient through a colormap, drawn where a dataset has no thumbnail yet.
+
+    The same colormap the map viewer and the thumbnail use, so the placeholder already looks
+    like the layer will. Cached: a landing page lists the same few colormaps many times, and
+    resolving one imports matplotlib.
+    """
+    from matplotlib.colors import to_hex
+
+    from open_climate_service.shared.thumbnails import resolve_colormap
+
+    colormap = resolve_colormap(name)
+    stops = ", ".join(to_hex(colormap(i / 4)) for i in range(5))
+    return f"linear-gradient(90deg, {stops})"
+
+
+def _coverage_label(start: object, end: object) -> str:
+    if not start and not end:
+        return ""
+    return f"{start or '…'} – {end or '…'}"
+
+
+def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, Any]:
+    """A dataset tile or row: thumbnail (or colormap ramp), name, source and description.
+
+    The thumbnail is linked only when its file exists. It is written at ingest and sync, so a
+    dataset ingested before thumbnails existed has none until its next sync, and linking a
+    missing image would show a broken-image icon rather than the ramp.
+    """
+    from open_climate_service.shared.thumbnails import thumbnail_path
+
+    display = (template or {}).get("display")
+    colormap = display.get("colormap") if isinstance(display, dict) else None
+    status = "published" if dataset.publication.status == "published" else "unpublished"
+    try:
+        has_thumbnail = thumbnail_path(dataset.dataset_id).is_file()
+    except OSError:
+        has_thumbnail = False
+    description = " ".join((dataset.description or "").split())
+    return {
+        "id": dataset.dataset_id,
+        "name": dataset.dataset_name,
+        "description": description,
+        "source": dataset.source or "",
+        "variable": dataset.variable,
+        "units": dataset.units or "",
+        "period_type": dataset.period_type,
+        "coverage": _coverage_label(dataset.extent.temporal.start, dataset.extent.temporal.end),
+        "status": status,
+        "has_thumbnail": has_thumbnail,
+        "ramp": _colormap_ramp(colormap if isinstance(colormap, str) else None),
+    }
+
+
+def _paragraphs(text: str | None) -> list[str]:
+    """Split prose on blank lines, joining the wrapped lines within each paragraph."""
+    blocks = (text or "").replace("\r\n", "\n").split("\n\n")
+    return [" ".join(block.split()) for block in blocks if block.strip()]
+
+
+def _format_timestamp(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return str(value.strftime("%Y-%m-%d %H:%M UTC"))
+    except AttributeError:
+        return str(value)
+
+
+Fact = tuple[str, str, str | None]
+"""A dataset page line: label, value, and an optional link."""
+
+_SYNC_KIND_LABELS = {
+    "temporal": "New periods are added as the source publishes them",
+    "release": "Replaced when the source issues a new release",
+    "static": "Does not update",
+}
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _record_licence_label(record: Any) -> str:
+    # "other" is what a record says when the licence has no SPDX id, including when none was
+    # declared at all; shown bare it reads like a licence called "other".
+    if record.license == "other":
+        return "See licence" if record.license_url else "Not specified"
+    return str(record.license)
+
+
+def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[str, Any]:
+    """Everything the dataset page shows: the managed record, plus what its template adds.
+
+    Each fact is a (label, value, href) triple and is dropped when it has no value, so the
+    page lists what is known rather than a column of dashes.
+    """
+    template = template or {}
+    summary = _dataset_view(record, template)
+    spatial = record.extent.spatial
+    display = _mapping(template.get("display"))
+    sync = _mapping(template.get("sync"))
+    sync_kind = str(sync.get("kind") or "")
+    providers = ", ".join(
+        str(provider["name"])
+        for provider in template.get("providers") or []
+        if isinstance(provider, dict) and provider.get("name")
+    )
+    version = sync.get("version")
+    version_label = (
+        f"{version.get('authority')}:{version.get('value')}"
+        if isinstance(version, dict) and version.get("value")
+        else (str(version) if version else "")
+    )
+    display_range = display.get("range")
+    range_label = (
+        f"{display_range[0]} – {display_range[1]}"
+        if isinstance(display_range, list | tuple) and len(display_range) == 2
+        else ""
+    )
+
+    if template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
+        origin: Fact = (
+            "Produced by",
+            f"{template['produced_by']} workflow",
+            f"/process_graphs/{template['produced_by']}",
+        )
+    elif template and registry_datasets.is_ingestable(template):
+        origin = ("Origin", "Fetched from the data source", None)
+    else:
+        origin = ("Origin", "", None)
+
+    about: list[Fact] = [
+        ("Identifier", record.dataset_id, None),
+        ("Short name", record.short_name or "", None),
+        ("Source", record.source or "", record.source_url),
+        origin,
+        ("Licence", _licence_label(template) or _record_licence_label(record), record.license_url),
+        ("Providers", providers, None),
+    ]
+    data: list[Fact] = [
+        ("Variable", record.variable, None),
+        ("Standard name", str(template.get("standard_name") or ""), None),
+        ("Units", record.units or "", None),
+        ("Cell methods", str(template.get("cell_methods") or ""), None),
+        ("Period type", record.period_type, None),
+        ("Temporal coverage", summary["coverage"], None),
+        ("Direction", str(template.get("temporal_direction") or ""), None),
+        ("Resolution", record.resolution or "", None),
+        (
+            "Bounding box",
+            f"{spatial.xmin:.4f}, {spatial.ymin:.4f}, {spatial.xmax:.4f}, {spatial.ymax:.4f}",
+            None,
+        ),
+    ]
+    status: list[Fact] = [
+        ("Publication", summary["status"], None),
+        ("Published", _format_timestamp(record.publication.published_at), None),
+        ("Last updated", _format_timestamp(record.last_updated), None),
+        ("Updates", _SYNC_KIND_LABELS.get(sync_kind, sync_kind), None),
+        ("Release", version_label, None),
+        # Above the scale it describes, and above the bar below the list: the range is what makes
+        # the colours mean anything, so it reads before the name of the ramp rather than after.
+        ("Display range", range_label, None),
+        ("Colour scale", str(display.get("colormap") or ""), None),
+    ]
+
+    def present(facts: list[Fact]) -> list[Fact]:
+        return [fact for fact in facts if fact[1]]
+
+    return {
+        "dataset": summary,
+        # Static datasets and workflow outputs have no upstream to sync from; the console offers
+        # the button for them and the planner answers "not syncable", which is noise here.
+        "syncable": bool(template) and sync_kind in {"temporal", "release"},
+        "sync_kind": sync_kind,
+        "format_hint": _PERIOD_FORMAT_HINTS.get(str(record.period_type), ""),
+        "paragraphs": _paragraphs(record.description),
+        # One list: what the dataset measures, then where it came from. Two panels of facts side
+        # by side in the same column read as one region anyway, and splitting them meant a
+        # reader hunting two places for "what is this".
+        "data": present(data + about),
+        "status_facts": present(status),
+        "links": [link for link in record.links if link.rel != "self"],
+        "published": summary["status"] == "published",
+    }
+
+
+def render_dataset_page(record: Any, mount: str) -> str:
+    """Render the HTML page for one managed dataset, linked from the landing page."""
+    try:
+        template = registry_datasets.get_dataset(record.source_dataset_id) or registry_datasets.get_dataset(
+            record.dataset_id
+        )
+    except Exception:
+        _log.exception("Unexpected error loading the template for dataset '%s'", record.dataset_id)
+        template = None
+    return get_template("dataset_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "datasets"),
+        job_script=_read_asset("ocs_jobs.js"),
+        read_only=api_config.is_read_only(),
+        **_dataset_page_context(record, template),
+    )
+
+
+_PERIOD_FORMAT_HINTS = {
+    "hourly": "YYYY-MM-DDTHH",
+    "daily": "YYYY-MM-DD",
+    "dekadal": "YYYY-MM-DD",
+    "weekly": "YYYY-MM-DD",
+    "monthly": "YYYY-MM",
+    "yearly": "YYYY",
+}
+
+
+def prefers_html(request: Request) -> bool:
+    """Whether a client asked for HTML over JSON, for an endpoint that is JSON by default.
+
+    Stricter than `wants_json` on purpose. `/` has always defaulted to HTML; a data endpoint
+    has always answered JSON, and scripts calling it may send no Accept header or `*/*`.
+    Those keep getting JSON, and only a client that ranks `text/html` above JSON — a browser —
+    gets the page. `?f=html` and `?f=json` override either way.
+    """
+    requested = request.query_params.get("f")
+    if requested in {"html", "json"}:
+        return requested == "html"
+    accept = request.headers.get("accept", "")
+    if not accept:
+        return False
+    return _media_type_q(accept, "text/html") > _media_type_q(accept, "application/json")
+
+
+def _dataset_views(datasets: list[Any], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id = {template["id"]: template for template in templates}
+    views = []
+    for dataset in datasets:
+        template = by_id.get(dataset.source_dataset_id) or by_id.get(dataset.dataset_id)
+        try:
+            views.append(_dataset_view(dataset, template))
+        except Exception:
+            _log.exception("Unexpected error preparing dataset '%s' for the landing page", dataset.dataset_id)
+    return views
+
+
+def render_datasets_page(mount: str) -> str:
+    """Render the list of datasets this instance holds.
+
+    The area that lived at `/#datasets` as its own page, so it can be linked to, bookmarked and
+    reached without JavaScript. `GET /datasets` still answers JSON to anything that does not ask
+    for a page.
+    """
+    return get_template("datasets_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        list_script=_read_asset("ocs_list.js"),
+        nav=page_nav(mount, "datasets"),
+        datasets=_dataset_views(_load_datasets(), _load_templates()),
+    )
 
 
 def render_maps(mount: str) -> str:
