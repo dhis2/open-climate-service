@@ -68,6 +68,17 @@
               </dl>
             </section>
 
+            <section class="panel" aria-labelledby="about-title">
+              <h3 id="about-title">About</h3>
+              <dl class="facts">
+                {% for label, value, href in about %}
+                <dt>{{ label }}</dt>
+                <dd>
+                  {% if href %}<a href="{{ href if href.startswith('http') else mount ~ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}
+                </dd>
+                {% endfor %}
+              </dl>
+            </section>
           </div>
 
           <div class="stack">
@@ -124,18 +135,6 @@
                 This dataset is not published, so it is not in the map viewer or the STAC catalog.
               </p>
               {% endif %}
-            </section>
-
-            <section class="panel" aria-labelledby="about-title">
-              <h3 id="about-title">About</h3>
-              <dl class="facts">
-                {% for label, value, href in about %}
-                <dt>{{ label }}</dt>
-                <dd>
-                  {% if href %}<a href="{{ href if href.startswith('http') else mount ~ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}
-                </dd>
-                {% endfor %}
-              </dl>
             </section>
 
             <section class="panel" aria-labelledby="status-title">
