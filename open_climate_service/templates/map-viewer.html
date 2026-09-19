@@ -223,7 +223,7 @@
           <dl id="dataset-meta" class="meta-grid hidden">
             <dt>Source</dt>
             <dd id="meta-source">—</dd>
-            <dt>Units</dt>
+            <dt id="meta-units-label">Units</dt>
             <dd id="meta-units">—</dd>
             <dt>Licence</dt>
             <dd id="meta-licence">—</dd>
@@ -289,6 +289,114 @@
         } catch {
           return chroma.scale("viridis").colors(256);
         }
+      }
+
+      // A true-colour render, or null for the ordinary colormapped case.
+      //
+      // The bands are selected by *index*, not by name, and no version of the library changes
+      // that: the band coordinate is a Zarr v3 fixed-length UTF-32 string array, which has no
+      // v3 specification and which the JS reader does not load, so a band *name* has nothing
+      // to resolve against. What changed is the failure. 0.6.1 resolved every unreadable name
+      // to index 0, so all three samplers read the same band and the composite rendered grey —
+      // a plausible image of the wrong data. From 0.9.1 (carbonplan/zarr-layer#87) it refuses,
+      // and its message names the remedy this already uses: "the coordinate array could not be
+      // read ... Use { selected: <index>, type: 'index' } to select by array index instead."
+      //
+      // The collection already publishes the axis values, so the mapping is resolved here and
+      // passed as `{selected: [...], type: "index"}` — the form the library documents for a
+      // multi-band selector, and the one whose shader names `bandIdentifier` mirrors.
+      function readRgbRender(renders, dimensions) {
+        const bands = renders.bands;
+        // No `bands` at all is the ordinary colormapped case, not a failure — return null
+        // quietly and let the caller take the ramp path. Every refusal *after* this point
+        // explains itself, because the caller stops loading once `bands` was declared.
+        if (!Array.isArray(bands)) return null;
+        if (bands.length !== 3) {
+          setStatus(`Cannot composite: expected 3 bands, the collection declares ${bands.length}.`, true);
+          return null;
+        }
+        const rescale = Array.isArray(renders.rescale) ? renders.rescale : [];
+        if (rescale.length !== 3) {
+          setStatus(`Cannot composite: expected 3 rescale pairs, the collection declares ${rescale.length}.`, true);
+          return null;
+        }
+        // Prefer the dimension the collection names; otherwise find the one whose values
+        // contain all three bands, so a store using a different axis name still works.
+        const declared = renders["open_climate_service:band_dimension"];
+        const byValues = Object.entries(dimensions ?? {}).find(
+          ([, v]) => Array.isArray(v.values) && bands.every((b) => v.values.includes(b)),
+        )?.[0];
+        const dimension = declared && dimensions?.[declared] ? declared : (byValues ?? declared ?? "band");
+        const values = dimensions?.[dimension]?.values;
+        if (!Array.isArray(values)) {
+          setStatus(`Cannot composite: dimension '${dimension}' publishes no values to map bands onto.`, true);
+          return null;
+        }
+        const indices = bands.map((b) => values.indexOf(b));
+        if (indices.some((i) => i < 0)) {
+          setStatus(`Cannot composite: bands ${JSON.stringify(bands)} are not all in '${dimension}'.`, true);
+          return null;
+        }
+        return { bands, rescale, dimension, indices };
+      }
+
+      // zarr-layer blends with premultiplied alpha and, once a customFrag is supplied, the
+      // shader owns discarding: fill pixels arrive as NaN rather than being dropped for us.
+      // Each band is stretched by its own rescale pair, which is why per-band ranges exist.
+      // zarr-layer replaces any character that is not a letter, digit or underscore with an
+      // underscore and prefixes a leading digit, so the shader has to refer to the sanitised
+      // names rather than the raw band labels.
+      function glslName(band) {
+        const safe = String(band).replace(/[^A-Za-z0-9_]/g, "_");
+        return /^[0-9]/.test(safe) ? `_${safe}` : safe;
+      }
+
+      // The identifier zarr-layer declares for one selected band. An index selector is
+      // namespaced by its dimension, so band 0 of `band` becomes `band_0`, and the shader has
+      // to match that exactly or it fails to compile with "undeclared identifier". Documented
+      // upstream from 0.9.1 (carbonplan/zarr-layer#87) rather than read off the implementation.
+      // Only indices arrive here — `layerSelector` sends the band axis nothing else.
+      function bandIdentifier(dimension, index) {
+        return glslName(`${dimension}_${index}`);
+      }
+
+      function rgbFrag(names, rescale) {
+        const stretch = (name, pair) =>
+          `clamp((${name} - ${Number(pair[0]).toFixed(6)}) / (${(Number(pair[1]) - Number(pair[0])).toFixed(6)}), 0.0, 1.0)`;
+        return `
+          if (${names.map((n) => `isnan(${n})`).join(" || ")}) {
+            discard;
+          }
+          vec3 rgb = vec3(
+            ${names.map((n, i) => stretch(n, rescale[i])).join(",\n            ")}
+          );
+          fragColor = vec4(rgb * opacity, opacity);
+        `;
+      }
+
+      // The selector as the layer must always see it. A composite pins its band axis to the
+      // list of band names, and that has to be re-sent on every update, not just at
+      // construction: zarr-layer recomputes its band names from the selector inside
+      // `setSelector`, and an array-valued entry is what makes it emit one sampler per band.
+      // Send a selector without it and the bands collapse to a single one named after the
+      // variable, while `customFrag` stays in place — so the shader still refers to red, green
+      // and blue and fails to compile with "undeclared identifier". Both call sites go through
+      // here so they cannot drift apart again.
+      // Indices are clamped to the control's own step count. The store is the authority on
+      // how many slices exist, and it tells us through `values`; this only stops an index
+      // from escaping the range the controls were built for. It is not a substitute for the
+      // collection publishing `values` on a sparse axis (CLIM-950) — without that the count
+      // itself is wrong, and clamping to a wrong count still misses.
+      // Every entry is a selection object rather than a raw index: `selector` holds what
+      // `indexSelection` produced (CLIM-1003), so the clamp reads `.selected` and re-wraps.
+      // Clamping the object itself yields NaN, and a NaN selector reaches the layer silently.
+      function layerSelector() {
+        const pinned = {};
+        for (const d of dimStates) {
+          const index = selector[d.key]?.selected ?? 0;
+          pinned[d.key] = indexSelection(Math.min(Math.max(0, index), Math.max(0, d.count - 1)));
+        }
+        return rgb ? { ...pinned, [rgb.dimension]: { selected: rgb.indices, type: "index" } } : pinned;
       }
 
       // Every non-spatial dimension, in cube order, that the user steps through.
@@ -432,12 +540,24 @@
       let dimStates = [];
       // Current index per dimension key — pins every non-spatial axis for the layer.
       let selector = {};
+      // { bands, rescale, dimension } for a true-colour collection, else null.
+      let rgb = null;
+      // Set once a dataset has positioned the view, so the instance-extent fit cannot undo it.
+      // `fitToExtent` awaits a fetch, so without this it can resolve *after* the first
+      // dataset has loaded and yank the view back out to the whole country.
+      let viewPinnedByLayer = false;
+
+      // A layer spanning less than this fraction of the viewport is treated as out of view.
+      // The 1.3 km Vantor footprint is 0.2% of Nepal's width: technically on screen at the
+      // instance extent, and impossible to find.
+      const MIN_VISIBLE_SPAN = 0.1;
 
       const selectEl = document.getElementById("dataset-select");
       const dimControls = document.getElementById("dim-controls");
       const datasetMeta = document.getElementById("dataset-meta");
       const metaSource = document.getElementById("meta-source");
       const metaUnits = document.getElementById("meta-units");
+      const metaUnitsLabel = document.getElementById("meta-units-label");
       const metaDescription = document.getElementById("meta-description");
       const metaLicence = document.getElementById("meta-licence");
       const legendEl = document.getElementById("legend");
@@ -448,6 +568,12 @@
       const statusEl = document.getElementById("status");
 
       function updateLegend(cm, clim, units) {
+        if (rgb) {
+          // A true-colour composite has no single ramp to explain, and showing one from
+          // the unused colormap would be actively misleading.
+          legendEl.classList.add("hidden");
+          return;
+        }
         const stops = Array.from(
           { length: 32 },
           (_, i) => cm[Math.round((i * (cm.length - 1)) / 31)]
@@ -496,7 +622,7 @@
       }
 
       async function fitToExtent() {
-        if (!map || mapUnavailable) return;
+        if (!map || mapUnavailable || viewPinnedByLayer) return;
         try {
           const res = await fetch("{{ mount }}/extent");
           if (!res.ok) return;
@@ -504,6 +630,44 @@
           const [xmin, ymin, xmax, ymax] = extent.bbox;
           map.fitBounds([[xmin, ymin], [xmax, ymax]], { padding: 40, maxZoom: 10 });
         } catch {}
+      }
+
+
+      // Bring a newly selected layer into view when it would otherwise be unfindable.
+      //
+      // Deliberately conditional. Re-fitting on every dataset switch would discard a view the
+      // user had chosen — comparing two layers over the same spot means switching between them
+      // without the map moving — so this only acts when the layer is genuinely not viewable:
+      // outside the viewport entirely, or so small within it as to be a speck.
+      //
+      // Zooming *out* is not handled: a layer larger than the viewport is still visible, and a
+      // user zoomed into a global dataset is looking at exactly what they asked for.
+      function revealLayer(collection) {
+        if (!map || mapUnavailable) return;
+        const bbox = collection.extent?.spatial?.bbox?.[0];
+        if (!Array.isArray(bbox) || bbox.length < 4) return;
+        const [w, s, e, n] = bbox.slice(0, 4).map(Number);
+        if (![w, s, e, n].every(Number.isFinite) || w >= e || s >= n) return;
+
+        const view = map.getBounds();
+        const viewWidth = view.getEast() - view.getWest();
+        const viewHeight = view.getNorth() - view.getSouth();
+        // Before the map has a size, getBounds is not meaningful; fit rather than divide by it.
+        const measurable = Number.isFinite(viewWidth) && Number.isFinite(viewHeight) && viewWidth > 0 && viewHeight > 0;
+
+        if (measurable) {
+          const offscreen =
+            e < view.getWest() || w > view.getEast() || n < view.getSouth() || s > view.getNorth();
+          const spanRatio = Math.max((e - w) / viewWidth, (n - s) / viewHeight);
+          if (!offscreen && spanRatio >= MIN_VISIBLE_SPAN) {
+            viewPinnedByLayer = true;
+            return;
+          }
+        }
+        // maxZoom so a sub-kilometre footprint stops at a usable scale instead of going to
+        // street level, where the imagery is past its own resolution.
+        map.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 16 });
+        viewPinnedByLayer = true;
       }
 
       async function loadCatalog() {
@@ -582,7 +746,19 @@
         // Build a control state for every non-spatial dimension. The layer selector
         // must pin each one so the cube reduces to 2-D for rendering.
         const dimensions = collection["cube:dimensions"] ?? {};
-        dimStates = getSteppingDims(dimensions).map((key) => {
+        // A true-colour render pins the band axis itself, so it must not also get a
+        // stepping control — the selector would then disagree with the shader.
+        rgb = readRgbRender(renders, dimensions);
+        // A collection that declares `bands` and cannot be resolved into one must not quietly
+        // fall through to the colormapped path: that renders a single band under a ramp, which
+        // looks like a working layer and is a picture of different data. `readRgbRender` has
+        // already explained why on the status line, so stop here rather than clearing it below.
+        if (rgb === null && Array.isArray(renders?.bands)) {
+          return;
+        }
+        dimStates = getSteppingDims(dimensions)
+          .filter((key) => key !== rgb?.dimension)
+          .map((key) => {
           const dim = dimensions[key];
           const steps = buildSteps(dimensions, key);
           const control = controlForDim(dim);
@@ -636,7 +812,13 @@
             clim,
             colormap: cm,
             opacity: 1,
-            selector,
+            selector: layerSelector(),
+            ...(rgb !== null && {
+              customFrag: rgbFrag(
+                rgb.indices.map((i) => bandIdentifier(rgb.dimension, i)),
+                rgb.rescale,
+              ),
+            }),
             ...(zarrVersion !== null && { zarrVersion }),
             ...(fillValue !== null && { fillValue }),
             crs: nativeCrs,
@@ -666,7 +848,17 @@
         );
         const units = collection["cube:variables"]?.[variable]?.unit ?? "";
         metaSource.textContent = source ?? "—";
-        metaUnits.textContent = units || "—";
+        // A composite is a picture, not a measurement, so its unit is an artefact of having to
+        // put something in the field: the imagery layers declare `1`, which tells a reader
+        // nothing and invites them to treat display values as calibrated. Hide the row for
+        // those, and for a dataset that declares no unit at all — an em dash is not
+        // information either. The same reasoning already hides the legend for a composite.
+        // The `.hidden` class rather than the `hidden` attribute: it carries `!important`, so
+        // it cannot be defeated by an author `display` rule on a grid item.
+        const showUnits = !rgb && Boolean(units);
+        metaUnits.textContent = units;
+        metaUnitsLabel.classList.toggle("hidden", !showUnits);
+        metaUnits.classList.toggle("hidden", !showUnits);
         datasetMeta.classList.remove("hidden");
 
         // The collection description, which is where a dataset states what its values actually
@@ -702,6 +894,7 @@
         metaDescription.classList.toggle("hidden", !description || generated);
 
         updateLegend(cm, clim, units);
+        revealLayer(collection);
 
         setStatus("");
       }
@@ -715,7 +908,7 @@
         const layer = activeLayer;
         clearTimeout(_selectorDebounce);
         _selectorDebounce = setTimeout(() => {
-          layer?.setSelector({ ...selector });
+          layer?.setSelector(layerSelector());
         }, 150);
       }
 
