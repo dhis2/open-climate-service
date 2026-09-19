@@ -151,6 +151,19 @@ def test_the_overview_links_to_every_area_as_a_page(client: TestClient) -> None:
     assert 'href="#datasets"' not in html and 'href="#data-sources"' not in html
 
 
+def test_the_list_script_carries_nothing_for_areas(client: TestClient) -> None:
+    """The switcher went with the areas.
+
+    It ships to all four list pages, so leaving it in meant every one of them ran a
+    `querySelectorAll` for elements no template contains.
+    """
+    body = client.get("/datasets", headers={"Accept": BROWSER_ACCEPT}).text
+
+    assert "initList" in body, "the list behaviour is still there"
+    assert "data-area" not in body
+    assert "scroll-margin-top: 100vh" not in body, "the rule existed only for the switcher"
+
+
 def test_read_only_is_stated_on_the_overview(monkeypatch: pytest.MonkeyPatch) -> None:
     """Said once, where a visitor will see it, since no page then offers ingest or sync."""
     monkeypatch.setattr(api_config, "is_read_only", lambda: True)
