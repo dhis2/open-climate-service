@@ -800,8 +800,9 @@ _RST_LITERAL = re.compile(r"(?<!`)``([^`]+)``(?!`)")
 _RST_DIRECTIVE = re.compile(r"^\s*\.\. [a-z]+::\s*$")
 
 # Rendered as tables further down the page, so repeating them as prose only duplicates the
-# content and leaves the numpydoc underline showing as a row of dashes.
-_DOC_SECTIONS_SHOWN_ELSEWHERE = frozenset({"parameters", "returns", "yields", "raises", "other parameters"})
+# content and leaves the numpydoc underline showing as a row of dashes. Only these two: no page
+# renders Raises or Yields, so dropping those would lose what they document rather than repeat it.
+_DOC_SECTIONS_SHOWN_ELSEWHERE = frozenset({"parameters", "returns"})
 
 
 def _is_section_heading(lines: list[str], index: int) -> bool:
@@ -1014,11 +1015,15 @@ def _process_page_context(process: dict[str, Any], origin_label: str, workflows:
     returns = _mapping(process.get("returns"))
     record = type("ProcessParameters", (), {"parameters": process.get("parameters") or []})
     summary = " ".join(str(process.get("summary") or "").split())
-    blocks = _description_blocks(process.get("description"))
     # A docstring's first line is its summary, so for every process that has one the page led
-    # with the same sentence twice — once as the lead, once as the opening paragraph.
-    if summary and blocks and blocks[0].get("html") == summary:
-        blocks = blocks[1:]
+    # with the same sentence twice — once as the lead, once as the opening paragraph. Compared
+    # before rendering: the block is Markup by then, so a summary carrying a link, bold or an
+    # escaped character would no longer match itself and the repeat would come back.
+    description = str(process.get("description") or "")
+    first, _, rest = description.partition("\n\n")
+    if summary and " ".join(first.split()) == summary:
+        description = rest
+    blocks = _description_blocks(description)
     return {
         "process": {
             "id": process["id"],
