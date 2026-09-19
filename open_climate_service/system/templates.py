@@ -1379,7 +1379,7 @@ def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) ->
     Workflows as an output of an unknown workflow, rather than silently dropped.
     """
     sources = sorted(
-        (_source_view(t) for t in templates if registry_datasets.is_ingestable(t)),
+        (_source_view(t) for t in _ingestable_templates(templates)),
         key=lambda source: (source["provider"].lower(), source["name"].lower()),
     )
     workflow_ids = {workflow.id for workflow in workflows}

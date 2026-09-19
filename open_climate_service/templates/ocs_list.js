@@ -1,34 +1,6 @@
-// Progressive enhancement: without JavaScript every area is shown in sequence and every
-// list is complete, and the rail links scroll to their section.
+// Progressive enhancement: without JavaScript every list is complete and every item is shown.
 (function () {
   document.documentElement.classList.add("js");
-
-  var areas = Array.prototype.slice.call(document.querySelectorAll("[data-area]"));
-  var links = Array.prototype.slice.call(document.querySelectorAll("[data-area-link]"));
-
-  function showArea(id, moveFocus) {
-    var known = areas.some(function (area) {
-      return area.id === id;
-    });
-    if (!known) id = "overview";
-    areas.forEach(function (area) {
-      area.hidden = area.id !== id;
-    });
-    links.forEach(function (link) {
-      if (link.getAttribute("data-area-link") === id) link.setAttribute("aria-current", "page");
-      else link.removeAttribute("aria-current");
-    });
-    window.scrollTo(0, 0);
-    if (moveFocus) {
-      var heading = document.getElementById(id + "-title");
-      if (heading) heading.focus({ preventScroll: true });
-    }
-  }
-
-  window.addEventListener("hashchange", function () {
-    showArea(location.hash.slice(1), true);
-  });
-  showArea(location.hash.slice(1), false);
 
   function initList(root) {
     var items = Array.prototype.slice.call(root.querySelectorAll("[data-item]"));
