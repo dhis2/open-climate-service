@@ -239,15 +239,43 @@ def test_a_description_that_is_already_markdown_is_untouched() -> None:
 
 
 def test_the_lead_sentence_is_not_repeated_as_the_first_paragraph() -> None:
-    """A docstring's first line is its summary, so the page led with it twice."""
+    """A docstring's first line is its summary, so the page led with it twice.
+
+    Matched on the raw text, before either side is rendered: a summary carrying a literal or
+    bold would otherwise stop matching the paragraph it was taken from, and the repeat return.
+    """
     context = landing._process_page_context(
         {"id": "x", "summary": "Compute a thing.", "description": "Compute a thing.\n\nThen more."},
         "earthkit",
         [],
     )
-
-    assert context["process"]["summary"] == "Compute a thing."
     assert [str(b["html"]) for b in context["blocks"]] == ["Then more."]
+
+    marked = landing._process_page_context(
+        {
+            "id": "y",
+            "summary": "Uses ``eq()`` and **bold**.",
+            "description": "Uses ``eq()`` and **bold**.\n\nThen more.",
+        },
+        "earthkit",
+        [],
+    )
+    assert [str(b["html"]) for b in marked["blocks"]] == ["Then more."]
+
+
+def test_a_raises_section_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only Parameters and Returns are tables further down the page.
+
+    Dropping Raises as well lost the failure modes a docstring documents, since nothing else
+    on the page shows them.
+    """
+    blocks = landing._description_blocks(
+        "Does a thing.\n\nRaises\n------\nValueError\n    When it cannot.\n"
+    )
+    rendered = " ".join(str(b.get("html") or b.get("code") or b.get("bullets")) for b in blocks)
+
+    assert "Raises" in rendered
+    assert "ValueError" in rendered
 
 
 def test_the_process_page_lists_the_workflows_that_use_it() -> None:
