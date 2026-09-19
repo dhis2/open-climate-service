@@ -662,7 +662,7 @@ def render_data_sources_page(mount: str) -> str:
         styles=_read_asset("ocs_ui.css"),
         list_script=_read_asset("ocs_list.js"),
         nav=page_nav(mount, "data-sources"),
-        sources=[_source_view(t) for t in templates if registry_datasets.is_ingestable(t)],
+        sources=[_source_view(t) for t in _ingestable_templates(templates)],
     )
 
 
@@ -706,15 +706,18 @@ def _load_templates() -> list[dict[str, Any]]:
         return []
 
 
-def _ingestable_templates() -> list[dict[str, Any]]:
-    """Return only templates that can be ingested from a source.
+def _ingestable_templates(templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The templates in *templates* that can be ingested from a source.
 
     Templates without an ingestion plugin — typically workflow outputs published via
-    ``save_result`` — have no upstream fetch path, so they are excluded from the ingest form. Shares the registry's
-    predicate with ``GET /dataset-templates/`` and with the ingest path that refuses them, so
-    the form and the API cannot disagree about what is offerable.
+    ``save_result`` — have no upstream fetch path, so they are not data sources. Shares the
+    registry's predicate with ``GET /dataset-templates/`` and with the ingest path that refuses
+    them, so every surface agrees about what is offerable.
+
+    Takes the list rather than loading it, because each caller already has one and a second
+    load would be a second answer to the same question.
     """
-    return [t for t in _load_templates() if registry_datasets.is_ingestable(t)]
+    return [t for t in templates if registry_datasets.is_ingestable(t)]
 
 
 def _load_datasets() -> list[Any]:
@@ -748,7 +751,7 @@ def render_manage(version: str, mount: str, message: str | None = None, error: s
         mount=mount,
         name=api_config.get_name(),
         extent=_load_extent(),
-        templates=_ingestable_templates(),
+        templates=_ingestable_templates(_load_templates()),
         datasets=_load_datasets(),
         today=today,
         year_ago=year_ago,
