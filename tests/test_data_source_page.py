@@ -250,6 +250,14 @@ def test_one_facts_panel_holds_both_what_and_where(client: TestClient) -> None:
     assert 'id="data-title"' not in body
 
 
+def test_the_breadcrumb_returns_to_the_source_list(client: TestClient) -> None:
+    """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
+    body = client.get("/data-sources/chirps3_precipitation_daily").text
+
+    assert '<a href="/data-sources">Data sources</a>' in body
+    assert "/#data-sources" not in body
+
+
 def test_the_data_source_list_is_its_own_page(client: TestClient) -> None:
     """The area that lived at `/#data-sources`, as a URL that can be linked to.
 
