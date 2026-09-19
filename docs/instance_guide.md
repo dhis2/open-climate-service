@@ -174,8 +174,8 @@ make install
 make run
 ```
 
-Visit `http://127.0.0.1:9000` to confirm the service is running. From there, open
-`/manage` to ingest data and `/map` to view it — see [Using the web interface](web_interface.md).
+Visit `http://127.0.0.1:9000` to confirm the service is running. From there, open a data
+source to ingest it and `/map` to view the result — see [Using the web interface](web_interface.md).
 The `/extent` endpoint should return your configured bounding box.
 
 ---
@@ -275,8 +275,8 @@ Still available: the catalogue and metadata (`/collections`, `/stac`, `/datasets
 `/processes`, `/process_graphs`, `/extent`), the data (`/zarr/…`, `/icechunk/…`, downloads),
 the landing page and `/map`, and `POST /result` for synchronous openEO process graphs.
 
-Refused: ingestion and sync, the `/manage` console, stored process graph writes, and batch
-jobs.
+Refused: ingestion and sync (the pages leave their forms out), stored process graph writes,
+and batch jobs.
 
 Read-only applies to HTTP only, so ingestion becomes an operator task on the host. Until a
 CLI command exists, run it inside the container or virtualenv:

@@ -1,6 +1,5 @@
 import json
 from collections.abc import Callable, Coroutine
-from html.parser import HTMLParser
 from typing import cast
 
 import pytest
@@ -11,40 +10,6 @@ from starlette.responses import StreamingResponse
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.system import routes as system_routes
 from open_climate_service.system import templates as system_templates
-
-
-class _ManageHtmlParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.current_sync_form: dict[str, str] | None = None
-        self.sync_forms_by_dataset_id: dict[str, dict[str, str]] = {}
-        self.sync_triggers: dict[str, dict[str, str]] = {}
-        self.cancel_buttons: dict[str, dict[str, str]] = {}
-
-    @staticmethod
-    def _has_class(attr_map: dict[str, str], class_name: str) -> bool:
-        return class_name in attr_map.get("class", "").split()
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attr_map = {key: value for key, value in attrs if value is not None}
-        if tag == "form" and self._has_class(attr_map, "sync-form") and "data-trigger-id" in attr_map:
-            self.current_sync_form = attr_map
-        if (
-            tag == "input"
-            and self.current_sync_form is not None
-            and attr_map.get("type") == "hidden"
-            and attr_map.get("name") == "dataset_id"
-            and "value" in attr_map
-        ):
-            self.sync_forms_by_dataset_id[attr_map["value"]] = self.current_sync_form
-        if tag == "button" and "data-dataset-id" in attr_map and attr_map.get("id", "").startswith("sync-trigger-"):
-            self.sync_triggers[attr_map["data-dataset-id"]] = attr_map
-        if tag == "button" and self._has_class(attr_map, "secondary-btn") and "data-dataset-id" in attr_map:
-            self.cancel_buttons[attr_map["data-dataset-id"]] = attr_map
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "form":
-            self.current_sync_form = None
 
 
 class _FakeRequest:
@@ -293,69 +258,6 @@ async def test_manage_ingest_rejects_blank_start(monkeypatch: pytest.MonkeyPatch
     assert "chirps3_precipitation_daily" in detail
 
 
-def test_manage_page_shows_split_publication_and_sync_columns(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    dataset_id = "chirps3_precipitation_daily'quoted"
-    monkeypatch.setattr(system_templates, "_load_templates", lambda: [])
-    monkeypatch.setattr(system_templates, "_load_extent", lambda: {"id": "sle", "name": "Sierra Leone", "bbox": []})
-    monkeypatch.setattr(
-        system_templates,
-        "_load_datasets",
-        lambda: [
-            type(
-                "Dataset",
-                (),
-                {
-                    "dataset_id": dataset_id,
-                    "dataset_name": "CHIRPS3 precipitation",
-                    "period_type": "daily",
-                    "extent": type(
-                        "Extent",
-                        (),
-                        {"temporal": type("Temporal", (), {"start": "2026-01-01", "end": "2026-01-10"})()},
-                    )(),
-                    "publication": type("Publication", (), {"status": "published"})(),
-                },
-            )()
-        ],
-    )
-
-    response = client.get("/manage")
-
-    assert response.status_code == 200
-
-    parser = _ManageHtmlParser()
-    parser.feed(response.text)
-    sync_form_attrs = parser.sync_forms_by_dataset_id.get(dataset_id)
-    sync_trigger_attrs = parser.sync_triggers.get(dataset_id)
-    cancel_button_attrs = parser.cancel_buttons.get(dataset_id)
-
-    assert "<th>Publication</th>" in response.text
-    assert "<th>Sync</th>" in response.text
-    assert "Start sync" in response.text
-    assert "Cutoff end" in response.text
-    assert sync_form_attrs is not None
-    assert sync_form_attrs["data-trigger-id"].startswith("sync-trigger-sync-row-")
-    assert sync_form_attrs["data-progress-id"].startswith("sync-progress-sync-row-")
-    assert sync_form_attrs["data-status-id"].startswith("sync-status-sync-row-")
-    assert "runJob(" in sync_form_attrs["onsubmit"]
-    assert "this.dataset.triggerId" in sync_form_attrs["onsubmit"]
-    assert "this.dataset.progressId" in sync_form_attrs["onsubmit"]
-    assert "this.dataset.statusId" in sync_form_attrs["onsubmit"]
-    assert sync_trigger_attrs is not None
-    assert sync_trigger_attrs["data-dataset-id"] == dataset_id
-    assert sync_trigger_attrs["data-sync-dom-id"].startswith("sync-row-")
-    assert sync_trigger_attrs["onclick"] == "openSyncPanel(this.dataset.syncDomId)"
-    assert cancel_button_attrs is not None
-    assert cancel_button_attrs["data-dataset-id"] == dataset_id
-    assert cancel_button_attrs["data-sync-dom-id"] == sync_trigger_attrs["data-sync-dom-id"]
-    assert cancel_button_attrs["onclick"] == "closeSyncPanel(this.dataset.syncDomId)"
-    assert "function restoreJobControls(controls, btn, status)" in response.text
-    assert "label.textContent = 'Error: Sync ended unexpectedly.';" in response.text
-    assert "const message = err instanceof Error ? err.message : String(err);" in response.text
-
-
 def test_ingestable_templates_excludes_static_workflow_outputs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Templates with no ingestion.plugin (e.g. workflow outputs) are not ingestable."""
     monkeypatch.setattr(
@@ -372,34 +274,6 @@ def test_ingestable_templates_excludes_static_workflow_outputs(monkeypatch: pyte
 
     assert "worldpop_population_change" not in ingestable_ids
     assert ingestable_ids == ["chirps3_precipitation_daily", "worldpop_population_yearly"]
-
-
-def test_manage_page_dropdown_excludes_static_templates(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The /manage ingest dropdown lists only ingestable templates."""
-    monkeypatch.setattr(
-        system_templates,
-        "_load_templates",
-        lambda: [
-            {
-                "id": "chirps3_precipitation_daily",
-                "name": "Total precipitation (CHIRPS3)",
-                "ingestion": {"plugin": "p"},
-            },
-            {
-                "id": "worldpop_population_change",
-                "name": "Population change (WorldPop Global2)",
-                "sync": {"kind": "static"},
-            },
-        ],
-    )
-    monkeypatch.setattr(system_templates, "_load_extent", lambda: {"id": "sle", "name": "Sierra Leone", "bbox": []})
-    monkeypatch.setattr(system_templates, "_load_datasets", lambda: [])
-
-    response = client.get("/manage")
-
-    assert response.status_code == 200
-    assert 'value="chirps3_precipitation_daily"' in response.text
-    assert 'value="worldpop_population_change"' not in response.text
 
 
 def test_the_shared_navigation_marks_the_current_page_and_carries_the_mount() -> None:
@@ -502,20 +376,6 @@ def test_only_the_latest_selection_survives_the_wait_for_the_style(client: TestC
     assert "if (alreadyWaiting) return;" in body
     # Emptying the selection cancels a load still waiting, rather than letting it arrive later.
     assert "pendingWhenReady = null;\n          clearDataset();" in body
-
-
-def test_the_console_understands_the_stream_it_is_served(client: TestClient) -> None:
-    """`/manage` is still served until it is removed, and consumes the same endpoints.
-
-    It recognised only the old `redirect` event, so a successful run under the new contract
-    reached EOF and reported "Sync ended unexpectedly", and a pre-stream refusal lost its
-    reason to a generic "Request failed".
-    """
-    body = client.get("/manage").text
-
-    assert "if (evt.finished)" in body
-    assert "if (evt.error)" in body
-    assert "refusal.error" in body, "the refusal's reason is read from the body"
 
 
 def test_a_superseded_load_does_not_reach_the_map(client: TestClient) -> None:

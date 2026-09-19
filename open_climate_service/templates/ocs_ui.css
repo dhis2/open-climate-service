@@ -215,11 +215,6 @@ main > section + section {
 .js main > section + section {
   margin-top: 0;
 }
-/* One area shows at a time, so jumping to its anchor would only scroll the header away.
-   A margin taller than the page makes that jump land at the top. */
-.js main > section {
-  scroll-margin-top: 100vh;
-}
 h2 {
   font-size: var(--font-size-h2);
   font-weight: var(--font-weight-medium);
