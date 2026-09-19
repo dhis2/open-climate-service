@@ -378,6 +378,22 @@ def test_only_the_latest_selection_survives_the_wait_for_the_style(client: TestC
     assert "pendingWhenReady = null;\n          clearDataset();" in body
 
 
+def test_a_superseded_load_does_not_reach_the_map(client: TestClient) -> None:
+    """The guard after the style has loaded, where `whenMapReady` no longer helps.
+
+    Two selections in quick succession both run: whichever finishes last adds the shared
+    `zarr-layer`, so without this the map can settle on the dataset that was not chosen.
+    """
+    body = client.get("/map").text
+
+    assert "const generation = ++loadGeneration;" in body
+    assert "const superseded = () => generation !== loadGeneration;" in body
+    # Checked after every await, and again at the step that would actually go wrong.
+    assert body.count("if (superseded()) return;") >= 4
+    # Emptying the selection supersedes an in-flight load too, not only a pending one.
+    assert "loadGeneration++;" in body
+
+
 def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     response = client.get("/map")
 
