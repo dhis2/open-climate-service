@@ -269,9 +269,7 @@ def test_a_raises_section_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     Dropping Raises as well lost the failure modes a docstring documents, since nothing else
     on the page shows them.
     """
-    blocks = landing._description_blocks(
-        "Does a thing.\n\nRaises\n------\nValueError\n    When it cannot.\n"
-    )
+    blocks = landing._description_blocks("Does a thing.\n\nRaises\n------\nValueError\n    When it cannot.\n")
     rendered = " ".join(str(b.get("html") or b.get("code") or b.get("bullets")) for b in blocks)
 
     assert "Raises" in rendered
