@@ -146,6 +146,9 @@ def test_the_overview_links_to_every_area_as_a_page(client: TestClient) -> None:
     for path in ("/datasets", "/data-sources", "/workflows", "/processes"):
         assert f'href="{path}"' in html
     assert "data-area-link" not in html, "nothing switches areas in place any more"
+    # The stat cards are links too, and pointed at fragments this page no longer has.
+    assert 'class="panel stat" href="/datasets"' in html
+    assert 'href="#datasets"' not in html and 'href="#data-sources"' not in html
 
 
 def test_read_only_is_stated_on_the_overview(monkeypatch: pytest.MonkeyPatch) -> None:

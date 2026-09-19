@@ -17,22 +17,25 @@ scheduled — see the [API reference](managed_data_api_guide.md).
 
 ---
 
-## The landing page (`/`)
+## The overview and the collections
 
-The landing page is split into five areas, chosen from the navigation on the left (a row of tabs
-on a narrow screen). One area shows at a time, and each has its own address, such as
-`/#data-sources`, so it can be bookmarked or linked.
+Every page carries the same navigation on the left (a row of tabs on a narrow screen), and each
+entry is a page of its own — an address that can be bookmarked, shared or opened without
+JavaScript.
 
-| Area             | What it shows                                                                                                                      |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Overview**     | The instance's extent on a globe, counts of datasets, data sources and workflows, the size of everything stored, plus access mode and version |
-| **Datasets**     | The data this instance holds, with temporal coverage and publication status                                                        |
-| **Data sources** | Data the instance can fetch from outside providers, titled by dataset with the provider beneath                                    |
-| **Workflows**    | Each workflow and what it makes: a published dataset or an exported file                                                           |
-| **Processes**    | The processes this instance can run, tagged by origin and filterable by it                                                         |
+| Page                      | What it shows                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, data sources and workflows, the size of everything stored, plus access mode and version |
+| **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
+| **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, titled by dataset with the provider beneath                            |
+| **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
+| **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
+
+The overview counts the collections and links to them rather than listing them, so the root
+stays small however much the instance holds.
 
 The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
-time. Without JavaScript every area is shown in sequence and each list is complete.
+time. Without JavaScript each list is complete.
 
 Datasets and data sources can be shown as **tiles** or as a **list**; the choice is remembered
 in the browser. Data sources show their provider, description and details, with no preview,

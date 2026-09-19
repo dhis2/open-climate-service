@@ -72,12 +72,13 @@ see [ERA5-Land datasets](era5_land_datasets.md).
 make run
 ```
 
-The service starts on `http://127.0.0.1:9000`. Open it in a browser — the landing page
-lists the data sources you can ingest and the datasets you hold, and links to the map viewer.
+The service starts on `http://127.0.0.1:9000`. Open it in a browser — the overview reports what
+the instance holds and links to the data sources you can ingest, the datasets you hold, and the
+map viewer.
 
 ## Step 5: Ingest and view data
 
-Open **Data sources** on the landing page and ingest your first dataset from its page.
+Open **Data sources** from the navigation and ingest your first dataset from its page.
 CHIRPS3 (daily precipitation) requires no API key and is a good one to start with — open
 it, enter a start date, and ingest (leave **Publish** checked). Progress streams live, and
 the dataset's page opens when it finishes.

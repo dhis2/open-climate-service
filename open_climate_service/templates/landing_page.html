@@ -26,19 +26,19 @@
           <h2 id="overview-title" tabindex="-1">Overview</h2>
           <p class="lead">Climate and environmental data for this instance, ready to explore and use.</p>
           <div class="stats">
-            <a class="panel stat" href="#datasets">
+            <a class="panel stat" href="{{ mount }}/datasets">
               <span class="value">{{ datasets | length }}</span>
               <span class="label">Datasets</span>
             </a>
-            <a class="panel stat" href="#data-sources">
+            <a class="panel stat" href="{{ mount }}/data-sources">
               <span class="value">{{ sources | length }}</span>
               <span class="label">Data sources</span>
             </a>
-            <a class="panel stat" href="#workflows">
+            <a class="panel stat" href="{{ mount }}/workflows">
               <span class="value">{{ workflows | length }}</span>
               <span class="label">Workflows</span>
             </a>
-            <a class="panel stat" href="#datasets">
+            <a class="panel stat" href="{{ mount }}/datasets">
               <span class="value">{{ stored_size }}</span>
               <span class="label">Data stored</span>
             </a>
