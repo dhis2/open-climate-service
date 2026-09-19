@@ -758,6 +758,9 @@ p.note.table-title {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: var(--spacers-dp12);
+  /* Set the fields apart from the note or heading above them: the first label otherwise sits
+     tight under running text and reads as part of it rather than as the start of the form. */
+  margin-block-start: var(--spacers-dp16);
 }
 .field {
   display: flex;

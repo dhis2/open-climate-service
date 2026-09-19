@@ -2,7 +2,7 @@
 
 import importlib.resources
 import logging
-from datetime import date
+from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import Any
@@ -15,6 +15,7 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
+from open_climate_service.shared.time import datetime_to_period_string
 
 from .schemas import Link, RootResponse
 
@@ -128,6 +129,7 @@ LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
+    ("data-sources", "Data sources", "/data-sources"),
     ("map", "Map viewer", "/map"),
     ("openeo", "openEO editor", "/openeo"),
 )
@@ -296,7 +298,9 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
             f"/process_graphs/{template['produced_by']}",
         )
     elif template and registry_datasets.is_ingestable(template):
-        origin = ("Origin", "Fetched from the data source", None)
+        # Linked, now that the data source has a page: the source page already links to the
+        # dataset it produced, so this closes that pair rather than leaving it one-way.
+        origin = ("Origin", "Fetched from the data source", f"/data-sources/{template['id']}")
     else:
         origin = ("Origin", "", None)
 
@@ -382,7 +386,7 @@ _PERIOD_FORMAT_HINTS = {
     "hourly": "YYYY-MM-DDTHH",
     "daily": "YYYY-MM-DD",
     "dekadal": "YYYY-MM-DD",
-    "weekly": "YYYY-MM-DD",
+    "weekly": "YYYY-Www",
     "monthly": "YYYY-MM",
     "yearly": "YYYY",
 }
@@ -403,6 +407,197 @@ def prefers_html(request: Request) -> bool:
     if not accept:
         return False
     return _media_type_q(accept, "text/html") > _media_type_q(accept, "application/json")
+
+
+def _period_value(value: str, period: str) -> str:
+    """A date as the source's own period identifier.
+
+    The field asks for a period, not a date: a monthly source takes `2025-09`, a yearly one
+    `2025`, a weekly one `2025-W38`. Through the shared converter rather than by trimming the
+    string, because a week's identifier is not a prefix of the date it falls in — truncating
+    left `2026-09-17` unchanged and the form then asked for something the source cannot read.
+    """
+    if not value or not period:
+        return value
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    try:
+        return datetime_to_period_string(moment, period)
+    except Exception:
+        _log.exception("Unexpected error formatting %r as a %s period", value, period)
+        return value
+
+
+def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
+    """Prefilled start and end for the ingest form, following the source's direction.
+
+    History defaults to the past year; a forecast leaves
+    both blank, meaning "from now, as far ahead as the source offers"; a span that crosses now
+    runs to the declared end, so the projected years are not cut off at today.
+    """
+    direction = str(template.get("temporal_direction") or "past")
+    period = str(template.get("period_type") or "")
+    # Keep the day, and only give it up where it does not exist: clamping every date to the
+    # 28th moved the default start back by up to three days for most of each month, which a
+    # daily or dekadal source ingests as real extra periods.
+    try:
+        year_ago = today.replace(year=today.year - 1).isoformat()
+    except ValueError:
+        # 29 February, where the previous year has none: the 28th is the nearest real date.
+        year_ago = today.replace(year=today.year - 1, month=2, day=28).isoformat()
+    declared_end = _mapping(_mapping(template.get("extents")).get("temporal")).get("end")
+    if direction == "future":
+        return {"start": "", "end": "", "start_required": False, "direction": direction}
+    end = str(declared_end) if direction == "spanning" and declared_end else today.isoformat()
+    return {
+        "start": _period_value(year_ago, period),
+        "end": _period_value(end, period),
+        "start_required": True,
+        "direction": direction,
+    }
+
+
+def _data_source_page_context(
+    template: dict[str, Any], datasets: list[Any], *, read_only: bool, has_extent: bool, today: date
+) -> dict[str, Any]:
+    """Everything the data source page shows, and whether it can offer the ingest form."""
+    display = _mapping(template.get("display"))
+    sync = _mapping(template.get("sync"))
+    sync_kind = str(sync.get("kind") or "")
+    extents = _mapping(template.get("extents"))
+    temporal = _mapping(extents.get("temporal"))
+    bbox = _mapping(extents.get("spatial")).get("bbox")
+    version = sync.get("version")
+    providers = ", ".join(
+        str(provider["name"])
+        for provider in template.get("providers") or []
+        if isinstance(provider, dict) and provider.get("name")
+    )
+    ingestable = registry_datasets.is_ingestable(template)
+    # A managed dataset records the template it came from in `source_dataset_id`; match on that
+    # first and fall back to `dataset_id`, as the dataset page and the STAC path both do.
+    #
+    # Nothing writes an aliased record today — `create_artifact` persists under the template id
+    # and no path assigns `source_dataset_id` — so the two are always equal in practice. The
+    # ingest form below depends on that: it posts `source.id`, which is the only id
+    # `create_artifact` can act on. Introducing aliasing therefore means changing the ingest
+    # path to carry a managed id, not just this lookup.
+    ingested = next(
+        (dataset for dataset in datasets if (dataset.source_dataset_id or dataset.dataset_id) == template["id"]),
+        None,
+    )
+    display_range = display.get("range")
+
+    about: list[Fact] = [
+        ("Identifier", str(template["id"]), None),
+        ("Short name", str(template.get("short_name") or ""), None),
+        ("Provider", str(template.get("source") or ""), template.get("source_url")),
+        ("Providers", providers, None),
+        ("Licence", _licence_label(template) or "", None),
+    ]
+    data: list[Fact] = [
+        ("Variable", str(template.get("variable") or ""), None),
+        ("Standard name", str(template.get("standard_name") or ""), None),
+        ("Units", str(template.get("units") or ""), None),
+        ("Cell methods", str(template.get("cell_methods") or ""), None),
+        ("Period type", str(template.get("period_type") or ""), None),
+        ("Available", _coverage_label(temporal.get("begin"), temporal.get("end")), None),
+        ("Direction", str(template.get("temporal_direction") or ""), None),
+        ("Resolution", str(template.get("resolution") or ""), None),
+        (
+            "Coverage",
+            ", ".join(str(value) for value in bbox) if isinstance(bbox, list) and len(bbox) == 4 else "",
+            None,
+        ),
+    ]
+    status: list[Fact] = [
+        ("Updates", _SYNC_KIND_LABELS.get(sync_kind, sync_kind), None),
+        (
+            "Release",
+            f"{version.get('authority')}:{version.get('value')}"
+            if isinstance(version, dict) and version.get("value")
+            else str(version or ""),
+            None,
+        ),
+        # Above the scale it describes, as on the dataset page: the range is what makes the
+        # colours mean anything, so it reads before the name of the ramp rather than after.
+        (
+            "Display range",
+            f"{display_range[0]} – {display_range[1]}"
+            if isinstance(display_range, list | tuple) and len(display_range) == 2
+            else "",
+            None,
+        ),
+        ("Colour scale", str(display.get("colormap") or ""), None),
+    ]
+
+    def present(facts: list[Fact]) -> list[Fact]:
+        return [fact for fact in facts if fact[1]]
+
+    period = str(template.get("period_type") or "")
+    return {
+        "source": {
+            "id": template["id"],
+            "name": template.get("name") or template["id"],
+            "provider": template.get("source") or "",
+            "ramp": _colormap_ramp(display.get("colormap") if isinstance(display.get("colormap"), str) else None),
+        },
+        "paragraphs": _paragraphs(str(template.get("description") or "")),
+        # One list, as on the dataset page: what the source measures, then where it comes from.
+        "data": present(data + about),
+        "status_facts": present(status),
+        "ingestable": ingestable,
+        "produced_by": template.get("produced_by") if not ingestable else None,
+        "ingested": (
+            {
+                # The dataset's own id, not the template's: the two differ whenever a source was
+                # ingested under a different name, and the links below have to reach the dataset.
+                "id": ingested.dataset_id,
+                "coverage": _coverage_label(ingested.extent.temporal.start, ingested.extent.temporal.end),
+                "status": "published" if ingested.publication.status == "published" else "unpublished",
+            }
+            if ingested is not None
+            else None
+        ),
+        "can_ingest": ingestable and not read_only and has_extent,
+        "read_only": read_only,
+        "has_extent": has_extent,
+        "defaults": _ingest_defaults(template, today),
+        "format_hint": _PERIOD_FORMAT_HINTS.get(period, ""),
+    }
+
+
+def render_data_source_page(template: dict[str, Any], mount: str) -> str:
+    """Render the page for one data source, with the form that ingests it."""
+    read_only = api_config.is_read_only()
+    return get_template("data_source_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "data-sources"),
+        job_script=_read_asset("ocs_jobs.js"),
+        **_data_source_page_context(
+            template,
+            _load_datasets(),
+            read_only=read_only,
+            has_extent=_load_extent() is not None,
+            today=date.today(),
+        ),
+    )
+
+
+_TITLE_WORDS = {"chap": "CHAP", "csv": "CSV", "dhis2": "DHIS2", "json": "JSON"}
+
+_RESULT_FORMATS = {
+    "zarr": ("publish", "Publishes a dataset"),
+    "geozarr": ("publish", "Publishes a dataset"),
+    "chapcsv": ("export", "Exports CHAP CSV"),
+    "dhis2json": ("export", "Exports DHIS2 JSON"),
+}
 
 
 def _dataset_views(datasets: list[Any], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -433,6 +628,41 @@ def render_datasets_page(mount: str) -> str:
         list_script=_read_asset("ocs_list.js"),
         nav=page_nav(mount, "datasets"),
         datasets=_dataset_views(_load_datasets(), _load_templates()),
+    )
+
+
+def _source_view(template: dict[str, Any]) -> dict[str, Any]:
+    """A data source card: titled by the dataset, with the provider beneath it."""
+    return {
+        "id": template["id"],
+        "name": template.get("name") or template["id"],
+        "provider": template.get("source") or "",
+        "provider_url": template.get("source_url"),
+        "description": " ".join(str(template.get("description") or "").split()),
+        "variable": template.get("variable") or "",
+        "units": template.get("units") or "",
+        "period_type": template.get("period_type") or "",
+        "resolution": template.get("resolution") or "",
+        "licence": _licence_label(template),
+    }
+
+
+def render_data_sources_page(mount: str) -> str:
+    """Render the list of data sources this instance can fetch from.
+
+    HTML only, like a single data source: the machine-readable list of the same thing is
+    `GET /dataset-templates/`, which this does not rename or duplicate.
+    """
+    templates = _load_templates()
+    return get_template("data_sources_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        list_script=_read_asset("ocs_list.js"),
+        nav=page_nav(mount, "data-sources"),
+        sources=[_source_view(t) for t in _ingestable_templates(templates)],
     )
 
 
@@ -476,15 +706,18 @@ def _load_templates() -> list[dict[str, Any]]:
         return []
 
 
-def _ingestable_templates() -> list[dict[str, Any]]:
-    """Return only templates that can be ingested from a source.
+def _ingestable_templates(templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The templates in *templates* that can be ingested from a source.
 
     Templates without an ingestion plugin — typically workflow outputs published via
-    ``save_result`` — have no upstream fetch path, so they are excluded from the ingest form. Shares the registry's
-    predicate with ``GET /dataset-templates/`` and with the ingest path that refuses them, so
-    the form and the API cannot disagree about what is offerable.
+    ``save_result`` — have no upstream fetch path, so they are not data sources. Shares the
+    registry's predicate with ``GET /dataset-templates/`` and with the ingest path that refuses
+    them, so every surface agrees about what is offerable.
+
+    Takes the list rather than loading it, because each caller already has one and a second
+    load would be a second answer to the same question.
     """
-    return [t for t in _load_templates() if registry_datasets.is_ingestable(t)]
+    return [t for t in templates if registry_datasets.is_ingestable(t)]
 
 
 def _load_datasets() -> list[Any]:
@@ -518,7 +751,7 @@ def render_manage(version: str, mount: str, message: str | None = None, error: s
         mount=mount,
         name=api_config.get_name(),
         extent=_load_extent(),
-        templates=_ingestable_templates(),
+        templates=_ingestable_templates(_load_templates()),
         datasets=_load_datasets(),
         today=today,
         year_ago=year_ago,
