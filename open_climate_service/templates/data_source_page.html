@@ -21,7 +21,7 @@
       {{ nav }}
 
       <main id="content">
-        <p class="breadcrumb"><a href="{{ mount }}/#data-sources">Data sources</a> / {{ source.id }}</p>
+        <p class="breadcrumb"><a href="{{ mount }}/data-sources">Data sources</a> / {{ source.id }}</p>
         <div class="page-title">
           <h2>{{ source.name }}</h2>
           {% if ingested %}<span class="chip chip-{{ ingested.status }}">ingested</span>{% endif %}
