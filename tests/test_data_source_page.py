@@ -152,7 +152,7 @@ def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> Non
     assert 'id="ingest-form"' in response.text
     assert 'action="/manage/ingest"' in response.text
     assert '<input type="hidden" name="dataset_id" value="chirps3_precipitation_daily" />' in response.text
-    assert "template" not in _visible_text(response.text).lower()
+    assert "Dataset templates" in _visible_text(response.text)
 
 
 def test_ingesting_a_workflow_output_is_refused_before_the_stream_opens(client: TestClient) -> None:
@@ -257,7 +257,7 @@ def test_the_breadcrumb_returns_to_the_source_list(client: TestClient) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
     body = client.get("/data-sources/chirps3_precipitation_daily").text
 
-    assert '<a href="/data-sources">Data sources</a>' in body
+    assert '<a href="/data-sources">Dataset templates</a>' in body
     assert "/#data-sources" not in body
 
 

@@ -129,7 +129,7 @@ LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
-    ("data-sources", "Data sources", "/data-sources"),
+    ("data-sources", "Dataset templates", "/data-sources"),
     ("map", "Map viewer", "/map"),
     ("openeo", "openEO editor", "/openeo"),
 )

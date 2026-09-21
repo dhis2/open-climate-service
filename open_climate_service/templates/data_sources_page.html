@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Data sources · {{ name }}</title>
+    <title>Dataset templates · {{ name }}</title>
     <style>
 {{ styles | safe }}
     </style>
@@ -21,7 +21,7 @@
       {{ nav }}
 
       <main id="content">
-        <h2 id="data-sources-title" tabindex="-1">Data sources</h2>
+        <h2 id="data-sources-title" tabindex="-1">Dataset templates</h2>
         <p class="lead">Data this instance can fetch from outside providers.</p>
         {% if sources %}
         {% set periods = sources | map(attribute="period_type") | reject("equalto", "") | unique | sort | list %}
@@ -70,14 +70,14 @@
             </article>
             {% endfor %}
           </div>
-          <p class="note" data-empty hidden>No data sources match.</p>
+          <p class="note" data-empty hidden>No dataset templates match.</p>
           <div class="pager" data-pager>
             <button type="button" data-prev>Previous</button>
             <button type="button" data-next>Next</button>
           </div>
         </div>
         {% else %}
-        <p class="note">No data sources are configured.</p>
+        <p class="note">No dataset templates are configured.</p>
         {% endif %}
 
       </main>
