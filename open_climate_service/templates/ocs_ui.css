@@ -57,9 +57,11 @@
   --table-gap: 14px;
   --radius: 4px;
   --radius-chip: 12px;
-  /* The DHIS2 header bar's own colour and height, from @dhis2-ui/header-bar 10.17.0, where
-     they are literals rather than tokens: background #2c6693, white text, 48px tall. */
-  --header-background: #2c6693;
+  /* The bar is DHIS2 green800 rather than @dhis2-ui/header-bar's own #2c6693. A DHIS2 instance
+     sets its header colour per deployment, so the default blue is a default and not a rule; a
+     token from the same palette keeps this in the design system rather than off it. White on
+     green800 is 7.87:1, better than the blue's 6.12:1. Height stays the bar's own 48px. */
+  --header-background: var(--colors-green800);
   --header-height: 48px;
 }
 
@@ -195,7 +197,9 @@ nav.rail a:hover {
   color: var(--colors-grey900);
 }
 nav.rail a[aria-current="page"] {
-  background: var(--colors-blue100);
+  /* The selected tint follows the header rather than the palette's blue, so selection reads as
+     part of this instance's colour. Not the ocean below, which is blue because it is water. */
+  background: var(--colors-green100);
   color: var(--colors-blue900);
 }
 nav.rail .count {
@@ -506,7 +510,7 @@ button:disabled {
   border-radius: 0 var(--radius) var(--radius) 0;
 }
 .view-switch button[aria-pressed="true"] {
-  background: var(--colors-blue100);
+  background: var(--colors-green100);
   border-color: var(--colors-blue600);
   color: var(--colors-blue900);
   position: relative;
