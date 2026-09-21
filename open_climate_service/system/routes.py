@@ -19,8 +19,6 @@ from .schemas import AppInfo, HealthStatus, Status
 from .templates import (
     ROOT_RESPONSES,
     app_version,
-    render_data_source_page,
-    render_data_sources_page,
     render_landing,
     render_manage,
     render_maps,
@@ -56,33 +54,6 @@ def read_index(request: Request) -> Response:
 def maps(request: Request) -> HTMLResponse:
     """Return the interactive map viewer."""
     return HTMLResponse(render_maps(mount_prefix(request)))
-
-
-@router.get("/data-sources", response_class=HTMLResponse, include_in_schema=False)
-def data_sources_page(request: Request) -> HTMLResponse:
-    """Return the list of data sources. The machine-readable form is `GET /dataset-templates/`."""
-    return HTMLResponse(render_data_sources_page(mount_prefix(request)))
-
-
-@router.get("/data-sources/{dataset_id}", response_class=HTMLResponse, include_in_schema=False)
-def data_source_page(request: Request, dataset_id: str) -> HTMLResponse:
-    """Return the page for one data source, where it can also be ingested.
-
-    A page rather than an API resource: the machine-readable form of the same thing is
-    `GET /dataset-templates/{dataset_id}`, which this deliberately does not rename.
-    """
-    from fastapi import HTTPException
-
-    from open_climate_service.data_registry.services import datasets as registry_datasets
-    from open_climate_service.data_registry.services.datasets import get_dataset
-
-    template = get_dataset(dataset_id)
-    # A data source is a template this instance can fetch. A workflow output is a template too,
-    # so resolving by id alone served one as a source — it has a page, under the workflow that
-    # produces it, and it belongs there rather than behind an ingest form it cannot use.
-    if template is None or not registry_datasets.is_ingestable(template):
-        raise HTTPException(status_code=404, detail=f"Data source '{dataset_id}' not found")
-    return HTMLResponse(render_data_source_page(template, mount_prefix(request)))
 
 
 @router.get("/openeo", response_class=HTMLResponse, include_in_schema=False)
@@ -143,7 +114,7 @@ def _job_stream(work: Any, finished_message: str) -> StreamingResponse:
 
 @router.post("/manage/ingest", include_in_schema=False)
 async def manage_ingest(request: Request) -> Response:
-    """Ingest a data source from its page's form, streaming progress via SSE."""
+    """Ingest a dataset template from its page's form, streaming progress via SSE."""
     from fastapi import HTTPException
 
     from open_climate_service.data_registry.services import datasets as registry_datasets
@@ -162,7 +133,7 @@ async def manage_ingest(request: Request) -> Response:
 
         template = get_dataset(dataset_id)
         if template is None:
-            return _refusal(404, f"Data source '{dataset_id}' not found")
+            return _refusal(404, f"Dataset template '{dataset_id}' not found")
 
         # Both checks belong here rather than inside create_artifact: the work below runs in an
         # event stream, where a refusal arrives as an event after a 200 instead of as the

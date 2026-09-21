@@ -1,7 +1,8 @@
-"""The data source page, and the ingest form it offers (CLIM-940).
+"""The dataset template page, and the ingest form it offers (CLIM-940).
 
-A data source is a dataset template the instance can fetch from outside. The page is HTML
-only — the machine-readable form of the same thing stays at `GET /dataset-templates/{id}`.
+A dataset template describes a dataset this instance can fetch from outside. The page shares
+its URL with the JSON: `GET /dataset-templates/{id}` answers JSON by default and the page to a
+browser, on the same terms as `/datasets/{id}`.
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ from fastapi.testclient import TestClient
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.system import templates as landing
+
+# What a browser sends: `text/html` ahead of anything else.
+BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -146,7 +150,7 @@ def test_an_ingested_source_links_to_its_dataset() -> None:
 
 
 def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:
-    response = client.get("/data-sources/chirps3_precipitation_daily")
+    response = client.get("/dataset-templates/chirps3_precipitation_daily", headers={"Accept": BROWSER_ACCEPT})
 
     assert response.status_code == 200
     assert 'id="ingest-form"' in response.text
@@ -192,7 +196,7 @@ def test_the_ingest_form_prefills_dates_in_the_format_it_states(
     """
     monkeypatch.setattr(landing, "date", _FrozenDate)
 
-    body = client.get("/data-sources/era5land_temperature_monthly").text
+    body = client.get("/dataset-templates/era5land_temperature_monthly", headers={"Accept": BROWSER_ACCEPT}).text
     form = body.split('id="ingest-form"', 1)[1]
 
     assert 'value="2025-09"' in form
@@ -248,50 +252,90 @@ def test_one_facts_panel_holds_both_what_and_where(client: TestClient) -> None:
     assert {"Identifier", "Provider", "Licence"} <= set(labels)
     assert labels.index("Variable") < labels.index("Identifier")
 
-    body = client.get("/data-sources/chirps3_precipitation_daily").text
+    body = client.get("/dataset-templates/chirps3_precipitation_daily", headers={"Accept": BROWSER_ACCEPT}).text
     assert body.count('id="about-title"') == 1
     assert 'id="data-title"' not in body
 
 
 def test_the_breadcrumb_returns_to_the_source_list(client: TestClient) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
-    body = client.get("/data-sources/chirps3_precipitation_daily").text
+    body = client.get("/dataset-templates/chirps3_precipitation_daily", headers={"Accept": BROWSER_ACCEPT}).text
 
-    assert '<a href="/data-sources">Dataset templates</a>' in body
+    assert '<a href="/dataset-templates">Dataset templates</a>' in body
     assert "/#data-sources" not in body
 
 
-def test_the_data_source_list_is_its_own_page(client: TestClient) -> None:
-    """The area that lived at `/#data-sources`, as a URL that can be linked to.
+def test_the_template_list_is_a_page_and_the_json_it_always_was(client: TestClient) -> None:
+    """The area that lived at `/#data-sources`, now a URL, sharing it with the JSON listing.
 
-    HTML only, like a single data source: the machine-readable list of the same thing stays at
-    `GET /dataset-templates/`, which this neither renames nor duplicates.
+    The page is the narrower view: it lists what this instance can fetch, while the JSON lists
+    every template and flags `ingestable`. A workflow output is shown under Workflows instead.
     """
-    response = client.get("/data-sources")
+    page = client.get("/dataset-templates", headers={"Accept": BROWSER_ACCEPT})
 
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/html")
-    assert 'data-views="sources"' in response.text
-    assert "initList" in response.text, "the shared list script, not a second copy"
-    # Only what can be fetched: a workflow output is not a data source.
-    assert 'href="/data-sources/chirps3_precipitation_daily"' in response.text
-    assert "chirps3_precipitation_daily_normal_1991_2020" not in response.text
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert page.headers["vary"] == "Accept"
+    assert 'data-views="sources"' in page.text
+    assert "initList" in page.text, "the shared list script, not a second copy"
+    assert 'href="/dataset-templates/chirps3_precipitation_daily"' in page.text
+    assert "chirps3_precipitation_daily_normal_1991_2020" not in page.text
 
-    assert client.get("/dataset-templates/").status_code == 200
+    listing = client.get("/dataset-templates")
+
+    assert listing.headers["content-type"].startswith("application/json")
+    assert listing.headers["vary"] == "Accept"
+    ids = {template["id"] for template in listing.json()}
+    assert {"chirps3_precipitation_daily", "chirps3_precipitation_daily_normal_1991_2020"} <= ids
 
 
-def test_an_unknown_data_source_is_a_404(client: TestClient) -> None:
-    assert client.get("/data-sources/does_not_exist").status_code == 404
+@pytest.mark.parametrize(
+    ("accept", "query", "html"),
+    [
+        (BROWSER_ACCEPT, "", True),
+        (BROWSER_ACCEPT, "?f=json", False),
+        ("application/json", "", False),
+        ("application/json", "?f=html", True),
+        ("*/*", "", False),
+        ("", "", False),
+    ],
+)
+def test_the_template_url_answers_json_unless_html_is_preferred(
+    client: TestClient, accept: str, query: str, html: bool
+) -> None:
+    """A script calling the API keeps getting JSON; only a browser gets the page."""
+    for path in ("/dataset-templates", "/dataset-templates/chirps3_precipitation_daily"):
+        response = client.get(f"{path}{query}", headers={"Accept": accept} if accept else {})
+
+        assert response.status_code == 200, path
+        expected = "text/html" if html else "application/json"
+        assert response.headers["content-type"].startswith(expected), path
+        assert response.headers["vary"] == "Accept", path
 
 
-def test_a_workflow_output_is_not_a_data_source(client: TestClient) -> None:
-    """A data source is a template this instance can fetch.
+def test_an_unknown_template_is_a_404(client: TestClient) -> None:
+    assert client.get("/dataset-templates/does_not_exist").status_code == 404
+    unknown = client.get("/dataset-templates/does_not_exist", headers={"Accept": BROWSER_ACCEPT})
+    assert unknown.status_code == 404
 
-    Resolving by id alone served a workflow output as one, behind an ingest form it cannot use.
-    It has a page already, under the workflow that produces it.
+
+def test_a_workflow_output_has_no_page_but_still_has_json(client: TestClient) -> None:
+    """The page is for a template this instance can fetch.
+
+    Resolving by id alone gave a workflow output a page behind an ingest form it cannot use. It
+    has a page already, under the workflow that produces it. The JSON arm still describes it
+    here, flagged `ingestable: false` — the 404 is the page's, not the resource's.
     """
-    assert client.get("/data-sources/chirps3_precipitation_daily").status_code == 200
-    assert client.get("/data-sources/chirps3_precipitation_daily_normal_1991_2020").status_code == 404
+    produced = "chirps3_precipitation_daily_normal_1991_2020"
+    browser = {"Accept": BROWSER_ACCEPT}
+
+    assert client.get(f"/dataset-templates/{produced}", headers=browser).status_code == 404
+    assert client.get("/dataset-templates/chirps3_precipitation_daily", headers=browser).status_code == 200
+
+    listed = client.get(f"/dataset-templates/{produced}")
+
+    assert listed.status_code == 200
+    assert listed.json()["ingestable"] is False
 
 
 @pytest.mark.parametrize(
@@ -360,7 +404,7 @@ def test_the_dataset_page_links_back_to_the_data_source(monkeypatch: pytest.Monk
 
     html = landing.render_dataset_page(_record("chirps_monthly"), "/ocs")
 
-    assert 'href="/ocs/data-sources/chirps_monthly"' in html
+    assert 'href="/ocs/dataset-templates/chirps_monthly"' in html
 
 
 def _ingest_defaults_start(today: date) -> str:

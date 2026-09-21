@@ -21,7 +21,7 @@
       {{ nav }}
 
       <main id="content">
-        <p class="breadcrumb"><a href="{{ mount }}/data-sources">Dataset templates</a> / {{ source.id }}</p>
+        <p class="breadcrumb"><a href="{{ mount }}/dataset-templates">Dataset templates</a> / {{ source.id }}</p>
         <div class="page-title">
           <h2>{{ source.name }}</h2>
           {% if ingested %}<span class="chip chip-{{ ingested.status }}">ingested</span>{% endif %}
@@ -152,7 +152,7 @@
                 {% if ingested %}
                 <a class="button-link" href="{{ mount }}/datasets/{{ ingested.id }}">Ingested dataset</a>
                 {% endif %}
-                <a class="button-link" href="{{ mount }}/dataset-templates/{{ source.id }}">Metadata (JSON)</a>
+                <a class="button-link" href="{{ mount }}/dataset-templates/{{ source.id }}?f=json">Metadata (JSON)</a>
               </div>
             </section>
           </div>

@@ -476,7 +476,7 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
 
     # produced_by names the workflow that writes a non-ingestable template, so a reader can
     # get from the dataset to the way it is made. A dataset is either fetched or produced, and
-    # a template claiming both would be listed as a data source and as a workflow output at
+    # a template claiming both would be listed as a dataset template and as a workflow output at
     # once. The workflow id itself is not resolved here: workflows can be registered at
     # runtime, after templates load, so an unknown id is a presentation concern, not an error.
     produced_by = dataset.get("produced_by")

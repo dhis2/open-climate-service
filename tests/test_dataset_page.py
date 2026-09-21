@@ -228,7 +228,7 @@ def test_the_dataset_page_names_the_workflow_that_produced_it() -> None:
 def test_the_dataset_page_names_the_dataset_template_it_was_fetched_from() -> None:
     context = landing._dataset_page_context(_record("chirps_monthly"), _ingestable("chirps_monthly"))
 
-    assert ("Origin", "Fetched from the dataset template", "/data-sources/chirps_monthly") in context["data"]
+    assert ("Origin", "Fetched from the dataset template", "/dataset-templates/chirps_monthly") in context["data"]
 
 
 def test_the_dataset_page_lists_only_what_is_known() -> None:

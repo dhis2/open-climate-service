@@ -129,7 +129,7 @@ LOGO = Markup(_read_asset("ocs_logo.svg"))
 
 _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
-    ("data-sources", "Dataset templates", "/data-sources"),
+    ("data-sources", "Dataset templates", "/dataset-templates"),
     ("map", "Map viewer", "/map"),
     ("openeo", "openEO editor", "/openeo"),
 )
@@ -300,7 +300,7 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
     elif template and registry_datasets.is_ingestable(template):
         # Linked, now that the dataset template has a page: the template page already links to
         # the dataset it produced, so this closes that pair rather than leaving it one-way.
-        origin = ("Origin", "Fetched from the dataset template", f"/data-sources/{template['id']}")
+        origin = ("Origin", "Fetched from the dataset template", f"/dataset-templates/{template['id']}")
     else:
         origin = ("Origin", "", None)
 
@@ -462,7 +462,7 @@ def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
 def _data_source_page_context(
     template: dict[str, Any], datasets: list[Any], *, read_only: bool, has_extent: bool, today: date
 ) -> dict[str, Any]:
-    """Everything the data source page shows, and whether it can offer the ingest form."""
+    """Everything the dataset template page shows, and whether it can offer the ingest form."""
     display = _mapping(template.get("display"))
     sync = _mapping(template.get("sync"))
     sync_kind = str(sync.get("kind") or "")
@@ -570,7 +570,7 @@ def _data_source_page_context(
 
 
 def render_data_source_page(template: dict[str, Any], mount: str) -> str:
-    """Render the page for one data source, with the form that ingests it."""
+    """Render the page for one dataset template, with the form that ingests it."""
     read_only = api_config.is_read_only()
     return get_template("data_source_page.html").render(
         version=app_version,
@@ -632,7 +632,7 @@ def render_datasets_page(mount: str) -> str:
 
 
 def _source_view(template: dict[str, Any]) -> dict[str, Any]:
-    """A data source card: titled by the dataset, with the provider beneath it."""
+    """A dataset template card: titled by the dataset, with the provider beneath it."""
     return {
         "id": template["id"],
         "name": template.get("name") or template["id"],
@@ -648,10 +648,11 @@ def _source_view(template: dict[str, Any]) -> dict[str, Any]:
 
 
 def render_data_sources_page(mount: str) -> str:
-    """Render the list of data sources this instance can fetch from.
+    """Render the list of dataset templates this instance can fetch from.
 
-    HTML only, like a single data source: the machine-readable list of the same thing is
-    `GET /dataset-templates/`, which this does not rename or duplicate.
+    The HTML arm of `GET /dataset-templates`, which answers JSON to everything but a browser.
+    A narrower view than the JSON: only what can be fetched, because that is what the page
+    offers to act on. The JSON lists every template and flags `ingestable`.
     """
     templates = _load_templates()
     return get_template("data_sources_page.html").render(
@@ -710,9 +711,9 @@ def _ingestable_templates(templates: list[dict[str, Any]]) -> list[dict[str, Any
     """The templates in *templates* that can be ingested from a source.
 
     Templates without an ingestion plugin — typically workflow outputs published via
-    ``save_result`` — have no upstream fetch path, so they are not data sources. Shares the
-    registry's predicate with ``GET /dataset-templates/`` and with the ingest path that refuses
-    them, so every surface agrees about what is offerable.
+    ``save_result`` — have no upstream fetch path, so there is nothing to fetch them from.
+    Shares the registry's predicate with ``GET /dataset-templates`` and with the ingest path
+    that refuses them, so every surface agrees about what is offerable.
 
     Takes the list rather than loading it, because each caller already has one and a second
     load would be a second answer to the same question.

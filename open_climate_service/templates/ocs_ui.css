@@ -761,7 +761,7 @@ p.note.table-title {
   margin-top: var(--spacers-dp12);
 }
 
-/* Ingest form on the data source page */
+/* Ingest form on the dataset template page */
 .form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
