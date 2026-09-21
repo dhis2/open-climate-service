@@ -509,7 +509,9 @@ def test_publication_failure_restores_the_previous_file_and_record(monkeypatch: 
     grown = _collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
 
     def fail_after_upsert(_artifact_id: str) -> ArtifactRecord:
-        assert ingestion_services._load_records()[0].features.feature_count == 3
+        stored = ingestion_services._load_records()[0]
+        assert stored.features is not None
+        assert stored.features.feature_count == 3
         raise RuntimeError("publication failed")
 
     monkeypatch.setattr(ingestion_services, "publish_artifact_record", fail_after_upsert)
