@@ -7,7 +7,7 @@ expressed as **paths**, not HTTP methods, because method is the wrong axis here:
   It is the instance's compute path and stays open. It cannot publish a dataset — the
   synchronous handler rejects ZARR output outright (``openeo/routes.py``), so the only
   route that writes to the managed store is the batch-job path, which read-only closes.
-- ``/manage`` holds the ingest and sync streams the data source and dataset pages post to.
+- ``/manage`` holds the ingest and sync streams the template and dataset pages post to.
   It is closed as a whole tree, every method included, so nothing under it can be added
   later and be missed by a method filter. The pages themselves stay open and simply leave
   their forms out on a read-only instance.

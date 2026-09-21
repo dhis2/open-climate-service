@@ -73,12 +73,12 @@ make run
 ```
 
 The service starts on `http://127.0.0.1:9000`. Open it in a browser — the overview reports what
-the instance holds and links to the data sources you can ingest, the datasets you hold, and the
-map viewer.
+the instance holds and links to the dataset templates you can ingest, the datasets you hold, and
+the map viewer.
 
 ## Step 5: Ingest and view data
 
-Open **Data sources** from the navigation and ingest your first dataset from its page.
+Open **Dataset templates** from the navigation and ingest your first dataset from its page.
 CHIRPS3 (daily precipitation) requires no API key and is a good one to start with — open
 it, enter a start date, and ingest (leave **Publish** checked). Progress streams live, and
 the dataset's page opens when it finishes.
