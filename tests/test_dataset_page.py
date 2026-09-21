@@ -219,10 +219,15 @@ def test_a_dataset_with_a_thumbnail_links_it() -> None:
 
 
 def test_the_dataset_page_names_the_workflow_that_produced_it() -> None:
+    """The workflow's page, not its process graph.
+
+    The link is named after the workflow, so it opened JSON at a name a reader expects to be
+    readable. The process graph stays a click away, labelled as JSON on that page.
+    """
     template = _template("normal", produced_by="climate_normal", sync={"kind": "static"})
     context = landing._dataset_page_context(_record("normal"), template)
 
-    assert ("Produced by", "climate_normal workflow", "/process_graphs/climate_normal") in context["data"]
+    assert ("Produced by", "climate_normal workflow", "/workflows/climate_normal") in context["data"]
 
 
 def test_the_dataset_page_names_the_dataset_template_it_was_fetched_from() -> None:

@@ -298,10 +298,13 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
     )
 
     if template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
+        # The workflow's page, not its process graph: the link is named after the workflow, so
+        # it should open the thing a reader can read. The JSON stays a click away, behind the
+        # "Process graph (JSON)" link on that page.
         origin: Fact = (
             "Produced by",
             f"{template['produced_by']} workflow",
-            f"/process_graphs/{template['produced_by']}",
+            f"/workflows/{template['produced_by']}",
         )
     elif template and registry_datasets.is_ingestable(template):
         # Linked, now that the dataset template has a page: the template page already links to
@@ -823,11 +826,46 @@ def _from_rst(text: str) -> str:
     every role name printed before its argument.
 
     Only the constructs that actually occur are handled. Anything else passes through, because
-    a docstring that is already Markdown must come out unchanged.
+    a docstring that is already Markdown must come out unchanged — and a fenced example in
+    such a docstring is not reStructuredText at all, so it is held out of the conversion
+    entirely rather than trusted to contain nothing that looks like it.
     """
+    return "\n".join(
+        run if is_code else _rst_prose(run) for run, is_code in _fenced_runs(text.replace("\r\n", "\n"))
+    ).strip()
+
+
+def _fenced_runs(text: str) -> list[tuple[str, bool]]:
+    """Split *text* into runs, flagging the ones inside a Markdown fence.
+
+    Keeps the fence lines, unlike `_split_fences`, so joining the runs restores the input.
+    An unterminated fence leaves its tail flagged as code, which is what the renderer does
+    with it too.
+    """
+    runs: list[tuple[str, bool]] = []
+    buffer: list[str] = []
+    fenced = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            if fenced:
+                buffer.append(line)
+                runs.append(("\n".join(buffer), True))
+                buffer = []
+            else:
+                runs.append(("\n".join(buffer), False))
+                buffer = [line]
+            fenced = not fenced
+            continue
+        buffer.append(line)
+    runs.append(("\n".join(buffer), fenced))
+    return runs
+
+
+def _rst_prose(text: str) -> str:
+    """The conversion itself, over one run of text known to hold no fence of its own."""
     # Inline first: ``literal`` and :role:`x` become `x` before any fence exists, or the
     # literal pattern would match the pair of backticks inside a fence this function adds.
-    text = _RST_LITERAL.sub(r"`\1`", text.replace("\r\n", "\n"))
+    text = _RST_LITERAL.sub(r"`\1`", text)
     text = _RST_ROLE.sub(r"`\1`", text)
     lines = text.split("\n")
     out: list[str] = []
@@ -863,7 +901,8 @@ def _from_rst(text: str) -> str:
             continue
         out.append(lines[index])
         index += 1
-    return "\n".join(out).strip()
+    # Not stripped: the blank lines at either end separate this run from the fences around it.
+    return "\n".join(out)
 
 
 def _split_fences(text: str) -> list[tuple[str, bool]]:

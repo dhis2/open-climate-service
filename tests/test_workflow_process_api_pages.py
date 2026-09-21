@@ -417,6 +417,22 @@ def test_a_fenced_block_survives_a_blank_line_inside_it() -> None:
     ]
 
 
+def test_a_fenced_example_is_not_read_as_restructuredtext() -> None:
+    """A docstring that is already Markdown may hold an example, and it is not RST.
+
+    The conversion ran over the whole docstring, so an example lost its ``literals`` and its
+    :roles:, and a row of dashes in it was taken for a numpydoc heading — which rewrote the
+    line above as bold and dropped the dashes.
+    """
+    blocks = landing._description_blocks("Lead.\n\n```\ncall(x=``raw``, y=:math:`n`)\n-----\n```\n\nTail with ``a``.")
+
+    assert [b.get("code") or str(b.get("html")) for b in blocks] == [
+        "Lead.",
+        "call(x=``raw``, y=:math:`n`)\n-----\n",
+        "Tail with <code>a</code>.",
+    ]
+
+
 def test_the_negotiated_process_endpoints_still_publish_a_json_schema(client: TestClient) -> None:
     """Serving two representations must not cost the machine-readable contract.
 

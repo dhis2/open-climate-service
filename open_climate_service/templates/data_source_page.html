@@ -109,7 +109,7 @@
               {% elif not ingestable %}
               <p class="note">
                 This dataset is not fetched from a provider{% if produced_by %}; it is produced by the
-                <a href="{{ mount }}/process_graphs/{{ produced_by }}">{{ produced_by }}</a> workflow{% endif %}.
+                <a href="{{ mount }}/workflows/{{ produced_by }}">{{ produced_by }}</a> workflow{% endif %}.
               </p>
               {% elif read_only %}
               <p class="note">This instance is read-only, so data cannot be ingested here.</p>
