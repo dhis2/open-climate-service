@@ -171,7 +171,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `source`     | No       | Name of the upstream data source                                               |
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
 | `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /dataset-templates/`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
-| `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Templates that are produced, not ingested](#templates-that-are-produced-not-ingested) |
+| `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Derived datasets](#derived-datasets) |
 
 **Period and sync**
 
@@ -214,7 +214,7 @@ Multiple templates can share the same plugin class and differ only in `params`:
 
 ### Derived datasets
 
-In constrast to ingestable datasets, __derived__ datasets are those that cannot be ingested but rather have to be produced by running a workflow, and therefore should not have the `ingestion.plugin` parameter. Roughly half the shipped catalogue are derived and is missing this parameter. Anomalies, normals and change rasters are *produced* by a workflow through `save_result` and registered as static templates, so there is nothing upstream to fetch. 
+In contrast to ingestable datasets, **derived** datasets are those that cannot be ingested but rather have to be produced by running a workflow, and therefore should not have the `ingestion.plugin` parameter. Roughly half the shipped catalogue is derived and lacks this parameter. Anomalies, normals and change rasters are *produced* by a workflow through `save_result` and registered as static templates, so there is nothing upstream to fetch. 
 
 Name the workflow that produces such a template with `produced_by`:
 
