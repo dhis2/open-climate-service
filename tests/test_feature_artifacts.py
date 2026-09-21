@@ -499,6 +499,46 @@ def test_create_feature_artifact_canonicalizes_the_crs84_spelling_geojson_uses(
     assert record.features.crs == "EPSG:4326"
 
 
+def test_create_feature_artifact_refuses_a_store_path_with_no_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A record pointing at nothing registers loudly and then vanishes from every listing.
+
+    `_materialized_records` drops a record whose backing storage is missing, so without this
+    guard the collection would be published and then absent, with a stale-artifact warning as
+    the only trace.
+    """
+    _tmp_record_store(monkeypatch, tmp_path)
+    missing = tmp_path / "never-written.parquet"
+
+    with pytest.raises(ValueError, match="no GeoParquet file at"):
+        services.create_feature_artifact(
+            template=DISTRICTS_TEMPLATE,
+            features=_feature_collection(),
+            store_path=missing,
+            crs="EPSG:4326",
+        )
+
+    assert not services.ARTIFACTS_INDEX_PATH.exists() or services._load_records() == []
+
+
+def test_create_feature_artifact_refuses_a_directory_in_place_of_the_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One GeoParquet file; the partitioned form is not what this release writes or reads."""
+    _tmp_record_store(monkeypatch, tmp_path)
+    partitioned = tmp_path / "districts.parquet.d"
+    partitioned.mkdir()
+
+    with pytest.raises(ValueError, match="no GeoParquet file at"):
+        services.create_feature_artifact(
+            template=DISTRICTS_TEMPLATE,
+            features=_feature_collection(),
+            store_path=partitioned,
+            crs="EPSG:4326",
+        )
+
+
 def test_create_feature_artifact_refuses_a_reprojected_store_it_cannot_describe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -844,6 +884,27 @@ def test_dataset_list_response_spells_the_discriminator_as_ogc_does(
         "districts": "feature",
     }
     assert all("item_type" not in item for item in payload["items"])
+
+
+def test_a_stale_raster_template_cannot_lend_a_feature_collection_a_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The record's format decides whether a period axis exists; the template only names one.
+
+    `source_dataset` is resolved by dataset id, so a feature collection whose id also names a
+    raster template would otherwise publish `itemType: "feature"` beside `period_type: "daily"`.
+    """
+    monkeypatch.setattr(services, "_load_records", lambda: [_feature_artifact()])
+    monkeypatch.setattr(
+        services.registry_datasets,
+        "get_dataset",
+        lambda _: {"id": "districts", "period_type": "daily", "units": "mm"},
+    )
+
+    dataset = services.list_datasets().items[0]
+
+    assert dataset.item_type == DatasetItemType.FEATURE
+    assert dataset.period_type is None
 
 
 def test_a_raster_with_no_declared_period_type_still_reports_unknown(monkeypatch: pytest.MonkeyPatch) -> None:

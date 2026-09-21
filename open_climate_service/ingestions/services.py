@@ -426,9 +426,10 @@ def create_feature_artifact(
 
     Raises ValueError for a template or collection that cannot produce a record: a missing
     `id_property`, a payload that is not a FeatureCollection, a malformed member, an empty
-    collection, or a stored CRS this entry point cannot honestly describe. An empty collection
-    is refused rather than registered, because a provider that returned nothing is reporting a
-    failure, and a record for it would advertise a collection with no extent.
+    collection, a `store_path` with no file at it, or a stored CRS this entry point cannot
+    honestly describe. An empty collection is refused rather than registered, because a
+    provider that returned nothing is reporting a failure, and a record for it would advertise
+    a collection with no extent.
     """
     dataset_id = _require_template_str(template, "id")
     dataset_name = _require_template_str(template, "name")
@@ -437,12 +438,12 @@ def create_feature_artifact(
     id_property = _require_template_str(template, "id_property")
     stored_crs = _require_wgs84_feature_crs(crs, dataset_id=dataset_id)
     requested_bbox = _requested_extract_bbox(bbox, dataset_id=dataset_id)
+    resolved_path = _require_written_feature_store(store_path, dataset_id=dataset_id)
     feature_list = _feature_collection_members(features, dataset_id=dataset_id)
     # Deliberately not validated per feature here. That each id_property value is present and
     # identifies exactly one feature is the identity contract, and it needs one implementation
     # governing the stored collection, a provider's output and both export paths — CLIM-1068.
     bounds = _feature_collection_bounds(feature_list, dataset_id=dataset_id)
-    resolved_path = Path(store_path).resolve()
     record = ArtifactRecord(
         artifact_id=str(uuid4()),
         dataset_id=dataset_id,
@@ -514,6 +515,29 @@ def _require_wgs84_feature_crs(crs: str, *, dataset_id: str) -> str:
             "store needs the CRS-correct path in CLIM-1068"
         )
     return canonical
+
+
+def _require_written_feature_store(store_path: Path | str, *, dataset_id: str) -> Path:
+    """Return the resolved path of an already-written GeoParquet file, or refuse to register it.
+
+    `resolve()` makes a path absolute; it does not make a file exist. Registering a record that
+    points at nothing would succeed loudly and then fail silently: `_materialized_records` drops
+    any record whose backing storage is missing, so the collection would be published, logged as
+    registered, and absent from every listing — with a warning about a stale artifact as the
+    only trace, which reads as corruption rather than as a caller that passed the wrong path.
+
+    Checked before the record is built rather than after, so a caller that got the path wrong
+    learns it without a half-done registration. `is_file` rather than `exists`: a feature
+    collection is one GeoParquet file, and a directory at that path is the partitioned form this
+    release does not write or read.
+    """
+    resolved = Path(store_path).resolve()
+    if not resolved.is_file():
+        raise ValueError(
+            f"feature collection '{dataset_id}' has no GeoParquet file at {resolved}; the store "
+            "writes the file, and this registers what it wrote"
+        )
+    return resolved
 
 
 def _requested_extract_bbox(
@@ -2321,11 +2345,18 @@ def _dataset_period_type(latest: ArtifactRecord, source_dataset: dict[str, Any])
     A feature collection gets None instead, which is not a missing value but the true one: a
     boundary set has no temporal axis to name. `itemType` is the field that says which of the
     two a null means, which is why the discriminator exists.
+
+    The format is answered first, before anything is read from the template. `source_dataset` is
+    resolved by dataset id, so a feature collection whose id also names a raster template — an
+    older template, or one an operator left behind — would otherwise pick up that template's
+    `period_type` and publish `itemType: "feature"` beside `period_type: "daily"`. The record's
+    own format is the authority on whether a period axis exists; the template is only ever the
+    source of what to call one.
     """
+    if latest.format == ArtifactFormat.GEOPARQUET:
+        return None
     declared = _as_optional_str(source_dataset.get("period_type")) or latest.period_type
-    if declared is not None:
-        return declared
-    return None if latest.format == ArtifactFormat.GEOPARQUET else "unknown"
+    return declared if declared is not None else "unknown"
 
 
 def _item_type_for(artifact: ArtifactRecord) -> DatasetItemType:
