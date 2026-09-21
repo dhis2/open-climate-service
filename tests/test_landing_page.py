@@ -173,6 +173,23 @@ def test_read_only_is_stated_on_the_overview(monkeypatch: pytest.MonkeyPatch) ->
     assert "read-only" in _visible_text(html)
 
 
+def test_access_and_version_are_stated_without_a_configured_extent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """They describe the instance, not its extent, so an unconfigured one still reports them.
+
+    Both sat inside the extent block, so a fresh instance — the one an operator is in the
+    middle of setting up, and the most likely to be read — showed neither.
+    """
+    monkeypatch.setattr(landing, "_load_extent", lambda: None)
+
+    visible = _visible_text(landing.render_landing("9.9.9", ""))
+
+    assert "No extent configured" in visible
+    assert "Access" in visible and "Read and write" in visible
+    assert "Version" in visible and "9.9.9" in visible
+
+
 def test_the_interface_calls_them_dataset_templates(client: TestClient) -> None:
     """The stat card and the rail agree, and neither says "data source"."""
     visible = _visible_text(client.get("/", headers={"Accept": "text/html"}).text)

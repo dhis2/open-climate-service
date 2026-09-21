@@ -47,8 +47,11 @@
             <h3>Instance</h3>
             <div class="instance">
               <div class="instance-facts">
-            {% if extent %}
             <dl class="facts">
+              {# Access and version are facts about the instance, not about its extent, so they
+                 are stated whether or not one is configured — an instance without an extent is
+                 exactly the one an operator is still setting up and needs to read them on. #}
+              {% if extent %}
               <dt>Extent</dt>
               <dd>{{ extent.name or "Unnamed extent" }}</dd>
               <dt>Bounding box</dt>
@@ -57,12 +60,13 @@
               <dt>Country code</dt>
               <dd><code>{{ extent.country_code }}</code></dd>
               {% endif %}
+              {% endif %}
               <dt>Access</dt>
               <dd>{% if read_only %}Read-only{% else %}Read and write{% endif %}</dd>
               <dt>Version</dt>
               <dd><code>{{ version }}</code></dd>
             </dl>
-            {% else %}
+            {% if not extent %}
             <p class="note">
               No extent configured. Set <code>extent:</code> in
               <code>CLIMATE_SERVICE_CONFIG</code> — see <a href="{{ mount }}/docs">API docs</a> for
