@@ -355,15 +355,15 @@ def test_an_unqualified_read_above_the_limit_is_refused_and_names_it() -> None:
     record = _register()
 
     with pytest.raises(ValueError, match="unqualified-read limit of 1"):
-        store.read_feature_collection(record, limit=1)
+        store.read_feature_collection(record, max_unqualified_read=1)
 
 
 def test_the_limit_does_not_apply_to_a_windowed_read_or_to_a_deliberate_one() -> None:
     """The guard catches the caller that forgot a bbox, not the one that means to read it all."""
     record = _register()
 
-    windowed = store.read_feature_collection(record, bbox=(-13.6, 6.8, -12.5, 7.5), limit=1)
-    deliberate = store.read_feature_collection(record, limit=None)
+    windowed = store.read_feature_collection(record, bbox=(-13.6, 6.8, -12.5, 7.5), max_unqualified_read=1)
+    deliberate = store.read_feature_collection(record, max_unqualified_read=None)
 
     assert list(windowed["orgUnitCode"]) == ["SL-W"]
     assert len(deliberate) == 2
@@ -402,7 +402,38 @@ def test_a_failed_write_leaves_no_partial_file() -> None:
     assert len(store.read_feature_collection(first)) == 2
 
 
-@pytest.mark.parametrize("dataset_id", ["", "../escape", "a/b", ".hidden"], ids=["empty", "traversal", "slash", "dot"])
+def test_a_feature_without_geometry_is_refused_before_the_write() -> None:
+    """A null-geometry feature is stored and counted but invisible to every bbox read."""
+    null_geometry = {**_box("SL-X", -13.0, 6.0, -12.5, 7.0), "geometry": None}
+
+    with pytest.raises(ValueError, match="no geometry"):
+        store.write_feature_collection(
+            dataset_id="districts", features=_collection(WEST, null_geometry), id_property="orgUnitCode"
+        )
+
+    assert not store.feature_store_path("districts").exists()
+
+
+def test_a_property_named_bbox_is_refused_with_a_rename() -> None:
+    """The covering-bbox column the store writes would overwrite a `bbox` property."""
+    with_bbox = {
+        **_box("SL-W", -13.5, 6.9, -12.0, 8.0),
+        "properties": {"orgUnitCode": "SL-W", "bbox": [0, 0, 1, 1]},
+    }
+
+    with pytest.raises(ValueError, match="property named 'bbox'"):
+        store.write_feature_collection(
+            dataset_id="districts", features=_collection(with_bbox), id_property="orgUnitCode"
+        )
+
+    assert not store.feature_store_path("districts").exists()
+
+
+@pytest.mark.parametrize(
+    "dataset_id",
+    ["", " ", " districts", "districts ", "a\x00b", "../escape", "a/b", ".hidden"],
+    ids=["empty", "blank", "leading_space", "trailing_space", "nul", "traversal", "slash", "dot"],
+)
 def test_a_collection_id_cannot_escape_the_store_directory(dataset_id: str) -> None:
     with pytest.raises(ValueError, match="invalid feature collection id"):
         store.feature_store_path(dataset_id)
@@ -456,6 +487,20 @@ def test_a_refresh_writes_and_registers_through_one_door() -> None:
     assert record.features.feature_count == 2
     assert store.feature_store_path("districts").is_file()
     assert [r.artifact_id for r in ingestion_services._load_records()] == [record.artifact_id]
+
+
+def test_a_refresh_refuses_bad_features_before_copying_the_previous_aside() -> None:
+    """The write's refusals fire before the backup copy, so the previous collection is untouched."""
+    import geopandas as gpd
+
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    bad = _collection(WEST, {**_box("SL-X", -13.0, 6.0, -12.5, 7.0), "geometry": None})
+    with pytest.raises(ValueError, match="no geometry"):
+        feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=bad)
+
+    assert not list(store.feature_store_path("districts").parent.glob("*.previous"))
+    assert len(gpd.read_parquet(store.feature_store_path("districts"))) == 2
 
 
 def test_a_failed_registration_leaves_the_previous_collection_in_place(
@@ -596,6 +641,11 @@ def test_concurrent_refreshes_leave_the_file_and_its_record_agreeing() -> None:
     ("template", "expected"),
     [
         pytest.param({"name": "D", "id_property": "orgUnitCode"}, "non-empty 'id'", id="no_id"),
+        pytest.param(
+            {"id": " districts ", "name": "D", "id_property": "orgUnitCode"},
+            "invalid feature collection id",
+            id="surrounding_whitespace",
+        ),
         pytest.param({"id": "districts", "name": "D"}, "non-empty 'id_property'", id="no_id_property"),
     ],
 )

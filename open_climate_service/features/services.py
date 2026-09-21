@@ -43,9 +43,10 @@ def refresh_feature_collection(
     that installed the new one, which means a reader at any instant sees one complete file:
     the old collection or the new one, never a mixture and never a gap.
     """
-    dataset_id = str(template.get("id", "")).strip()
-    if not dataset_id:
+    dataset_id = str(template.get("id", ""))
+    if not dataset_id.strip():
         raise ValueError("feature collection template must declare a non-empty 'id'")
+    store.feature_store_path(dataset_id)
     id_property = str(template.get("id_property", "")).strip()
     if not id_property:
         raise ValueError(f"feature collection template '{dataset_id}' must declare a non-empty 'id_property'")
@@ -57,6 +58,9 @@ def refresh_feature_collection(
             for record in ingestion_services._load_records()
             if record.dataset_id == dataset_id and record.format == ArtifactFormat.GEOPARQUET
         ]
+        # Refuse before touching anything: the checks that can fail a write run before the
+        # previous collection is copied aside, so a doomed refresh leaves file and record alone.
+        store.validate_features_for_write(dataset_id=dataset_id, features=features, id_property=id_property)
         previous = _keep_previous(path)
         try:
             written, _count, geometry = store.write_feature_collection(

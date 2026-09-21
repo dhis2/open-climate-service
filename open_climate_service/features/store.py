@@ -35,13 +35,13 @@ nothing else.
 """
 
 UNQUALIFIED_READ_LIMIT = 5000
-"""Feature count above which a read must narrow itself with a bbox or say `limit=None`.
+"""Feature count above which a read must narrow itself with a bbox or say `max_unqualified_read=None`.
 
 A DHIS2 hierarchy runs to the thousands, and pulling all of it is a real operation — just
 never an accidental one. The guard catches the caller that forgot a bbox, not the caller that
-means it, which is why `limit=None` is an ordinary argument rather than a setting an operator
-has to find. The number is a backstop rather than a measured capacity: it sits above a
-country's divisions at every level and below a national facility register.
+means it, which is why `max_unqualified_read=None` is an ordinary argument rather than a
+setting an operator has to find. The number is a backstop rather than a measured capacity: it
+sits above a country's divisions at every level and below a national facility register.
 """
 
 
@@ -73,12 +73,53 @@ def feature_store_path(dataset_id: str) -> Path:
     or a provider, so it is checked rather than trusted: a name that escapes the store
     directory would let a caller write through it.
     """
-    if not dataset_id or "/" in dataset_id or "\\" in dataset_id or dataset_id.startswith("."):
+    if (
+        not dataset_id
+        or dataset_id != dataset_id.strip()
+        or any(not char.isprintable() for char in dataset_id)
+        or "/" in dataset_id
+        or "\\" in dataset_id
+        or dataset_id.startswith(".")
+    ):
         raise ValueError(
             f"invalid feature collection id {dataset_id!r}; it names one file in the feature store, "
-            "so it cannot be empty, contain a path separator, or start with a dot"
+            "so it cannot be blank, have surrounding whitespace, contain a path separator or a "
+            "non-printing character, or start with a dot"
         )
     return api_config.get_features_root() / f"{dataset_id}.parquet"
+
+
+def validate_features_for_write(*, dataset_id: str, features: object, id_property: str) -> None:
+    """Refuse what a write cannot store correctly, before any file is touched.
+
+    Three rules, one place, so `write_feature_collection` refuses on the same terms as the
+    refresh path that calls this ahead of backing the previous collection up:
+
+    * identity — each feature's id is present and unique, from `validate_feature_ids`;
+    * geometry — a feature with no geometry is invisible to every bbox read, so it is refused
+      rather than stored and counted while no window can ever return it;
+    * names — a property named `bbox` would collide with the covering-bbox column the store
+      writes, so it is refused with the rename a provider can act on rather than a raw geopandas
+      message.
+    """
+    from open_climate_service.shared.features import validate_feature_ids
+
+    members = _members(features)
+    validate_feature_ids(features, id_property=id_property)
+    for index, feature in enumerate(members):
+        if feature.get("geometry") is None:
+            raise ValueError(
+                f"feature collection '{dataset_id}' has a feature with no geometry at index {index}; "
+                "a feature without geometry cannot be found by any bbox read, so the collection "
+                "must be written without it"
+            )
+        properties = feature.get("properties")
+        if isinstance(properties, dict) and "bbox" in properties:
+            raise ValueError(
+                f"feature collection '{dataset_id}' has a property named 'bbox' at index {index}, "
+                "which the store's covering-bbox column would overwrite; rename the property "
+                "(for example to 'bounds') and re-run"
+            )
 
 
 def write_feature_collection(
@@ -111,9 +152,7 @@ def write_feature_collection(
     """
     import geopandas as gpd
 
-    from open_climate_service.shared.features import validate_feature_ids
-
-    validate_feature_ids(features, id_property=id_property)
+    validate_features_for_write(dataset_id=dataset_id, features=features, id_property=id_property)
     target = canonical_crs_code(store_crs)
     frame = gpd.GeoDataFrame.from_features(_members(features), crs=WGS84)
     if frame.empty:
@@ -152,7 +191,7 @@ def read_feature_collection(
     *,
     bbox: tuple[float, float, float, float] | None = None,
     bbox_crs: str = WGS84,
-    limit: int | None = UNQUALIFIED_READ_LIMIT,
+    max_unqualified_read: int | None = UNQUALIFIED_READ_LIMIT,
 ) -> gpd.GeoDataFrame:
     """Read a registered collection, optionally windowed to *bbox*.
 
@@ -161,9 +200,10 @@ def read_feature_collection(
     Reprojecting the window rather than the rows is what keeps the read a pushdown: the rows
     stay in the CRS they were written in, and only four numbers cross CRSs.
 
-    `limit` guards an *unqualified* read — one with no bbox — against pulling a whole hierarchy
-    by accident. A windowed read is already narrowed by the window, so the guard does not apply
-    to it; `limit=None` turns it off for a caller that means to read everything.
+    `max_unqualified_read` guards an *unqualified* read — one with no bbox — against pulling a
+    whole hierarchy by accident. A windowed read is already narrowed by the window, so the guard
+    does not apply to it; `max_unqualified_read=None` turns it off for a caller that means to
+    read everything.
     """
     import geopandas as gpd
 
@@ -171,11 +211,11 @@ def read_feature_collection(
     if detail is None:
         raise ValueError(f"artifact '{record.artifact_id}' is not a feature collection, so it has no features to read")
     path = _stored_path(record)
-    if bbox is None and limit is not None and detail.feature_count > limit:
+    if bbox is None and max_unqualified_read is not None and detail.feature_count > max_unqualified_read:
         raise ValueError(
             f"feature collection '{record.dataset_id}' holds {detail.feature_count} features, above the "
-            f"unqualified-read limit of {limit}; pass a bbox to narrow the read, or limit=None to "
-            "read all of it deliberately"
+            f"unqualified-read limit of {max_unqualified_read}; pass a bbox to narrow the read, or "
+            "max_unqualified_read=None to read all of it deliberately"
         )
     window = transform_bbox(bbox, source=bbox_crs, target=detail.crs) if bbox is not None else None
     frame: gpd.GeoDataFrame = gpd.read_parquet(path, bbox=window)
