@@ -15,6 +15,7 @@ from open_climate_service.ingestions.schemas import (
     CoverageSpatial,
     CoverageTemporal,
     DatasetDetailRecord,
+    DatasetItemType,
     DatasetPublication,
     PublicationStatus,
 )
@@ -103,6 +104,7 @@ def _dataset_detail(dataset_id: str) -> DatasetDetailRecord:
         source_dataset_id="chirps3_precipitation_daily",
         dataset_name="CHIRPS3 precipitation",
         short_name="CHIRPS3 precip",
+        item_type=DatasetItemType.COVERAGE,
         variable="precip",
         period_type="daily",
         units="mm",
@@ -163,7 +165,7 @@ def test_dataset_links_include_stac_for_published_icechunk() -> None:
     assert any(link.rel == "stac" and link.href == "/stac/collections/chirps3_precipitation_daily" for link in links)
 
 
-def test_dataset_links_omit_stac_for_unpublished_or_netcdf() -> None:
+def test_dataset_links_omit_catalogue_links_for_unpublished_or_netcdf() -> None:
     unpublished = _artifact(artifact_id="a1")
     unpublished.publication.status = PublicationStatus.UNPUBLISHED
     netcdf = _artifact(artifact_id="a2")
@@ -172,8 +174,8 @@ def test_dataset_links_omit_stac_for_unpublished_or_netcdf() -> None:
     unpublished_links = services._dataset_links("chirps3_precipitation_daily", unpublished)
     netcdf_links = services._dataset_links("chirps3_precipitation_daily", netcdf)
 
-    assert all(link.rel != "stac" for link in unpublished_links)
-    assert all(link.rel != "stac" for link in netcdf_links)
+    for links in (unpublished_links, netcdf_links):
+        assert all(link.rel not in {"zarr", "stac"} for link in links)
 
 
 def test_dataset_links_include_zarr_and_stac_for_icechunk() -> None:
@@ -184,6 +186,16 @@ def test_dataset_links_include_zarr_and_stac_for_icechunk() -> None:
     assert any(link.rel == "zarr" for link in links)
     assert any(link.rel == "stac" for link in links)
     assert all(link.rel != "ogc-collection" for link in links)
+
+
+def test_dataset_links_include_zarr_and_stac_for_plain_zarr() -> None:
+    artifact = _artifact(artifact_id="a4")
+    artifact.format = ArtifactFormat.ZARR
+
+    links = services._dataset_links("chirps3_precipitation_daily", artifact)
+
+    assert any(link.rel == "zarr" for link in links)
+    assert any(link.rel == "stac" for link in links)
 
 
 def test_get_dataset_zarr_store_file_reads_icechunk_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,7 +216,11 @@ def test_get_dataset_zarr_store_file_reads_icechunk_metadata(tmp_path: Path, mon
     artifact.format = ArtifactFormat.ICECHUNK
     artifact.path = str(store_path)
     artifact.asset_paths = [str(store_path)]
-    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: artifact)
+    monkeypatch.setattr(
+        services,
+        "latest_published_raster_artifacts_by_dataset",
+        lambda: {"chirps3_precipitation_daily": artifact},
+    )
 
     response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "zarr.json")
 
@@ -235,7 +251,11 @@ def test_zarr_store_root_serves_group_metadata(tmp_path: Path, monkeypatch: pyte
     artifact.format = ArtifactFormat.ICECHUNK
     artifact.path = str(store_path)
     artifact.asset_paths = [str(store_path)]
-    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: artifact)
+    monkeypatch.setattr(
+        services,
+        "latest_published_raster_artifacts_by_dataset",
+        lambda: {"chirps3_precipitation_daily": artifact},
+    )
 
     # "" is what the route passes for both /zarr/{id} (after its redirect) and /zarr/{id}/.
     response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "")
@@ -263,10 +283,78 @@ def test_get_dataset_zarr_store_file_rejects_invalid_icechunk_relative_path(
     artifact.format = ArtifactFormat.ICECHUNK
     artifact.path = str(store_path)
     artifact.asset_paths = [str(store_path)]
-    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: artifact)
+    monkeypatch.setattr(
+        services,
+        "latest_published_raster_artifacts_by_dataset",
+        lambda: {"chirps3_precipitation_daily": artifact},
+    )
 
     with pytest.raises(services.HTTPException, match="invalid segments"):
         services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "../zarr.json")
+
+
+def test_zarr_route_serves_the_published_artifact_when_a_newer_one_is_unpublished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_path = tmp_path / "published.icechunk"
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(store_path)))
+    session = repo.writable_session("main")
+    ds = xr.Dataset(
+        {"precip": (("t", "y", "x"), [[[1.0]]])},
+        coords={"t": ["2026-01-01"], "x": [1.0], "y": [2.0]},
+        attrs={"release": "published"},
+    )
+    ds.to_zarr(session.store, mode="w", zarr_format=3)
+    session.commit("seed published metadata")
+    ds.close()
+
+    published = _artifact(artifact_id="published", created_at="2026-01-10T00:00:00+00:00")
+    published.path = str(store_path)
+    published.asset_paths = [str(store_path)]
+    unpublished = _artifact(artifact_id="unpublished", created_at="2026-01-11T00:00:00+00:00")
+    unpublished.publication.status = PublicationStatus.UNPUBLISHED
+    unpublished.path = str(tmp_path / "missing-newer-store.icechunk")
+    unpublished.asset_paths = [unpublished.path]
+    monkeypatch.setattr(
+        services,
+        "group_datasets",
+        lambda: {"chirps3_precipitation_daily": [published, unpublished]},
+    )
+
+    response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "zarr.json")
+
+    assert isinstance(response, services.JSONResponse)
+    assert b'"release":"published"' in response.body
+
+
+def test_zarr_route_serves_plain_zarr_metadata_and_ranged_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_path = tmp_path / "legacy.zarr"
+    store_path.mkdir()
+    (store_path / "zarr.json").write_text(
+        '{"zarr_format": 3, "node_type": "group", "attributes": {"source": "legacy"}}',
+        encoding="utf-8",
+    )
+    (store_path / "chunk.bin").write_bytes(b"0123456789")
+    artifact = _artifact(artifact_id="legacy-zarr")
+    artifact.format = ArtifactFormat.ZARR
+    artifact.path = str(store_path)
+    artifact.asset_paths = [str(store_path)]
+    monkeypatch.setattr(
+        services,
+        "latest_published_raster_artifacts_by_dataset",
+        lambda: {"legacy_zarr": artifact},
+    )
+
+    metadata = services.get_dataset_zarr_store_file_or_404("legacy_zarr", "")
+    chunk = services.get_dataset_zarr_store_file_or_404("legacy_zarr", "chunk.bin", range_header="bytes=2-5")
+
+    assert isinstance(metadata, services.JSONResponse)
+    assert b'"source":"legacy"' in metadata.body
+    assert isinstance(chunk, services.Response)
+    assert chunk.status_code == 206
+    assert chunk.body == b"2345"
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2025,6 +2113,9 @@ def test_create_artifact_overwrite_keeps_existing_store_when_replacement_is_inva
 
 
 def test_create_artifact_rejects_missing_plugin_definition() -> None:
+    """A 4xx, not a 5xx (CLIM-912). A template with no `ingestion.plugin` is not broken — half
+    the shipped catalogue is produced by a workflow rather than fetched — so naming one is a
+    client error, and a 500 both misreports it and invites a retry that cannot succeed."""
     dataset: dict[str, object] = {
         "id": "broken_dataset",
         "name": "Broken dataset",
@@ -2044,8 +2135,10 @@ def test_create_artifact_rejects_missing_plugin_definition() -> None:
             publish=False,
         )
 
-    assert exc_info.value.status_code == 500
-    assert exc_info.value.detail == "Dataset 'broken_dataset' does not define ingestion.plugin"
+    assert exc_info.value.status_code == 400
+    assert "cannot be ingested" in str(exc_info.value.detail)
+    assert "broken_dataset" in str(exc_info.value.detail)
+    assert "ingestion.plugin" in str(exc_info.value.detail)
 
 
 def test_create_artifact_rejects_partial_download_scope(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2054,6 +2147,9 @@ def test_create_artifact_rejects_partial_download_scope(monkeypatch: pytest.Monk
         "name": "Total precipitation (CHIRPS3)",
         "variable": "precip",
         "period_type": "daily",
+        # An ingestable template: the scope validation under test runs after the check that
+        # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
+        "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:
@@ -2081,6 +2177,9 @@ def test_create_artifact_rejects_download_scope_outside_request_scope(monkeypatc
         "name": "Total precipitation (CHIRPS3)",
         "variable": "precip",
         "period_type": "daily",
+        # An ingestable template: the scope validation under test runs after the check that
+        # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
+        "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:

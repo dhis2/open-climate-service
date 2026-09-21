@@ -584,14 +584,29 @@ def _get_published_artifact(collection_id: str) -> Any:
 
 
 def _eligible_artifacts() -> dict[str, Any]:
-    return ingestion_services.latest_published_zarr_artifacts_by_dataset()
+    # The raster gate, not the STAC one: this resolves what load_collection will open as a
+    # datacube, which is a narrower question than what the catalogue describes.
+    return ingestion_services.latest_published_raster_artifacts_by_dataset()
 
 
 def _open_artifact(artifact: Any) -> xr.Dataset:
+    # Only reached for a record the raster gate admitted, so the formats here and
+    # LOADABLE_RASTER_FORMATS describe the same set from the two sides. Enumerated rather than
+    # defaulted to open_zarr_dataset: since GEOPARQUET exists, an unexpected format falling
+    # through here would try to open a feature collection as a Zarr store and fail somewhere
+    # deep in the reader, reported as a corrupt store rather than as the wrong kind of dataset.
     path = _artifact_store_path(artifact)
     if artifact.format == ArtifactFormat.ICECHUNK:
         return open_icechunk_dataset(path)
-    return open_zarr_dataset(path)
+    if artifact.format == ArtifactFormat.ZARR:
+        return open_zarr_dataset(path)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Collection '{artifact.dataset_id}' is stored as {artifact.format} and cannot be "
+            "loaded as a raster datacube"
+        ),
+    )
 
 
 def _ensure_crs(ds: xr.Dataset) -> xr.Dataset:

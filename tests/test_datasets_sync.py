@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from open_climate_service.ingestions import services, sync_engine
 from open_climate_service.ingestions.schemas import (
@@ -11,9 +12,11 @@ from open_climate_service.ingestions.schemas import (
     ArtifactPublication,
     ArtifactRecord,
     ArtifactRequestScope,
+    ArtifactVersion,
     CoverageSpatial,
     CoverageTemporal,
     DatasetDetailRecord,
+    DatasetItemType,
     DatasetPublication,
     PublicationStatus,
     SyncAction,
@@ -24,31 +27,38 @@ from open_climate_service.ingestions.schemas import (
 from open_climate_service.shared.time import next_period_string
 
 
+def _version(value: str, authority: str = "worldpop") -> ArtifactVersion:
+    return ArtifactVersion(value=value, authority=authority)
+
+
 def _artifact(
     *,
     artifact_id: str,
     source_dataset_id: str = "chirps3_precipitation_daily",
     managed_dataset_id: str = "chirps3_precipitation_daily_sle",
     created_at: str = "2026-01-10T00:00:00+00:00",
+    start: str = "2026-01-01",
     end: str = "2026-01-10",
     path: str = "/tmp/chirps3_precipitation_daily.icechunk",
+    version: ArtifactVersion | None = None,
 ) -> ArtifactRecord:
     return ArtifactRecord(
         artifact_id=artifact_id,
         dataset_id=source_dataset_id,
         dataset_name="CHIRPS3 precipitation",
         variable="precip",
+        version=version,
         format=ArtifactFormat.ICECHUNK,
         path=path,
         asset_paths=[path],
         variables=["precip"],
         request_scope=ArtifactRequestScope(
-            start="2026-01-01",
+            start=start,
             end=end,
             bbox=(1.0, 2.0, 3.0, 4.0),
         ),
         coverage=ArtifactCoverage(
-            temporal=CoverageTemporal(start="2026-01-01", end=end),
+            temporal=CoverageTemporal(start=start, end=end),
             spatial=CoverageSpatial(xmin=1.0, ymin=2.0, xmax=3.0, ymax=4.0),
         ),
         created_at=datetime.fromisoformat(created_at),
@@ -65,6 +75,7 @@ def _dataset_detail(dataset_id: str) -> DatasetDetailRecord:
         source_dataset_id="chirps3_precipitation_daily",
         dataset_name="CHIRPS3 precipitation",
         short_name="CHIRPS3 precip",
+        item_type=DatasetItemType.COVERAGE,
         variable="precip",
         period_type="daily",
         units="mm",
@@ -259,8 +270,9 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
     assert result.sync_detail.action == SyncAction.APPEND
     assert result.sync_detail.reason == "new_periods_available_for_append"
     assert "Data exists through 2026-01-31" in result.sync_detail.message
-    assert "Sync will append missing periods 2026-02-01 through 2026-02-10" in result.sync_detail.message
-    assert "extend coverage through 2026-02-10" in result.sync_detail.message
+    assert "Sync will add 2026-02-01 through 2026-02-10" in result.sync_detail.message
+    # Said once: an append covers exactly that range, so naming the target again repeated it.
+    assert result.sync_detail.message.count("2026-02-10") == 1
     assert result.message is not None
     assert "appending missing periods" in result.message
     assert "committed store" in result.message
@@ -800,6 +812,518 @@ def test_sync_dataset_release_policy_returns_up_to_date_when_release_matches(mon
     assert result.sync_detail.reason == "no_new_release"
 
 
+def test_release_planner_reports_version_decoupled_from_period_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLIM-1065: a release-kind artifact's version, not its coverage period, names the release.
+
+    WorldPop's revision (e.g. 'R2025A') is not a calendar period, so it must not be read
+    from coverage.temporal.end. The planner reports it via SyncDetail.current_version,
+    while the period-based NO_OP message continues to describe temporal coverage.
+    """
+    dataset_id = "worldpop_population_yearly_sle"
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id=dataset_id,
+        end="2024",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: latest)
+    monkeypatch.setattr(
+        services.registry_datasets,
+        "get_dataset",
+        lambda _: {
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}},
+        },
+    )
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
+
+    result = services.sync_dataset(dataset_id=dataset_id, end="2024", publish=True)
+
+    assert result.sync_detail is not None
+    assert result.sync_detail.action == SyncAction.NO_OP
+    assert result.sync_detail.current_version == _version("R2025A")
+    assert result.sync_detail.target_version == _version("R2025A")
+    assert result.sync_detail.message.startswith("Data through 2024 is already available locally")
+
+
+@pytest.mark.parametrize(
+    ("available", "expected_action", "expected_message"),
+    [
+        ([], SyncAction.NO_OP, "No new data is available beyond 2024."),
+        (["2025"], SyncAction.REMATERIALIZE, "New data is available through 2025."),
+    ],
+)
+def test_release_period_path_messages_name_periods_not_the_matching_version(
+    monkeypatch: pytest.MonkeyPatch,
+    available: list[str],
+    expected_action: SyncAction,
+    expected_message: str,
+) -> None:
+    """A matching release falls through to coverage comparison, whose messages name periods."""
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        end="2024",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: available)
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end="2025",
+    )
+
+    assert result.action == expected_action
+    assert result.message.startswith(expected_message)
+    assert "worldpop:R2025A" not in result.message
+
+
+def test_release_planner_rematerializes_when_declared_version_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLIM-1065: a new revision over identical periods must sync.
+
+    This is the case no period comparison can detect — the upstream source republished
+    the same 2015..2030 span under a new revision — and the whole reason release identity
+    is decoupled from temporal coverage.
+    """
+    dataset_id = "worldpop_population_yearly_sle"
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id=dataset_id,
+        end="2030",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: latest)
+    monkeypatch.setattr(
+        services.registry_datasets,
+        "get_dataset",
+        lambda _: {
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+    )
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
+    monkeypatch.setattr(services, "create_artifact", lambda **_: latest)
+
+    result = services.sync_dataset(dataset_id=dataset_id, end="2030", publish=True)
+
+    assert result.sync_detail is not None
+    assert result.sync_detail.action == SyncAction.REMATERIALIZE
+    assert result.sync_detail.reason == "release_version_changed"
+    assert result.sync_detail.current_version == _version("R2025A")
+    assert result.sync_detail.target_version == _version("R2025B")
+    assert "worldpop:R2025A to worldpop:R2025B" in result.sync_detail.message
+
+
+def test_version_change_without_a_requested_end_preserves_existing_coverage() -> None:
+    """A version-only sync must not truncate the artifact to the default target of today.
+
+    WorldPop covers 2015..2030, so a default target end of the current year would otherwise
+    rewrite it as 2015..<this year> and silently drop the future half of the dataset.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        end="2030",
+        version=_version("R2025A"),
+    )
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.REMATERIALIZE
+    assert result.reason == "release_version_changed"
+    assert result.target_end == "2030"
+    assert result.target_end_source == "current_coverage"
+
+
+def test_version_change_does_not_shrink_coverage_for_an_explicit_earlier_end() -> None:
+    """An explicitly requested earlier end cannot truncate either — sync never shrinks."""
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        end="2030",
+        version=_version("R2025A"),
+    )
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end="2020",
+    )
+
+    assert result.action == SyncAction.REMATERIALIZE
+    assert result.target_end == "2030"
+    assert result.target_end_source == "current_coverage"
+
+
+def test_version_change_is_a_no_op_when_the_source_reports_no_periods(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty availability list means the declared release cannot be fetched yet.
+
+    `_query_available_periods` distinguishes None (no plugin, use the requested target) from
+    [] (plugin present, nothing available). Rematerializing on [] would fail at execution
+    with "Source has no data for the requested scope" instead of reporting a readable plan.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        end="2030",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: [])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.NO_OP
+    assert result.reason == "release_version_unavailable"
+    assert result.current_version == _version("R2025A")
+    assert result.target_version == _version("R2025B")
+
+
+def test_version_change_waits_when_the_new_release_stops_short_of_current_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Availability decides go/no-go for a version change; it never lowers the target.
+
+    A new release that only reaches 2029 cannot replace a 2015..2030 artifact — doing so
+    would shrink a published dataset to chase a version. Wait for the release to cover what
+    is already held instead.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
+        end="2030",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2029"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.NO_OP
+    assert result.reason == "release_version_unavailable"
+    assert result.target_end == "2030"
+    assert "covers only through 2029" in result.message
+
+
+def test_version_change_clamps_to_availability_when_it_advances_beyond_current_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial availability ahead of existing coverage is a safe upgrade, not a shrink.
+
+    The floor is current_end, not target_end: a release reaching 2025 over coverage ending
+    2024 preserves everything held and advances it, so it is materialized at 2025 rather
+    than being refused for falling short of the requested 2026.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
+        end="2024",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2025"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end="2026",
+    )
+
+    assert result.action == SyncAction.REMATERIALIZE
+    assert result.reason == "release_version_changed"
+    assert result.current_end == "2024"
+    assert result.target_end == "2025"
+    assert result.target_end_source == "plugin_availability"
+
+
+def test_version_change_waits_when_the_new_release_no_longer_reaches_the_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A release that dropped the earliest years cannot rewrite the artifact either.
+
+    Execution requires the first available period to equal the requested start, so planning
+    REMATERIALIZE here would fail with "Source cannot materialize the requested temporal
+    scope from 2015" — and succeeding would drop the head of the series.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
+        end="2030",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2018", "2030"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.NO_OP
+    assert result.reason == "release_version_unavailable"
+    assert "starts at 2018, after the current 2015" in result.message
+
+
+def test_version_change_passes_planned_periods_to_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The span approved at planning is the span execution materializes.
+
+    The list is queried over exactly [current_start, target_end], so unlike the temporal
+    append path it can describe the whole rewrite — carrying it through avoids a second
+    periods() call that could return a different span than the plan was approved for.
+    """
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
+        end="2016",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2016"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.REMATERIALIZE
+    assert result.periods == ["2015", "2016"]
+
+
+def test_version_change_rematerializes_when_availability_reaches_the_protected_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A release that covers the existing span is materialized at that full span."""
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id="worldpop_population_yearly_sle",
+        start="2015",
+        end="2030",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: ["2015", "2030"])
+
+    result = sync_engine.plan_sync(
+        source_dataset={
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+        latest_artifact=latest,
+        requested_end=None,
+    )
+
+    assert result.action == SyncAction.REMATERIALIZE
+    assert result.reason == "release_version_changed"
+    assert result.target_end == "2030"
+
+
+def test_unavailable_release_is_not_reported_as_up_to_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declared-but-unavailable release is waiting on the source, not already current."""
+    dataset_id = "worldpop_population_yearly_sle"
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id=dataset_id,
+        end="2030",
+        version=_version("R2025A"),
+    )
+    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: latest)
+    monkeypatch.setattr(
+        services.registry_datasets,
+        "get_dataset",
+        lambda _: {
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025B", "authority": "worldpop"}},
+        },
+    )
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: [])
+    monkeypatch.setattr(services, "create_artifact", lambda **_: pytest.fail("must not rematerialize"))
+
+    result = services.sync_dataset(dataset_id=dataset_id, end=None, publish=True)
+
+    assert result.status == "waiting_for_source"
+    assert result.message is not None
+    assert "worldpop:R2025B" in result.message
+    assert "already current" not in result.message
+
+
+def test_release_planner_rematerializes_a_legacy_artifact_with_unknown_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An artifact predating version tracking is unknown, not known-equal.
+
+    Documents the migration rule: one rematerialization stamps the version, after which
+    the next sync sees a match and stops. Treating None as equal would leave the release
+    permanently unknown.
+    """
+    dataset_id = "worldpop_population_yearly_sle"
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id=dataset_id,
+        end="2030",
+        version=None,
+    )
+    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: latest)
+    monkeypatch.setattr(
+        services.registry_datasets,
+        "get_dataset",
+        lambda _: {
+            "id": "worldpop_population_yearly",
+            "period_type": "yearly",
+            "sync": {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}},
+        },
+    )
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
+    monkeypatch.setattr(services, "create_artifact", lambda **_: latest)
+
+    result = services.sync_dataset(dataset_id=dataset_id, end="2030", publish=True)
+
+    assert result.sync_detail is not None
+    assert result.sync_detail.action == SyncAction.REMATERIALIZE
+    assert result.sync_detail.reason == "release_version_unknown"
+    assert result.sync_detail.current_version is None
+    assert result.sync_detail.target_version == _version("R2025A")
+
+
+def test_release_planner_ignores_versions_when_no_template_declares_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A release template with no declared version keeps the pre-CLIM-1065 period behaviour."""
+    dataset_id = "worldpop_population_yearly_sle"
+    latest = _artifact(
+        artifact_id="a1",
+        source_dataset_id="worldpop_population_yearly",
+        managed_dataset_id=dataset_id,
+        end="2024",
+    )
+    monkeypatch.setattr(services, "get_latest_artifact_for_dataset_or_404", lambda _: latest)
+    monkeypatch.setattr(
+        services.registry_datasets,
+        "get_dataset",
+        lambda _: {"id": "worldpop_population_yearly", "period_type": "yearly", "sync": {"kind": "release"}},
+    )
+    monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
+
+    result = services.sync_dataset(dataset_id=dataset_id, end="2024", publish=True)
+
+    assert result.sync_detail is not None
+    assert result.sync_detail.action == SyncAction.NO_OP
+    assert result.sync_detail.reason == "no_new_release"
+    assert result.sync_detail.current_version is None
+    assert result.sync_detail.target_version is None
+
+
+def test_resolve_artifact_version_reads_both_halves_and_infers_neither() -> None:
+    """Neither half is derived, and no declaration at all is the only route to None."""
+    declared: dict[str, object] = {"sync": {"kind": "release", "version": {"value": "R2025A", "authority": "worldpop"}}}
+    assert services._resolve_artifact_version(declared) == _version("R2025A")
+
+    # A release template that declares no version, so period comparison still governs it.
+    assert services._resolve_artifact_version({"sync": {"kind": "release"}}) is None
+    # A temporal dataset never carries a release identity, however many periods it appends.
+    assert services._resolve_artifact_version({"sync": {"kind": "temporal"}, "period_type": "daily"}) is None
+    assert services._resolve_artifact_version({}) is None
+
+
+def test_a_malformed_declaration_raises_rather_than_reading_as_no_version() -> None:
+    """Reading a broken declaration as "no version" would disable the detection it asked for.
+
+    Registration rejects these, so materialization and planning only meet one if that was
+    bypassed — and then failing loudly beats silently syncing on periods alone.
+    """
+    malformed = [
+        {"value": "R2025A"},  # half declared
+        {"authority": "worldpop"},
+        "R2025A",  # the pre-ArtifactVersion scalar form
+        2025,
+        {"value": "   ", "authority": "worldpop"},
+        {"value": " R2025A ", "authority": "worldpop"},  # verbatim means unpadded
+        {"value": "R2025A", "authority": "WorldPop"},
+    ]
+    for declaration in malformed:
+        with pytest.raises(ValueError):
+            services._resolve_artifact_version({"sync": {"kind": "release", "version": declaration}})
+        with pytest.raises(ValueError):
+            sync_engine._declared_release_version({"sync": {"kind": "release", "version": declaration}})
+
+
+def test_release_identity_compares_on_the_pair_not_the_value() -> None:
+    """Same value under a different authority is a different release."""
+    assert _version("R2025A") == _version("R2025A")
+    assert _version("R2025A") != _version("R2025A", authority="ocs")
+    assert _version("R2025A") != _version("R2025B")
+
+
+def test_authority_must_be_a_machine_identifier() -> None:
+    """A display label is rejected rather than quietly lower-cased into an identifier."""
+    for rejected in ["WorldPop", "WorldPop Global2", "world pop", "", "-worldpop", "worldpop-"]:
+        with pytest.raises(ValidationError):
+            ArtifactVersion(value="R2025A", authority=rejected)
+
+    for accepted in ["worldpop", "overture", "ocs", "dhis2", "dhis2.national-hmis", "worldpop_global2"]:
+        assert ArtifactVersion(value="R2025A", authority=accepted).authority == accepted
+
+
 def test_default_hourly_target_end_is_utc_aware(monkeypatch: pytest.MonkeyPatch) -> None:
     class FixedDateTime(datetime):
         @classmethod
@@ -954,6 +1478,8 @@ def test_sync_plan_route_returns_plan_without_creating_artifact(
         "current_end": "2026-01-31",
         "target_end": "2026-02-10",
         "target_end_source": "request",
+        "current_version": None,
+        "target_version": None,
         "delta_start": "2026-02-01",
         "delta_end": "2026-02-10",
     }

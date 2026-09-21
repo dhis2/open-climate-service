@@ -75,7 +75,9 @@ def test_post_ingestion_respond_async_returns_202_with_location(
     monkeypatch.setattr("open_climate_service.jobs.service.JobService.submit_callable_job", lambda self, **kw: job)
     monkeypatch.setattr(
         "open_climate_service.ingestions.routes._get_dataset_or_404",
-        lambda _: {"id": "chirps3_precipitation_daily"},
+        # An ingestable template. The ingest path refuses one with no "ingestion.plugin"
+        # (CLIM-912), so a bare stub short-circuits before the behaviour under test.
+        lambda _: {"id": "chirps3_precipitation_daily", "ingestion": {"plugin": "pkg.mod"}},
     )
     monkeypatch.setattr("open_climate_service.ingestions.routes.get_extent_or_404", lambda: {"bbox": [0, 0, 1, 1]})
 
@@ -161,7 +163,7 @@ def test_post_ingestion_without_prefer_does_not_return_202(client: TestClient, m
     """Without Prefer: respond-async the response is never 202 Accepted."""
     monkeypatch.setattr(
         "open_climate_service.ingestions.routes._get_dataset_or_404",
-        lambda _: {"id": "chirps3_precipitation_daily"},
+        lambda _: {"id": "chirps3_precipitation_daily", "ingestion": {"plugin": "pkg.mod"}},
     )
 
     def raise_no_extent() -> NoReturn:

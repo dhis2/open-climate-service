@@ -95,7 +95,7 @@ curl -s -X POST http://127.0.0.1:9000/ingestions \
 curl -s -X POST http://127.0.0.1:9000/ingestions \
   -H "Content-Type: application/json" \
   -d '{
-    "dataset_id": "worldpop_population_global2_R2025A_100m",
+    "dataset_id": "worldpop_population_global2_100m",
     "start": "2020",
     "end": "2020",
     "overwrite": false,
@@ -115,6 +115,7 @@ Example response:
     "dataset_name": "Total precipitation (CHIRPS3)",
     "short_name": "Total precipitation",
     "description": "CHIRPS v3 daily precipitation in mm.",
+    "itemType": "coverage",
     "variable": "precip",
     "period_type": "daily",
     "units": "mm",
@@ -228,6 +229,7 @@ Example response:
       "dataset_name": "Total precipitation (CHIRPS3)",
       "short_name": "Total precipitation",
       "description": "CHIRPS v3 daily precipitation in mm.",
+      "itemType": "coverage",
       "variable": "precip",
       "period_type": "daily",
       "units": "mm",
@@ -271,6 +273,16 @@ Example response:
 What this means:
 
 - `/datasets` is the public native catalog of managed datasets
+- `itemType` says what the dataset holds: `coverage` for a raster, `feature` for a feature
+  collection such as a boundary set. It is the field to filter a listing on, because `format`
+  sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
+  name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
+  the collection object; `coverage` is convention rather than conformance, since OGC API -
+  Coverages is a candidate draft and silent on the field. `/datasets` is Open Climate Service's
+  own API, so do not infer the rest of an OGC collection object from the borrowed name.
+- `variable` and `period_type` are both nullable, and are `null` together for a feature
+  collection: a boundary set measures nothing and has no temporal axis. Read `itemType` rather
+  than testing these two for absence.
 - `license` is an SPDX identifier, or `other` for a licence that has none — the Copernicus
   licence, for instance. It is never absent: a dataset whose template declares no licence
   reports `other` rather than something that reads as permissive. `license_url` points at the
@@ -425,6 +437,80 @@ Current sync constraints:
 
 - append execution is a delta-download plus canonical rebuild, not in-place Zarr mutation
 - upstream availability is determined by each plugin's `periods()` method
+
+### Release identity
+
+A `release` dataset's template may declare a release identity, independent of `period_type`
+and of temporal coverage. It has two halves:
+
+```yaml
+sync:
+  kind: release
+  version:
+    value: R2025A # the identifier, verbatim as the source publishes it
+    authority: worldpop # whose versioning scheme gives that identifier meaning
+```
+
+The pair is the identity — a bare `R2025A` or `1.0` says nothing on its own, so both halves
+are required and neither is inferred. `value` is opaque: OCS never parses, orders or
+normalises it, because its syntax belongs to the authority. Because it is stored exactly as
+declared, a blank or whitespace-padded value is rejected rather than trimmed — otherwise
+`" R2025A "` would be a different release from `R2025A`. `authority` is a stable machine
+identifier (`worldpop`, `overture`, `ocs`), never a display label — display names live on
+`source` and `providers` — and it is compared exactly, so changing it renames every release
+under it. Both are capped at 64 characters, and the same rules apply wherever an identity is
+built: a template at registration, an artifact at materialization, a record on load.
+
+That identity is stored on the materialized artifact and reported on every release plan:
+
+```json
+{
+  "current_version": { "value": "R2025A", "authority": "worldpop" },
+  "target_version": { "value": "R2025B", "authority": "worldpop" }
+}
+```
+
+- `sync_detail.current_version` — the release the local artifact holds
+- `sync_detail.target_version` — the release the template currently declares
+
+It exists because a source can republish *the same periods* under a new revision, which no
+period comparison can detect. When the two differ, sync rematerializes even though temporal
+coverage is unchanged — and they are compared as a whole, so the same `value` under a
+different `authority` is a different release. An artifact materialized before its template
+declared a version has `current_version: null`; its release is unknown rather than
+known-equal, so it rematerializes once to establish identity and then settles.
+
+A version is a *logical release*, distinct from the other two identities on a record:
+`artifact_id` is the exact materialization, and provenance is how it was produced. A derived
+dataset does not inherit a version from its inputs — an openEO result carries no version
+unless OCS deliberately releases it, as `{"value": "1.0", "authority": "ocs"}`, with its
+inputs recorded as provenance.
+
+A template that declares no version keeps the period-based behaviour described above, and a
+`temporal` dataset never carries a release identity however many periods it appends.
+
+Rematerializing for a new release never shortens a managed dataset. If the declared release
+cannot cover what is already held — the source reports nothing, stops short of the current
+end, or no longer reaches back to the start — the plan reports:
+
+- `action` is `no_op`
+- `reason` is `release_version_unavailable`
+- `message` names which end of the span the source falls short of
+
+Executing that sync returns top-level `status: waiting_for_source` (**not** `up_to_date`,
+which would claim the dataset is current when a newer release is declared).
+
+Clients should treat `waiting_for_source` as "retry later": nothing was written, the existing
+artifact and its version are untouched, and the same request succeeds once the source
+publishes the declared release. Where the source *can* preserve existing coverage but reaches
+only partway to the requested end, sync proceeds and clamps `target_end` to what is available,
+reporting `target_end_source` as `plugin_availability`.
+
+This guard is only as good as each plugin's `periods()` reporting. A plugin that enumerates
+periods without regard to the revision it was configured with — WorldPop's returns a fixed
+2015–2030 year list — reports every period as available even for a revision the upstream hub
+has not published, so advancing such a template to an unpublished revision fails at fetch time
+rather than returning `waiting_for_source`.
 
 Configured availability policies:
 
@@ -617,7 +703,7 @@ Create an initial WorldPop managed dataset:
 curl -s -X POST "http://127.0.0.1:9000/ingestions" \
   -H "Content-Type: application/json" \
   -d '{
-    "dataset_id": "worldpop_population_global2_R2025A_100m",
+    "dataset_id": "worldpop_population_global2_100m",
     "start": "2020",
     "end": "2020",
     "publish": true
@@ -627,7 +713,7 @@ curl -s -X POST "http://127.0.0.1:9000/ingestions" \
 Plan a later release:
 
 ```bash
-curl -s "http://127.0.0.1:9000/sync/worldpop_population_global2_R2025A_100m/plan?end=2021" | jq
+curl -s "http://127.0.0.1:9000/sync/worldpop_population_global2_100m/plan?end=2021" | jq
 ```
 
 Expected:
@@ -640,7 +726,7 @@ Expected:
 Execute the release sync:
 
 ```bash
-curl -s -X POST "http://127.0.0.1:9000/sync/worldpop_population_global2_R2025A_100m" \
+curl -s -X POST "http://127.0.0.1:9000/sync/worldpop_population_global2_100m" \
   -H "Content-Type: application/json" \
   -d '{
     "end": "2021",
@@ -652,7 +738,36 @@ Expected:
 
 - `status` is `completed`
 - `sync_detail.action` is `rematerialize`
-- `dataset.dataset_id` is `worldpop_population_global2_R2025A_100m`
+- `dataset.dataset_id` is `worldpop_population_global2_100m`
+
+### 8. Observe release identity
+
+Plan again with the end you just materialized:
+
+```bash
+curl -s "http://127.0.0.1:9000/sync/worldpop_population_global2_100m/plan?end=2021" | jq \
+  '{action: .action, reason: .reason, current_version, target_version}'
+```
+
+Expected:
+
+- `current_version` and `target_version` are both `{"value": "R2025A", "authority": "worldpop"}`
+- `action` is `no_op` and `reason` is `no_new_release` — matching releases fall through to the
+  period comparison
+
+To see a release change drive a sync, edit the template's `sync.version.value` (and the
+plugin's matching `ingestion.params.revision`) to a published revision and plan again.
+Expected:
+
+- `action` is `rematerialize`
+- `reason` is `release_version_changed`
+- `target_end` is unchanged from the current coverage end — a version change rewrites the
+  existing span rather than truncating it to today
+
+If the declared revision is not yet published by the source, the same plan returns `no_op`
+with `reason: release_version_unavailable`; executing the sync returns
+`status: waiting_for_source`, provided the plugin's `periods()` reports availability for that
+revision — see **Release identity** above.
 
 ## Summary
 

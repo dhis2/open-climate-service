@@ -158,7 +158,7 @@ Zarr output cannot be produced synchronously, so submit it as a **batch job** (`
       "change": {
         "process_id": "temporal_change",
         "arguments": {
-          "dataset_id": "worldpop_population_global2_R2025A_100m",
+          "dataset_id": "worldpop_population_global2_100m",
           "output_dataset_id": "worldpop_population_change",
           "variable": "pop_change",
           "temporal_extent": ["2015-01-01", "2030-12-31"]

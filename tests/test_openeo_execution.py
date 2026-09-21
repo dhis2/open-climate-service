@@ -442,7 +442,7 @@ def test_result_assets_none_output_returns_empty() -> None:
 def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyPatch) -> None:
     # Unpublished: dataset + zarr links, no STAC.
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.latest_published_zarr_artifacts_by_dataset",
+        "open_climate_service.ingestions.services.latest_published_raster_artifacts_by_dataset",
         lambda: {},
     )
     assets = _result_assets(_record("managed://my_aggregate"))
@@ -452,7 +452,7 @@ def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyP
 
     # Published: STAC collection link is added.
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.latest_published_zarr_artifacts_by_dataset",
+        "open_climate_service.ingestions.services.latest_published_raster_artifacts_by_dataset",
         lambda: {"my_aggregate": object()},
     )
     published = _result_assets(_record("managed://my_aggregate"))
@@ -1760,7 +1760,7 @@ def test_persist_result_auto_registers_missing_template(
         "Zarr",
         {
             "dataset_id": "worldpop_population_change_autogen",
-            "source_dataset_id": "worldpop_population_global2_R2025A_100m",
+            "source_dataset_id": "worldpop_population_global2_100m",
             "variable": "pop_change",
             "publish": False,
         },
@@ -1828,7 +1828,7 @@ def test_persist_result_reloads_template_after_concurrent_create(
         "Zarr",
         {
             "dataset_id": "worldpop_population_change_autogen",
-            "source_dataset_id": "worldpop_population_global2_R2025A_100m",
+            "source_dataset_id": "worldpop_population_global2_100m",
             "variable": "pop_change",
             "publish": False,
         },

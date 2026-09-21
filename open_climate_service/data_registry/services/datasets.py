@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from open_climate_service import config as api_config
+from open_climate_service.ingestions.schemas import parse_declared_artifact_version
 from open_climate_service.shared.time import SUPPORTED_PERIOD_TYPES
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,26 @@ def list_datasets() -> list[dict[str, Any]]:
                 merged[ds_id] = dataset
 
     return list(merged.values())
+
+
+def is_ingestable(dataset: dict[str, Any]) -> bool:
+    """Whether this template can be ingested from an upstream source.
+
+    An ingestable template declares ``ingestion.plugin``: the fetch path. Half the shipped
+    catalogue does not — anomalies, normals and change rasters are *produced* by a workflow
+    through ``save_result`` and registered as static templates, so there is nothing upstream
+    to fetch.
+
+    Keyed on the plugin rather than on ``sync.kind``, which looks like the same question and
+    is not: ``era5land_temperature_daily_normal_1991_2020`` is ``kind: static`` *and* has a
+    plugin, so a kind-based rule would refuse a template that ingests perfectly well. The
+    plugin is what `create_artifact` actually requires, so it is what this reports.
+    """
+    ingestion = dataset.get("ingestion")
+    if not isinstance(ingestion, dict):
+        return False
+    plugin = ingestion.get("plugin")
+    return isinstance(plugin, str) and bool(plugin.strip())
 
 
 def get_dataset(dataset_id: str) -> dict[str, Any] | None:
@@ -351,6 +372,19 @@ def _warn_once(dataset_id: str, source: str, message: str) -> None:
         logger.warning("Dataset template '%s' in %s: %s", dataset_id, source, message)
 
 
+def _validate_sync_version(declared: object, *, dataset_id: str, source: str) -> None:
+    """Reject a malformed release identity at registration, with template context.
+
+    The rules themselves live with ArtifactVersion — registration adds only "which template,
+    which file", so a constraint cannot be tightened on the model and silently keep passing
+    here, or vice versa.
+    """
+    try:
+        parse_declared_artifact_version(declared)
+    except ValueError as exc:
+        raise ValueError(f"Dataset template '{dataset_id}' in {source} has an {exc}") from exc
+
+
 def _validate_dataset_template(dataset: object, *, source: str) -> None:
     """Validate registry fields required by runtime sync planning."""
     if not isinstance(dataset, dict):
@@ -369,6 +403,19 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
             f"Dataset template '{dataset_id}' in {source} has unsupported sync.kind "
             f"'{sync_kind}'. Supported values: {supported}"
         )
+
+    # sync.version is the release identity a release-kind dataset is compared against, and
+    # it declares both halves: the identifier, and the authority whose scheme names it. A
+    # malformed one would be read as "no version declared" by the planner and silently
+    # disable release-change detection, so reject it at registration rather than letting a
+    # typo turn into a dataset that never notices a new revision.
+    if isinstance(sync_block, dict) and "version" in sync_block:
+        _validate_sync_version(sync_block.get("version"), dataset_id=dataset_id, source=source)
+        if sync_kind != "release":
+            raise ValueError(
+                f"Dataset template '{dataset_id}' in {source} declares sync.version but has "
+                f"sync.kind '{sync_kind}'; only a release dataset carries a release identity"
+            )
 
     # An unsupported period_type is accepted by every downstream consumer and then
     # silently ignored — no step, no period normalisation, no error. Reject it here so a
@@ -426,6 +473,24 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
         has_plugin = isinstance(plugin, str) and bool(plugin)
         if not has_plugin:
             raise ValueError(f"Dataset template '{dataset_id}' in {source} must define ingestion.plugin")
+
+    # produced_by names the workflow that writes a non-ingestable template, so a reader can
+    # get from the dataset to the way it is made. A dataset is either fetched or produced, and
+    # a template claiming both would be listed as a dataset template and as a workflow output at
+    # once. The workflow id itself is not resolved here: workflows can be registered at
+    # runtime, after templates load, so an unknown id is a presentation concern, not an error.
+    produced_by = dataset.get("produced_by")
+    if produced_by is not None:
+        if not isinstance(produced_by, str) or not produced_by.strip() or produced_by != produced_by.strip():
+            raise ValueError(
+                f"Dataset template '{dataset_id}' in {source} has an invalid produced_by "
+                f"{produced_by!r}; it must be a workflow id"
+            )
+        if is_ingestable(dataset):
+            raise ValueError(
+                f"Dataset template '{dataset_id}' in {source} declares both produced_by and "
+                "ingestion.plugin; a dataset is either ingested or produced by a workflow"
+            )
 
     # Surface non-CF/udunits units so unit-aware processes (xclim indices) don't fail
     # cryptically later. Warn rather than reject — not every variable is a physical
