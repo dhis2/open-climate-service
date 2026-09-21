@@ -319,10 +319,13 @@ def test_the_trailing_slash_form_redirects_to_the_canonical_path(client: TestCli
 
     Each of these collections is registered at the slashless path, so `/dataset-templates/`
     answers 307 rather than the listing. That is ordinary FastAPI behaviour and the same for
-    all three, but it changed for `/dataset-templates` when its page moved onto the JSON's URL
-    — and it broke an instance health check calling `curl -sf` with the old trailing slash,
-    which suppresses the 307 body and does not follow it. Nothing here said the redirect
-    existed, so nothing caught it.
+    all three, but it changed for `/dataset-templates` when its page moved onto the JSON's URL,
+    and it broke an instance health check calling `curl -sf` with the old trailing slash.
+
+    The redirect is what broke it, not `-f`: a 307 carries no body, and curl does not follow
+    one without `-L`, so the check read an empty response and failed parsing it. `-f` never
+    came into it — it acts on 4xx and 5xx, and leaves a 307 reporting success. Worth being
+    exact about, because the obvious reading sends the next person after the wrong flag.
     """
     redirect = client.get(f"{collection}/", follow_redirects=False)
 

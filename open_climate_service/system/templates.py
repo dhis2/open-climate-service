@@ -1231,29 +1231,81 @@ def _globe_zoom(width: float, height: float, latitude: float) -> float:
     return max(_MIN_ZOOM, min(0.1 * 180 / span, 2.2))
 
 
-def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float]:
-    """Orthographic projection onto the viewBox, with the far side pushed out to the limb.
-
-    A point beyond the horizon has no orthographic position, but dropping it breaks the ring
-    it belongs to: the visible run then closes with a straight chord, which cut a hard diagonal
-    across Europe on a globe centred on Nepal. Instead the point keeps its own azimuth and goes
-    out to the limb, so every ring stays one closed polygon in its original order — the winding,
-    and so the fill, stays right without any of the horizon-walking that would otherwise be
-    needed to rejoin the pieces.
-
-    Nothing is lost by it. The zoom keeps the limb outside the frame (`_globe_zoom` never goes
-    below `_MIN_ZOOM`), so the far side collapses onto an arc no viewer can see.
-    """
+def _sphere_xy(lon: float, lat: float, lon0: float, lat0: float) -> tuple[float, float, bool]:
+    """Orthographic (x, y) on the unit sphere, and whether the point is beyond the horizon."""
     lam, phi = math.radians(lon - lon0), math.radians(lat)
     phi0 = math.radians(lat0)
     cos_c = math.sin(phi0) * math.sin(phi) + math.cos(phi0) * math.cos(phi) * math.cos(lam)
     x = math.cos(phi) * math.sin(lam)
     y = math.cos(phi0) * math.sin(phi) - math.sin(phi0) * math.cos(phi) * math.cos(lam)
-    if cos_c <= 0:
-        # Radius alone is folded by the far side; the azimuth is already the true one.
+    return x, y, cos_c <= 0
+
+
+def _on_frame(x: float, y: float, scale: float) -> tuple[float, float]:
+    """Unit-sphere coordinates placed on the viewBox."""
+    return _GLOBE_WIDTH / 2 + scale * x, _GLOBE_HEIGHT / 2 - scale * y
+
+
+def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float]:
+    """Orthographic projection onto the viewBox, with the far side pushed out to the limb.
+
+    A point beyond the horizon has no orthographic position, but dropping it breaks the ring it
+    belongs to: the visible run then closes with a straight chord, which cut a hard diagonal
+    across Europe on a globe centred on Nepal. Instead the point keeps its own azimuth — which
+    the far side does not fold, only the radius — and goes out to the limb, which the zoom keeps
+    outside the frame.
+
+    On its own that is not enough to keep the far side out of sight, which is why land goes
+    through `_land_path` rather than straight through here; see `_LIMB_STEP`.
+    """
+    x, y, hidden = _sphere_xy(lon, lat, lon0, lat0)
+    if hidden:
         radius = math.hypot(x, y) or 1.0
         x, y = x / radius, y / radius
-    return _GLOBE_WIDTH / 2 + scale * x, _GLOBE_HEIGHT / 2 - scale * y
+    return _on_frame(x, y, scale)
+
+
+# How far apart two points on the limb may be before the straight line between them is drawn as
+# an arc instead. Putting each hidden vertex on the limb does not put the *segment* between two
+# of them there: SVG joins them with a chord, which dips to `scale * cos(gap / 2)` and can land
+# back inside the frame. Brazil sits at `_MIN_ZOOM`, where the limb clears the frame's corner by
+# barely a unit (88.8 against 87.66), and three of its chords reached in. Below 18 degrees no
+# chord can dip that far even there; 4 leaves room to spare and costs at most 90 points a ring.
+_LIMB_STEP = math.radians(4)
+
+
+def _limb_arc(start: float, end: float, scale: float) -> list[tuple[float, float]]:
+    """Points along the limb from azimuth *start* to *end*, the short way round."""
+    delta = (end - start + math.pi) % (2 * math.pi) - math.pi
+    steps = int(abs(delta) / _LIMB_STEP)
+    return [
+        _on_frame(math.cos(start + delta * i / steps), math.sin(start + delta * i / steps), scale)
+        for i in range(1, steps)
+    ]
+
+
+def _land_path(ring: list[tuple[float, float]], lon0: float, lat0: float, scale: float) -> str:
+    """One coastline ring, with whatever of it is hidden laid along the limb.
+
+    A ring with nothing on the visible face is dropped rather than collapsed onto the limb: it
+    contributes no outline, and a degenerate sliver out there is one more thing to reason about.
+    """
+    placed = [(*_sphere_xy(lon, lat, lon0, lat0),) for lon, lat in ring]
+    if all(hidden for _, _, hidden in placed):
+        return ""
+    points: list[tuple[float, float]] = []
+    previous: float | None = None
+    for x, y, hidden in placed:
+        if not hidden:
+            points.append(_on_frame(x, y, scale))
+            previous = None
+            continue
+        azimuth = math.atan2(y, x)
+        if previous is not None:
+            points.extend(_limb_arc(previous, azimuth, scale))
+        points.append(_on_frame(math.cos(azimuth), math.sin(azimuth), scale))
+        previous = azimuth
+    return _path(points, close=True)
 
 
 def _on_far_side(lon: float, lat: float, lon0: float, lat0: float) -> bool:
@@ -1290,9 +1342,7 @@ def _globe(bbox: tuple[float, float, float, float]) -> dict[str, Any]:
     xmin, ymin, xmax, ymax = bbox
     lon0, lat0 = (xmin + xmax) / 2, (ymin + ymax) / 2
     scale = _GLOBE_RADIUS * _globe_zoom(abs(xmax - xmin), abs(ymax - ymin), lat0)
-    land = "".join(
-        _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in ring], close=True) for ring in _world_rings()
-    )
+    land = "".join(_land_path(ring, lon0, lat0, scale) for ring in _world_rings())
     # Drawn only while the extent fits on the face being shown. An extent wider than the
     # visible hemisphere has no orthographic outline — its true edge is the limb, which the
     # zoom keeps off-frame — and clamping its corners out there draws a box across the map
