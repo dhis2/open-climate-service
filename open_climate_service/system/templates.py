@@ -296,7 +296,7 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
             f"/process_graphs/{template['produced_by']}",
         )
     elif template and registry_datasets.is_ingestable(template):
-        origin = ("Origin", "Fetched from the data source", None)
+        origin = ("Origin", "Fetched from the dataset template", None)
     else:
         origin = ("Origin", "", None)
 

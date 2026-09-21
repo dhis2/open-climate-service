@@ -225,6 +225,12 @@ def test_the_dataset_page_names_the_workflow_that_produced_it() -> None:
     assert ("Produced by", "climate_normal workflow", "/process_graphs/climate_normal") in context["data"]
 
 
+def test_the_dataset_page_names_the_dataset_template_it_was_fetched_from() -> None:
+    context = landing._dataset_page_context(_record("chirps_monthly"), _ingestable("chirps_monthly"))
+
+    assert ("Origin", "Fetched from the dataset template", None) in context["data"]
+
+
 def test_the_dataset_page_lists_only_what_is_known() -> None:
     context = landing._dataset_page_context(_record(short_name=None, resolution=None), None)
     labels = [label for label, _, _ in context["data"] + context["status_facts"]]
@@ -250,7 +256,8 @@ def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatc
     # the landing page, which arrives in a later slice, and a link to a 404 is worse than none.
     assert 'href="/ocs/map"' in html
     assert "#operator" not in html
-    assert "template" not in _visible_text(html).lower()
+    # "Dataset templates" is the rail entry; the dataset page itself names no template.
+    assert "template" not in _visible_text(html).lower().replace("dataset templates", "")
 
 
 # --- sync from the dataset page ----------------------------------------------------------
