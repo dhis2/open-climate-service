@@ -1,10 +1,20 @@
 """Pydantic schemas for ingestion, dataset, and sync APIs."""
 
+import re
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
+from open_climate_service.shared.crs import canonical_crs_code
 from open_climate_service.shared.licences import STAC_LICENSE_OTHER
 
 
@@ -14,6 +24,33 @@ class ArtifactFormat(StrEnum):
     ZARR = "zarr"
     NETCDF = "netcdf"
     ICECHUNK = "icechunk"
+    GEOPARQUET = "geoparquet"
+    """A feature collection: rows of geometry and properties, not a datacube.
+
+    The first format here that no raster reader opens, which is why the catalogue gates split
+    in CLIM-1066 before this value existed. Every branch that dispatches on format has to
+    answer for it rather than fall through to a Zarr path that would fail obscurely.
+
+    A record carrying it is registered, published and listed under `/datasets`, and is in
+    neither catalogue yet: openEO `/collections` refuses it permanently, since it is not a
+    datacube, while STAC admits it in CLIM-1069 — together with the collection document and
+    the `table` extension, so the catalogue never advertises a child it cannot serve.
+    """
+
+
+class DatasetItemType(StrEnum):
+    """What a managed dataset holds, as the public `itemType` discriminator.
+
+    The field name and the `feature` value are OGC API - Features Part 1, which defines
+    `itemType` on the collection object as an "indicator about the type of the items in the
+    collection (the default value is 'feature')". `coverage` is convention rather than
+    conformance: OGC API - Coverages is a candidate draft and silent on the field. `/datasets`
+    is OCS's own API, so borrowing the name buys consistency, not a promise that the rest of
+    an OGC collection object is there.
+    """
+
+    FEATURE = "feature"
+    COVERAGE = "coverage"
 
 
 class PublicationStatus(StrEnum):
@@ -218,6 +255,155 @@ def _describe_version_error(exc: ValidationError) -> str:
     return "; ".join(problems)
 
 
+_CRS_CODE_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9_.-]*):([A-Za-z0-9_.+-]+)$")
+"""Shape of a coordinate reference system code: an authority, then its code.
+
+Structural only. It separates 'EPSG:4326' and 'ESRI:102008' from blank space, a bare label or
+a sentence; whether the authority publishes that code, and whether the stored file agrees, is
+the reader's question (CLIM-1068).
+"""
+
+
+def canonical_feature_crs(declared: object) -> str | None:
+    """Return one spelling of a declared CRS, or None when it is not a CRS code at all.
+
+    The single normalizer for a stored collection's CRS, shared by `FeatureDetail` and by the
+    vector entry point that builds one. Two callers each doing "most of" this is how a record
+    ends up holding `epsg:4326` while another holds `EPSG:4326`, and those compare unequal.
+
+    Three steps. `canonical_crs_code` collapses the CRS84 aliases GeoJSON and GeoParquet both
+    use, and prefixes a bare EPSG number. The authority is then uppercased, since authorities
+    are conventionally uppercase and case is not part of their identity — `epsg` and `EPSG`
+    name the same register. The code half is left exactly as declared: it is a token the
+    authority defines, and this has no standing to recase it.
+    """
+    if not isinstance(declared, str) or not declared.strip():
+        return None
+    match = _CRS_CODE_PATTERN.match(canonical_crs_code(declared.strip()))
+    if match is None:
+        return None
+    authority, code = match.groups()
+    return f"{authority.upper()}:{code}"
+
+
+class FeatureDetail(BaseModel):
+    """What a feature collection must remember that has no home on the record.
+
+    A nested submodel rather than three fields flattened onto `ArtifactRecord`, following
+    `request_scope`, `coverage` and `publication`. Flattening would make every raster record
+    carry `id_property: null` forever, and a free-form dict would leave these untyped and
+    absent from the API contract.
+
+    The shape is deliberate about `id_property` being required *inside* here: a feature record
+    cannot exist without one, which neither alternative can guarantee. It is the one value
+    whose loss does not raise — a missing or duplicated identifier pushes values against the
+    wrong org unit silently, because DHIS2 keeps whichever value arrives last.
+
+    Nothing temporal, which is correct for the static geometry in scope: org unit boundaries
+    and facility points are versioned when they change (see `ArtifactRecord.version`) rather
+    than timestamped per observation. CLIM-1095 decides what an observed, time-varying
+    collection looks like; if it lands on a time column rather than a collection per
+    acquisition, that shape arrives here and existing records need migrating.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id_property: str = Field(
+        min_length=1,
+        description=(
+            "Name of the property each feature is identified by. Read from a feature's "
+            "`properties`, which is what the openEO specification guarantees survives "
+            "aggregation, rather than a top-level GeoJSON `id`, which the usual "
+            "GeoJSON-to-frame conversion drops. Becomes the geometry-dimension label that the "
+            "DHIS2 and CHAP exports use as their location column, so it must identify exactly "
+            "one feature."
+        ),
+    )
+    feature_count: int = Field(
+        ge=0,
+        description=(
+            "Number of features in the stored collection. Recorded rather than counted on "
+            "read, so 'why did yesterday cover 47 districts and today 48' is answerable from "
+            "the record alone."
+        ),
+    )
+    primary_geometry: str = Field(
+        min_length=1,
+        description=(
+            "Name of the geometry *column* in the stored GeoParquet, not a geometry type — one "
+            "column may hold points and polygons together. Named rather than assumed, because a "
+            "collection may carry more than one geometry column, and this is what the STAC table "
+            "extension publishes as `table:primary_geometry` (CLIM-1069)."
+        ),
+    )
+    crs: str = Field(
+        min_length=1,
+        description=(
+            "Coordinate reference system of the stored geometry, as a canonical authority code "
+            "such as 'EPSG:4326'. Required, never defaulted at read time: ADR 0002 decision 9 "
+            "makes an explicit CRS a property of every stored collection, because the "
+            "alternative is a reader assuming WGS 84 and a process silently sampling a raster "
+            "at the wrong places. A spatial read declares the CRS of its own bbox against this, "
+            "and a process combining raster and vector reprojects to the raster's CRS before "
+            "sampling. Canonicalized on the way in, so a CRS84 alias and a bare EPSG number "
+            "are stored in the one spelling every consumer compares against."
+        ),
+    )
+
+    @field_validator("id_property", "primary_geometry")
+    @classmethod
+    def _names_a_real_column(cls, value: str, info: ValidationInfo) -> str:
+        """Reject a blank or padded column name rather than storing one that cannot match.
+
+        Both fields name something in the stored file — a property key and a geometry column —
+        and are compared exactly by whatever reads it. A padded ' orgUnitCode ' matches no
+        property, and the failure is the quiet kind: every lookup misses, so the identifier is
+        absent rather than wrong, and CLIM-1068's identity check reports a collection with no
+        usable ids instead of a template with a stray space.
+
+        Rejected rather than stripped, following `ArtifactVersion.value`. Stripping would
+        silently accept a template whose declaration does not say what its author meant, and a
+        record loaded from disk would then disagree with the template it came from.
+        """
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must name a column, not blank space")
+        if value != value.strip():
+            raise ValueError(
+                f"{info.field_name} {value!r} has leading or trailing whitespace; it is compared "
+                "exactly against the stored file, so declare it without padding"
+            )
+        return value
+
+    @field_validator("crs")
+    @classmethod
+    def _is_a_canonical_authority_code(cls, value: str) -> str:
+        """Canonicalize a declared CRS and reject one no consumer could resolve.
+
+        Enforced on the model rather than only in `create_feature_artifact`, so a record loaded
+        from `records.json` or built by a future provider gets the same guarantee: reading
+        `features.crs` never yields blank space, a padded string, or a bare number.
+
+        Canonicalized rather than rejected for padding, unlike the column names above: this
+        field's value is an identifier of a known thing rather than a name that must match
+        bytes in a file. Padding, a CRS84 alias, a bare EPSG number and a lowercase authority
+        all resolve to the one spelling, because two records naming WGS 84 differently would
+        otherwise compare unequal — which is the whole reason this normalizes at all.
+
+        The check is structural — an authority and a code — not a registry lookup. Whether
+        EPSG:1234567 exists, and whether it is the CRS the GeoParquet actually persists, is a
+        question for the reader that opens the file (CLIM-1068); this rules out the inputs that
+        are not a CRS at all.
+        """
+        canonical = canonical_feature_crs(value)
+        if canonical is None:
+            raise ValueError(
+                f"invalid crs {value!r}; declare an authority code such as 'EPSG:4326' "
+                "(a CRS84 alias, a bare EPSG number, or a lowercase authority is accepted "
+                "and canonicalized)"
+            )
+        return canonical
+
+
 class ArtifactRecord(BaseModel):
     """Stored artifact metadata."""
 
@@ -225,7 +411,14 @@ class ArtifactRecord(BaseModel):
     dataset_id: str
     source_dataset_id: str | None = None
     dataset_name: str
-    variable: str
+    variable: str | None = Field(
+        default=None,
+        description=(
+            "Primary raster variable stored in the artifact. None for an artifact that is not "
+            "a raster: a boundary set has properties, not a measured variable. Defaulted rather "
+            "than required so a feature record does not have to name a variable it does not have."
+        ),
+    )
     period_type: str | None = None
     version: ArtifactVersion | None = Field(
         default=None,
@@ -245,6 +438,52 @@ class ArtifactRecord(BaseModel):
     coverage: ArtifactCoverage
     created_at: datetime
     publication: ArtifactPublication = Field(default_factory=ArtifactPublication)
+    features: FeatureDetail | None = Field(
+        default=None,
+        description=(
+            "Feature collection detail. Present exactly when `format` is geoparquet, and None "
+            "for every raster record, which is what keeps a raster from carrying three null "
+            "vector fields forever."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _shape_matches_the_format(self) -> "ArtifactRecord":
+        """Hold each format to its own required shape.
+
+        `format` is the discriminator every branch in the codebase dispatches on, so the fields
+        that only make sense for one kind of artifact are tied to it here rather than left to
+        each construction site. Without this the model accepts three records that cannot be
+        served: a GeoParquet with no `FeatureDetail` — which is a feature collection with no
+        `id_property`, the exact loss `FeatureDetail` exists to prevent — a Zarr carrying
+        feature detail, and a raster with no `variable`.
+
+        Relaxing `variable` to optional (CLIM-1067) is what made the third of those reachable.
+        It was relaxed for feature collections alone, so rasters keep the requirement they
+        have always had, and this is where that stays true.
+        """
+        if self.format == ArtifactFormat.GEOPARQUET:
+            if self.features is None:
+                raise ValueError("a geoparquet artifact must carry a 'features' detail, including its id_property")
+            # Not merely unused. Each of these three says "raster" to something that reads it:
+            # `variable` and `variables` name measured data variables, and `period_type` is the
+            # period axis the sync planner does arithmetic on. A feature record carrying any of
+            # them would read as a coverage to anything scanning for one, and `itemType` would
+            # then disagree with the record it is derived from.
+            if self.variable is not None:
+                raise ValueError("a geoparquet artifact has properties rather than a measured variable")
+            if self.variables:
+                raise ValueError("a geoparquet artifact has properties rather than data variables")
+            if self.period_type is not None:
+                # Not a statement about time-varying collections: CLIM-1095 gives an observed
+                # collection a time column or a version, neither of which is a raster period.
+                raise ValueError("a geoparquet artifact has no period axis, so it declares no period_type")
+            return self
+        if self.features is not None:
+            raise ValueError(f"a {self.format} artifact is a raster and must not carry feature detail")
+        if self.variable is None or not self.variable.strip():
+            raise ValueError(f"a {self.format} artifact must name the raster variable it stores")
+        return self
 
 
 class CreateIngestionRequest(BaseModel):
@@ -302,6 +541,8 @@ class DatasetPublication(BaseModel):
 class DatasetRecord(BaseModel):
     """Native FastAPI view of a managed dataset."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     dataset_id: str = Field(description="Stable public identifier for the managed dataset.")
     source_dataset_id: str = Field(description="Dataset template id from which this managed dataset was created.")
     dataset_name: str = Field(description="Full display name of the dataset.")
@@ -312,8 +553,31 @@ class DatasetRecord(BaseModel):
             "Longer prose description from the dataset template, where the caveats about what the values mean belong."
         ),
     )
-    variable: str = Field(description="Primary raster variable stored in the dataset.")
-    period_type: str = Field(description="Temporal period type of the dataset, for example daily or yearly.")
+    item_type: DatasetItemType = Field(
+        validation_alias="itemType",
+        serialization_alias="itemType",
+        description=(
+            "What this dataset holds: 'feature' for a feature collection, 'coverage' for a "
+            "raster. The one field that lets a client filter a listing without a request per "
+            "row — `format` sits on the nested version record, which only the detail endpoint "
+            "returns. Spelled in OGC API - Features' camelCase because the name is borrowed "
+            "from that specification rather than invented here."
+        ),
+    )
+    variable: str | None = Field(
+        default=None,
+        description=(
+            "Primary raster variable stored in the dataset. None for a feature collection, "
+            "which has properties rather than a measured variable."
+        ),
+    )
+    period_type: str | None = Field(
+        default=None,
+        description=(
+            "Temporal period type of the dataset, for example daily or yearly. None for a "
+            "dataset with no temporal axis, such as a boundary set."
+        ),
+    )
     units: str | None = Field(default=None, description="Units of the primary variable.")
     resolution: str | None = Field(default=None, description="Native spatial resolution summary.")
     source: str | None = Field(default=None, description="Upstream source name.")
@@ -398,6 +662,7 @@ class DatasetListResponse(BaseModel):
                     "source_dataset_id": "chirps3_precipitation_daily",
                     "dataset_name": "Total precipitation (CHIRPS3)",
                     "short_name": "Total precipitation",
+                    "itemType": "coverage",
                     "variable": "precip",
                     "period_type": "daily",
                     "units": "mm",

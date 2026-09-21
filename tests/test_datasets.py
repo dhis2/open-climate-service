@@ -15,6 +15,7 @@ from open_climate_service.ingestions.schemas import (
     CoverageSpatial,
     CoverageTemporal,
     DatasetDetailRecord,
+    DatasetItemType,
     DatasetPublication,
     PublicationStatus,
 )
@@ -103,6 +104,7 @@ def _dataset_detail(dataset_id: str) -> DatasetDetailRecord:
         source_dataset_id="chirps3_precipitation_daily",
         dataset_name="CHIRPS3 precipitation",
         short_name="CHIRPS3 precip",
+        item_type=DatasetItemType.COVERAGE,
         variable="precip",
         period_type="daily",
         units="mm",
