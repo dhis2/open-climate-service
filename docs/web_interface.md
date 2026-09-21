@@ -6,7 +6,7 @@ separate application to install. Once the instance is running, open its root URL
 
 | Page           | URL       | What it does                                                                       |
 | -------------- | --------- | ---------------------------------------------------------------------------------- |
-| Landing page   | `/`       | Instance overview, the datasets it holds, the data sources and workflows it offers |
+| Landing page   | `/`       | Instance overview, the datasets it holds, the templates and workflows it offers |
 | **Map viewer** | `/map`    | View published datasets on an interactive map                                      |
 | openEO editor  | `/openeo` | Redirects to the openEO Web Editor, pre-connected to this instance                 |
 | API docs       | `/docs`   | Interactive Swagger documentation for the REST API                                 |
@@ -25,28 +25,28 @@ JavaScript.
 
 | Page                      | What it shows                                                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, data sources and workflows, the size of everything stored, plus access mode and version |
+| **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, dataset templates and workflows, the size of everything stored, plus access mode and version |
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
-| **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, titled by dataset with the provider beneath                            |
+| **Dataset templates** (`/dataset-templates`) | Data the instance can fetch from outside providers, titled by dataset with the provider beneath                 |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
 The overview counts the collections and links to them rather than listing them, so the root
 stays small however much the instance holds.
 
-The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
+The Datasets and Dataset templates lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript each list is complete.
 
-Datasets and data sources can be shown as **tiles** or as a **list**; the choice is remembered
-in the browser. Data sources show their provider, description and details, with no preview,
-since they hold no data yet.
+Datasets and dataset templates can be shown as **tiles** or as a **list**; the choice is
+remembered in the browser. Templates show their provider, description and details, with no
+preview, since they hold no data yet.
 Each dataset shows its thumbnail, source, a short description, publication status, period,
 temporal coverage and units. A dataset ingested before thumbnails existed shows its colour
 scale instead, until its next sync renders one.
 
-### The data source page (`/data-sources/{dataset_id}`)
+### The dataset template page (`/dataset-templates/{dataset_id}`)
 
-Selecting a data source opens its page: the description, what the data is (variable, units,
+Selecting a dataset template opens its page: the description, what the data is (variable, units,
 period, available range, resolution and coverage), the provider and licence, how it updates,
 and its colour scale. If it has already been ingested, the page links to that dataset.
 
@@ -91,8 +91,8 @@ Zarr store, the STAC collection and the JSON metadata.
 The same URL still returns JSON to API clients. A browser, which asks for HTML first, gets the
 page; `?f=json` and `?f=html` choose explicitly.
 
-Data sources and Workflows together cover every dataset template registered on the
-instance: a template that can be ingested is a data source, and one that a workflow writes is
+Dataset templates and Workflows together cover every template registered on the instance:
+one that can be ingested is listed under Dataset templates, and one that a workflow writes is
 listed under that workflow (see [Templates that are produced, not
 ingested](adding_custom_datasets.md#templates-that-are-produced-not-ingested)).
 
@@ -102,7 +102,7 @@ ingested](adding_custom_datasets.md#templates-that-are-produced-not-ingested)).
 
 There is no separate console: data is added from the page of the thing it concerns.
 
-- **Ingest** from a data source page (`/data-sources/{dataset_id}`): enter a start and an
+- **Ingest** from a dataset template page (`/dataset-templates/{dataset_id}`): enter a start and an
   optional end, choose whether to publish and whether to overwrite an existing store, and
   start. Progress streams on the page; the dataset page opens when it finishes.
 - **Sync** from a dataset page (`/datasets/{dataset_id}`): the page shows what the source

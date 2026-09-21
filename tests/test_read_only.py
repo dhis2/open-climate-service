@@ -251,12 +251,13 @@ def test_writable_instance_does_not_refuse(client: TestClient) -> None:
     assert response.status_code != 403
 
 
-def test_writable_instance_offers_ingest_on_the_data_source_page(client: TestClient) -> None:
-    assert 'action="/manage/ingest"' in client.get("/data-sources/chirps3_precipitation_daily").text
+def test_writable_instance_offers_ingest_on_the_template_page(client: TestClient) -> None:
+    page = client.get("/dataset-templates/chirps3_precipitation_daily?f=html").text
+    assert 'action="/manage/ingest"' in page
 
 
-def test_read_only_data_source_page_is_served_without_the_form(ro_client: TestClient) -> None:
-    response = ro_client.get("/data-sources/chirps3_precipitation_daily")
+def test_read_only_template_page_is_served_without_the_form(ro_client: TestClient) -> None:
+    response = ro_client.get("/dataset-templates/chirps3_precipitation_daily?f=html")
     assert response.status_code == 200
     assert "/manage" not in response.text
 

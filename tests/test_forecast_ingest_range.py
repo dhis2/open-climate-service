@@ -91,7 +91,7 @@ def test_spanning_dataset_still_requires_a_start_over_http(client: TestClient) -
 
 def test_ingest_form_offers_the_declared_end_for_a_spanning_dataset(client: TestClient) -> None:
     """So WorldPop's page prefills through 2030 rather than truncating at today."""
-    body = client.get("/data-sources/worldpop_population_global2_100m").text
+    body = client.get("/dataset-templates/worldpop_population_global2_100m?f=html").text
     assert 'value="2030"' in body.split('id="end"', 1)[1].split("/>", 1)[0]
     assert "Prefilled to the end of what the source covers." in body
 
@@ -245,7 +245,7 @@ def test_post_ingestions_without_start_rejects_a_historical_dataset(client: Test
 
 def test_ingest_form_requires_a_start_for_a_historical_source(client: TestClient) -> None:
     """A historical source must name its start; only a forecast may leave it blank."""
-    body = client.get("/data-sources/chirps3_precipitation_daily").text
+    body = client.get("/dataset-templates/chirps3_precipitation_daily?f=html").text
     start_input = body.split('id="start"', 1)[1].split("/>", 1)[0]
     assert "required" in start_input
 

@@ -143,7 +143,7 @@ def test_the_overview_links_to_every_area_as_a_page(client: TestClient) -> None:
     """
     html = client.get("/", headers={"Accept": "text/html"}).text
 
-    for path in ("/datasets", "/data-sources", "/workflows", "/processes"):
+    for path in ("/datasets", "/dataset-templates", "/workflows", "/processes"):
         assert f'href="{path}"' in html
     assert "data-area-link" not in html, "nothing switches areas in place any more"
     # The stat cards are links too, and pointed at fragments this page no longer has.
