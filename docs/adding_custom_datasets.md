@@ -183,6 +183,54 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `sync.version`       | No       | Release-kind only: the release identity, as `value` (the source's own identifier, e.g. WorldPop's `R2025A`) plus `authority` (a machine identifier for whose scheme names it, e.g. `worldpop`). Independent of `period_type`; changing either half triggers a rematerialization even when the periods are unchanged. Both halves required. Rejected at registration on a non-release template, when blank, or when `authority` is not a machine identifier. See below |
 | `temporal_direction` | No       | Which way the periods run relative to now: `past` (default), `future` (a forecast), or `spanning` (crosses now, e.g. WorldPop 2015–2030). See below                                                                                               |
 
+### Ingestable datasets
+
+Datasets that can be ingested from an external data source are specified with the `ingestion.plugin` parameter. `GET /dataset-templates/` reports these as `ingestable`, the `/manage` ingest
+form offers only the ingestable ones, and asking to ingest one that is not ingestable returns `400` naming
+the reason. Read the flag rather than inferring it from `sync.kind`: the two are not the same
+question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* ingestable.
+
+| Field                  | Required | Description                                                                                                                                     |
+| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
+| `ingestion.params`     | No       | Extra keyword arguments forwarded to `fetch_period` as `**params`, and to the plugin constructor                                                |
+| `ingestion.resampling` | No       | Pyramid coarsening for large layers: `mean` (default; continuous data), `max`/`min`/`sum`, or `mode`/`nearest` for categorical data — see below |
+
+Multiple templates can share the same plugin class and differ only in `params`:
+
+```yaml
+- id: era5land_temperature_hourly
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandHourlySingleBandPlugin
+    params:
+      variable: 2m_temperature
+
+- id: era5land_precipitation_hourly
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandPrecipitationPlugin
+    params:
+      variable: total_precipitation
+```
+
+### Derived datasets
+
+In constrast to ingestable datasets, __derived__ datasets are those that cannot be ingested but rather have to be produced by running a workflow, and therefore should not have the `ingestion.plugin` parameter. Roughly half the shipped catalogue are derived and is missing this parameter. Anomalies, normals and change rasters are *produced* by a workflow through `save_result` and registered as static templates, so there is nothing upstream to fetch. 
+
+Name the workflow that produces such a template with `produced_by`:
+
+```yaml
+- id: chirps3_precipitation_monthly_normal_1991_2020
+  sync:
+    kind: static
+  produced_by: climate_normal
+```
+
+`produced_by` is metadata, not behaviour: it records where the data comes from, so a reader can get from
+the dataset to the way it is made, and `GET /dataset-templates/` reports it. A template that
+declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
+either fetched or produced. The workflow id itself is not checked, because workflows can be
+registered later at runtime.
+
 ### Dekads: a period type with no fixed length
 
 `dekadal` is 10-daily data, and is the one cadence whose periods differ in length: a dekad
@@ -267,7 +315,7 @@ Most datasets are historical, and the default (`past`) suits them. Two other sha
 
 `spanning` requires a start _on purpose_. Defaulting it to "now" would ingest only the projected years and silently drop every historical one, which is usually the half you actually want. What declaring it does buy you: the ingest form prefills the end from the dataset's declared `extents.temporal.end`, so selecting WorldPop offers the full range through 2030 instead of truncating at today.
 
-### Forecast datasets (`temporal_direction: future`)
+#### Forecast datasets (`temporal_direction: future`)
 
 A forecast's periods lie in the _future_, which changes what an ingestion request means. Declare it:
 
@@ -308,64 +356,13 @@ Note `end` stays a plain `str`, so there is no missing-value case to handle.
 
 **Honour `end` when it is given.** If your plugin returns periods outside the requested temporal union, ingestion is refused before mutation. That guard catches a plugin that ignores the range rather than silently storing more than was asked for, so a lead-day plugin has to filter rather than ignore.
 
-### Templates that are produced, not ingested
-
-`ingestion.plugin` is what makes a template ingestable, and roughly half the shipped catalogue
-has none: anomalies, normals and change rasters are *produced* by a workflow through
-`save_result` and registered as static templates, so there is nothing upstream to fetch.
-A custom template without `ingestion.plugin` is not ingestable either, whatever produces it.
-
-`GET /dataset-templates/` reports this as `ingestable` on every template, the `/manage` ingest
-form offers only the ingestable ones, and asking to ingest one that is not returns `400` naming
-the reason. Read the flag rather than inferring it from `sync.kind`: the two are not the same
-question, and `era5land_temperature_daily_normal_1991_2020` is `static` *and* ingestable.
-
-Name the workflow that produces such a template with `produced_by`:
-
-```yaml
-- id: chirps3_precipitation_monthly_normal_1991_2020
-  sync:
-    kind: static
-  produced_by: climate_normal
-```
-
-It is metadata, not behaviour: it records where the data comes from, so a reader can get from
-the dataset to the way it is made, and `GET /dataset-templates/` reports it. A template that
-declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
-either fetched or produced. The workflow id itself is not checked, because workflows can be
-registered later at runtime.
-
 `temporal_direction` is separate from `sync.kind` on purpose: a forecast is still `temporal` for sync (re-run it and you get fresher data); what differs is which way its periods run. It cannot be combined with `sync.kind: static`, which has no upstream to look ahead into.
 
 **How far ahead belongs in the template, not the request.** A source often publishes further out than is useful — 40 days when only 7 verify well. That cap is a property of the dataset, so express it in `ingestion.params` (as `max_lead_days` above) and let your plugin's `periods()` honour it. The request then narrows _within_ that window rather than re-deciding it on every run.
 
 The response reports the window that was actually ingested, under `dataset.extent.temporal`, so you can confirm what an omitted `start` resolved to.
 
-**Ingestion**
-
-| Field                  | Required | Description                                                                                                                                     |
-| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class                                                                                                       |
-| `ingestion.params`     | No       | Extra keyword arguments forwarded to `fetch_period` as `**params`, and to the plugin constructor                                                |
-| `ingestion.resampling` | No       | Pyramid coarsening for large layers: `mean` (default; continuous data), `max`/`min`/`sum`, or `mode`/`nearest` for categorical data — see below |
-
-Multiple templates can share the same plugin class and differ only in `params`:
-
-```yaml
-- id: era5land_temperature_hourly
-  ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandHourlySingleBandPlugin
-    params:
-      variable: 2m_temperature
-
-- id: era5land_precipitation_hourly
-  ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandPrecipitationPlugin
-    params:
-      variable: total_precipitation
-```
-
-#### Pyramid resampling for categorical layers
+### Pyramid resampling
 
 Layers whose grid exceeds 1024×1024 cells (about 1.05 megapixels, counted as `nx × ny` rather than per axis) are stored as a multiscale pyramid so the map stays fast when zoomed out. Coarser levels sit beside the full-resolution level 0, which analytics keeps reading, so **analysis results do not change** and the persistent cost is roughly +33% storage.
 
@@ -381,7 +378,9 @@ Levels are aggregated from the full-resolution data, and `ingestion.resampling` 
 
 `mode` is not composable: mode-of-modes is not mode-of-native, since a locally dominant class can win at coarse zoom even when it is globally rare. So Open Climate Service resamples `mode` levels from the native resolution itself. A first-class `mode` upstream is still open as [carbonplan/topozarr#26](https://github.com/carbonplan/topozarr/issues/26); when it lands, that local path can go.
 
-**Spatial and temporal extents** — declares what the source dataset covers. Used to validate ingest requests before hitting the provider:
+### Spatial and temporal extents
+
+Declares what the source dataset covers. Used to validate ingest requests before hitting the provider:
 
 ```yaml
 extents:
@@ -395,7 +394,9 @@ extents:
     resolution: P1D # ISO 8601 duration: PT1H, P1D, P1M, P1Y
 ```
 
-**CF metadata** — stamped onto the stored variable at ingest so the GeoZarr store is
+### CF metadata
+
+Stamped onto the stored variable at ingest so the GeoZarr store is
 CF-compliant on disk and CF-aware tools (xclim climate indices, cf-xarray, QGIS) work
 without per-process glue. These fields take effect when the store is written, so changing
 them requires re-ingesting the dataset:
@@ -406,7 +407,9 @@ them requires re-ingesting the dataset:
 | `standard_name` | No       | CF [standard name](https://cfconventions.org/standard-names.html) (e.g. `air_temperature`, `lwe_thickness_of_precipitation_amount`).                                                                                                                                                                                                                                               |
 | `cell_methods`  | No       | CF cell methods describing the temporal aggregation (e.g. `time: mean`, `time: sum`).                                                                                                                                                                                                                                                                                              |
 
-**Display**
+### Display
+
+The following parameters control how the datasets are displayed visually and in text:
 
 | Field              | Required | Description                                              |
 | ------------------ | -------- | -------------------------------------------------------- |
