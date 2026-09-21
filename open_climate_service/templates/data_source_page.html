@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ source.name }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/dataset-templates">Dataset templates</a> / {{ source.id }}</p>
+        <div class="page-title">
+          <h2>{{ source.name }}</h2>
+          {% if ingested %}<span class="chip chip-{{ ingested.status }}">ingested</span>{% endif %}
+        </div>
+
+        <div class="dataset-page">
+          <div class="stack">
+            <section class="panel" aria-labelledby="description-title">
+              <h3 id="description-title">Description</h3>
+              {% if paragraphs %}
+              <div class="prose">
+                {% for paragraph in paragraphs %}
+                <p>{{ paragraph }}</p>
+                {% endfor %}
+              </div>
+              {% else %}
+              <p class="note">No description has been provided for this dataset template.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="ingest-title">
+              <h3 id="ingest-title">Ingest</h3>
+              {% if ingested %}
+              <p class="note">
+                Already ingested{% if ingested.coverage %} for {{ ingested.coverage }}{% endif %}.
+                <a href="{{ mount }}/datasets/{{ ingested.id }}">View the dataset</a>.
+              </p>
+              <p class="note">
+                Ingesting again adds to it, or replaces it when <em>Overwrite</em> is checked.
+              </p>
+              {% endif %}
+              {% if can_ingest %}
+              <form
+                id="ingest-form"
+                method="post"
+                action="{{ mount }}/manage/ingest"
+                data-dataset-url="{{ mount }}/datasets/{{ source.id }}"
+              >
+                <input type="hidden" name="dataset_id" value="{{ source.id }}" />
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="start">Start{% if not defaults.start_required %} (optional){% endif %}</label>
+                    <input
+                      type="text"
+                      id="start"
+                      name="start"
+                      value="{{ defaults.start }}"
+                      {% if format_hint %}placeholder="{{ format_hint }}"{% endif %}
+                      {% if defaults.start_required %}required{% endif %}
+                      aria-describedby="start-hint"
+                    />
+                    <span class="hint" id="start-hint">
+                      {% if defaults.direction == "future" %}Leave blank to ingest the full forecast window from now.{% elif format_hint %}Format {{ format_hint }}.{% endif %}
+                    </span>
+                  </div>
+                  <div class="field">
+                    <label for="end">End (optional)</label>
+                    <input
+                      type="text"
+                      id="end"
+                      name="end"
+                      value="{{ defaults.end }}"
+                      {% if format_hint %}placeholder="{{ format_hint }}"{% endif %}
+                      aria-describedby="end-hint"
+                    />
+                    <span class="hint" id="end-hint">
+                      {% if defaults.direction == "spanning" %}Prefilled to the end of what the source covers.{% else %}Blank means as far as the source goes.{% endif %}
+                    </span>
+                  </div>
+                </div>
+                <div class="checks">
+                  <label><input type="checkbox" name="publish" checked /> Publish after ingestion</label>
+                  <label><input type="checkbox" name="overwrite" /> Overwrite if already ingested</label>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="primary" id="ingest-button">Ingest</button>
+                  <span class="note">Data is fetched for this instance's extent. This may take several minutes.</span>
+                </div>
+                <div class="progress" data-job-progress hidden>
+                  <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
+                  <span class="progress-label" aria-live="polite">Starting…</span>
+                </div>
+                <div class="notice error" data-job-error role="alert" hidden></div>
+              </form>
+              {% elif not ingestable %}
+              <p class="note">
+                This dataset is not fetched from a provider{% if produced_by %}; it is produced by the
+                <a href="{{ mount }}/process_graphs/{{ produced_by }}">{{ produced_by }}</a> workflow{% endif %}.
+              </p>
+              {% elif read_only %}
+              <p class="note">This instance is read-only, so data cannot be ingested here.</p>
+              {% elif not has_extent %}
+              <p class="note">
+                No extent is configured for this instance. Set <code>extent:</code> in
+                <code>CLIMATE_SERVICE_CONFIG</code> before ingesting data.
+              </p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="about-title">
+              <h3 id="about-title">About</h3>
+              <dl class="facts">
+                {% for label, value, href in data %}
+                <dt>{{ label }}</dt>
+                <dd>
+                  {% if href %}<a href="{{ href if href.startswith('http') else mount ~ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}
+                </dd>
+                {% endfor %}
+              </dl>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel" aria-labelledby="status-title">
+              <h3 id="status-title">Updates and display</h3>
+              <dl class="facts">
+                {% for label, value, href in status_facts %}
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+                {% endfor %}
+              </dl>
+              <span class="ramp-bar" style="--ramp: {{ source.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
+            </section>
+
+            <section class="panel" aria-labelledby="links-title">
+              <h3 id="links-title">Links</h3>
+              <div class="actions">
+                {% if ingested %}
+                <a class="button-link" href="{{ mount }}/datasets/{{ ingested.id }}">Ingested dataset</a>
+                {% endif %}
+                <a class="button-link" href="{{ mount }}/dataset-templates/{{ source.id }}?f=json">Metadata (JSON)</a>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    {% if can_ingest %}
+    <script>
+{{ job_script | safe }}
+      // Stays on this page: progress and failures are shown here, success opens the dataset.
+      runJobForm(document.getElementById("ingest-form"), {
+        startLabel: "Starting…",
+        onDone: function (form) {
+          window.location.href = form.getAttribute("data-dataset-url");
+        },
+      });
+    </script>
+    {% endif %}
+  </body>
+</html>

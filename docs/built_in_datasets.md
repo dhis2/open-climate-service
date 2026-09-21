@@ -1,6 +1,6 @@
 # Built-in datasets
 
-The Open Climate Service ships with built-in dataset templates covering precipitation, temperature, and population. Each template describes a data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
+The Open Climate Service ships with built-in dataset templates covering precipitation, temperature, and population. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
 
 To ingest a built-in dataset for your configured extent, see the [API reference](managed_data_api_guide.md). To add datasets beyond these, see [Adding custom datasets](adding_custom_datasets.md).
 

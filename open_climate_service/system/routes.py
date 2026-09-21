@@ -114,7 +114,7 @@ def _job_stream(work: Any, finished_message: str) -> StreamingResponse:
 
 @router.post("/manage/ingest", include_in_schema=False)
 async def manage_ingest(request: Request) -> Response:
-    """Ingest a data source from its page's form, streaming progress via SSE."""
+    """Ingest a dataset template from its page's form, streaming progress via SSE."""
     from fastapi import HTTPException
 
     from open_climate_service.data_registry.services import datasets as registry_datasets
@@ -133,7 +133,7 @@ async def manage_ingest(request: Request) -> Response:
 
         template = get_dataset(dataset_id)
         if template is None:
-            return _refusal(404, f"Data source '{dataset_id}' not found")
+            return _refusal(404, f"Dataset template '{dataset_id}' not found")
 
         # Both checks belong here rather than inside create_artifact: the work below runs in an
         # event stream, where a refusal arrives as an event after a 200 instead of as the

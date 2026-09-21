@@ -368,7 +368,7 @@ def test_ingestable_templates_excludes_static_workflow_outputs(monkeypatch: pyte
         ],
     )
 
-    ingestable_ids = [t["id"] for t in system_templates._ingestable_templates()]
+    ingestable_ids = [t["id"] for t in system_templates._ingestable_templates(system_templates._load_templates())]
 
     assert "worldpop_population_change" not in ingestable_ids
     assert ingestable_ids == ["chirps3_precipitation_daily", "worldpop_population_yearly"]
