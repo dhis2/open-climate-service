@@ -29,6 +29,8 @@ from open_climate_service.ingestions.schemas import (
 from open_climate_service.openeo import execution as openeo_execution
 from open_climate_service.stac import services as stac_services
 
+BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
 DISTRICTS_TEMPLATE: dict[str, object] = {
     "id": "districts",
     "name": "District boundaries",
@@ -1036,36 +1038,36 @@ def test_stac_collection_builder_still_serves_a_raster(client: TestClient, monke
 # --- the server-rendered pages ------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/", "/manage"])
-def test_the_rendered_tables_show_absences_rather_than_python_nulls(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
-) -> None:
-    """A feature collection has no variable, period type or temporal extent to show."""
-    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
-
-    body = client.get(path, headers={"Accept": "text/html"}).text
-
-    assert "District boundaries" in body
-    assert "None" not in body.split("District boundaries")[1].split("</tr>")[0]
-
-
-def test_the_management_page_does_not_offer_a_sync_that_would_be_refused(
+def test_the_rendered_pages_show_absences_rather_than_python_nulls(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A feature collection has no variable, period type or temporal extent to show.
+
+    Checked on the dataset list and a dataset's own page, which are where a collection appears
+    now that the root is an overview and the `/manage` console is gone.
+    """
+    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
+
+    for path in ("/datasets", "/datasets/districts"):
+        body = client.get(path, headers={"Accept": BROWSER_ACCEPT}).text
+
+        assert "District boundaries" in body, path
+        assert "None" not in body, path
+
+
+def test_a_feature_collection_is_not_offered_a_sync(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_refuse_non_raster_sync` always 409s a feature collection, so the control is not drawn."""
     monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
 
-    row = client.get("/manage").text.split("District boundaries")[1].split("</tr>")[0]
+    body = client.get("/datasets/districts", headers={"Accept": BROWSER_ACCEPT}).text
 
-    assert "Start sync" not in row
-    assert "Not syncable" in row
+    assert 'id="sync-form"' not in body
+    assert "Start sync" not in body
 
 
-def test_the_management_page_still_offers_a_sync_for_a_raster(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_raster_is_still_offered_a_sync(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_raster_artifact()]))
 
-    row = client.get("/manage").text.split("CHIRPS3 precipitation")[1].split("</tr>")[0]
+    body = client.get("/datasets/chirps3_precipitation_daily", headers={"Accept": BROWSER_ACCEPT}).text
 
-    assert "Start sync" in row
+    assert "Start sync" in body

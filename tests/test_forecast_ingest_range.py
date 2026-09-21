@@ -89,11 +89,11 @@ def test_spanning_dataset_still_requires_a_start_over_http(client: TestClient) -
     assert "requires a start period" in response.json()["detail"]
 
 
-def test_manage_form_offers_the_declared_end_for_a_spanning_dataset(client: TestClient) -> None:
-    """So selecting WorldPop prefills through 2030 rather than truncating at today."""
-    body = client.get("/manage").text
-    assert 'data-direction="spanning"' in body
-    assert 'data-declared-end="2030"' in body
+def test_ingest_form_offers_the_declared_end_for_a_spanning_dataset(client: TestClient) -> None:
+    """So WorldPop's page prefills through 2030 rather than truncating at today."""
+    body = client.get("/dataset-templates/worldpop_population_global2_100m?f=html").text
+    assert 'value="2030"' in body.split('id="end"', 1)[1].split("/>", 1)[0]
+    assert "Prefilled to the end of what the source covers." in body
 
 
 def test_rejects_an_unsupported_direction(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -240,21 +240,22 @@ def test_post_ingestions_without_start_rejects_a_historical_dataset(client: Test
     assert "temporal_direction: future" in response.json()["detail"]
 
 
-# --- the manage form -----------------------------------------------------------------
+# --- the ingest form ------------------------------------------------------------------
 
 
-def test_manage_form_exposes_each_template_direction(client: TestClient) -> None:
-    """The form switches its date defaults on the selected template, so it needs this."""
-    body = client.get("/manage").text
-    assert 'data-direction="past"' in body
+def test_ingest_form_requires_a_start_for_a_historical_source(client: TestClient) -> None:
+    """A historical source must name its start; only a forecast may leave it blank."""
+    body = client.get("/dataset-templates/chirps3_precipitation_daily?f=html").text
+    start_input = body.split('id="start"', 1)[1].split("/>", 1)[0]
+    assert "required" in start_input
 
 
 def test_manage_form_start_rejection_is_dataset_aware(client: TestClient) -> None:
-    """The unconditional "Start date is required" gate is gone from the manage route.
+    """The unconditional "Start date is required" gate is gone from the ingest route.
 
     The rejection still happens in ``manage_ingest`` rather than downstream in
-    ``create_artifact`` — deliberately, because the ingest runs inside an SSE stream and a
-    response that has begun cannot redirect. What changed is that it now consults
+    ``create_artifact`` — deliberately, because the ingest runs inside an event stream and a
+    failure there arrives after the response has begun. What changed is that it now consults
     ``is_future_facing()`` instead of rejecting every blank start.
     """
     from open_climate_service.system import routes

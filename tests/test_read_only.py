@@ -92,8 +92,8 @@ def test_policy_allows_synchronous_result_execution() -> None:
     assert not is_blocked("POST", "/result/")  # trailing slash is the same rule
 
 
-def test_policy_closes_the_admin_console_including_get() -> None:
-    """/manage is an admin UI behind a GET, so method filtering would miss it."""
+def test_policy_closes_the_manage_tree_including_get() -> None:
+    """/manage is closed as a tree, so method filtering cannot leave any part of it open."""
     assert is_blocked("GET", "/manage")
     assert is_blocked("GET", "/manage/ingest")
 
@@ -251,8 +251,15 @@ def test_writable_instance_does_not_refuse(client: TestClient) -> None:
     assert response.status_code != 403
 
 
-def test_writable_instance_serves_the_admin_console(client: TestClient) -> None:
-    assert client.get("/manage").status_code == 200
+def test_writable_instance_offers_ingest_on_the_template_page(client: TestClient) -> None:
+    page = client.get("/dataset-templates/chirps3_precipitation_daily?f=html").text
+    assert 'action="/manage/ingest"' in page
+
+
+def test_read_only_template_page_is_served_without_the_form(ro_client: TestClient) -> None:
+    response = ro_client.get("/dataset-templates/chirps3_precipitation_daily?f=html")
+    assert response.status_code == 200
+    assert "/manage" not in response.text
 
 
 def test_writable_capabilities_keep_the_write_endpoints(client: TestClient) -> None:
@@ -295,7 +302,7 @@ def test_policy_is_inert_when_the_flag_is_off(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize("root_path", ["/ocs", "/ocs/"])
-def test_read_only_still_refuses_the_console_under_a_mount_prefix(
+def test_read_only_still_refuses_manage_under_a_mount_prefix(
     read_only: None, mounted_client_factory: MountedClientFactory, root_path: str
 ) -> None:
     """The policy matches route paths as the app declares them, so the prefix must come off.

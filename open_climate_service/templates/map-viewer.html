@@ -6,62 +6,35 @@
     <title>Map viewer — {{ name }}</title>
     <link href="https://unpkg.com/maplibre-gl@6.7.0/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
-      *,
-      *::before,
-      *::after {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
+{{ styles | safe }}
 
-      html,
-      body {
-        height: 100%;
+      /* The map fills the space beside the navigation and below the header, without scrolling. */
+      body.map-page {
+        height: 100vh;
         overflow: hidden;
-      }
-
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        font-size: 15px;
-        color: #1a2332;
-      }
-
-      .layout {
         display: flex;
         flex-direction: column;
-        height: 100%;
       }
-
-      header {
-        background: #1a2332;
-        color: #fff;
-        padding: 0.85rem 1.5rem;
+      .map-page .layout {
+        flex: 1;
+        min-height: 0;
+      }
+      .map-page main {
+        padding: 0;
+        max-width: none;
+        position: relative;
         display: flex;
-        align-items: center;
-        gap: 1rem;
-        flex-shrink: 0;
-        z-index: 10;
+        min-height: 0;
       }
-      header h1 {
-        font-size: 1rem;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-      }
-      header h1 a {
-        color: inherit;
-        text-decoration: none;
-      }
-      header h1 a:hover {
-        text-decoration: underline;
-      }
-      header .subtitle {
-        font-size: 0.825rem;
-        color: #8fa3b8;
+      @media (max-width: 720px) {
+        .map-page .layout {
+          grid-template-rows: auto minmax(0, 1fr);
+        }
       }
       .map-container {
         position: relative;
         flex: 1;
+        min-height: 0;
       }
 
       #map {
@@ -69,10 +42,10 @@
         inset: 0;
       }
 
-      .panel {
+      .map-panel {
         position: absolute;
         top: 1rem;
-        left: 1rem;
+        right: 1rem;
         width: 272px;
         background: #fff;
         border: 1px solid #e2e8f0;
@@ -83,6 +56,21 @@
         display: flex;
         flex-direction: column;
         gap: 0.9rem;
+        max-height: calc(100% - 2rem);
+        overflow-y: auto;
+      }
+      @media (max-width: 720px) {
+        .map-panel {
+          top: 0.5rem;
+          left: 0.5rem;
+          right: 0.5rem;
+          width: auto;
+          max-height: 45%;
+        }
+      }
+
+      .map-panel .dataset-link {
+        font-size: 0.8rem;
       }
 
       .panel-section label {
@@ -197,17 +185,21 @@
       }
     </style>
   </head>
-  <body>
+  <body class="map-page">
+    <a class="skip-link" href="#dataset-select">Skip to the map controls</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
     <div class="layout">
-      <header>
-        <h1><a href="{{ mount }}/">{{ name }}</a></h1>
-        <span class="subtitle">Map viewer</span>
-      </header>
-
+      {{ nav }}
+      <main id="content">
       <div class="map-container">
         <div id="map"></div>
 
-        <div class="panel">
+        <div class="map-panel">
           <div class="panel-section">
             <label for="dataset-select">Dataset</label>
             <select id="dataset-select">
@@ -229,6 +221,7 @@
             <dd id="meta-licence">—</dd>
           </dl>
           <p id="meta-description" class="meta-description hidden"></p>
+          <a id="dataset-link" class="dataset-link hidden" href="#">About this dataset</a>
 
           <div id="legend" class="panel-section hidden">
             <label>Legend</label>
@@ -243,6 +236,7 @@
           <div id="status" class="status">Loading datasets...</div>
         </div>
       </div>
+      </main>
     </div>
 
     <script type="module">
@@ -464,15 +458,32 @@
         statusEl.className = isError ? "status error" : "status";
       }
 
-      function initMap() {
+      async function extentBounds() {
+        try {
+          const res = await fetch("{{ mount }}/extent");
+          if (!res.ok) return null;
+          const [xmin, ymin, xmax, ymax] = (await res.json()).bbox;
+          return [
+            [xmin, ymin],
+            [xmax, ymax],
+          ];
+        } catch {
+          return null;
+        }
+      }
+
+      // The extent is read before the map is built, so it opens on the instance's own area.
+      // Fitting afterwards meant a world view that then moved, which reads as the map
+      // wandering off on its own while a dataset is already being requested.
+      async function initMap() {
+        const bounds = await extentBounds();
         try {
           map = new maplibregl.Map({
             container: "map",
             style: "https://tiles.openfreemap.org/styles/positron",
-            center: [20, 20],
-            zoom: 1.5,
+            ...(bounds ? { bounds } : { center: [20, 20], zoom: 1.5 }),
             projection: { type: "globe" },
-            fitBoundsOptions: { padding: 40 },
+            fitBoundsOptions: { padding: 40, maxZoom: 10, animate: false, duration: 0 },
             attributionControl: { compact: true },
           });
         } catch (err) {
@@ -483,7 +494,6 @@
 
         map.on("load", () => {
           map.setProjection({ type: "globe" });
-          fitToExtent();
         });
 
         map.on("error", (event) => {
@@ -493,17 +503,6 @@
             setStatus(MAP_UNAVAILABLE_MESSAGE, true);
           }
         });
-      }
-
-      async function fitToExtent() {
-        if (!map || mapUnavailable) return;
-        try {
-          const res = await fetch("{{ mount }}/extent");
-          if (!res.ok) return;
-          const extent = await res.json();
-          const [xmin, ymin, xmax, ymax] = extent.bbox;
-          map.fitBounds([[xmin, ymin], [xmax, ymax]], { padding: 40, maxZoom: 10 });
-        } catch {}
       }
 
       async function loadCatalog() {
@@ -516,12 +515,16 @@
             setStatus(
               "No published datasets found. Ingest and publish a dataset first."
             );
+            // A deep link still names a dataset, and "not published" answers that question
+            // better than the generic empty-catalogue line.
+            openRequestedDataset();
             return;
           }
           for (const col of collections) {
             const href = `{{ mount }}/collections/${col.id}`;
             const opt = document.createElement("option");
             opt.value = href;
+            opt.dataset.id = col.id;
             opt.textContent = col.title ?? col.id;
             selectEl.appendChild(opt);
           }
@@ -531,17 +534,16 @@
               : "Select a dataset to visualise it on the map.",
             mapUnavailable
           );
+          openRequestedDataset();
         } catch (err) {
           setStatus(`Failed to load catalog: ${err.message}`, true);
         }
       }
 
-      async function loadDataset(href) {
-        if (!map || mapUnavailable) {
-          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
-          return;
-        }
-        setStatus("Loading...");
+      // Everything the map shows for one dataset, taken down together: the raster, its
+      // dimension controls, its metadata and its legend. Leaving any of it up after the
+      // selection changes would describe a dataset the map is no longer showing.
+      function clearDataset() {
         clearTimeout(_selectorDebounce);
         if (activeLayer) {
           try {
@@ -553,13 +555,33 @@
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
         legendEl.classList.add("hidden");
+      }
+
+      // Each load takes a number, and every step after an await checks it is still the current
+      // one. Two selections made in quick succession both run to completion otherwise, and the
+      // slower one finishes last — adding the shared `zarr-layer` after the newer request, so
+      // the map ends up showing the dataset that was not chosen, or fails as a duplicate layer.
+      let loadGeneration = 0;
+
+      async function loadDataset(href) {
+        if (!map || mapUnavailable) {
+          setStatus(MAP_UNAVAILABLE_MESSAGE, true);
+          return;
+        }
+        const generation = ++loadGeneration;
+        const superseded = () => generation !== loadGeneration;
+        setStatus("Loading...");
+        clearDataset();
 
         let collection;
         try {
           const res = await fetch(href);
+          if (superseded()) return;
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           collection = await res.json();
+          if (superseded()) return;
         } catch (err) {
+          if (superseded()) return;
           setStatus(`Failed to load collection: ${err.message}`, true);
           return;
         }
@@ -641,6 +663,9 @@
             ...(fillValue !== null && { fillValue }),
             crs: nativeCrs,
           });
+          // Nothing awaits between the check above and here, but this is the step that would
+          // actually go wrong, so it says so itself.
+          if (superseded()) return;
           map.addLayer(activeLayer);
           for (const layer of map.getStyle().layers) {
             if ((layer.type === "line" && layer.id.startsWith("boundary")) || layer.type === "symbol") {
@@ -706,8 +731,73 @@
         setStatus("");
       }
 
+      // `/map?dataset=<id>` opens the viewer on one dataset, and choosing a dataset writes the
+      // same parameter back, so the address in the bar is always a link to what is shown.
+      const datasetLink = document.getElementById("dataset-link");
+
+      function selectedDatasetId() {
+        return selectEl.selectedOptions[0]?.dataset.id ?? "";
+      }
+
+      function reflectSelection() {
+        const id = selectedDatasetId();
+        const url = new URL(window.location.href);
+        if (id) url.searchParams.set("dataset", id);
+        else url.searchParams.delete("dataset");
+        history.replaceState(null, "", url);
+        datasetLink.classList.toggle("hidden", !id);
+        if (id) datasetLink.href = `{{ mount }}/datasets/${encodeURIComponent(id)}`;
+      }
+
+      // Only the most recent pending selection survives the wait. Registering a listener per
+      // selection meant two choices made before the style loaded both ran on `load`, each
+      // clearing and then racing to add the same `zarr-layer` id — so the map could end up
+      // showing the dataset that was not chosen, or fail on a duplicate layer.
+      let pendingWhenReady = null;
+
+      function whenMapReady(callback) {
+        if (!map || mapUnavailable || map.isStyleLoaded()) {
+          callback();
+          return;
+        }
+        const alreadyWaiting = pendingWhenReady !== null;
+        pendingWhenReady = callback;
+        if (alreadyWaiting) return;
+        map.once("load", () => {
+          const run = pendingWhenReady;
+          pendingWhenReady = null;
+          if (run) run();
+        });
+      }
+
+      function openRequestedDataset() {
+        const requested = new URLSearchParams(window.location.search).get("dataset");
+        if (!requested) return;
+        const option = [...selectEl.options].find((o) => o.dataset.id === requested);
+        if (!option) {
+          setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
+          return;
+        }
+        selectEl.value = option.value;
+        reflectSelection();
+        whenMapReady(() => loadDataset(option.value));
+      }
+
       selectEl.addEventListener("change", (e) => {
-        if (e.target.value) loadDataset(e.target.value);
+        reflectSelection();
+        if (e.target.value) {
+          // Through the same guard as a deep link: `initMap` returns once the map is
+          // constructed, not once its style has loaded, and `addLayer` before that is rejected.
+          whenMapReady(() => loadDataset(e.target.value));
+        } else {
+          // Supersedes whatever is in flight as well as whatever is waiting on the style: a
+          // fetch already running still holds the current generation, so without this it could
+          // add its layer to a map the reader has just emptied.
+          loadGeneration++;
+          pendingWhenReady = null;
+          clearDataset();
+          setStatus("Select a dataset to visualise it on the map.");
+        }
       });
 
       let _selectorDebounce = null;
@@ -789,8 +879,12 @@
         dimControls.classList.remove("hidden");
       }
 
-      initMap();
-      loadCatalog();
+      // Sequential: the catalogue's deep link loads a dataset onto the map, so the map has to
+      // exist first.
+      (async () => {
+        await initMap();
+        await loadCatalog();
+      })();
     </script>
   </body>
 </html>
