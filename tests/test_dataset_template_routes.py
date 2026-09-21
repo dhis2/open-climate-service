@@ -57,7 +57,7 @@ def test_every_listed_template_is_individually_fetchable(client: TestClient) -> 
     """The guard the bug needed. Sixteen of seventeen templates on the Nepal demo returned 500
     while the list endpoint returned all of them, so a per-template check that happened to pick
     an ingested one would have passed."""
-    listed = client.get("/dataset-templates/").json()
+    listed = client.get("/dataset-templates").json()
     assert listed, "no templates to check"
 
     responses = {t["id"]: client.get(f"/dataset-templates/{t['id']}") for t in listed}

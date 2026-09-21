@@ -330,7 +330,7 @@ def ensure_ingestable(dataset: dict[str, object]) -> None:
             "'ingestion.plugin', so there is no source to fetch from. If it is a derived "
             "product, it is published by a workflow through 'save_result' — run the workflow "
             "that produces it (see GET /process_graphs). Otherwise, add an 'ingestion.plugin' "
-            "to the template. GET /dataset-templates/ reports 'ingestable' for every template."
+            "to the template. GET /dataset-templates reports 'ingestable' for every template."
         ),
     )
 
