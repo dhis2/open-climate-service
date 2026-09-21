@@ -173,10 +173,12 @@ def test_read_only_is_stated_on_the_overview(monkeypatch: pytest.MonkeyPatch) ->
     assert "read-only" in _visible_text(html)
 
 
-def test_the_word_template_is_not_shown_to_readers(client: TestClient) -> None:
-    html = client.get("/", headers={"Accept": "text/html"}).text
+def test_the_interface_calls_them_dataset_templates(client: TestClient) -> None:
+    """The stat card and the rail agree, and neither says "data source"."""
+    visible = _visible_text(client.get("/", headers={"Accept": "text/html"}).text)
 
-    assert "template" not in _visible_text(html).lower()
+    assert visible.lower().count("dataset templates") == 2
+    assert "data source" not in visible.lower()
 
 
 def test_colours_come_from_the_token_block(client: TestClient) -> None:
