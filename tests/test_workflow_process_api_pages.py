@@ -162,6 +162,22 @@ def test_the_workflow_page_is_served(client: TestClient) -> None:
     assert client.get("/workflows/does_not_exist").status_code == 404
 
 
+def test_the_breadcrumbs_return_to_their_list_pages(client: TestClient) -> None:
+    """The lists are pages, so the breadcrumbs go to them rather than landing-page fragments.
+
+    They pointed at `/#workflows` and `/#processes`, which the overview stops carrying once the
+    areas move out — a dead link on both detail pages, and the dataset and template pages had
+    already been moved off the same fragments.
+    """
+    workflow = client.get("/workflows/climate_normal").text
+    process = client.get("/processes/mean", headers={"Accept": BROWSER_ACCEPT}).text
+
+    assert '<a href="/workflows">Workflows</a>' in workflow
+    assert '<a href="/processes">Processes</a>' in process
+    assert "/#workflows" not in workflow
+    assert "/#processes" not in process
+
+
 # --- processes ---------------------------------------------------------------------------
 
 

@@ -17,6 +17,8 @@ from open_climate_service.shared.urls import BASE_URL_ENV
 from .conftest import MountedClientFactory
 
 _CONFIGURED = "https://ocs-demo-nepal.dhis2.org"
+# `?f=html` because the URL answers JSON by default: these tests are about the page.
+_SOURCE_PAGE = "/dataset-templates/chirps3_precipitation_daily?f=html"
 
 
 @pytest.fixture
@@ -141,10 +143,10 @@ def test_the_map_viewer_html_carries_no_origin(https_client: TestClient) -> None
         assert f'fetch("{path}")' in body
 
 
-def test_the_manage_console_posts_to_the_origin_it_was_reached_on(https_client: TestClient) -> None:
-    """Form actions and redirects stay relative for the same reason: an operator on a
-    port-forward pressing Ingest must not POST to the configured public instance."""
-    body = https_client.get("/manage").text
+def test_the_ingest_form_posts_to_the_origin_it_was_reached_on(https_client: TestClient) -> None:
+    """Form actions stay relative for the same reason: an operator on a port-forward pressing
+    Ingest must not POST to the configured public instance."""
+    body = https_client.get(_SOURCE_PAGE).text
 
     assert _CONFIGURED not in body
     # Strict: the bare substring also appears in the `action="http://testserver/..."` form this
@@ -277,10 +279,10 @@ def test_an_origin_only_base_url_composes_with_the_asgi_prefix(mounted_client: T
     assert all(v["url"].startswith(f"{_CONFIGURED}/ocs") for v in well_known["versions"]), well_known
 
 
-def test_the_manage_console_posts_under_the_mount_prefix(mounted_client: TestClient) -> None:
-    """A page served at `/ocs/manage` that posts to `/manage/ingest` reaches the proxy, not the
+def test_the_ingest_form_posts_under_the_mount_prefix(mounted_client: TestClient) -> None:
+    """A page served under `/ocs` that posts to `/manage/ingest` reaches the proxy, not the
     app, and gets a 404."""
-    body = mounted_client.get("/manage").text
+    body = mounted_client.get(_SOURCE_PAGE).text
 
     assert 'action="/ocs/manage/ingest"' in body
     assert 'action="/manage/ingest"' not in body
@@ -312,7 +314,7 @@ def test_the_viewer_fetches_under_the_mount_prefix(mounted_client: TestClient) -
 
 def test_an_unmounted_instance_gains_no_prefix(https_client: TestClient) -> None:
     """The prefix is empty at the root, so the same expression serves both deployments."""
-    body = https_client.get("/manage").text
+    body = https_client.get(_SOURCE_PAGE).text
 
     assert 'action="/manage/ingest"' in body
     assert "//manage" not in body, "empty prefix must not leave a doubled slash"
@@ -348,7 +350,7 @@ def test_the_app_reads_the_root_path_itself(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("ROOT_PATH", "/ocs/")
     client = TestClient(create_app())
 
-    assert 'action="/ocs/manage/ingest"' in client.get("/manage").text
+    assert 'action="/ocs/manage/ingest"' in client.get(_SOURCE_PAGE).text
     self_href = next(link["href"] for link in client.get("/stac").json()["links"] if link["rel"] == "self")
     assert self_href == "http://testserver/ocs/stac"
 
