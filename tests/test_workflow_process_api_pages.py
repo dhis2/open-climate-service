@@ -44,6 +44,9 @@ def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
             {"href": f"/datasets/{dataset_id}", "rel": "self", "title": "Dataset detail"},
             {"href": f"/zarr/{dataset_id}", "rel": "zarr", "title": "Zarr store"},
         ],
+        # Required since GeoParquet feature collections landed: a listing has to tell a
+        # raster from a feature without a request per row.
+        "itemType": "coverage",
         "publication": {"status": "published", "published_at": "2026-09-01T07:58:03Z"},
         "versions": [],
         **fields,
