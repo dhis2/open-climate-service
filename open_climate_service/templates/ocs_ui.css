@@ -200,7 +200,7 @@ nav.rail a[aria-current="page"] {
   /* The selected tint follows the header rather than the palette's blue, so selection reads as
      part of this instance's colour. Not the ocean below, which is blue because it is water. */
   background: var(--colors-green100);
-  color: var(--colors-blue900);
+  color: var(--colors-green800);
 }
 nav.rail .count {
   font-size: var(--font-size-small);
@@ -351,7 +351,7 @@ a.card:hover {
   color: inherit;
 }
 a.card h3 {
-  color: var(--theme-primary800);
+  color: var(--colors-grey900);
 }
 .meta {
   display: flex;
@@ -511,8 +511,8 @@ button:disabled {
 }
 .view-switch button[aria-pressed="true"] {
   background: var(--colors-green100);
-  border-color: var(--colors-blue600);
-  color: var(--colors-blue900);
+  border-color: var(--colors-green800);
+  color: var(--colors-green800);
   position: relative;
 }
 
@@ -589,6 +589,10 @@ button:disabled {
 }
 .item h3 a {
   text-decoration: none;
+  /* A title names the thing rather than pointing elsewhere, and a wall of blue headings reads
+     as a list of links instead of a list of datasets. The whole tile is the hit area and it
+     lifts on hover, so the affordance does not depend on the colour. */
+  color: var(--colors-grey900);
 }
 /* The whole tile or row opens the page: the title link's hit area is stretched over the item,
    so there is still exactly one link per item for keyboard and screen-reader users. */
