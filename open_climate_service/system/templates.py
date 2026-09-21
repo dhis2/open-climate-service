@@ -9,6 +9,7 @@ from typing import Any
 
 import jinja2
 from fastapi import Request
+from markupsafe import Markup
 
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
@@ -113,6 +114,50 @@ def wants_json(request: Request) -> bool:
     return json_q >= 0 and (html_q < 0 or json_q >= html_q)
 
 
+def _read_asset(name: str) -> str:
+    resource = importlib.resources.files("open_climate_service") / "templates" / name
+    return resource.read_text(encoding="utf-8")
+
+
+# The instance mark: a climate over a globe. Monochrome in `currentColor` so it takes the header
+# bar's white, with the sun in the DHIS2 yellow400 token; sized for the 48px bar, and legible at
+# that size because it is three shapes. Inlined into the page rather than linked, so it costs no
+# request and works offline — the rationale lives here rather than in the file, because an XML
+# comment in the file would be served to every viewer.
+LOGO = Markup(_read_asset("ocs_logo.svg"))
+
+_NAV_ITEMS = (
+    ("map", "Map viewer", "/map"),
+    ("openeo", "openEO editor", "/openeo"),
+)
+
+# Set apart by a gap: the only entry that leaves this instance for another site.
+_NAV_GAP_BEFORE = frozenset({"openeo"})
+
+# Leaves the instance for the hosted openEO Web Editor, so it opens in a new tab.
+_EXTERNAL_NAV_ITEMS = frozenset({"openeo"})
+
+
+def page_nav(mount: str, current: str) -> Markup:
+    """The left navigation for pages outside the landing page, with *current* marked.
+
+    The landing page renders its own, because its links switch areas in place rather than
+    navigate.
+    """
+    items = Markup("").join(
+        Markup('<li{}><a href="{}{}"{}{}>{}</a></li>').format(
+            Markup(' class="gap"') if key in _NAV_GAP_BEFORE else "",
+            mount,
+            path,
+            Markup(' aria-current="page"') if key == current else "",
+            Markup(' target="_blank" rel="noopener"') if key in _EXTERNAL_NAV_ITEMS else "",
+            label,
+        )
+        for key, label, path in _NAV_ITEMS
+    )
+    return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
+
+
 def render_maps(mount: str) -> str:
     """Render the map viewer page.
 
@@ -125,7 +170,14 @@ def render_maps(mount: str) -> str:
     Required rather than defaulted: an omitted mount gives links that work unmounted and 404
     behind a prefix, which is the failure this parameter exists to prevent.
     """
-    return get_template("map-viewer.html").render(mount=mount, name=api_config.get_name())
+    return get_template("map-viewer.html").render(
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        version=app_version,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "map"),
+    )
 
 
 def _load_extent() -> dict[str, Any] | None:
