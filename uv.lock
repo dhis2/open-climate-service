@@ -1,6 +1,10 @@
 version = 1
 revision = 3
 requires-python = ">=3.12"
+resolution-markers = [
+    "platform_machine == 'ARM64' and sys_platform == 'win32'",
+    "platform_machine != 'ARM64' or sys_platform != 'win32'",
+]
 
 [manifest]
 overrides = [
@@ -8,7 +12,6 @@ overrides = [
     { name = "dask-geopandas", specifier = ">=0.4" },
     { name = "geojson-pydantic", specifier = ">=2.1.0" },
     { name = "geopandas", specifier = ">=1.1" },
-    { name = "numpy", specifier = ">=2.2" },
     { name = "pyarrow", specifier = ">=19.0" },
     { name = "pystac", specifier = ">=1.10" },
     { name = "rioxarray", specifier = ">=0.17" },
@@ -1951,7 +1954,7 @@ name = "oschmod"
 version = "0.3.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywin32" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9d/64/6e522f0a1b500470ae14dcd1a4bb8f8751f5cf441e85e9fee7dfc712cb7b/oschmod-0.3.12.tar.gz", hash = "sha256:bec99216f31615ee653b2a5c87cacfb4e4b6184c0e9f71da186300dacae974f3", size = 20064, upload-time = "2020-10-30T00:38:42.409Z" }
 wheels = [
