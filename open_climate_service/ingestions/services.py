@@ -604,7 +604,7 @@ def _feature_collection_members(features: object, *, dataset_id: str) -> list[Ma
             f"feature collection '{dataset_id}' must be a GeoJSON FeatureCollection, got type {features.get('type')!r}"
         )
     members = features.get("features")
-    if not isinstance(members, list):
+    if not isinstance(members, Sequence) or isinstance(members, str | bytes):
         raise ValueError(f"feature collection '{dataset_id}' has no 'features' array")
     if not members:
         raise ValueError(
@@ -699,7 +699,7 @@ def _geometry_positions(geometry: object, *, dataset_id: str, index: int) -> Ite
     geometry_type = geometry.get("type")
     if geometry_type == "GeometryCollection":
         nested = geometry.get("geometries")
-        if not isinstance(nested, list) or not nested:
+        if not isinstance(nested, Sequence) or isinstance(nested, str | bytes) or not nested:
             raise ValueError(
                 f"feature collection '{dataset_id}' has a feature at {index} whose "
                 "GeometryCollection declares no 'geometries' array"
@@ -731,7 +731,7 @@ def _coordinate_positions(
         return ValueError(f"feature collection '{dataset_id}' has a malformed {geometry_type} at {index}: {detail}")
 
     if depth == 1:
-        if not isinstance(coordinates, list) or len(coordinates) < 2:
+        if not isinstance(coordinates, Sequence) or isinstance(coordinates, str | bytes) or len(coordinates) < 2:
             raise fail("a position must be an array of at least two numbers")
         x, y = coordinates[0], coordinates[1]
         # bool is an int in Python, and `[True, False]` is not a position.
@@ -746,7 +746,7 @@ def _coordinate_positions(
         # past rather than rejected.
         yield float(x), float(y)
         return
-    if not isinstance(coordinates, list) or not coordinates:
+    if not isinstance(coordinates, Sequence) or isinstance(coordinates, str | bytes) or not coordinates:
         raise fail(f"expected a non-empty array {depth} levels deep, got {coordinates!r}")
     for member in coordinates:
         yield from _coordinate_positions(
@@ -1985,6 +1985,7 @@ def _store_artifact_record(record: ArtifactRecord) -> ArtifactRecord:
             records=records,
             dataset_id=record.dataset_id,
             request_scope=record.request_scope,
+            format=record.format,
         )
         if existing is not None and existing.coverage == record.coverage:
             return existing
@@ -2196,6 +2197,7 @@ def _find_replaceable_artifact(*, records: list[ArtifactRecord], record: Artifac
         records=records,
         dataset_id=record.dataset_id,
         request_scope=record.request_scope,
+        format=record.format,
     )
 
 
@@ -2204,6 +2206,7 @@ def _find_artifact_by_request_scope(
     records: list[ArtifactRecord],
     dataset_id: str,
     request_scope: ArtifactRequestScope,
+    format: ArtifactFormat | None = None,
 ) -> ArtifactRecord | None:
     """Return the latest materialized record for the same operation request.
 
@@ -2213,6 +2216,8 @@ def _find_artifact_by_request_scope(
     """
     for record in reversed(records):
         if record.dataset_id != dataset_id or record.request_scope != request_scope:
+            continue
+        if format is not None and record.format != format:
             continue
         if _artifact_storage_exists(record):
             return record

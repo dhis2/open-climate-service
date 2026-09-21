@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from shapely.geometry import GeometryCollection, Point, Polygon, mapping
 
 from open_climate_service.ingestions import services
 from open_climate_service.ingestions.schemas import (
@@ -352,6 +353,23 @@ def test_create_feature_artifact_reads_every_geojson_geometry_type(
     assert record.coverage.spatial == CoverageSpatial(xmin=-13.0, ymin=6.0, xmax=-10.0, ymax=11.0)
     assert record.features is not None
     assert record.features.feature_count == 2
+
+
+def test_create_feature_artifact_accepts_shapely_mapping_sequences(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store_path = _tmp_record_store(monkeypatch, tmp_path)
+    geometry = mapping(GeometryCollection([Point(-13.0, 6.0), Polygon([(0, 0), (2, 0), (2, 3), (0, 0)])]))
+    collection = {
+        "type": "FeatureCollection",
+        "features": ({"type": "Feature", "properties": {"orgUnitCode": "SL-W"}, "geometry": geometry},),
+    }
+
+    record = services.create_feature_artifact(
+        template=DISTRICTS_TEMPLATE, features=collection, store_path=store_path, crs="EPSG:4326"
+    )
+
+    assert record.coverage.spatial == CoverageSpatial(xmin=-13.0, ymin=0.0, xmax=2.0, ymax=6.0)
 
 
 def test_create_feature_artifact_names_the_geometry_column_the_writer_used(
@@ -715,6 +733,24 @@ def test_a_raster_still_keeps_one_record_per_request_scope(monkeypatch: pytest.M
     services.register_artifact_record(february, publish=False)
 
     assert len(services._load_records()) == 2
+
+
+def test_raster_overwrite_does_not_replace_feature_with_same_dataset_and_scope(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _tmp_record_store(monkeypatch, tmp_path)
+    feature = _feature_artifact()
+    raster = _raster_artifact(dataset_id=feature.dataset_id)
+    raster.request_scope = feature.request_scope.model_copy(deep=True)
+    services.register_artifact_record(feature, publish=False)
+
+    stored_raster = services.register_artifact_record(raster, publish=False)
+
+    records = services._load_records()
+    assert len(records) == 2
+    assert stored_raster.artifact_id == raster.artifact_id
+    assert records[0] == feature
+    assert records[1].format == ArtifactFormat.ICECHUNK
 
 
 # --- the gates ---------------------------------------------------------------------------
