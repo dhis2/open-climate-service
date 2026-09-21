@@ -126,7 +126,7 @@ def list_datasets() -> list[dict[str, Any]]:
         if not root.is_dir():
             # Startup already warns about this (plugins_diagnostics.log_plugin_loading) and lets the
             # service run, so raising here made the two disagree: the instance reported healthy and
-            # served /datasets, /collections and /processes while /dataset-templates/ returned 500 —
+            # served /datasets, /collections and /processes while /dataset-templates returned 500 —
             # the one route the ingest form needs. A configured-but-absent plugins_dir is a
             # deployment slip, not a reason to refuse service, so degrade to the built-in and
             # entry-point templates instead. Debug rather than warning because startup has already

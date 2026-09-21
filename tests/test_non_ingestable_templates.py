@@ -2,7 +2,7 @@
 
 Half the shipped catalogue is *produced* rather than fetched: anomalies, normals and change
 rasters are written by a workflow through `save_result` and registered as static templates.
-They appeared in `GET /dataset-templates/` beside ingestable ones with nothing to tell them
+They appeared in `GET /dataset-templates` beside ingestable ones with nothing to tell them
 apart, so an operator found out by picking one and getting
 
     500: Dataset 'worldpop_population_change' does not define ingestion.plugin
@@ -61,7 +61,7 @@ def test_the_shipped_catalogue_splits_both_ways() -> None:
 
 
 def test_every_listed_template_reports_ingestability(client: TestClient) -> None:
-    payload = client.get("/dataset-templates/").json()
+    payload = client.get("/dataset-templates").json()
     assert payload, "no templates listed"
     assert all("ingestable" in t for t in payload)
     assert all(t["ingestable"] == registry.is_ingestable(t) for t in payload)
@@ -69,7 +69,7 @@ def test_every_listed_template_reports_ingestability(client: TestClient) -> None
 
 def test_a_single_template_reports_it_too(client: TestClient) -> None:
     """The detail route is where an operator looks before ingesting one."""
-    listed = client.get("/dataset-templates/").json()
+    listed = client.get("/dataset-templates").json()
     derived = next(t["id"] for t in listed if not t["ingestable"])
     assert client.get(f"/dataset-templates/{derived}").json()["ingestable"] is False
 
@@ -191,7 +191,7 @@ def test_produced_by_beside_an_ingestion_plugin_is_refused() -> None:
 
 
 def test_produced_by_is_listed_by_the_template_api(client: TestClient) -> None:
-    templates = {t["id"]: t for t in client.get("/dataset-templates/").json()}
+    templates = {t["id"]: t for t in client.get("/dataset-templates").json()}
 
     assert templates["worldpop_population_change"]["produced_by"] == "temporal_change"
     assert "produced_by" not in templates["worldpop_population_global2_100m"]

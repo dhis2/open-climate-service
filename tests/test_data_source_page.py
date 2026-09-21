@@ -313,6 +313,27 @@ def test_the_template_url_answers_json_unless_html_is_preferred(
         assert response.headers["vary"] == "Accept", path
 
 
+@pytest.mark.parametrize("collection", ["/datasets", "/dataset-templates", "/processes"])
+def test_the_trailing_slash_form_redirects_to_the_canonical_path(client: TestClient, collection: str) -> None:
+    """Stated, because a client that does not follow redirects sees only an empty 307.
+
+    Each of these collections is registered at the slashless path, so `/dataset-templates/`
+    answers 307 rather than the listing. That is ordinary FastAPI behaviour and the same for
+    all three, but it changed for `/dataset-templates` when its page moved onto the JSON's URL,
+    and it broke an instance health check calling `curl -sf` with the old trailing slash.
+
+    The redirect is what broke it, not `-f`: a 307 carries no body, and curl does not follow
+    one without `-L`, so the check read an empty response and failed parsing it. `-f` never
+    came into it — it acts on 4xx and 5xx, and leaves a 307 reporting success. Worth being
+    exact about, because the obvious reading sends the next person after the wrong flag.
+    """
+    redirect = client.get(f"{collection}/", follow_redirects=False)
+
+    assert redirect.status_code == 307
+    assert redirect.headers["location"].endswith(collection)
+    assert client.get(f"{collection}/").status_code == 200, "and it still resolves when followed"
+
+
 def test_an_unknown_template_is_a_404(client: TestClient) -> None:
     assert client.get("/dataset-templates/does_not_exist").status_code == 404
     unknown = client.get("/dataset-templates/does_not_exist", headers={"Accept": BROWSER_ACCEPT})
