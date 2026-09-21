@@ -7,6 +7,7 @@ drive it directly; the rendering tests go through `GET /`, where the page is act
 
 from __future__ import annotations
 
+import math
 import re
 from html.parser import HTMLParser
 from pathlib import Path
@@ -356,10 +357,115 @@ def test_the_globe_is_centred_on_the_extent() -> None:
         assert point == (landing._GLOBE_WIDTH / 2, landing._GLOBE_HEIGHT / 2)
 
 
-def test_the_far_side_of_the_world_is_not_drawn() -> None:
-    """Orthographic shows one hemisphere; the antipode must not fold onto the front."""
-    assert landing._project(0.0, 0.0, 180.0, 0.0, 48) is None
-    assert landing._project(1.0, 1.0, 0.0, 0.0, 48) is not None
+def test_the_far_side_of_the_world_is_pushed_out_to_the_limb() -> None:
+    """Orthographic shows one hemisphere; the antipode must not fold onto the front.
+
+    Pushed out rather than dropped. Dropping it broke the ring it belonged to, and the visible
+    run then closed with a straight chord — a hard diagonal across Europe on a globe centred on
+    Nepal. On the limb it keeps the ring whole, and the limb is outside the frame.
+    """
+    scale = 48.0
+    centre = (landing._GLOBE_WIDTH / 2, landing._GLOBE_HEIGHT / 2)
+
+    far = landing._project(0.0, 0.0, 180.0, 0.0, scale)
+    near = landing._project(1.0, 1.0, 0.0, 0.0, scale)
+
+    assert math.hypot(far[0] - centre[0], far[1] - centre[1]) == pytest.approx(scale)
+    assert math.hypot(near[0] - centre[0], near[1] - centre[1]) < scale
+    assert landing._on_far_side(0.0, 0.0, 180.0, 0.0)
+    assert not landing._on_far_side(1.0, 1.0, 0.0, 0.0)
+
+
+def test_a_ring_cut_by_the_horizon_is_never_split_into_chords() -> None:
+    """The bug this guards: a ring with anything visible draws as exactly one subpath.
+
+    A ring split at the horizon leaves each visible run to close itself, and a run closed
+    across the width of a hemisphere is a straight line through everything between its ends.
+    Counting subpaths is the structural form of "no chord": as long as no ring is cut, none
+    can be closed short. A ring with nothing visible draws nothing at all.
+    """
+    # Centred on Nepal, which puts Eurasia across the horizon — the ring that showed the chord.
+    bbox = (80.05, 26.35, 88.2, 30.45)
+    lon0, lat0 = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    showing = sum(
+        any(not landing._on_far_side(lon, lat, lon0, lat0) for lon, lat in ring) for ring in landing._world_rings()
+    )
+
+    globe = landing._globe(bbox)
+
+    assert 0 < showing < len(landing._world_rings()), "this extent hides some rings and shows others"
+    assert globe["land"].count("M") == showing
+
+
+def test_the_limb_step_is_fine_enough_that_its_chords_stay_off_the_frame() -> None:
+    """Putting a hidden vertex on the limb does not put the segment to the next one there.
+
+    SVG joins two limb points with a chord, which dips to `scale * cos(gap / 2)`. The frame's
+    own corner is the radius that matters: anything beyond it is outside the rectangle. At
+    `_MIN_ZOOM` — where Brazil sits — the limb clears that corner by about a unit, so the gap
+    has to stay small or the chord lands back on the map.
+    """
+    scale = landing._GLOBE_RADIUS * landing._MIN_ZOOM
+    corner = math.hypot(landing._GLOBE_WIDTH / 2, landing._GLOBE_HEIGHT / 2)
+
+    assert scale * math.cos(landing._LIMB_STEP / 2) > corner
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        # Brazil is where this was first found: three chords, all in one fully hidden ring.
+        # New Zealand is the harder case and the reason the limb arc is what carries the
+        # property — its offender is a ring that *is* partly visible, so dropping hidden
+        # rings does not reach it, and only walking the limb keeps the chord off the frame.
+        (-74.0, -34.0, -34.0, 5.3),
+        (166.0, -47.0, 179.0, -34.0),
+        (80.05, 26.35, 88.2, 30.45),
+        (4.5, 58.0, 31.0, 71.2),
+        (-180.0, -85.0, 180.0, 85.0),
+    ],
+)
+def test_the_hidden_side_of_the_world_never_paints_into_the_frame(
+    bbox: tuple[float, float, float, float],
+) -> None:
+    """End to end: walk every drawn segment that lies on the limb and check it stays off."""
+    lon0, lat0 = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    scale = landing._GLOBE_RADIUS * landing._globe_zoom(abs(bbox[2] - bbox[0]), abs(bbox[3] - bbox[1]), lat0)
+    centre = (landing._GLOBE_WIDTH / 2, landing._GLOBE_HEIGHT / 2)
+
+    def on_limb(point: tuple[float, float]) -> bool:
+        return math.hypot(point[0] - centre[0], point[1] - centre[1]) >= scale - 0.5
+
+    intruders = []
+    for ring in landing._world_rings():
+        drawn = landing._land_path(ring, lon0, lat0, scale)
+        if not drawn:
+            continue
+        values = [float(v) for v in re.findall(r"-?\d+\.?\d*", drawn)]
+        points = list(zip(values[0::2], values[1::2], strict=True))
+        for start, end in zip(points, points[1:] + points[:1], strict=True):
+            if not (on_limb(start) and on_limb(end)):
+                continue
+            # Sampled along its length, not at its midpoint: a chord this shallow enters the
+            # frame through a corner and leaves again, with its deepest point still outside.
+            if any(
+                0 <= start[0] + (end[0] - start[0]) * step / 64 <= landing._GLOBE_WIDTH
+                and 0 <= start[1] + (end[1] - start[1]) * step / 64 <= landing._GLOBE_HEIGHT
+                for step in range(65)
+            ):
+                intruders.append((start, end))
+
+    assert intruders == []
+
+
+def test_an_extent_wider_than_the_visible_face_draws_no_outline() -> None:
+    """Its real edge is the limb, which the zoom keeps off-frame, so a box would be a lie."""
+    world = landing._globe((-180.0, -85.0, 180.0, 85.0))
+    nepal = landing._globe((80.05, 26.35, 88.2, 30.45))
+
+    assert world["extent"] == ""
+    assert world["land"].count("M") > 10, "the land is still drawn"
+    assert nepal["extent"].startswith("M"), "an extent that fits still gets its outline"
 
 
 def test_the_map_never_shows_the_sphere_s_edge() -> None:
