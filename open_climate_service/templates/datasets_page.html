@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Datasets · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <h2 id="datasets-title" tabindex="-1">Datasets</h2>
+        <p class="lead">Data this instance holds.</p>
+        {% if datasets %}
+        <div data-list data-page-size="12" data-views="datasets">
+          <div class="toolbar">
+            <label
+              >Search
+              <input type="search" data-filter-text placeholder="Name, source or variable" />
+            </label>
+            <label
+              >Status
+              <select data-filter-field="status">
+                <option value="">All</option>
+                <option value="published">Published</option>
+                <option value="unpublished">Unpublished</option>
+              </select>
+            </label>
+            <div class="view-switch" role="group" aria-label="Layout">
+              <button type="button" data-view-button="tiles" aria-pressed="true">Tiles</button>
+              <button type="button" data-view-button="list" aria-pressed="false">List</button>
+            </div>
+            <span class="status" data-status aria-live="polite"></span>
+          </div>
+          <div class="collection view-tiles" data-view-target>
+            {% for ds in datasets %}
+            <article
+              class="panel item clickable"
+              data-item
+              data-status="{{ ds.status }}"
+              data-search="{{ [ds.name, ds.id, ds.source, ds.variable, ds.period_type] | join(' ') | lower }}"
+            >
+              <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}" style="--ramp: {{ ds.ramp }}">
+                {% if ds.has_thumbnail %}
+                <img src="{{ mount }}/datasets/{{ ds.id }}/thumbnail.png" alt="" loading="lazy" />
+                {% else %}
+                <span class="no-preview">No preview yet</span>
+                {% endif %}
+              </div>
+              <div class="body">
+                <h3><a class="item-link" href="{{ mount }}/datasets/{{ ds.id }}">{{ ds.name }}</a></h3>
+                {% if ds.source %}<span class="provider clamp">{{ ds.source }}</span>{% endif %}
+                {% if ds.description %}<p class="description clamp">{{ ds.description }}</p>{% endif %}
+                <div class="meta">
+                  <span class="chip chip-{{ ds.status }}">{{ ds.status }}</span>
+                  {% if ds.period_type %}<span class="chip">{{ ds.period_type }}</span>{% endif %}
+                  {% if ds.coverage %}<span class="chip">{{ ds.coverage }}</span>{% endif %}
+                  {% if ds.units %}<span class="chip">{{ ds.units }}</span>{% endif %}
+                </div>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          <p class="note" data-empty hidden>No datasets match.</p>
+          <div class="pager" data-pager>
+            <button type="button" data-prev>Previous</button>
+            <button type="button" data-next>Next</button>
+          </div>
+        </div>
+        {% else %}
+        <p class="note">
+          No datasets ingested yet. Use
+          <a href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post">POST /ingestions</a>
+          to ingest data, or
+          <a href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">POST /sync</a>
+          to run an automated sync.
+        </p>
+        {% endif %}
+
+      </main>
+    </div>
+<script>
+{{ list_script | safe }}
+</script>
+  </body>
+</html>
