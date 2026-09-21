@@ -58,6 +58,7 @@ from open_climate_service.ingestions.schemas import (
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
+from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -455,7 +456,8 @@ def create_feature_artifact(
     `crs` is required rather than defaulted, and describes the geometry as the GeoParquet at
     `store_path` stores it. ADR 0002 decision 9 makes an explicit CRS a property of every stored
     collection; a default here would let a caller that reprojected before writing record WGS 84
-    by omission, and the extent below would then describe a store it does not match.
+    by omission, and the extent would then describe a store it does not match. A projected store
+    is recorded with its own extent as `coverage.spatial` and the WGS 84 one beside it.
 
     Raises ValueError for a template or collection that cannot produce a record: a missing
     `id_property`, a payload that is not a FeatureCollection, a malformed member, an empty
@@ -469,7 +471,7 @@ def create_feature_artifact(
     # Required by FeatureDetail too, but read here so the error names the template field the
     # author has to fix rather than surfacing as a pydantic failure on a nested submodel.
     id_property = _require_template_str(template, "id_property")
-    stored_crs = _require_wgs84_feature_crs(crs, dataset_id=dataset_id)
+    stored_crs = _require_feature_crs(crs, dataset_id=dataset_id)
     requested_bbox = _requested_extract_bbox(bbox, dataset_id=dataset_id)
     resolved_path = _require_written_feature_store(store_path, dataset_id=dataset_id)
     feature_list = _feature_collection_members(features, dataset_id=dataset_id)
@@ -491,15 +493,7 @@ def create_feature_artifact(
         asset_paths=[str(resolved_path)],
         variables=[],
         request_scope=ArtifactRequestScope(start=None, end=None, bbox=requested_bbox),
-        coverage=ArtifactCoverage(
-            spatial=bounds,
-            # `spatial` is already the WGS 84 extent: it is computed from GeoJSON coordinates,
-            # which RFC 7946 defines as WGS 84, and the guard above has established that the
-            # store is in that CRS too. The field means "the WGS 84 extent when `spatial` is in
-            # some other CRS", so a separate copy would only repeat it.
-            spatial_wgs84=None,
-            temporal=CoverageTemporal(start=None, end=None),
-        ),
+        coverage=_feature_coverage(bounds, stored_crs=stored_crs, dataset_id=dataset_id),
         created_at=datetime.now(UTC),
         publication=ArtifactPublication(),
         features=FeatureDetail(
@@ -517,19 +511,19 @@ def create_feature_artifact(
     return register_artifact_record(record, publish=publish)
 
 
-def _require_wgs84_feature_crs(crs: str, *, dataset_id: str) -> str:
-    """Return the canonical form of a declared store CRS, or refuse what this door cannot record.
+def _require_feature_crs(crs: str, *, dataset_id: str) -> str:
+    """Return the canonical form of a declared store CRS, or refuse what is not a CRS at all.
 
     Two CRSs meet here and this is the only place that can tell them apart. The incoming
     `features` payload is GeoJSON, which RFC 7946 defines as WGS 84, and `crs` describes the
-    GeoParquet already written at `store_path`. The extent on the record is derived from the
-    GeoJSON, so it is a WGS 84 extent — and it only describes the store when the two agree.
+    GeoParquet already written at `store_path` — which the store may have reprojected on the
+    way in. The coverage below is what keeps both true: the extent derived from the GeoJSON is
+    recorded as `spatial_wgs84`, and `spatial` is that extent expressed in the store's own CRS,
+    which is the same arrangement every raster record uses.
 
-    So a declared non-WGS 84 store is refused rather than recorded. The alternative is
-    registering an extent in one CRS against a store in another, which is exactly the silent
-    mismatch ADR 0002 decision 9 exists to prevent. Reprojection-aware registration belongs
-    with the component that does the reprojecting: CLIM-1068 owns the writer and the
-    CRS-correct windowing, and widens this when a provider contract needs it.
+    A projected store was refused here until CLIM-1068, because until there was a CRS-correct
+    reader there was nothing that could window one. Now that there is, refusing would only
+    stop a collection being registered that the rest of the system can read.
 
     Normalized through `canonical_feature_crs`, the same function `FeatureDetail` validates
     with, so a provider declaring 'OGC:CRS84' — the spelling GeoJSON and GeoParquet both use —
@@ -541,13 +535,35 @@ def _require_wgs84_feature_crs(crs: str, *, dataset_id: str) -> str:
             f"feature collection '{dataset_id}' must declare the CRS of its stored geometry as an "
             "authority code such as 'EPSG:4326'"
         )
-    if canonical != "EPSG:4326":
-        raise ValueError(
-            f"feature collection '{dataset_id}' declares stored CRS {canonical}, but its extent is "
-            "derived from GeoJSON, which RFC 7946 defines as WGS 84; registering a reprojected "
-            "store needs the CRS-correct path in CLIM-1068"
-        )
     return canonical
+
+
+def _feature_coverage(bounds: CoverageSpatial, *, stored_crs: str, dataset_id: str) -> ArtifactCoverage:
+    """Return the coverage for a feature collection, with `spatial` in the store's own CRS.
+
+    `bounds` comes from GeoJSON coordinates, so it is a WGS 84 extent whatever the store holds.
+    The record's convention is that `spatial` is native and `spatial_wgs84` is the WGS 84 copy —
+    None when the two are the same — so a reprojected store records the projected extent as
+    `spatial` and keeps the WGS 84 one beside it, exactly as a raster in a projected CRS does.
+    Recording the WGS 84 extent as `spatial` for a projected store is the silent mismatch ADR
+    0002 decision 9 exists to prevent.
+    """
+    if stored_crs == "EPSG:4326":
+        return ArtifactCoverage(spatial=bounds, spatial_wgs84=None, temporal=CoverageTemporal(start=None, end=None))
+    try:
+        west, south, east, north = transform_bbox(
+            (bounds.xmin, bounds.ymin, bounds.xmax, bounds.ymax), source="EPSG:4326", target=stored_crs
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"feature collection '{dataset_id}' declares stored CRS {stored_crs}, but its features do "
+            f"not map into it: {exc}"
+        ) from exc
+    return ArtifactCoverage(
+        spatial=CoverageSpatial(xmin=west, ymin=south, xmax=east, ymax=north),
+        spatial_wgs84=bounds,
+        temporal=CoverageTemporal(start=None, end=None),
+    )
 
 
 def _require_written_feature_store(store_path: Path | str, *, dataset_id: str) -> Path:

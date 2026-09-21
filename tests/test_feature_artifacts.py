@@ -557,19 +557,44 @@ def test_create_feature_artifact_refuses_a_directory_in_place_of_the_file(
         )
 
 
-def test_create_feature_artifact_refuses_a_reprojected_store_it_cannot_describe(
+def test_create_feature_artifact_records_a_projected_store_with_both_extents(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The extent comes from GeoJSON, which is WGS 84; recording it against a projected store
-    is the silent mismatch ADR 0002 decision 9 exists to prevent."""
+    """A projected store was refused until CLIM-1068 gave it a CRS-correct reader; now it registers.
+
+    The record keeps the raster convention: `spatial` is the extent in the store's own CRS and
+    `spatial_wgs84` is the WGS 84 one the GeoJSON gave. Recording the WGS 84 extent as `spatial`
+    is the silent mismatch ADR 0002 decision 9 exists to prevent.
+    """
     store_path = _tmp_record_store(monkeypatch, tmp_path)
 
-    with pytest.raises(ValueError, match="CLIM-1068"):
+    record = services.create_feature_artifact(
+        template=DISTRICTS_TEMPLATE,
+        features=_feature_collection(),
+        store_path=store_path,
+        crs="EPSG:3857",
+    )
+
+    assert record.features is not None
+    assert record.features.crs == "EPSG:3857"
+    assert record.coverage.spatial_wgs84 == CoverageSpatial(xmin=-13.5, ymin=6.9, xmax=-10.1, ymax=10.0)
+    # Web Mercator metres, so the projected extent is far outside the degree range it came from.
+    assert record.coverage.spatial.xmin < -1_000_000
+    assert record.coverage.spatial.ymax > 1_000_000
+
+
+def test_create_feature_artifact_still_refuses_a_crs_that_is_not_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Widening which CRSs are accepted did not stop the field being required and checked."""
+    store_path = _tmp_record_store(monkeypatch, tmp_path)
+
+    with pytest.raises(ValueError, match="authority code"):
         services.create_feature_artifact(
             template=DISTRICTS_TEMPLATE,
             features=_feature_collection(),
             store_path=store_path,
-            crs="EPSG:3857",
+            crs="WGS 84",
         )
 
 
