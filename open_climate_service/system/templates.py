@@ -1231,30 +1231,42 @@ def _globe_zoom(width: float, height: float, latitude: float) -> float:
     return max(_MIN_ZOOM, min(0.1 * 180 / span, 2.2))
 
 
-def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float] | None:
-    """Orthographic projection onto the viewBox, or None for a point on the far side."""
+def _project(lon: float, lat: float, lon0: float, lat0: float, scale: float) -> tuple[float, float]:
+    """Orthographic projection onto the viewBox, with the far side pushed out to the limb.
+
+    A point beyond the horizon has no orthographic position, but dropping it breaks the ring
+    it belongs to: the visible run then closes with a straight chord, which cut a hard diagonal
+    across Europe on a globe centred on Nepal. Instead the point keeps its own azimuth and goes
+    out to the limb, so every ring stays one closed polygon in its original order — the winding,
+    and so the fill, stays right without any of the horizon-walking that would otherwise be
+    needed to rejoin the pieces.
+
+    Nothing is lost by it. The zoom keeps the limb outside the frame (`_globe_zoom` never goes
+    below `_MIN_ZOOM`), so the far side collapses onto an arc no viewer can see.
+    """
     lam, phi = math.radians(lon - lon0), math.radians(lat)
     phi0 = math.radians(lat0)
     cos_c = math.sin(phi0) * math.sin(phi) + math.cos(phi0) * math.cos(phi) * math.cos(lam)
-    if cos_c <= 0:
-        return None
     x = math.cos(phi) * math.sin(lam)
     y = math.cos(phi0) * math.sin(phi) - math.sin(phi0) * math.cos(phi) * math.cos(lam)
+    if cos_c <= 0:
+        # Radius alone is folded by the far side; the azimuth is already the true one.
+        radius = math.hypot(x, y) or 1.0
+        x, y = x / radius, y / radius
     return _GLOBE_WIDTH / 2 + scale * x, _GLOBE_HEIGHT / 2 - scale * y
 
 
-def _path(points: list[tuple[float, float] | None], *, close: bool) -> str:
-    """An SVG path through *points*, starting a new subpath wherever the horizon cut them."""
-    parts: list[str] = []
-    run: list[tuple[float, float]] = []
-    for point in [*points, None]:
-        if point is None:
-            if len(run) > 1:
-                parts.append("M" + "L".join(f"{x:.1f} {y:.1f}" for x, y in run) + ("Z" if close else ""))
-            run = []
-        else:
-            run.append(point)
-    return "".join(parts)
+def _on_far_side(lon: float, lat: float, lon0: float, lat0: float) -> bool:
+    """Whether a point lies beyond the horizon from the globe's centre."""
+    lam, phi, phi0 = math.radians(lon - lon0), math.radians(lat), math.radians(lat0)
+    return math.sin(phi0) * math.sin(phi) + math.cos(phi0) * math.cos(phi) * math.cos(lam) <= 0
+
+
+def _path(points: list[tuple[float, float]], *, close: bool) -> str:
+    """An SVG path through *points*. One subpath: the projection never cuts a ring."""
+    if len(points) < 2:
+        return ""
+    return "M" + "L".join(f"{x:.1f} {y:.1f}" for x, y in points) + ("Z" if close else "")
 
 
 def _densify(bbox: tuple[float, float, float, float], steps: int = 24) -> list[tuple[float, float]]:
@@ -1281,7 +1293,16 @@ def _globe(bbox: tuple[float, float, float, float]) -> dict[str, Any]:
     land = "".join(
         _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in ring], close=True) for ring in _world_rings()
     )
-    marker = _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in _densify(bbox)], close=True)
+    # Drawn only while the extent fits on the face being shown. An extent wider than the
+    # visible hemisphere has no orthographic outline — its true edge is the limb, which the
+    # zoom keeps off-frame — and clamping its corners out there draws a box across the map
+    # that means nothing. A globe already showing the whole extent needs no box around it.
+    outline = _densify(bbox)
+    marker = (
+        _path([_project(lon, lat, lon0, lat0, scale) for lon, lat in outline], close=True)
+        if not any(_on_far_side(lon, lat, lon0, lat0) for lon, lat in outline)
+        else ""
+    )
     return {"land": land, "extent": marker, "width": _GLOBE_WIDTH, "height": _GLOBE_HEIGHT}
 
 

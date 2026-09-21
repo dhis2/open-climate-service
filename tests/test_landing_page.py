@@ -7,6 +7,7 @@ drive it directly; the rendering tests go through `GET /`, where the page is act
 
 from __future__ import annotations
 
+import math
 import re
 from html.parser import HTMLParser
 from pathlib import Path
@@ -356,10 +357,47 @@ def test_the_globe_is_centred_on_the_extent() -> None:
         assert point == (landing._GLOBE_WIDTH / 2, landing._GLOBE_HEIGHT / 2)
 
 
-def test_the_far_side_of_the_world_is_not_drawn() -> None:
-    """Orthographic shows one hemisphere; the antipode must not fold onto the front."""
-    assert landing._project(0.0, 0.0, 180.0, 0.0, 48) is None
-    assert landing._project(1.0, 1.0, 0.0, 0.0, 48) is not None
+def test_the_far_side_of_the_world_is_pushed_out_to_the_limb() -> None:
+    """Orthographic shows one hemisphere; the antipode must not fold onto the front.
+
+    Pushed out rather than dropped. Dropping it broke the ring it belonged to, and the visible
+    run then closed with a straight chord — a hard diagonal across Europe on a globe centred on
+    Nepal. On the limb it keeps the ring whole, and the limb is outside the frame.
+    """
+    scale = 48.0
+    centre = (landing._GLOBE_WIDTH / 2, landing._GLOBE_HEIGHT / 2)
+
+    far = landing._project(0.0, 0.0, 180.0, 0.0, scale)
+    near = landing._project(1.0, 1.0, 0.0, 0.0, scale)
+
+    assert math.hypot(far[0] - centre[0], far[1] - centre[1]) == pytest.approx(scale)
+    assert math.hypot(near[0] - centre[0], near[1] - centre[1]) < scale
+    assert landing._on_far_side(0.0, 0.0, 180.0, 0.0)
+    assert not landing._on_far_side(1.0, 1.0, 0.0, 0.0)
+
+
+def test_a_ring_cut_by_the_horizon_is_never_split_into_chords() -> None:
+    """The bug this guards: every ring draws as exactly one subpath.
+
+    A ring split at the horizon leaves each visible run to close itself, and a run closed
+    across the width of a hemisphere is a straight line through everything between its ends.
+    Counting subpaths is the structural form of "no chord": as long as no ring is cut, none
+    can be closed short.
+    """
+    # Centred on Nepal, which puts Eurasia across the horizon — the ring that showed the chord.
+    globe = landing._globe((80.05, 26.35, 88.2, 30.45))
+
+    assert globe["land"].count("M") == len(landing._world_rings())
+
+
+def test_an_extent_wider_than_the_visible_face_draws_no_outline() -> None:
+    """Its real edge is the limb, which the zoom keeps off-frame, so a box would be a lie."""
+    world = landing._globe((-180.0, -85.0, 180.0, 85.0))
+    nepal = landing._globe((80.05, 26.35, 88.2, 30.45))
+
+    assert world["extent"] == ""
+    assert world["land"].count("M") > 10, "the land is still drawn"
+    assert nepal["extent"].startswith("M"), "an extent that fits still gets its outline"
 
 
 def test_the_map_never_shows_the_sphere_s_edge() -> None:
