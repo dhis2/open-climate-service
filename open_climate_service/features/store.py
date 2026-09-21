@@ -9,8 +9,8 @@ exist, so the store directory is not an inbox.
 
 from __future__ import annotations
 
-import json
 import logging
+import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from open_climate_service import config as api_config
 from open_climate_service.ingestions.schemas import ArtifactRecord
+from open_climate_service.shared import geoparquet
 from open_climate_service.shared.crs import canonical_crs_code, transform_bbox
 
 if TYPE_CHECKING:
@@ -42,6 +43,26 @@ means it, which is why `limit=None` is an ordinary argument rather than a settin
 has to find. The number is a backstop rather than a measured capacity: it sits above a
 country's divisions at every level and below a national facility register.
 """
+
+
+_collection_locks: dict[str, threading.Lock] = {}
+_collection_locks_mutex = threading.Lock()
+
+
+def collection_lock(dataset_id: str) -> threading.Lock:
+    """Return the exclusive lock for one collection, creating it on first use.
+
+    Serializes a refresh end to end — write, replace, register — rather than only the write.
+    Those are separate operations on the same collection, so without this two refreshes can
+    interleave: both replace the file, and whichever registers last stamps its count, extent and
+    CRS onto whatever bytes happen to be on disk.
+
+    In-process, like `ingestions.services._acquire_store_lock` for raster stores. The record
+    index itself is guarded across processes by portalocker; a store is guarded within one, which
+    is the deployment this serves — one instance owning its data directory.
+    """
+    with _collection_locks_mutex:
+        return _collection_locks.setdefault(dataset_id, threading.Lock())
 
 
 def feature_store_path(dataset_id: str) -> Path:
@@ -162,24 +183,10 @@ def read_feature_collection(
 
 
 def stored_geometry_types(record: ArtifactRecord) -> list[str]:
-    """Return the geometry types a stored collection declares, read from its file footer.
-
-    From the GeoParquet `geo` metadata rather than from the rows: the spec has the writer record
-    `geometry_types` per geometry column, so this is a footer read whose cost does not grow with
-    the collection. An empty list means the file declares none, which a pre-1.0 writer may do —
-    reported as "unknown" rather than guessed at by scanning geometries.
-    """
-    import pyarrow.parquet as pq
-
-    try:
-        metadata = pq.read_schema(_stored_path(record)).metadata or {}
-        geo = json.loads(metadata[b"geo"].decode("utf-8"))
-        column = geo["columns"][record.features.primary_geometry if record.features else "geometry"]
-        declared = column.get("geometry_types", [])
-    except (OSError, KeyError, ValueError, TypeError):
-        logger.warning("Could not read geometry types for '%s' from its GeoParquet metadata", record.dataset_id)
-        return []
-    return sorted(str(value) for value in declared) if isinstance(declared, list) else []
+    """Return the geometry types a stored collection declares, read from its file footer."""
+    return geoparquet.stored_geometry_types(
+        _stored_path(record), column=record.features.primary_geometry if record.features else None
+    )
 
 
 def _stored_path(record: ArtifactRecord) -> Path:

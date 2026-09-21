@@ -446,6 +446,203 @@ def test_geometry_types_are_read_from_the_file_footer() -> None:
     assert store.stored_geometry_types(record) == ["Polygon"]
 
 
+# --- write and register as one operation --------------------------------------------------
+
+
+def test_a_refresh_writes_and_registers_through_one_door() -> None:
+    record = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert record.features is not None
+    assert record.features.feature_count == 2
+    assert store.feature_store_path("districts").is_file()
+    assert [r.artifact_id for r in ingestion_services._load_records()] == [record.artifact_id]
+
+
+def test_a_failed_registration_leaves_the_previous_collection_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Apart, these two steps leave the old record describing the new file — and nothing raises.
+
+    The record stays valid and the file stays present, so `feature_count`, `extent` and `crs`
+    all describe bytes that are gone.
+    """
+    import geopandas as gpd
+
+    first = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    grown = _collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+
+    def refuse(**_: Any) -> None:
+        raise RuntimeError("records.json is unwritable")
+
+    monkeypatch.setattr(ingestion_services, "create_feature_artifact", refuse)
+
+    with pytest.raises(RuntimeError, match="unwritable"):
+        feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=grown)
+
+    stored = gpd.read_parquet(str(store.feature_store_path("districts")))
+    assert len(stored) == 2, "the file must still be the one the surviving record describes"
+    assert first.features is not None
+    assert first.features.feature_count == len(stored)
+    assert not list(store.feature_store_path("districts").parent.glob("*.previous"))
+
+
+def test_a_failed_first_registration_leaves_no_collection_behind(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no previous version to restore, the unregistered file is removed rather than left."""
+
+    def refuse(**_: Any) -> None:
+        raise RuntimeError("records.json is unwritable")
+
+    monkeypatch.setattr(ingestion_services, "create_feature_artifact", refuse)
+
+    with pytest.raises(RuntimeError, match="unwritable"):
+        feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert not store.feature_store_path("districts").exists()
+
+
+def test_publication_failure_restores_the_previous_file_and_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    import geopandas as gpd
+
+    first = feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(), publish=False
+    )
+    grown = _collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+
+    def fail_after_upsert(_artifact_id: str) -> ArtifactRecord:
+        assert ingestion_services._load_records()[0].features.feature_count == 3
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(ingestion_services, "publish_artifact_record", fail_after_upsert)
+    with pytest.raises(RuntimeError, match="publication failed"):
+        feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=grown)
+
+    assert ingestion_services._load_records() == [first]
+    assert len(gpd.read_parquet(store.feature_store_path("districts"))) == 2
+    assert not list(store.feature_store_path("districts").parent.glob("*.previous"))
+
+
+def test_failed_first_publication_removes_the_new_file_and_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_after_upsert(_artifact_id: str) -> ArtifactRecord:
+        assert len(ingestion_services._load_records()) == 1
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(ingestion_services, "publish_artifact_record", fail_after_upsert)
+    with pytest.raises(RuntimeError, match="publication failed"):
+        feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert ingestion_services._load_records() == []
+    assert not store.feature_store_path("districts").exists()
+
+
+def test_the_collection_lock_is_still_held_while_the_record_is_written(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registration runs inside the lock, not after it — which is the whole point of the fix.
+
+    Asserted structurally rather than by racing threads: with the lock in place a second thread
+    cannot enter the critical section, so no interleaving test can distinguish the fixed code
+    from the broken code by timing alone. What is checkable is that the lock is held at the
+    moment the record is written, since that is when a second refresh would otherwise stamp its
+    numbers onto the file this one just replaced.
+    """
+    held: list[bool] = []
+    original = ingestion_services.create_feature_artifact
+
+    def observe(**kwargs: Any) -> Any:
+        held.append(store.collection_lock("districts").locked())
+        return original(**kwargs)
+
+    monkeypatch.setattr(ingestion_services, "create_feature_artifact", observe)
+
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert held == [True]
+    assert not store.collection_lock("districts").locked()
+
+
+def test_concurrent_refreshes_leave_the_file_and_its_record_agreeing() -> None:
+    """The end state both reviewers care about: the record describes the bytes on disk."""
+    import threading
+
+    import geopandas as gpd
+
+    small = _collection()
+    large = _collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    errors: list[BaseException] = []
+
+    def refresh(payload: dict[str, Any]) -> None:
+        try:
+            feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=payload)
+        except BaseException as exc:  # noqa: BLE001 - surfaced through the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=refresh, args=(payload,)) for payload in (small, large)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    assert errors == []
+    records = [r for r in ingestion_services._load_records() if r.features is not None]
+    assert len(records) == 1
+    stored = gpd.read_parquet(str(store.feature_store_path("districts")))
+    assert records[0].features is not None
+    assert records[0].features.feature_count == len(stored)
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        pytest.param({"name": "D", "id_property": "orgUnitCode"}, "non-empty 'id'", id="no_id"),
+        pytest.param({"id": "districts", "name": "D"}, "non-empty 'id_property'", id="no_id_property"),
+    ],
+)
+def test_a_refresh_refuses_a_template_that_cannot_identify_its_features(
+    template: dict[str, Any], expected: str
+) -> None:
+    with pytest.raises(ValueError, match=expected):
+        feature_services.refresh_feature_collection(template=template, features=_collection())
+
+
+# --- the declared CRS is checked against the file -----------------------------------------
+
+
+def test_registering_a_file_as_a_crs_it_does_not_store_is_refused() -> None:
+    """Declaring a degrees file as metres publishes wrong coverage and windows every later read."""
+    path, _count, geometry = store.write_feature_collection(
+        dataset_id="districts", features=_collection(), id_property="orgUnitCode"
+    )
+
+    with pytest.raises(ValueError, match="stores EPSG:4326"):
+        ingestion_services.create_feature_artifact(
+            template=DISTRICTS_TEMPLATE,
+            features=_collection(),
+            store_path=path,
+            crs="EPSG:3857",
+            primary_geometry=geometry,
+        )
+
+
+def test_the_crs_check_accepts_a_file_that_agrees_with_the_declaration() -> None:
+    record = _register(crs="EPSG:3857")
+
+    assert record.features is not None
+    assert record.features.crs == "EPSG:3857"
+
+
+def test_a_file_without_readable_geoparquet_metadata_is_refused(tmp_path: Path) -> None:
+    from open_climate_service.shared import geoparquet
+
+    plain = tmp_path / "plain.parquet"
+    plain.write_bytes(b"PAR1")
+
+    assert geoparquet.stored_crs(plain) is None
+    with pytest.raises(ValueError, match="no readable GeoParquet CRS"):
+        ingestion_services.create_feature_artifact(
+            template=DISTRICTS_TEMPLATE, features=_collection(), store_path=plain, crs="EPSG:3857"
+        )
+
+
 # --- GET /features ------------------------------------------------------------------------
 
 
@@ -589,3 +786,75 @@ def test_features_is_registered_in_the_openapi_surface(client: TestClient) -> No
 
     assert "/features" in paths
     assert "/features/{collection_id}" in paths
+
+
+# --- error contracts shared with callers --------------------------------------------------
+
+
+def test_an_unknown_crs_code_is_a_value_error_not_a_pyproj_error() -> None:
+    """An authority-shaped code that no register knows is the ordinary typo, not a fault.
+
+    Every caller of `transform_bbox` promises its own callers ValueError, so a leaked
+    `CRSError` would surface as an internal error for a mistake a user can fix.
+    """
+    from open_climate_service.shared.crs import transform_bbox
+
+    with pytest.raises(ValueError, match="cannot transform a bbox"):
+        transform_bbox((-13.5, 6.9, -10.1, 10.0), source="EPSG:4326", target="EPSG:999999")
+
+
+def test_a_read_with_an_unknown_bbox_crs_reports_a_value_error() -> None:
+    record = _register()
+
+    with pytest.raises(ValueError, match="cannot transform a bbox"):
+        store.read_feature_collection(record, bbox=(-13.6, 6.8, -12.5, 7.5), bbox_crs="EPSG:999999")
+
+
+def test_provenance_fingerprints_a_tuple_backed_collection() -> None:
+    """The recorder accepts what the validator accepts, or an execution loses its fingerprint."""
+    from open_climate_service.shared.provenance import capture_execution, record_features
+
+    pt = {"type": "Point", "coordinates": [0.0, 0.0]}
+    collection = {
+        "type": "FeatureCollection",
+        "features": ({"type": "Feature", "id": "a", "geometry": pt},),
+    }
+
+    with capture_execution({}) as evidence:
+        record_features(collection)
+
+    assert len(evidence.features) == 1
+    assert evidence.features[0]["feature_count"] == 1
+    assert evidence.features[0]["ids_valid"] is True
+
+
+def test_provenance_agrees_with_the_validator_about_an_integer_id() -> None:
+    """One rule, one answer: identity validation and the manifest cannot disagree."""
+    from open_climate_service.shared.provenance import capture_execution, record_features
+
+    pt = {"type": "Point", "coordinates": [0.0, 0.0]}
+    collection = {"type": "FeatureCollection", "features": [{"type": "Feature", "id": 7, "geometry": pt}]}
+
+    assert validate_feature_ids(collection) == ["7"]
+    with capture_execution({}) as evidence:
+        record_features(collection)
+
+    assert evidence.features[0]["ids_valid"] is True
+
+
+def test_provenance_still_reports_broken_identity_as_invalid() -> None:
+    from open_climate_service.shared.provenance import capture_execution, record_features
+
+    pt = {"type": "Point", "coordinates": [0.0, 0.0]}
+    collection = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "id": "same", "geometry": pt},
+            {"type": "Feature", "id": "same", "geometry": pt},
+        ],
+    }
+
+    with capture_execution({}) as evidence:
+        record_features(collection)
+
+    assert evidence.features[0]["ids_valid"] is False

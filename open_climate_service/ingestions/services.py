@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mappin
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
 import portalocker
@@ -77,6 +77,7 @@ from open_climate_service.streaming.store import (
 )
 
 logger = logging.getLogger(__name__)
+MutationResult = TypeVar("MutationResult")
 
 # Per-store threading locks prevent two concurrent ingest/sync runs from writing
 # to the same Icechunk store simultaneously (which causes MVCC commit conflicts).
@@ -454,17 +455,18 @@ def create_feature_artifact(
     to hold in memory, so there is no streaming-to-file variant to serve.
 
     `crs` is required rather than defaulted, and describes the geometry as the GeoParquet at
-    `store_path` stores it. ADR 0002 decision 9 makes an explicit CRS a property of every stored
-    collection; a default here would let a caller that reprojected before writing record WGS 84
-    by omission, and the extent would then describe a store it does not match. A projected store
-    is recorded with its own extent as `coverage.spatial` and the WGS 84 one beside it.
+    `store_path` stores it — checked against the file's own footer rather than taken on trust.
+    ADR 0002 decision 9 makes an explicit CRS a property of every stored collection; a default
+    here would let a caller that reprojected before writing record WGS 84 by omission, and the
+    extent would then describe a store it does not match. A projected store is recorded with its
+    own extent as `coverage.spatial` and the WGS 84 one beside it.
 
     Raises ValueError for a template or collection that cannot produce a record: a missing
     `id_property`, a payload that is not a FeatureCollection, a malformed member, an empty
-    collection, a `store_path` with no file at it, or a stored CRS this entry point cannot
-    honestly describe. An empty collection is refused rather than registered, because a
-    provider that returned nothing is reporting a failure, and a record for it would advertise
-    a collection with no extent.
+    collection, a `store_path` with no file at it, or a declared CRS the stored file
+    contradicts. An empty collection is refused rather than registered, because a provider that
+    returned nothing is reporting a failure, and a record for it would advertise a collection
+    with no extent.
     """
     dataset_id = _require_template_str(template, "id")
     dataset_name = _require_template_str(template, "name")
@@ -474,6 +476,7 @@ def create_feature_artifact(
     stored_crs = _require_feature_crs(crs, dataset_id=dataset_id)
     requested_bbox = _requested_extract_bbox(bbox, dataset_id=dataset_id)
     resolved_path = _require_written_feature_store(store_path, dataset_id=dataset_id)
+    _require_declaration_matches_file(resolved_path, declared_crs=stored_crs, dataset_id=dataset_id)
     feature_list = _feature_collection_members(features, dataset_id=dataset_id)
     # Deliberately not validated per feature here. That each id_property value is present and
     # identifies exactly one feature is the identity contract, and it needs one implementation
@@ -587,6 +590,31 @@ def _require_written_feature_store(store_path: Path | str, *, dataset_id: str) -
             "writes the file, and this registers what it wrote"
         )
     return resolved
+
+
+def _require_declaration_matches_file(path: Path, *, declared_crs: str, dataset_id: str) -> None:
+    """Refuse a declared CRS the stored file contradicts.
+
+    `crs` is the caller's word for what it wrote, and until here nothing checked it against the
+    bytes. Getting it wrong is not a cosmetic error: declaring an EPSG:4326 file as EPSG:3857
+    publishes coverage reprojected from degrees it never left, and every later read transforms
+    its window into metres against a file indexed in degrees — so the reads return nothing, or
+    the wrong rows, with no error anywhere.
+
+    GeoParquet records the CRS in its footer. Missing or unreadable metadata cannot establish
+    what was written; an omitted CRS in valid metadata means OGC:CRS84.
+    """
+    from open_climate_service.shared import geoparquet
+
+    actual = geoparquet.stored_crs(path)
+    if actual is None:
+        raise ValueError(f"feature collection '{dataset_id}' has no readable GeoParquet CRS at {path}")
+    if actual == declared_crs:
+        return
+    raise ValueError(
+        f"feature collection '{dataset_id}' is declared as {declared_crs}, but the GeoParquet at "
+        f"{path} stores {actual}; the record would describe a file it does not match"
+    )
 
 
 def _requested_extract_bbox(
@@ -2076,7 +2104,7 @@ def _upsert_artifact_record(
     return _mutate_records(mutate)
 
 
-def _mutate_records(mutation: Callable[[list[ArtifactRecord]], ArtifactRecord]) -> ArtifactRecord:
+def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
     """Apply a read-modify-write mutation under an exclusive file lock."""
     ensure_store()
     with ARTIFACTS_INDEX_PATH.open("a+", encoding="utf-8") as handle:

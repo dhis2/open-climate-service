@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -13,6 +17,106 @@ from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
 from open_climate_service.publications.services import managed_dataset_id_for
 from open_climate_service.shared.licences import parse_licence
+
+
+def refresh_feature_collection(
+    *,
+    template: dict[str, Any],
+    features: Mapping[str, Any],
+    store_crs: str = store.WGS84,
+    bbox: Sequence[float] | None = None,
+    publish: bool = True,
+) -> ArtifactRecord:
+    """Write a collection and register it as one operation, or leave the previous one in place.
+
+    The single door a provider run comes through (CLIM-926), and the reason it exists is that
+    writing and registering are two operations on one collection. Apart, they fail badly:
+
+    * a refresh that writes and then fails to register leaves the *old* record describing the
+      *new* file, so `feature_count`, `extent` and `crs` all describe bytes that are gone — and
+      nothing raises, because the record is still valid and the file is still there;
+    * two refreshes interleave, and whichever registers last stamps its numbers onto whichever
+      file was replaced last.
+
+    So the whole sequence runs under one per-collection lock, and the previous file is kept
+    aside until the record is durable. On failure it is put back with the same atomic replace
+    that installed the new one, which means a reader at any instant sees one complete file:
+    the old collection or the new one, never a mixture and never a gap.
+    """
+    dataset_id = str(template.get("id", "")).strip()
+    if not dataset_id:
+        raise ValueError("feature collection template must declare a non-empty 'id'")
+    id_property = str(template.get("id_property", "")).strip()
+    if not id_property:
+        raise ValueError(f"feature collection template '{dataset_id}' must declare a non-empty 'id_property'")
+
+    with store.collection_lock(dataset_id):
+        path = store.feature_store_path(dataset_id)
+        prior_records = [
+            record
+            for record in ingestion_services._load_records()
+            if record.dataset_id == dataset_id and record.format == ArtifactFormat.GEOPARQUET
+        ]
+        previous = _keep_previous(path)
+        try:
+            written, _count, geometry = store.write_feature_collection(
+                dataset_id=dataset_id,
+                features=features,
+                id_property=id_property,
+                store_crs=store_crs,
+            )
+            return ingestion_services.create_feature_artifact(
+                template=template,
+                features=features,
+                store_path=written,
+                crs=store_crs,
+                primary_geometry=geometry,
+                bbox=bbox,
+                publish=publish,
+            )
+        except BaseException:
+            _restore_previous(path, previous)
+            _restore_records(dataset_id, prior_records)
+            raise
+        finally:
+            if previous is not None:
+                previous.unlink(missing_ok=True)
+
+
+def _keep_previous(path: Path) -> Path | None:
+    """Copy the current collection aside so a failed refresh can be undone, or None if new.
+
+    Copied rather than renamed: a rename would leave `path` absent for as long as the write
+    takes, and a concurrent read would see a collection that briefly does not exist.
+    """
+    if not path.is_file():
+        return None
+    kept = path.with_name(f"{path.name}.{uuid4().hex}.previous")
+    shutil.copy2(path, kept)
+    return kept
+
+
+def _restore_previous(path: Path, previous: Path | None) -> None:
+    """Put the previous collection back, or remove a first write that was never registered."""
+    if previous is None:
+        path.unlink(missing_ok=True)
+        return
+    # The backup is already a complete file on the same filesystem.
+    previous.replace(path)
+
+
+def _restore_records(dataset_id: str, prior_records: list[ArtifactRecord]) -> None:
+    """Undo a registration that succeeded before a later publication step failed."""
+
+    def restore(records: list[ArtifactRecord]) -> None:
+        records[:] = [
+            record
+            for record in records
+            if record.dataset_id != dataset_id or record.format != ArtifactFormat.GEOPARQUET
+        ]
+        records.extend(prior_records)
+
+    ingestion_services._mutate_records(restore)
 
 
 def registered_collections() -> dict[str, ArtifactRecord]:
@@ -39,9 +143,19 @@ def registered_collections() -> dict[str, ArtifactRecord]:
 
 
 def list_feature_collections() -> FeatureCollectionListResponse:
-    """Return every registered feature collection."""
+    """Return every registered feature collection.
+
+    Templates are loaded once for the whole listing. `registry_datasets.get_dataset` rebuilds
+    its lookup from `list_datasets()` on every call, which reloads every built-in and plugin
+    template, so asking it per collection turned one listing into N full registry scans.
+    """
+    collections = registered_collections()
+    templates = _templates_by_id() if collections else {}
     return FeatureCollectionListResponse(
-        items=[_build_record(collection_id, record) for collection_id, record in registered_collections().items()]
+        items=[
+            _build_record(collection_id, record, templates.get(record.dataset_id, {}))
+            for collection_id, record in collections.items()
+        ]
     )
 
 
@@ -50,7 +164,12 @@ def get_feature_collection_or_404(collection_id: str) -> FeatureCollectionRecord
     record = registered_collections().get(collection_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Feature collection '{collection_id}' not found")
-    return _build_record(collection_id, record)
+    return _build_record(collection_id, record, registry_datasets.get_dataset(record.dataset_id) or {})
+
+
+def _templates_by_id() -> dict[str, dict[str, Any]]:
+    """Return every declared template keyed by id, in one registry scan."""
+    return {str(template["id"]): template for template in registry_datasets.list_datasets() if "id" in template}
 
 
 def get_collection_record_or_404(collection_id: str) -> ArtifactRecord:
@@ -61,15 +180,17 @@ def get_collection_record_or_404(collection_id: str) -> ArtifactRecord:
     return record
 
 
-def _build_record(collection_id: str, record: ArtifactRecord) -> FeatureCollectionRecord:
+def _build_record(collection_id: str, record: ArtifactRecord, template: dict[str, Any]) -> FeatureCollectionRecord:
+    """Build one response row from a record and its already-resolved template.
+
+    The template is passed in rather than looked up, so a listing resolves them once. A feature
+    template (plugins/features/) is CLIM-926's work, so today it is empty and the descriptive
+    fields come back null — read through the same registry the raster path uses rather than a
+    second one, so they populate when templates exist without this needing to change.
+    """
     detail = record.features
     if detail is None:  # pragma: no cover - registered_collections filters these out
         raise HTTPException(status_code=500, detail=f"Feature collection '{collection_id}' has no feature detail")
-    # A feature template (plugins/features/) is CLIM-926's work, so today this lookup finds
-    # nothing and the descriptive fields come back null. Read through the same registry the
-    # raster path uses rather than inventing a second one, so those fields start being populated
-    # when templates exist without this needing to change.
-    template = registry_datasets.get_dataset(record.dataset_id) or {}
     licence = parse_licence(template.get("license"))
     return FeatureCollectionRecord(
         id=collection_id,

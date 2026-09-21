@@ -262,11 +262,13 @@ def test_the_records_this_release_actually_writes_are_accepted() -> None:
 
 
 def _tmp_record_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    import geopandas as gpd
+
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
     monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
     store_path = tmp_path / "districts.parquet"
-    store_path.write_bytes(b"PAR1")
+    gpd.GeoDataFrame({"orgUnitCode": ["SL-W"]}, geometry=[Point(-13.5, 6.9)], crs="EPSG:4326").to_parquet(store_path)
     return store_path
 
 
@@ -567,6 +569,9 @@ def test_create_feature_artifact_records_a_projected_store_with_both_extents(
     is the silent mismatch ADR 0002 decision 9 exists to prevent.
     """
     store_path = _tmp_record_store(monkeypatch, tmp_path)
+    import geopandas as gpd
+
+    gpd.read_parquet(store_path).to_crs("EPSG:3857").to_parquet(store_path)
 
     record = services.create_feature_artifact(
         template=DISTRICTS_TEMPLATE,

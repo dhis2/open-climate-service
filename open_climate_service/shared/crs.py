@@ -64,16 +64,24 @@ def transform_bbox(
     from a read that should have found them. `transform_bounds` walks the edges and returns
     bounds that contain the transformed box.
 
-    Raises ValueError when the box does not map into *target* at all — outside its area of use,
-    a projection produces infinities, and a window of infinities silently matches everything.
+    Raises ValueError for everything a caller can act on: a code no CRS register knows, and a
+    box that does not map into *target* at all. Both come back as ValueError rather than a
+    pyproj `CRSError` leaking through, because every caller of this — registration, the reader,
+    a future process — promises its own callers ValueError, and an authority-shaped code that
+    simply does not exist ('EPSG:999999') is the ordinary typo, not an internal fault.
     """
     source_code = canonical_crs_code(source)
     target_code = canonical_crs_code(target)
     if source_code == target_code:
         return bbox
     from pyproj import Transformer
+    from pyproj.exceptions import CRSError, ProjError
 
-    west, south, east, north = Transformer.from_crs(source_code, target_code, always_xy=True).transform_bounds(*bbox)
+    try:
+        transformer = Transformer.from_crs(source_code, target_code, always_xy=True)
+        west, south, east, north = transformer.transform_bounds(*bbox)
+    except (CRSError, ProjError) as exc:
+        raise ValueError(f"cannot transform a bbox from {source_code} to {target_code}: {exc}") from exc
     if not all(math.isfinite(value) for value in (west, south, east, north)):
         raise ValueError(
             f"bbox {bbox} in {source_code} does not map into {target_code}; it likely falls outside "
