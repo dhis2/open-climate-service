@@ -1069,8 +1069,8 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
 
 _API_GROUP_NOTES = {
     "Datasets": "What this instance holds, and the metadata for each dataset.",
-    "Dataset templates": "The data sources this instance can ingest, and whether each one is ingestable.",
-    "Ingestions": "Fetch a data source into this instance, and follow the job it starts.",
+    "Dataset templates": "What this instance can ingest, and whether each template is ingestable.",
+    "Ingestions": "Fetch a dataset template into this instance, and follow the job it starts.",
     "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
     "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
     "Icechunk": "The same stores for the Icechunk SDK, with version history.",
@@ -1159,7 +1159,7 @@ def render_api_page(schema: dict[str, Any], mount: str) -> str:
 
 
 def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) -> dict[str, Any]:
-    """Split templates between Data sources and Workflows by whether they can be ingested.
+    """Split templates between the Dataset templates and Workflows areas by what can be ingested.
 
     A template is fetched or produced, never both (registration refuses `produced_by` beside
     `ingestion.plugin`), so each appears in exactly one area. A non-ingestable template whose
