@@ -12,6 +12,7 @@ for a client to resolve it without a lookup table of its own.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -50,6 +51,43 @@ def is_builtin_crs(code: str | int) -> bool:
     CRS84 aliases are normalized to EPSG:4326 first.
     """
     return canonical_crs_code(code).upper() in _BUILTIN_CRS_CODES
+
+
+def transform_bbox(
+    bbox: tuple[float, float, float, float], *, source: str, target: str
+) -> tuple[float, float, float, float]:
+    """Return *bbox* expressed in *target*, containing the whole of the transformed box.
+
+    `transform_bounds` rather than transforming the two corner points. A projected CRS bends
+    straight lines, so a box's northern edge can bow beyond its corners; transforming only the
+    corners yields a window narrower than the one asked for, and rows near the edge go missing
+    from a read that should have found them. `transform_bounds` walks the edges and returns
+    bounds that contain the transformed box.
+
+    Raises ValueError for everything a caller can act on: a code no CRS register knows, and a
+    box that does not map into *target* at all. Both come back as ValueError rather than a
+    pyproj `CRSError` leaking through, because every caller of this — registration, the reader,
+    a future process — promises its own callers ValueError, and an authority-shaped code that
+    simply does not exist ('EPSG:999999') is the ordinary typo, not an internal fault.
+    """
+    source_code = canonical_crs_code(source)
+    target_code = canonical_crs_code(target)
+    if source_code == target_code:
+        return bbox
+    from pyproj import Transformer
+    from pyproj.exceptions import CRSError, ProjError
+
+    try:
+        transformer = Transformer.from_crs(source_code, target_code, always_xy=True)
+        west, south, east, north = transformer.transform_bounds(*bbox)
+    except (CRSError, ProjError) as exc:
+        raise ValueError(f"cannot transform a bbox from {source_code} to {target_code}: {exc}") from exc
+    if not all(math.isfinite(value) for value in (west, south, east, north)):
+        raise ValueError(
+            f"bbox {bbox} in {source_code} does not map into {target_code}; it likely falls outside "
+            "that CRS's area of use"
+        )
+    return (west, south, east, north)
 
 
 def dataset_crs(ds: "xr.Dataset", default: str = "EPSG:4326") -> str:
