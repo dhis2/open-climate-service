@@ -89,37 +89,52 @@ def feature_store_path(dataset_id: str) -> Path:
     return api_config.get_features_root() / f"{dataset_id}.parquet"
 
 
-def validate_features_for_write(*, dataset_id: str, features: object, id_property: str) -> None:
-    """Refuse what a write cannot store correctly, before any file is touched.
+def validate_features_for_write(*, dataset_id: str, features: object, id_property: str) -> gpd.GeoDataFrame:
+    """Return a frame that can be stored and found by bbox reads, before touching any file.
 
     Three rules, one place, so `write_feature_collection` refuses on the same terms as the
     refresh path that calls this ahead of backing the previous collection up:
 
     * identity — each feature's id is present and unique, from `validate_feature_ids`;
-    * geometry — a feature with no geometry is invisible to every bbox read, so it is refused
-      rather than stored and counted while no window can ever return it;
-    * names — a property named `bbox` would collide with the covering-bbox column the store
-      writes, so it is refused with the rename a provider can act on rather than a raw geopandas
-      message.
+    * geometry — missing and empty shapes are invisible to bbox reads, so check the converted
+      frame rather than enumerating GeoJSON spellings for them;
+    * names — `bbox` conflicts with the covering column, while `geometry` conflicts with the
+      geometry column; both are refused with a rename the provider can act on.
     """
+    import geopandas as gpd
+
     from open_climate_service.shared.features import validate_feature_ids
 
     members = _members(features)
     validate_feature_ids(features, id_property=id_property)
     for index, feature in enumerate(members):
-        if feature.get("geometry") is None:
+        properties = feature.get("properties")
+        if isinstance(properties, dict):
+            for reserved in ("bbox", "geometry"):
+                if reserved in properties:
+                    raise ValueError(
+                        f"feature collection '{dataset_id}' has a property named '{reserved}' at index {index}; "
+                        "rename the property before writing"
+                    )
+    try:
+        frame = gpd.GeoDataFrame.from_features(members, crs=WGS84)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"feature collection '{dataset_id}' has malformed GeoJSON geometry: {exc}") from exc
+    if frame.empty:
+        raise ValueError(f"feature collection '{dataset_id}' has no features to write")
+    invalid = frame.geometry.isna() | frame.geometry.is_empty
+    for index, bad in enumerate(invalid):
+        if bad:
             raise ValueError(
                 f"feature collection '{dataset_id}' has a feature with no geometry at index {index}; "
-                "a feature without geometry cannot be found by any bbox read, so the collection "
-                "must be written without it"
+                "missing or empty geometry cannot be found by any bbox read"
             )
-        properties = feature.get("properties")
-        if isinstance(properties, dict) and "bbox" in properties:
-            raise ValueError(
-                f"feature collection '{dataset_id}' has a property named 'bbox' at index {index}, "
-                "which the store's covering-bbox column would overwrite; rename the property "
-                "(for example to 'bounds') and re-run"
-            )
+    if id_property not in frame.columns:
+        raise ValueError(
+            f"feature collection '{dataset_id}' declares id_property '{id_property}', but no such "
+            f"column survived conversion; got {sorted(frame.columns)}"
+        )
+    return frame
 
 
 def write_feature_collection(
@@ -150,22 +165,8 @@ def write_feature_collection(
     coordinates with a projected CRS would leave every later read windowing the wrong numbers,
     and nothing downstream could detect it.
     """
-    import geopandas as gpd
-
-    validate_features_for_write(dataset_id=dataset_id, features=features, id_property=id_property)
+    frame = validate_features_for_write(dataset_id=dataset_id, features=features, id_property=id_property)
     target = canonical_crs_code(store_crs)
-    frame = gpd.GeoDataFrame.from_features(_members(features), crs=WGS84)
-    if frame.empty:
-        raise ValueError(f"feature collection '{dataset_id}' has no features to write")
-    if id_property not in frame.columns:
-        # Checked against the frame, not only against the input. `validate_feature_ids` reads
-        # the GeoJSON while `from_features` decides what becomes a column, and a file stored
-        # without its identifier column is the one failure that raises nothing later: the record
-        # would name an `id_property` no read could find.
-        raise ValueError(
-            f"feature collection '{dataset_id}' declares id_property '{id_property}', but no such "
-            f"column survived conversion; got {sorted(frame.columns)}"
-        )
     if target != WGS84:
         frame = frame.to_crs(target)
 

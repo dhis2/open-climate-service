@@ -414,6 +414,35 @@ def test_a_feature_without_geometry_is_refused_before_the_write() -> None:
     assert not store.feature_store_path("districts").exists()
 
 
+@pytest.mark.parametrize(
+    ("feature", "error"),
+    [
+        pytest.param(
+            {**_box("SL-X", -13.0, 6.0, -12.5, 7.0), "geometry": {"type": "Polygon", "coordinates": []}},
+            "no geometry at index 1",
+            id="empty_polygon",
+        ),
+        pytest.param(
+            {**_box("SL-X", -13.0, 6.0, -12.5, 7.0), "geometry": {"type": "Point"}},
+            "malformed GeoJSON geometry",
+            id="missing_coordinates",
+        ),
+        pytest.param(
+            {**_box("SL-X", -13.0, 6.0, -12.5, 7.0), "properties": {"orgUnitCode": "SL-X", "geometry": "label"}},
+            "property named 'geometry'",
+            id="geometry_property",
+        ),
+    ],
+)
+def test_unstorable_geometry_is_refused_with_collection_context(feature: dict[str, Any], error: str) -> None:
+    with pytest.raises(ValueError, match=f"feature collection 'districts'.*{error}"):
+        store.write_feature_collection(
+            dataset_id="districts", features=_collection(WEST, feature), id_property="orgUnitCode"
+        )
+
+    assert not store.feature_store_path("districts").exists()
+
+
 def test_a_property_named_bbox_is_refused_with_a_rename() -> None:
     """The covering-bbox column the store writes would overwrite a `bbox` property."""
     with_bbox = {
@@ -489,13 +518,18 @@ def test_a_refresh_writes_and_registers_through_one_door() -> None:
     assert [r.artifact_id for r in ingestion_services._load_records()] == [record.artifact_id]
 
 
-def test_a_refresh_refuses_bad_features_before_copying_the_previous_aside() -> None:
+@pytest.mark.parametrize(
+    "geometry",
+    [None, {"type": "Polygon", "coordinates": []}],
+    ids=["null", "empty"],
+)
+def test_a_refresh_refuses_bad_features_before_copying_the_previous_aside(geometry: object) -> None:
     """The write's refusals fire before the backup copy, so the previous collection is untouched."""
     import geopandas as gpd
 
     feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
 
-    bad = _collection(WEST, {**_box("SL-X", -13.0, 6.0, -12.5, 7.0), "geometry": None})
+    bad = _collection(WEST, {**_box("SL-X", -13.0, 6.0, -12.5, 7.0), "geometry": geometry})
     with pytest.raises(ValueError, match="no geometry"):
         feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=bad)
 
