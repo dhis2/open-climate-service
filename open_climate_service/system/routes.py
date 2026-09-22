@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.responses import RedirectResponse, StreamingResponse
 
 from open_climate_service import config as api_config
+from open_climate_service.shared.time import has_calendar_periods
 from open_climate_service.shared.urls import absolute_base, mount_prefix
 
 from .schemas import AppInfo, HealthStatus, Status
@@ -157,7 +158,11 @@ async def manage_ingest(request: Request) -> Response:
         # refusal it is. A workflow output has nothing to fetch from...
         ensure_ingestable(template)
         # ...and only a forecast may leave the start blank.
-        if start is None and not registry_datasets.is_future_facing(template):
+        # A climatology has no start to give: its ids are ordinals and its reference period is
+        # fixed by the template, so the form offers no date and the refusal must not demand one.
+        dated = has_calendar_periods(template.get("period_type"))
+        future = registry_datasets.is_future_facing(template)
+        if start is None and dated and not future:
             return _refusal(400, f"Start period is required for '{dataset_id}': its periods are not in the future")
 
         extent = get_extent_or_404()

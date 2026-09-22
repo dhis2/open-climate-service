@@ -7,6 +7,8 @@ by the next day, and a scheduled re-ingest would silently drift out of the forec
 
 from __future__ import annotations
 
+import logging
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from open_climate_service.data_registry.services import datasets as registry
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import CreateIngestionRequest
 from open_climate_service.shared.time import utc_today
+from open_climate_service.system import templates as landing
 
 
 def _write_template(tmp_path: Path, body: str, name: str = "forecast.yaml") -> None:
@@ -248,6 +251,45 @@ def test_ingest_form_requires_a_start_for_a_historical_source(client: TestClient
     body = client.get("/dataset-templates/chirps3_precipitation_daily?f=html").text
     start_input = body.split('id="start"', 1)[1].split("/>", 1)[0]
     assert "required" in start_input
+
+
+def test_a_climatology_is_offered_no_dates_and_logs_no_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Its ids are ordinals, so there is no date to prefill and none to demand.
+
+    Asking `datetime_to_period_string` for a climatology raised, which the form caught and
+    logged as an "Unexpected error" on every render of the two ERA5-Land normal templates —
+    while still putting a full date in a field whose period type has no dates.
+    """
+    template = {
+        "id": "era5land_temperature_daily_normal_1991_2020",
+        "period_type": "climatology",
+        "ingestion": {"plugin": "x", "params": {"period": [1991, 2020]}},
+    }
+
+    with caplog.at_level(logging.ERROR):
+        defaults = landing._ingest_defaults(template, date(2026, 9, 22))
+
+    assert defaults == {"start": "", "end": "", "start_required": False, "direction": "ordinal"}
+    assert caplog.records == [], "a period type with no calendar instants is not an error"
+
+
+def test_a_climatology_ingest_is_not_refused_for_a_missing_start(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The form offers no start, so the route must not require one.
+
+    `is_future_facing` is False for a climatology — its periods are not ahead of now, they are
+    not on the calendar at all — so the old gate refused the very form it had just drawn.
+    """
+    response = client.post(
+        "/manage/ingest",
+        data={"dataset_id": "era5land_temperature_daily_normal_1991_2020", "publish": "on"},
+    )
+    body = response.text
+
+    assert "Start period is required" not in body
 
 
 def test_manage_form_start_rejection_is_dataset_aware(client: TestClient) -> None:
