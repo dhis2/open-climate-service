@@ -14,6 +14,7 @@ import yaml
 from open_climate_service import config as api_config
 from open_climate_service.ingestions.schemas import parse_declared_artifact_version
 from open_climate_service.shared.time import SUPPORTED_PERIOD_TYPES
+from open_climate_service.shared.urls import is_segment_safe_id
 
 logger = logging.getLogger(__name__)
 
@@ -393,6 +394,17 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
     dataset_id = dataset.get("id")
     if not isinstance(dataset_id, str) or not dataset_id:
         raise ValueError(f"{source} contains a dataset template with a missing or invalid id")
+    # The id becomes a path segment in every catalogue link this dataset gets —
+    # `/stac/collections/{id}`, `/zarr/{id}`, `/datasets/{id}` — so an id outside this shape
+    # publishes links that do not resolve. A `/` is the unfixable case: ASGI decodes the path
+    # before routing, so escaping it does not help and no single-segment route matches.
+    # Rejected at registration, where a template author sees it, rather than discovered later
+    # as a catalogue full of 404s.
+    if not is_segment_safe_id(dataset_id):
+        raise ValueError(
+            f"Dataset template id '{dataset_id}' in {source} cannot be used in a URL; it must "
+            "start with a letter or digit and carry only letters, digits, '.', '_' or '-'"
+        )
     sync_block = dataset.get("sync", {})
     sync_kind = sync_block.get("kind") if isinstance(sync_block, dict) else None
     if not isinstance(sync_kind, str) or not sync_kind:

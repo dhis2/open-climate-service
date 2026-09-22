@@ -26,6 +26,7 @@ against a route.
 import functools
 import logging
 import os
+import re
 import urllib.parse
 from typing import NamedTuple
 
@@ -145,19 +146,48 @@ def absolute_base(request: Request) -> str:
     return f"{request.url.scheme}://{request.url.netloc}{prefix}"
 
 
+SEGMENT_SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+"""Shape of an id that can appear in a URL path and route back to the same resource.
+
+Every catalogued dataset id becomes a path segment — `/stac/collections/{id}`, `/zarr/{id}`,
+`/features/{id}` — and an id outside this shape produces a link that does not work, or worse,
+one that silently means something else: `districts?west` makes the rest of the path a query
+string, so the URL resolves elsewhere and nothing reports an error.
+
+An allowlist, because a denylist only covers the characters someone already thought of — a
+percent sign, a backtick and a right-to-left override each break something different.
+
+Escaping is not an alternative to this for one character. ASGI hands the application a
+*decoded* path, so `%2F` arrives as `/` and splits into two segments no route matches; a `/` in
+an id is unroutable however it is written. `?`, `#` and space do survive escaping, so
+`path_segment` still covers those for an id that predates this constraint.
+"""
+
+
+def is_segment_safe_id(value: str) -> bool:
+    """True when *value* can be a URL path segment that routes back to the same resource.
+
+    `fullmatch`, not `match`: in Python `$` also matches just before a trailing newline, so
+    `match` would accept an id ending in one — which names a different file and is not a URL
+    segment.
+    """
+    return bool(SEGMENT_SAFE_ID_PATTERN.fullmatch(value))
+
+
 def path_segment(value: str) -> str:
-    """Return *value* escaped so it is one path segment, whatever characters it carries.
+    """Return *value* escaped so it is one path segment, for the characters escaping can fix.
 
     A dataset or collection id reaches a URL by interpolation, and an id holding `?`, `#` or a
     space silently changes what the URL *means* rather than producing a broken-looking one:
     `/features/districts?west/data.parquet` parses as the path `/features/districts` with a
     query string, so the link resolves to a different resource and nothing reports an error.
+    Escaping those three makes the URL mean what it says, and they survive the round trip —
+    ASGI decodes the path, and `districts?west` is still one segment once decoded.
 
-    `safe=""` escapes `/` too, which is the point — a segment is one segment.
-
-    This is the second line of defence. Ids are constrained where they enter the system, so in
-    practice nothing here needs escaping; this is what keeps a record written before that
-    constraint, or by some future path that forgets it, from producing a link that lies.
+    `/` is the exception, and escaping cannot rescue it: `%2F` decodes back to `/` before
+    routing, so the path splits and no single-segment route matches. That is why
+    `SEGMENT_SAFE_ID_PATTERN` exists and is enforced where ids enter the system — this function
+    is the second line of defence for an id stored before that, not a substitute for it.
     """
     return urllib.parse.quote(value, safe="")
 

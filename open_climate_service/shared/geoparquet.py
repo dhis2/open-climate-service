@@ -69,8 +69,9 @@ def stored_crs(path: Path | str, *, column: str | None = None) -> str | None:
     spellings, and comparing PROJJSON documents textually would report a mismatch between two
     descriptions of the same thing.
 
-    An omitted or null CRS in valid GeoParquet metadata means OGC:CRS84. None means the
-    metadata is missing or cannot establish a valid geometry CRS.
+    An *omitted* crs means OGC:CRS84, which GeoParquet defines as the default. An *explicit*
+    null means the CRS is undefined, which is a different fact and comes back as None — along
+    with metadata that is missing or unreadable.
     """
     document = read_geo_metadata(path)
     if document is None:
@@ -82,10 +83,17 @@ def stored_crs(path: Path | str, *, column: str | None = None) -> str | None:
     entry = columns.get(name)
     if not isinstance(entry, dict):
         return None
-    declared = entry.get("crs")
-    if declared is None:
-        # Both omission and explicit null mean OGC:CRS84.
+    if "crs" not in entry:
+        # GeoParquet defines an *omitted* crs as OGC:CRS84, so this is a statement, not a gap.
         return "EPSG:4326"
+    declared = entry["crs"]
+    if declared is None:
+        # An *explicit* null is the opposite statement: the CRS is undefined. Reading it as
+        # WGS 84 would let a file of unknown coordinates register as degrees and then be
+        # windowed as degrees — wrong extents, wrong bbox reads, and no error anywhere. None
+        # sends it down the "the file does not say" path, where the caller's declaration stands
+        # on its own rather than being confirmed by something the file never claimed.
+        return None
     from pyproj import CRS
     from pyproj.exceptions import CRSError
 

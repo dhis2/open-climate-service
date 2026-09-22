@@ -63,6 +63,22 @@ def feature_store_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return root
 
 
+def _collection_files(dataset_id: str = "districts") -> list[Path]:
+    """Every stored file belonging to this collection, current and superseded alike."""
+    return store.superseded_collection_files(dataset_id, keep=None)
+
+
+def _current_file(dataset_id: str = "districts") -> Path:
+    """The file the collection's newest record points at — the only one a reader resolves."""
+    records = [
+        record
+        for record in ingestion_services._load_records()
+        if record.dataset_id == dataset_id and record.features is not None
+    ]
+    assert records, f"no registered record for '{dataset_id}'"
+    return Path(str(max(records, key=lambda record: record.created_at).path))
+
+
 def _register(
     *,
     features: dict[str, Any] | None = None,
@@ -181,7 +197,7 @@ def test_the_store_refuses_to_write_a_collection_with_broken_identity() -> None:
     with pytest.raises(ValueError, match="repeats"):
         store.write_feature_collection(dataset_id="districts", features=duplicated, id_property="orgUnitCode")
 
-    assert not store.feature_store_path("districts").exists()
+    assert _collection_files() == []
 
 
 @pytest.mark.parametrize(
@@ -209,6 +225,229 @@ def test_a_collection_may_carry_its_features_in_any_sequence(members: Any) -> No
 
 
 # --- the store ----------------------------------------------------------------------------
+
+
+def test_a_write_never_touches_the_file_the_current_record_names() -> None:
+    """The structural fix: a write lands on a brand-new path, never on an existing file.
+
+    Before this, a refresh replaced one stable file in place, so a reader that resolved the old
+    record just before a refresh committed could read bytes a concurrent write had already
+    overwritten -- and a crash in that same window made the mismatch between record and file
+    permanent. Writing to a fresh path every time removes the window rather than narrowing it:
+    there is no file an existing record points at that a write can ever touch.
+    """
+    first = _register()
+    first_path = Path(str(first.path))
+    first_bytes = first_path.read_bytes()
+
+    store.write_feature_collection(
+        dataset_id="districts",
+        features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5)),
+        id_property="orgUnitCode",
+    )
+
+    assert first_path.is_file()
+    assert first_path.read_bytes() == first_bytes
+
+
+def test_a_refresh_switches_the_record_to_the_new_file_and_keeps_the_old_one_reachable() -> None:
+    """The record is switched to the new file; the superseded file is *not* deleted on the spot.
+
+    So resolving record-then-path -- from either the record just before a refresh or the one
+    just after -- always yields bytes that record actually describes. Goes through
+    `refresh_feature_collection` rather than `_register`'s direct calls, because pruning is
+    that function's job, not the raw writer's.
+
+    The old file surviving this refresh is the whole point of the grace period: a reader that
+    resolved `first` a moment before this refresh landed must still find its file intact.
+    """
+    first = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    first_path = Path(str(first.path))
+
+    second = feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    )
+
+    assert second.artifact_id == first.artifact_id
+    assert Path(str(second.path)) != first_path
+    assert first_path.is_file(), "a file must survive the refresh cycle in which it is superseded"
+    assert Path(str(second.path)).is_file()
+
+
+def test_a_reader_that_resolved_the_old_record_can_still_open_its_file_after_a_refresh() -> None:
+    """The gap the second PR#400 review round found: pruning must not race a reader that has
+    already resolved the old record and has not yet opened its file.
+
+    No threads. The sequencing that matters is structural, not literal concurrency: record
+    lookup happens, *then* a refresh runs to completion (write, register, prune), *then* the
+    file is opened -- and the grace period is what makes that ordering safe regardless of how
+    much real time separates the two.
+    """
+    old_record = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    # A reader looked up the collection here and captured `old_record`, including its path --
+    # but has not opened the file yet.
+
+    # While the reader is paused, a refresh happens and completes end to end.
+    feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    )
+
+    # The reader resumes and opens the file the record it already holds names.
+    frame = store.read_feature_collection(old_record)
+
+    assert len(frame) == 2
+
+
+def test_a_superseded_file_is_removed_once_it_has_aged_past_the_grace_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The grace period does end: a file only outlives its record for so long.
+
+    Grace is set to zero so a second prune call -- not the one that first marks the file, the
+    next one after it -- treats any already-marked file as old enough. This is deterministic:
+    no sleeping, no timing assumptions, just "has a marker been written on some earlier call".
+    """
+    monkeypatch.setattr(store, "SUPERSEDED_FILE_GRACE_SECONDS", 0)
+    first = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    first_path = Path(str(first.path))
+
+    # First subsequent refresh: `first_path` is seen as superseded for the first time and only
+    # marked, never deleted on the same call that notices it.
+    feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    )
+    assert first_path.is_file(), "never deleted on the same call that first marks it, whatever the grace period"
+
+    # Second subsequent refresh: the marker from the previous call is now old enough (grace=0).
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert not first_path.exists()
+    assert not first_path.with_name(first_path.name + ".superseded").exists()
+
+
+def test_an_unmarked_file_is_never_deleted_in_the_same_call_that_marks_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even with grace at zero, marking and deleting never happen in the same prune call.
+
+    If they did, the fix would collapse back to the immediate-deletion bug this closes: the
+    marker exists only to force a file to survive at least one full refresh cycle before
+    deletion is even considered.
+    """
+    monkeypatch.setattr(store, "SUPERSEDED_FILE_GRACE_SECONDS", 0)
+    first = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    first_path = Path(str(first.path))
+
+    feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    )
+
+    assert first_path.is_file()
+
+
+def test_prune_removes_a_marker_orphaned_by_a_partial_earlier_delete() -> None:
+    """A marker whose file is already gone is swept up rather than left forever."""
+    root = api_config.get_features_root()
+    root.mkdir(parents=True, exist_ok=True)
+    orphan = root / f"districts.{'a' * 32}.parquet.superseded"
+    orphan.touch()
+
+    store.prune_superseded_files("districts", keep=root / "districts.does-not-exist.parquet")
+
+    assert not orphan.exists()
+
+
+def test_a_marker_within_a_positive_grace_period_is_not_yet_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercises the inequality at a genuine positive value, not only via grace forced to zero.
+
+    Every other grace-boundary test monkeypatches SUPERSEDED_FILE_GRACE_SECONDS to 0, which
+    makes `marker_age < 0` always false and never actually compares a positive marker_age
+    against a positive grace -- mutating that `<` to `<=` still passes every one of them. This
+    controls `time.time()` directly instead, so "marked, but still within grace" is taken at a
+    real, positive age, with no sleeping and the real default grace value left untouched.
+    """
+    # `store.time` is the stdlib `time` module itself, so patching its `time` attribute mutates
+    # that module globally -- capturing the real function first (not a reference to the module)
+    # is what keeps the fallback from calling the patched version of itself.
+    real_time_time = store.time.time
+    now: dict[str, float | None] = {"value": None}
+    monkeypatch.setattr(store.time, "time", lambda: now["value"] if now["value"] is not None else real_time_time())
+
+    first = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    first_path = Path(str(first.path))
+
+    # Marks first_path as superseded for the first time; its marker's mtime is real wall-clock
+    # time, set by Path.touch() rather than by the patched time.time().
+    feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    )
+    marker = first_path.with_name(first_path.name + ".superseded")
+    marked_at = marker.stat().st_mtime
+
+    # Force the *comparison* to see 10 real seconds elapsed -- well under the real 60s default.
+    now["value"] = marked_at + 10.0
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert first_path.is_file(), "10s < the real, unpatched 60s default grace period"
+
+    # Now push the same comparison past the real default and confirm it is finally removed.
+    now["value"] = marked_at + store.SUPERSEDED_FILE_GRACE_SECONDS + 1.0
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert not first_path.exists(), "past the real default grace period, the file is removed"
+
+
+def test_a_marker_exactly_at_the_grace_boundary_is_treated_as_due(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary itself, pinned in the direction the code actually implements.
+
+    `if marker_age < SUPERSEDED_FILE_GRACE_SECONDS: continue` treats "not yet due" as *strictly*
+    younger than the grace period, so a marker exactly that old is eligible for deletion, not
+    protected by one more cycle. A `<=` in place of `<` would pass every other test in this file
+    (a wall-clock tie is never hit by accident) but flips the outcome of exactly this check.
+    """
+    real_time_time = store.time.time
+    now: dict[str, float | None] = {"value": None}
+    monkeypatch.setattr(store.time, "time", lambda: now["value"] if now["value"] is not None else real_time_time())
+
+    first = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    first_path = Path(str(first.path))
+
+    feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    )
+    marker = first_path.with_name(first_path.name + ".superseded")
+    marked_at = marker.stat().st_mtime
+
+    now["value"] = marked_at + store.SUPERSEDED_FILE_GRACE_SECONDS
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert not first_path.exists(), "a marker exactly grace-seconds old is due for deletion, not protected"
+
+
+def test_a_reader_that_pauses_past_the_grace_period_can_still_lose_its_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented, accepted boundary of this design, pinned as a visible assertion.
+
+    `SUPERSEDED_FILE_GRACE_SECONDS`'s own docstring says this plainly: the grace period is a
+    heuristic window bounded by wall-clock time and refresh count, not a hard guarantee: a
+    reader that pauses longer than the grace period while two or more further refreshes run
+    its collection's prune calls can still have its file deleted out from under it. Nothing
+    short of reference counting -- which this module does not have -- closes this fully. This
+    test exists so that limit is an intentional, checked fact rather than a silent assumption.
+    """
+    monkeypatch.setattr(store, "SUPERSEDED_FILE_GRACE_SECONDS", 0)
+    old_record = feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    # First further refresh marks the old file as superseded; the second, with grace at zero,
+    # finds it already marked and deletes it -- the reader "paused" through both.
+    feature_services.refresh_feature_collection(
+        template=DISTRICTS_TEMPLATE, features=_collection(WEST, EAST, _box("SL-N", -12.5, 8.5, -11.5, 9.5))
+    )
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    with pytest.raises(ValueError, match="the record and the store disagree"):
+        store.read_feature_collection(old_record)
 
 
 def test_the_stored_file_carries_the_identifier_column_the_record_names() -> None:
@@ -281,8 +520,10 @@ def test_concurrent_writes_of_one_collection_do_not_share_a_staging_file() -> No
 
     assert errors == []
     assert len(set(staging_paths)) == 2
-    assert store.feature_store_path("districts").is_file()
-    assert not list(store.feature_store_path("districts").parent.glob("*.writing"))
+    # Two writes, two versions. Neither was registered, so nothing pruned either: a write only
+    # ever adds a file, and the record is what makes one of them the collection.
+    assert len(_collection_files()) == 2
+    assert not list(api_config.get_features_root().glob("*.writing"))
 
 
 def test_a_written_collection_round_trips_through_the_reader() -> None:
@@ -398,7 +639,7 @@ def test_a_failed_write_leaves_no_partial_file() -> None:
             id_property="orgUnitCode",
         )
 
-    assert not list(store.feature_store_path("districts").parent.glob("*.writing"))
+    assert not list(api_config.get_features_root().glob("*.writing"))
     assert len(store.read_feature_collection(first)) == 2
 
 
@@ -411,7 +652,7 @@ def test_a_feature_without_geometry_is_refused_before_the_write() -> None:
             dataset_id="districts", features=_collection(WEST, null_geometry), id_property="orgUnitCode"
         )
 
-    assert not store.feature_store_path("districts").exists()
+    assert _collection_files() == []
 
 
 @pytest.mark.parametrize(
@@ -440,7 +681,7 @@ def test_unstorable_geometry_is_refused_with_collection_context(feature: dict[st
             dataset_id="districts", features=_collection(WEST, feature), id_property="orgUnitCode"
         )
 
-    assert not store.feature_store_path("districts").exists()
+    assert _collection_files() == []
 
 
 def test_a_property_named_bbox_is_refused_with_a_rename() -> None:
@@ -455,7 +696,7 @@ def test_a_property_named_bbox_is_refused_with_a_rename() -> None:
             dataset_id="districts", features=_collection(with_bbox), id_property="orgUnitCode"
         )
 
-    assert not store.feature_store_path("districts").exists()
+    assert _collection_files() == []
 
 
 @pytest.mark.parametrize(
@@ -465,7 +706,7 @@ def test_a_property_named_bbox_is_refused_with_a_rename() -> None:
 )
 def test_a_collection_id_cannot_escape_the_store_directory(dataset_id: str) -> None:
     with pytest.raises(ValueError, match="invalid feature collection id"):
-        store.feature_store_path(dataset_id)
+        store.validate_collection_id(dataset_id)
 
 
 def test_reading_a_record_whose_file_is_gone_says_so(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -514,7 +755,7 @@ def test_a_refresh_writes_and_registers_through_one_door() -> None:
 
     assert record.features is not None
     assert record.features.feature_count == 2
-    assert store.feature_store_path("districts").is_file()
+    assert len(_collection_files()) == 1
     assert [r.artifact_id for r in ingestion_services._load_records()] == [record.artifact_id]
 
 
@@ -523,7 +764,7 @@ def test_a_refresh_writes_and_registers_through_one_door() -> None:
     [None, {"type": "Polygon", "coordinates": []}],
     ids=["null", "empty"],
 )
-def test_a_refresh_refuses_bad_features_before_copying_the_previous_aside(geometry: object) -> None:
+def test_a_refresh_refuses_bad_features_before_writing_anything(geometry: object) -> None:
     """The write's refusals fire before the backup copy, so the previous collection is untouched."""
     import geopandas as gpd
 
@@ -533,8 +774,8 @@ def test_a_refresh_refuses_bad_features_before_copying_the_previous_aside(geomet
     with pytest.raises(ValueError, match="no geometry"):
         feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=bad)
 
-    assert not list(store.feature_store_path("districts").parent.glob("*.previous"))
-    assert len(gpd.read_parquet(store.feature_store_path("districts"))) == 2
+    assert len(_collection_files()) == 1, "the superseded version is removed once the record is durable"
+    assert len(gpd.read_parquet(_current_file())) == 2
 
 
 def test_a_failed_registration_leaves_the_previous_collection_in_place(
@@ -558,25 +799,44 @@ def test_a_failed_registration_leaves_the_previous_collection_in_place(
     with pytest.raises(RuntimeError, match="unwritable"):
         feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=grown)
 
-    stored = gpd.read_parquet(str(store.feature_store_path("districts")))
+    stored = gpd.read_parquet(str(_current_file()))
     assert len(stored) == 2, "the file must still be the one the surviving record describes"
     assert first.features is not None
     assert first.features.feature_count == len(stored)
-    assert not list(store.feature_store_path("districts").parent.glob("*.previous"))
+    # The abandoned write is marked as stale, not deleted on the spot: the cleanup path is
+    # shared with cases where a caller could have resolved a record naming it, and it must get
+    # the same grace period as any other superseded file (see the dedicated reader-race test
+    # below for the case where a record actually did exist).
+    assert len(_collection_files()) == 2, "the abandoned write is marked stale, not deleted immediately"
 
 
-def test_a_failed_first_registration_leaves_no_collection_behind(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no previous version to restore, the unregistered file is removed rather than left."""
+def test_a_failed_first_registration_marks_rather_than_deletes_the_unregistered_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no previous version to restore, the file is marked stale, not deleted on the spot.
+
+    Immediate deletion here would be the exact race the fix closes for the steady-state case,
+    just reached with no prior record to roll back to: `keep=None` still routes through the
+    same mark-then-delete scheme rather than an unconditional unlink.
+    """
 
     def refuse(**_: Any) -> None:
         raise RuntimeError("records.json is unwritable")
 
-    monkeypatch.setattr(ingestion_services, "create_feature_artifact", refuse)
+    with pytest.MonkeyPatch.context() as scoped:
+        scoped.setattr(ingestion_services, "create_feature_artifact", refuse)
+        with pytest.raises(RuntimeError, match="unwritable"):
+            feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
 
-    with pytest.raises(RuntimeError, match="unwritable"):
-        feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+    assert len(_collection_files()) == 1, "marked stale, not deleted immediately"
 
-    assert not store.feature_store_path("districts").exists()
+    # It is not left forever either: a later successful refresh's own prune call finds the
+    # marker already present and, once old enough, removes it. `refuse` is out of scope again
+    # here (the `with` block above restored it), so this refresh runs for real.
+    monkeypatch.setattr(store, "SUPERSEDED_FILE_GRACE_SECONDS", 0)
+    feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    assert len(_collection_files()) == 1, "the abandoned file is gone; only the successful write remains"
 
 
 def test_publication_failure_restores_the_previous_file_and_record(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -598,11 +858,47 @@ def test_publication_failure_restores_the_previous_file_and_record(monkeypatch: 
         feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=grown)
 
     assert ingestion_services._load_records() == [first]
-    assert len(gpd.read_parquet(store.feature_store_path("districts"))) == 2
-    assert not list(store.feature_store_path("districts").parent.glob("*.previous"))
+    assert len(gpd.read_parquet(_current_file())) == 2
+    # The record that briefly named the "grown" file is durable before publication is attempted
+    # (register_artifact_record upserts, then publishes), so a caller could have resolved it in
+    # that window and be holding its path. Marking rather than deleting is what keeps that
+    # caller's read from racing this rollback.
+    assert len(_collection_files()) == 2, "the rolled-back file is marked stale, not deleted immediately"
 
 
-def test_failed_first_publication_removes_the_new_file_and_record(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_reader_that_resolved_the_record_before_a_publication_failure_can_still_open_its_file() -> None:
+    """The high-severity gap the adversarial review round found: rollback used to bypass the
+    grace period entirely with a raw unlink, reopening the exact race the fix otherwise closes --
+    just reachable from the failure path instead of a normal refresh.
+
+    `register_artifact_record` upserts the new record durably before `publish_artifact_record`
+    runs, so a caller resolving the collection in that window (`GET /features` does not filter
+    on publication) is handed a record naming the not-yet-published file. If publication then
+    fails, that file must still be there when the caller gets around to opening it.
+    """
+    import pytest as _pytest
+
+    captured: dict[str, Any] = {}
+
+    def fail_after_upsert(_artifact_id: str) -> ArtifactRecord:
+        captured["record"] = feature_services.registered_collections()["districts"]
+        raise RuntimeError("publication failed")
+
+    with _pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(ingestion_services, "publish_artifact_record", fail_after_upsert)
+        with pytest.raises(RuntimeError, match="publication failed"):
+            feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
+
+    # The reader resumes, after the rollback has already run, and opens the file the record it
+    # captured names.
+    frame = store.read_feature_collection(captured["record"])
+
+    assert len(frame) == 2
+
+
+def test_failed_first_publication_marks_rather_than_deletes_the_new_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fail_after_upsert(_artifact_id: str) -> ArtifactRecord:
         assert len(ingestion_services._load_records()) == 1
         raise RuntimeError("publication failed")
@@ -612,7 +908,7 @@ def test_failed_first_publication_removes_the_new_file_and_record(monkeypatch: p
         feature_services.refresh_feature_collection(template=DISTRICTS_TEMPLATE, features=_collection())
 
     assert ingestion_services._load_records() == []
-    assert not store.feature_store_path("districts").exists()
+    assert len(_collection_files()) == 1, "marked stale, not deleted immediately"
 
 
 def test_the_collection_lock_is_still_held_while_the_record_is_written(
@@ -666,7 +962,7 @@ def test_concurrent_refreshes_leave_the_file_and_its_record_agreeing() -> None:
     assert errors == []
     records = [r for r in ingestion_services._load_records() if r.features is not None]
     assert len(records) == 1
-    stored = gpd.read_parquet(str(store.feature_store_path("districts")))
+    stored = gpd.read_parquet(str(_current_file()))
     assert records[0].features is not None
     assert records[0].features.feature_count == len(stored)
 
@@ -759,7 +1055,7 @@ def test_a_file_in_the_store_directory_with_no_record_does_not_appear(
 
     payload = client.get("/features").json()
 
-    assert (feature_store_root / "unregistered.parquet").is_file()
+    assert len(_collection_files("unregistered")) == 1
     assert [item["id"] for item in payload["items"]] == ["districts"]
     assert client.get("/features/unregistered").status_code == 404
 
@@ -885,14 +1181,14 @@ def test_an_unknown_crs_code_is_a_value_error_not_a_pyproj_error() -> None:
     """
     from open_climate_service.shared.crs import transform_bbox
 
-    with pytest.raises(ValueError, match="cannot transform a bbox"):
+    with pytest.raises(ValueError, match="EPSG:999999' is not a CRS this service can resolve"):
         transform_bbox((-13.5, 6.9, -10.1, 10.0), source="EPSG:4326", target="EPSG:999999")
 
 
 def test_a_read_with_an_unknown_bbox_crs_reports_a_value_error() -> None:
     record = _register()
 
-    with pytest.raises(ValueError, match="cannot transform a bbox"):
+    with pytest.raises(ValueError, match="is not a CRS this service can resolve"):
         store.read_feature_collection(record, bbox=(-13.6, 6.8, -12.5, 7.5), bbox_crs="EPSG:999999")
 
 

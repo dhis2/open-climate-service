@@ -339,9 +339,12 @@ def test_the_asset_route_resolves_through_the_record_not_the_directory(
     """A file nothing registered is not a collection, so it cannot be fetched through this route."""
     from open_climate_service.features import store
 
-    store.write_feature_collection(dataset_id="unregistered", features=_collection_payload(), id_property="orgUnitCode")
+    written, _count, _geometry = store.write_feature_collection(
+        dataset_id="unregistered", features=_collection_payload(), id_property="orgUnitCode"
+    )
 
-    assert (isolated_store / "unregistered.parquet").is_file()
+    assert written.is_file()
+    assert written.parent == isolated_store
     assert client.get("/features/unregistered/data.parquet").status_code == 404
 
 
@@ -489,7 +492,7 @@ def test_a_collection_id_that_could_not_be_a_url_segment_is_refused(rejected: st
     from open_climate_service.features import store
 
     with pytest.raises(ValueError, match="invalid feature collection id"):
-        store.feature_store_path(rejected)
+        store.validate_collection_id(rejected)
 
 
 @pytest.mark.parametrize("accepted", ["districts", "worldpop_population_global2_100m", "a.b-c_1", "A1"])
@@ -497,7 +500,9 @@ def test_an_ordinary_collection_id_is_still_accepted(accepted: str) -> None:
     """The allowlist has to admit the ids real templates use, or it is the wrong allowlist."""
     from open_climate_service.features import store
 
-    assert store.feature_store_path(accepted).name == f"{accepted}.parquet"
+    assert store.validate_collection_id(accepted) == accepted
+    assert store.new_collection_file(accepted).name.startswith(f"{accepted}.")
+    assert store.new_collection_file(accepted).name.endswith(".parquet")
 
 
 def test_every_generated_link_escapes_the_id_as_one_segment() -> None:
@@ -583,3 +588,150 @@ def test_feature_dataset_links_track_stac_when_a_newer_artifact_is_unpublished(
     assert list(ingestion_services.stac_eligible_artifacts_by_dataset()) == ["districts"]
     links = {link["rel"] for link in client.get("/datasets/districts").json()["links"]}
     assert {"stac", "features"} <= links
+
+
+# --- the advertised asset stays reachable -------------------------------------------------------
+
+
+def test_the_asset_route_serves_the_artifact_stac_advertises(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The catalogue advertises the newest *published* collection; the asset must resolve the same one.
+
+    Taking the newest record first and then testing publication 404s the very asset the
+    collection document points at.
+    """
+    newer_unpublished = districts.model_copy(
+        update={
+            "artifact_id": "f2",
+            "created_at": districts.created_at + timedelta(days=1),
+            "publication": ArtifactPublication(status=PublicationStatus.UNPUBLISHED),
+        }
+    )
+    monkeypatch.setattr(
+        ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=[districts, newer_unpublished])
+    )
+
+    doc = client.get("/stac/collections/districts").json()
+    href = doc["assets"]["data"]["href"].replace("http://testserver", "")
+    response = client.get(href)
+
+    assert response.status_code == 200
+    assert response.content == Path(str(districts.path)).read_bytes()
+
+
+# --- an id that cannot route is refused where it enters ------------------------------------------
+
+
+@pytest.mark.parametrize("rejected", ["a/b", "a?b", "a b", "a\nb", "", ".hidden"])
+def test_a_dataset_template_id_that_cannot_be_a_url_segment_is_refused(rejected: str) -> None:
+    """A raster template id becomes a catalogue path segment too, so it is held to the same shape.
+
+    `a/b` is the case escaping cannot rescue: ASGI decodes the path before routing, so `%2F`
+    splits into two segments and no single-segment route matches.
+    """
+    from open_climate_service.data_registry.services.datasets import _validate_dataset_template
+
+    template = {"id": rejected, "sync": {"kind": "static"}}
+
+    with pytest.raises(ValueError):
+        _validate_dataset_template(template, source="test.yaml")
+
+
+def test_every_built_in_template_id_is_already_routable() -> None:
+    """The allowlist has to admit the templates that ship, or it is the wrong allowlist."""
+    from open_climate_service.data_registry.services.datasets import list_datasets
+    from open_climate_service.shared.urls import is_segment_safe_id
+
+    templates = list_datasets()
+
+    assert templates
+    assert [t["id"] for t in templates if not is_segment_safe_id(str(t["id"]))] == []
+
+
+def test_a_percent_encoded_slash_does_not_route_back(client: TestClient, districts: ArtifactRecord) -> None:
+    """Why the id is constrained rather than merely escaped: `%2F` decodes before routing."""
+    from open_climate_service.shared.urls import path_segment
+
+    assert path_segment("a/b") == "a%2Fb"
+    assert client.get("/features/a%2Fb").status_code == 404
+
+
+def test_a_trailing_newline_is_not_a_safe_segment() -> None:
+    """`$` also matches before a trailing newline, so this needs `fullmatch` rather than `match`."""
+    from open_climate_service.shared.urls import is_segment_safe_id
+
+    assert not is_segment_safe_id("districts\n")
+    assert is_segment_safe_id("districts")
+
+
+# --- the CRS contract holds on every path ---------------------------------------------------------
+
+
+def test_an_unknown_crs_is_refused_even_when_no_transform_is_needed() -> None:
+    """The identity shortcut must not skip the validation this helper promises."""
+    from open_climate_service.shared.crs import transform_bbox
+
+    with pytest.raises(ValueError, match="is not a CRS this service can resolve"):
+        transform_bbox((0.0, 0.0, 1.0, 1.0), source="EPSG:999999", target="EPSG:999999")
+
+
+def test_a_non_finite_bbox_is_refused_even_when_no_transform_is_needed() -> None:
+    """A window of infinities silently matches everything, so it is refused before it is used."""
+    from open_climate_service.shared.crs import transform_bbox
+
+    with pytest.raises(ValueError, match="not a finite box"):
+        transform_bbox((0.0, 0.0, float("inf"), 1.0), source="EPSG:4326", target="EPSG:4326")
+
+
+def test_a_same_crs_bbox_still_passes_through_unchanged() -> None:
+    """The shortcut still exists; it just no longer skips the checks."""
+    from open_climate_service.shared.crs import transform_bbox
+
+    assert transform_bbox((-13.5, 6.9, -10.1, 10.0), source="epsg:4326", target="EPSG:4326") == (
+        -13.5,
+        6.9,
+        -10.1,
+        10.0,
+    )
+
+
+# --- omitted CRS is a statement; an explicit null is not ------------------------------------------
+
+
+def test_an_omitted_crs_reads_as_the_geoparquet_default(tmp_path: Path) -> None:
+    from open_climate_service.shared import geoparquet
+
+    written = _write_parquet(tmp_path / "omitted.parquet", crs="EPSG:4326", drop_crs_key=True)
+
+    assert geoparquet.stored_crs(written) == "EPSG:4326"
+
+
+def test_an_explicit_null_crs_reads_as_unknown_not_as_wgs84(tmp_path: Path) -> None:
+    """A file of undefined coordinates must not register as degrees and then be windowed as degrees."""
+    from open_climate_service.shared import geoparquet
+
+    written = _write_parquet(tmp_path / "unknown.parquet", crs=None)
+
+    assert geoparquet.stored_crs(written) is None
+
+
+def _write_parquet(path: Path, *, crs: str | None, drop_crs_key: bool = False) -> Path:
+    """Write a GeoParquet, optionally removing the `crs` key entirely rather than nulling it."""
+    import json
+
+    import geopandas as gpd
+    import pyarrow.parquet as pq
+    from shapely.geometry import Point
+
+    frame = gpd.GeoDataFrame({"code": ["a"]}, geometry=[Point(0, 0)], crs=crs)
+    frame.to_parquet(path, write_covering_bbox=True, schema_version="1.1.0")
+    if not drop_crs_key:
+        return path
+    table = pq.read_table(path)
+    metadata = dict(table.schema.metadata or {})
+    geo = json.loads(metadata[b"geo"])
+    geo["columns"][geo["primary_column"]].pop("crs", None)
+    metadata[b"geo"] = json.dumps(geo).encode("utf-8")
+    pq.write_table(table.replace_schema_metadata(metadata), path)
+    return path
