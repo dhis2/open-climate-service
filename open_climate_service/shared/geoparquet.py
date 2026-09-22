@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_GEOMETRY_COLUMN = "geometry"
 
+PARQUET_MEDIA_TYPE = "application/x-parquet"
+"""The one media type OCS advertises for Parquet, wherever it advertises one.
+
+Two spellings were in use — `application/vnd.apache.parquet` on the openEO job-result path and
+pystac's own `application/x-parquet` — and neither is registered with IANA, so this is a choice
+rather than a correction. `x-parquet` wins because it is what the STAC ecosystem reads: pystac
+ships it as a constant, and a feature collection's data asset is the thing a STAC client has to
+recognise. Kept here, beside the reader, so the catalogue and the job-result path cannot drift.
+"""
+
 
 def read_geo_metadata(path: Path | str) -> dict[str, Any] | None:
     """Return a GeoParquet file's `geo` metadata document, or None when it has none.
@@ -86,6 +96,62 @@ def stored_crs(path: Path | str, *, column: str | None = None) -> str | None:
         return None
     code = crs.to_string() if crs.to_epsg() is None else f"EPSG:{crs.to_epsg()}"
     return canonical_crs_code(code)
+
+
+def covering_bbox_column(path: Path | str, *, column: str | None = None) -> str | None:
+    """Return the name of the GeoParquet covering-bbox column, when the file has one.
+
+    GeoParquet 1.1 lets a writer add a struct column of per-row bounds so a reader can skip row
+    groups, and names it under `covering.bbox`. It is a real column in the file and an
+    implementation detail of the pushdown, so anything describing the collection's *data* needs
+    to be able to tell it apart from a column a provider actually supplied.
+
+    Read from the metadata rather than matched by name: "bbox" is a name a provider could
+    legitimately use for its own column, and excluding that by string would hide real data.
+    """
+    document = read_geo_metadata(path)
+    if document is None:
+        return None
+    columns = document.get("columns")
+    if not isinstance(columns, dict):
+        return None
+    entry = columns.get(column or primary_geometry_column(path))
+    covering = entry.get("covering") if isinstance(entry, dict) else None
+    bbox = covering.get("bbox") if isinstance(covering, dict) else None
+    if not isinstance(bbox, dict):
+        return None
+    # Each corner is a path into the file, e.g. ["bbox", "xmin"]; the first element names the
+    # struct column they all share.
+    for corner in ("xmin", "ymin", "xmax", "ymax"):
+        reference = bbox.get(corner)
+        if isinstance(reference, list) and reference and isinstance(reference[0], str):
+            return reference[0]
+    return None
+
+
+def table_columns(path: Path | str, *, geometry_column: str | None = None) -> list[dict[str, str]]:
+    """Describe a stored collection's columns, for the STAC table extension's `table:columns`.
+
+    Read from the parquet footer, so the cost is the schema rather than the rows — a
+    country-scale collection is described without decoding one feature.
+
+    The covering-bbox column is left out. It is bookkeeping this service wrote to make windowed
+    reads cheap, not something a provider supplied, and advertising it would invite a client to
+    treat it as an attribute of the features.
+
+    Types are reported as Arrow spells them (`string`, `int64`, `double`, `binary`). The table
+    extension leaves `type` free-form, and the file's own vocabulary is the one a caller reading
+    that file will meet.
+    """
+    import pyarrow.parquet as pq
+
+    try:
+        schema = pq.read_schema(str(path))
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read the parquet schema of '%s': %s", path, exc)
+        return []
+    excluded = {name for name in (covering_bbox_column(path, column=geometry_column),) if name}
+    return [{"name": field.name, "type": str(field.type)} for field in schema if field.name not in excluded]
 
 
 def stored_geometry_types(path: Path | str, *, column: str | None = None) -> list[str]:

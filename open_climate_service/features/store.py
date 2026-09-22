@@ -10,6 +10,7 @@ exist, so the store directory is not an inbox.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -45,6 +46,23 @@ sits above a country's divisions at every level and below a national facility re
 """
 
 
+COLLECTION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+"""Shape of a feature collection id: a stable machine identifier, and nothing else.
+
+The id is used three ways and each constrains it. It names a file in the store, so a path
+separator, a leading dot or a non-printing character would escape or hide it. It is one segment
+of `/features/{id}`, `/features/{id}/data.parquet` and `/stac/collections/{id}`, so a `?`, `#`
+or space would change what those URLs *mean* rather than merely look wrong: `districts?west`
+makes the rest of the path a query string, and the link resolves to something else with no error
+anywhere. And it is the STAC collection id a client stores and re-fetches by.
+
+An allowlist rather than a list of rejected characters, because the rejections only ever cover
+the problems already thought of — a percent sign, a backtick, a right-to-left override each
+break something different. Constrained here rather than escaped at each URL, since an id that
+needs escaping to be usable is an id nobody should be able to create; `shared.urls.path_segment`
+still escapes on the way out, for a record written before this existed.
+"""
+
 _collection_locks: dict[str, threading.Lock] = {}
 _collection_locks_mutex = threading.Lock()
 
@@ -70,21 +88,14 @@ def feature_store_path(dataset_id: str) -> Path:
 
     Derived from the dataset id rather than stored, so the writer and any future reader agree
     on the location without consulting a record. `dataset_id` reaches here from a template id
-    or a provider, so it is checked rather than trusted: a name that escapes the store
-    directory would let a caller write through it.
+    or a provider, so it is checked rather than trusted — see `COLLECTION_ID_PATTERN` for what
+    the id has to satisfy and why.
     """
-    if (
-        not dataset_id
-        or dataset_id != dataset_id.strip()
-        or any(not char.isprintable() for char in dataset_id)
-        or "/" in dataset_id
-        or "\\" in dataset_id
-        or dataset_id.startswith(".")
-    ):
+    if not COLLECTION_ID_PATTERN.fullmatch(dataset_id):
         raise ValueError(
-            f"invalid feature collection id {dataset_id!r}; it names one file in the feature store, "
-            "so it cannot be blank, have surrounding whitespace, contain a path separator or a "
-            "non-printing character, or start with a dot"
+            f"invalid feature collection id {dataset_id!r}; it names one file in the feature store "
+            "and one segment of every URL that points at the collection, so it must start with a "
+            "letter or digit and carry only letters, digits, '.', '_' or '-'"
         )
     return api_config.get_features_root() / f"{dataset_id}.parquet"
 

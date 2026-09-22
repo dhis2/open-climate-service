@@ -14,7 +14,7 @@ from open_climate_service.data_registry.services import datasets as registry_dat
 from open_climate_service.features import store
 from open_climate_service.features.schemas import FeatureCollectionListResponse, FeatureCollectionRecord
 from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
+from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord, PublicationStatus
 from open_climate_service.publications.services import managed_dataset_id_for
 from open_climate_service.shared.licences import parse_licence
 
@@ -182,6 +182,33 @@ def get_collection_record_or_404(collection_id: str) -> ArtifactRecord:
     if record is None:
         raise HTTPException(status_code=404, detail=f"Feature collection '{collection_id}' not found")
     return record
+
+
+def published_collection_file_or_404(collection_id: str) -> Path:
+    """Return the GeoParquet file a *published* collection is registered at, or raise 404.
+
+    Resolved through the record, never by looking in the store directory. That is the same rule
+    the listing follows, and it is what stops this route becoming a way to read any file that
+    happens to be under the store root: a caller can only reach bytes some record already points
+    at, and the record is the only thing that puts a file there.
+
+    Publication is required here, unlike `/features`. The listing is the operator's inventory of
+    what this instance holds; this is the asset a STAC collection advertises, and STAC only
+    advertises published collections — so serving an unpublished one would hand out data the
+    catalogue deliberately withholds.
+    """
+    record = registered_collections().get(collection_id)
+    if record is None or record.publication.status != PublicationStatus.PUBLISHED:
+        raise HTTPException(status_code=404, detail=f"Feature collection '{collection_id}' not found")
+    raw = record.path or (record.asset_paths[0] if record.asset_paths else None)
+    if raw is None:
+        raise HTTPException(status_code=409, detail=f"Feature collection '{collection_id}' has no stored path")
+    path = Path(raw)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"Feature collection '{collection_id}' is registered but its file is missing"
+        )
+    return path
 
 
 def _build_record(collection_id: str, record: ArtifactRecord, template: dict[str, Any]) -> FeatureCollectionRecord:

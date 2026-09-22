@@ -160,7 +160,9 @@ def test_list_datasets_groups_artifacts_by_managed_dataset_id(monkeypatch: pytes
 
 
 def test_dataset_links_include_stac_for_published_icechunk() -> None:
-    links = services._dataset_links("chirps3_precipitation_daily", _artifact(artifact_id="a1"))
+    links = services._dataset_links(
+        "chirps3_precipitation_daily", _artifact(artifact_id="a1"), published=_artifact(artifact_id="a1")
+    )
 
     assert any(link.rel == "stac" and link.href == "/stac/collections/chirps3_precipitation_daily" for link in links)
 
@@ -171,8 +173,10 @@ def test_dataset_links_omit_catalogue_links_for_unpublished_or_netcdf() -> None:
     netcdf = _artifact(artifact_id="a2")
     netcdf.format = ArtifactFormat.NETCDF
 
-    unpublished_links = services._dataset_links("chirps3_precipitation_daily", unpublished)
-    netcdf_links = services._dataset_links("chirps3_precipitation_daily", netcdf)
+    # `published=None` is what "this dataset has no published artifact" looks like, which is the
+    # state an unpublished-only dataset is actually in.
+    unpublished_links = services._dataset_links("chirps3_precipitation_daily", unpublished, published=None)
+    netcdf_links = services._dataset_links("chirps3_precipitation_daily", netcdf, published=netcdf)
 
     for links in (unpublished_links, netcdf_links):
         assert all(link.rel not in {"zarr", "stac"} for link in links)
@@ -181,7 +185,7 @@ def test_dataset_links_omit_catalogue_links_for_unpublished_or_netcdf() -> None:
 def test_dataset_links_include_zarr_and_stac_for_icechunk() -> None:
     artifact = _artifact(artifact_id="a3")
 
-    links = services._dataset_links("chirps3_precipitation_daily", artifact)
+    links = services._dataset_links("chirps3_precipitation_daily", artifact, published=artifact)
 
     assert any(link.rel == "zarr" for link in links)
     assert any(link.rel == "stac" for link in links)
@@ -192,7 +196,7 @@ def test_dataset_links_include_zarr_and_stac_for_plain_zarr() -> None:
     artifact = _artifact(artifact_id="a4")
     artifact.format = ArtifactFormat.ZARR
 
-    links = services._dataset_links("chirps3_precipitation_daily", artifact)
+    links = services._dataset_links("chirps3_precipitation_daily", artifact, published=artifact)
 
     assert any(link.rel == "zarr" for link in links)
     assert any(link.rel == "stac" for link in links)

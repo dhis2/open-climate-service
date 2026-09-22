@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -13,14 +14,17 @@ import pandas as pd
 import pystac
 import xarray as xr
 from fastapi import HTTPException, Request
+from pystac.extensions.table import TableExtension
 from xstac import xarray_to_stac
 
 from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset, open_zarr_dataset
 from open_climate_service.data_manager.services.utils import get_time_dim, get_x_y_dims
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
+from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord, FeatureDetail
+from open_climate_service.shared import geoparquet
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
+from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.licences import DatasetLicence, parse_licence
 from open_climate_service.shared.thumbnails import thumbnail_path
 from open_climate_service.shared.time import (
@@ -30,7 +34,7 @@ from open_climate_service.shared.time import (
     period_type_to_iso_step,
     resolve_iso_period_step,
 )
-from open_climate_service.shared.urls import absolute_url, self_url
+from open_climate_service.shared.urls import absolute_url, path_segment, self_url
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
 
 CATALOG_TITLE = "Open Climate Service"
@@ -42,6 +46,8 @@ PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/sche
 RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
+_UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
+"""How STAC says "no temporal extent", for a collection whose features have no time axis."""
 # CF attributes surfaced from the store onto cube:variables, as `cf:`-prefixed STAC fields.
 # `cell_methods` is passed through as the CF string ("time: mean"); the CF extension also
 # defines a per-dimension array form, but permits the plain string for methods that span axes.
@@ -102,7 +108,7 @@ def build_catalog(request: Request) -> dict[str, object]:
         links.append(
             {
                 "rel": "child",
-                "href": absolute_url(request, f"/stac/collections/{dataset_id}"),
+                "href": absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"),
                 "title": artifact.dataset_name,
                 "type": "application/json",
             }
@@ -118,21 +124,37 @@ def build_catalog(request: Request) -> dict[str, object]:
 
 
 def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
-    """Build one STAC collection document."""
+    """Build one STAC collection document, in the representation its format calls for.
+
+    One catalogue, two representations. A raster is a datacube — `cube:dimensions`,
+    `cube:variables`, a Zarr asset, render hints — and a feature collection is a table:
+    `table:row_count`, `table:primary_geometry`, `table:columns`, and a GeoParquet asset. They
+    share the collection envelope, the links, the licence and the providers, and share nothing
+    below that, which is why this dispatches to two builders rather than threading conditionals
+    through one. A feature collection declares no datacube or Zarr extension at all.
+    """
     artifact = _eligible_artifacts_by_dataset().get(dataset_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail=f"STAC collection '{dataset_id}' not found")
+    if artifact.format == ArtifactFormat.GEOPARQUET:
+        return _build_feature_collection(dataset_id, artifact, request)
+    return _build_raster_collection(dataset_id, artifact, request)
 
+
+def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
+    """Build the STAC collection for a Zarr- or Icechunk-backed datacube."""
     source_dataset = registry_datasets.get_dataset(artifact.dataset_id) or {}
-    collection_href = absolute_url(request, f"/stac/collections/{dataset_id}")
+    collection_href = absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}")
     catalog_href = absolute_url(request, "/stac/catalog.json")
-    dataset_href = absolute_url(request, f"/datasets/{dataset_id}")
-    zarr_href = absolute_url(request, f"/zarr/{dataset_id}")
+    dataset_href = absolute_url(request, f"/datasets/{path_segment(dataset_id)}")
+    zarr_href = absolute_url(request, f"/zarr/{path_segment(dataset_id)}")
     # Only when the file is actually there: a collection that advertises a thumbnail a client
     # then 404s on is worse than one that advertises none. A render that failed or found
     # nothing to draw leaves an otherwise complete collection without the asset.
     thumbnail_href = (
-        absolute_url(request, f"/datasets/{dataset_id}/thumbnail.png") if thumbnail_path(dataset_id).is_file() else None
+        absolute_url(request, f"/datasets/{path_segment(dataset_id)}/thumbnail.png")
+        if thumbnail_path(dataset_id).is_file()
+        else None
     )
     licence = parse_licence(source_dataset.get("license"))
 
@@ -207,7 +229,7 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
         }
     if artifact.format == ArtifactFormat.ICECHUNK:
         collection_payload["assets"]["icechunk"] = {
-            "href": absolute_url(request, f"/icechunk/{dataset_id}"),
+            "href": absolute_url(request, f"/icechunk/{path_segment(dataset_id)}"),
             "type": "application/octet-stream",
             "title": "Icechunk store (native SDK access)",
             "roles": ["data"],
@@ -235,6 +257,163 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
     # Last, because the cf: fields are only known after the variables are built and sanitized.
     _declare_cf_extension_if_used(collection_payload)
     return collection_payload
+
+
+def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
+    """Build the STAC collection for a GeoParquet feature collection.
+
+    A second builder rather than a branch through the raster one. Nothing here opens a datacube:
+    the extent comes from the record's own coverage, the table fields come from `FeatureDetail`
+    and the stored file's footer, and the only asset is the GeoParquet itself.
+
+    STAC has no `itemType` to discriminate on — a Collection's `type` is always "Collection" —
+    so a client tells the two apart by the extensions and asset media types they declare, which
+    is what OCS already does for rasters through `datacube` and `zarr`. This declares `table`
+    and neither of those.
+
+    No temporal extent is invented. A boundary set has no time axis, and its release version is
+    a release identifier rather than a date — `ocs:2026-08-19.0` is not an instant, and turning
+    one into a temporal extent would publish a time range no feature was observed in.
+    """
+    detail = artifact.features
+    if detail is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Feature collection '{dataset_id}' has no feature detail to describe",
+        )
+    source_dataset = registry_datasets.get_dataset(artifact.dataset_id) or {}
+    licence = parse_licence(source_dataset.get("license"))
+    spatial = artifact.coverage.spatial_wgs84 or artifact.coverage.spatial
+
+    collection = pystac.Collection(
+        id=dataset_id,
+        description=_feature_collection_description(dataset_id, artifact, source_dataset),
+        extent=pystac.Extent(
+            spatial=pystac.SpatialExtent([[spatial.xmin, spatial.ymin, spatial.xmax, spatial.ymax]]),
+            # `[[None, None]]` is how STAC says "no temporal extent". The field is required on a
+            # Collection, so an unbounded interval is the honest answer for static geometry
+            # rather than an omission or a made-up range.
+            temporal=pystac.TemporalExtent(_UNBOUNDED_TEMPORAL_EXTENT),
+        ),
+        title=artifact.dataset_name,
+        license=licence.stac_license,
+    )
+    collection.extra_fields["keywords"] = _feature_keywords(artifact, source_dataset)
+    # The CRS the geometry is actually stored in, which for a reprojected collection is not
+    # WGS 84 even though the extent above is — `spatial_wgs84` exists for exactly that split.
+    collection.extra_fields["proj:code"] = detail.crs
+    collection.stac_extensions.append(PROJECTION_EXTENSION)
+
+    _apply_table_extension(collection, artifact, detail)
+    _add_feature_collection_links(collection, dataset_id=dataset_id, request=request, licence=licence)
+    collection.add_asset(
+        "data",
+        pystac.Asset(
+            href=absolute_url(request, f"/features/{path_segment(dataset_id)}/data.parquet"),
+            media_type=PARQUET_MEDIA_TYPE,
+            title="GeoParquet collection",
+            roles=["data"],
+        ),
+    )
+
+    # `transform_hrefs=False` because every href here is already absolute. With it on, pystac
+    # resolves the root link to rewrite relative ones — which means *fetching* the catalogue
+    # over HTTP while serving a request for one of its children.
+    payload = collection.to_dict(include_self_link=True, transform_hrefs=False)
+    payload["stac_version"] = STAC_VERSION
+    providers = _build_providers(source_dataset)
+    if providers:
+        payload["providers"] = providers
+    return payload
+
+
+def _apply_table_extension(collection: pystac.Collection, artifact: ArtifactRecord, detail: "FeatureDetail") -> None:
+    """Declare the table extension and fill it from the record and the stored file.
+
+    Through pystac's own extension class rather than by writing `table:` keys directly, so the
+    field names and the schema URI come from the library that tracks the spec.
+
+    `row_count` and `primary_geometry` are record facts — counted when the collection was
+    written, so they need no file read. `columns` is a footer read, because the record
+    deliberately does not duplicate the file's schema: `FeatureDetail` holds what a collection
+    must *remember*, and the columns are something the file already states.
+    """
+    table = TableExtension.ext(collection, add_if_missing=True)
+    table.row_count = detail.feature_count
+    # A column name, not a geometry type. One column may hold points and polygons together, so
+    # this says where the geometry is and `geometry_types` in the file says what is in it.
+    table.primary_geometry = detail.primary_geometry
+    columns = _stored_table_columns(artifact, detail)
+    if columns:
+        collection.extra_fields["table:columns"] = columns
+
+
+def _stored_table_columns(artifact: ArtifactRecord, detail: "FeatureDetail") -> list[dict[str, str]]:
+    """Return `table:columns` for the stored file, or an empty list when it cannot be read.
+
+    An unreadable file leaves the collection without `table:columns` rather than failing the
+    whole document: the record-derived fields above are still true and still useful, and a
+    catalogue entry that 500s tells a client less than one that describes what it can.
+    """
+    path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
+    if path is None:
+        return []
+    return geoparquet.table_columns(path, geometry_column=detail.primary_geometry)
+
+
+def _add_feature_collection_links(
+    collection: pystac.Collection, *, dataset_id: str, request: Request, licence: DatasetLicence
+) -> None:
+    """Attach the same link set a raster collection carries, plus the licence link."""
+    catalog_href = absolute_url(request, "/stac/catalog.json")
+    collection.clear_links()
+    # Through `set_self_href`, not `add_link`: pystac emits the self link from that attribute,
+    # and a rel="self" link added by hand is dropped by `to_dict`. STAC Browser navigates by it.
+    collection.set_self_href(absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"))
+    collection.add_link(pystac.Link(rel="root", target=catalog_href, media_type="application/json"))
+    collection.add_link(pystac.Link(rel="parent", target=catalog_href, media_type="application/json"))
+    collection.add_link(
+        pystac.Link(
+            rel="alternate",
+            target=absolute_url(request, f"/features/{path_segment(dataset_id)}"),
+            media_type="application/json",
+            title="Feature collection detail",
+        )
+    )
+    # The only way a bespoke licence travels: `license` can only say `other`, so without this a
+    # client learns nothing about the terms beyond "not SPDX". Same reasoning as the raster path.
+    if licence.url:
+        collection.add_link(
+            pystac.Link(
+                rel="license",
+                target=licence.url,
+                media_type="text/html",
+                title=licence.name or licence.identifier or "Licence",
+            )
+        )
+
+
+def _feature_collection_description(dataset_id: str, artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> str:
+    """The collection description: the template's own prose when it has one.
+
+    Same rule as the raster path, with a generated fallback that says what the thing is rather
+    than calling it a GeoZarr dataset, which it is not.
+    """
+    description = source_dataset.get("description")
+    if isinstance(description, str) and description.strip():
+        return description.strip()
+    logger.debug("Feature collection %s declares no description; using the generated one", dataset_id)
+    return f"Published feature collection for {artifact.dataset_name}"
+
+
+def _feature_keywords(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> list[str]:
+    """Keywords for a feature collection: its own terms, not the raster set's 'zarr'."""
+    keywords = [artifact.dataset_id, "features", "vector", "geoparquet", "stac"]
+    for key in ("source", "short_name"):
+        value = source_dataset.get(key)
+        if isinstance(value, str) and value:
+            keywords.append(value)
+    return keywords
 
 
 def _collection_description(dataset_id: str, artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> str:

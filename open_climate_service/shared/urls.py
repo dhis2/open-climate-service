@@ -145,6 +145,23 @@ def absolute_base(request: Request) -> str:
     return f"{request.url.scheme}://{request.url.netloc}{prefix}"
 
 
+def path_segment(value: str) -> str:
+    """Return *value* escaped so it is one path segment, whatever characters it carries.
+
+    A dataset or collection id reaches a URL by interpolation, and an id holding `?`, `#` or a
+    space silently changes what the URL *means* rather than producing a broken-looking one:
+    `/features/districts?west/data.parquet` parses as the path `/features/districts` with a
+    query string, so the link resolves to a different resource and nothing reports an error.
+
+    `safe=""` escapes `/` too, which is the point — a segment is one segment.
+
+    This is the second line of defence. Ids are constrained where they enter the system, so in
+    practice nothing here needs escaping; this is what keeps a record written before that
+    constraint, or by some future path that forgets it, from producing a link that lies.
+    """
+    return urllib.parse.quote(value, safe="")
+
+
 def absolute_url(request: Request, path: str) -> str:
     """`path` resolved against the public service root."""
     return f"{absolute_base(request)}/{path.lstrip('/')}"
