@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -30,46 +28,58 @@ def refresh_feature_collection(
     """Write a collection and register it as one operation, or leave the previous one in place.
 
     The single door a provider run comes through (CLIM-926), and the reason it exists is that
-    writing and registering are two operations on one collection. Apart, they fail badly:
+    writing and registering are two operations on one collection. Apart they fail badly, and the
+    order matters more than it looks:
 
-    * a refresh that writes and then fails to register leaves the *old* record describing the
-      *new* file, so `feature_count`, `extent` and `crs` all describe bytes that are gone — and
-      nothing raises, because the record is still valid and the file is still there;
+    * a refresh that replaced one stable file and then failed to register would leave the *old*
+      record describing the *new* bytes, so `feature_count`, `extent` and `crs` all describe a
+      file that no longer exists — and nothing raises, because the record is valid and a file is
+      there. A crash in that window made the mismatch permanent;
     * two refreshes interleave, and whichever registers last stamps its numbers onto whichever
       file was replaced last.
 
-    So the whole sequence runs under one per-collection lock, and the previous file is kept
-    aside until the record is durable. On failure it is put back with the same atomic replace
-    that installed the new one, which means a reader at any instant sees one complete file:
-    the old collection or the new one, never a mixture and never a gap.
+    Both come from letting the bytes move while the record stands still. So the new version is
+    written to its *own* path and the record is switched to it: at every instant, and from either
+    record, resolving record then path yields bytes that record actually describes. Nothing has
+    to be undone on failure — the new file is simply unreferenced.
+
+    The older files are not removed here and now, even once the new record is durable. A reader
+    can resolve the *old* record and only then open its file — two steps, not one — so a reader
+    caught in that gap when this refresh lands must still find the old file exactly as it was.
+    `prune_superseded_files` is what actually removes a superseded file, and it does so only
+    once that file has already survived one full refresh cycle plus a grace period; see its
+    docstring for why immediate deletion is not safe here.
+
+    The per-collection lock remains, so two refreshes cannot interleave their registrations, and
+    the last one to commit is the one the collection ends on.
     """
-    dataset_id = str(template.get("id", ""))
-    if not dataset_id.strip():
+    raw_id = str(template.get("id", ""))
+    if not raw_id.strip():
         raise ValueError("feature collection template must declare a non-empty 'id'")
-    store.feature_store_path(dataset_id)
+    # Unstripped on purpose: `validate_collection_id` rejects surrounding whitespace, and an id
+    # is compared exactly everywhere else, so silently trimming here would accept a template
+    # whose declaration does not say what its author meant.
+    dataset_id = store.validate_collection_id(raw_id)
     id_property = str(template.get("id_property", "")).strip()
     if not id_property:
         raise ValueError(f"feature collection template '{dataset_id}' must declare a non-empty 'id_property'")
 
     with store.collection_lock(dataset_id):
-        path = store.feature_store_path(dataset_id)
         prior_records = [
             record
             for record in ingestion_services._load_records()
             if record.dataset_id == dataset_id and record.format == ArtifactFormat.GEOPARQUET
         ]
-        # Refuse before touching anything: the checks that can fail a write run before the
-        # previous collection is copied aside, so a doomed refresh leaves file and record alone.
+        # Refuse before writing anything, so a doomed refresh leaves no file to clean up.
         store.validate_features_for_write(dataset_id=dataset_id, features=features, id_property=id_property)
-        previous = _keep_previous(path)
+        written, _count, geometry = store.write_feature_collection(
+            dataset_id=dataset_id,
+            features=features,
+            id_property=id_property,
+            store_crs=store_crs,
+        )
         try:
-            written, _count, geometry = store.write_feature_collection(
-                dataset_id=dataset_id,
-                features=features,
-                id_property=id_property,
-                store_crs=store_crs,
-            )
-            return ingestion_services.create_feature_artifact(
+            record = ingestion_services.create_feature_artifact(
                 template=template,
                 features=features,
                 store_path=written,
@@ -79,34 +89,28 @@ def refresh_feature_collection(
                 publish=publish,
             )
         except BaseException:
-            _restore_previous(path, previous)
+            # Records first, then the file. `create_feature_artifact` stores the record before it
+            # publishes, so a publication failure leaves a *stored* record pointing at `written` —
+            # and durably so: a caller can resolve that record (GET /features does not filter on
+            # publication) before this handler ever runs. Restoring the record first removes that
+            # exposure going forward; the file cleanup below must not reopen it going backward.
+            #
+            # That is why `written` is routed through `prune_superseded_files` rather than
+            # unlinked directly. A caller that resolved the pre-rollback record a moment before
+            # this handler ran is holding a path to `written`, exactly the gap the grace period
+            # exists to protect — deleting it on the spot here would be the same race this whole
+            # scheme was built to close, just reached from the failure path instead of a normal
+            # refresh. Marking it instead defers the actual delete to a later prune call, once
+            # `written` has aged past `SUPERSEDED_FILE_GRACE_SECONDS`.
             _restore_records(dataset_id, prior_records)
+            restored = max(prior_records, key=lambda record: record.created_at) if prior_records else None
+            restored_path = Path(str(restored.path)) if restored is not None else None
+            store.prune_superseded_files(dataset_id, keep=restored_path)
             raise
-        finally:
-            if previous is not None:
-                previous.unlink(missing_ok=True)
-
-
-def _keep_previous(path: Path) -> Path | None:
-    """Copy the current collection aside so a failed refresh can be undone, or None if new.
-
-    Copied rather than renamed: a rename would leave `path` absent for as long as the write
-    takes, and a concurrent read would see a collection that briefly does not exist.
-    """
-    if not path.is_file():
-        return None
-    kept = path.with_name(f"{path.name}.{uuid4().hex}.previous")
-    shutil.copy2(path, kept)
-    return kept
-
-
-def _restore_previous(path: Path, previous: Path | None) -> None:
-    """Put the previous collection back, or remove a first write that was never registered."""
-    if previous is None:
-        path.unlink(missing_ok=True)
-        return
-    # The backup is already a complete file on the same filesystem.
-    previous.replace(path)
+        # Only now, with the record durable and pointing at `written`, can the files it
+        # superseded go. A failure here leaves an orphan, not a wrong answer.
+        store.prune_superseded_files(dataset_id, keep=written)
+        return record
 
 
 def _restore_records(dataset_id: str, prior_records: list[ArtifactRecord]) -> None:

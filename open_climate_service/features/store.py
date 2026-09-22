@@ -10,7 +10,9 @@ exist, so the store directory is not an inbox.
 from __future__ import annotations
 
 import logging
+import re
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -65,13 +67,12 @@ def collection_lock(dataset_id: str) -> threading.Lock:
         return _collection_locks.setdefault(dataset_id, threading.Lock())
 
 
-def feature_store_path(dataset_id: str) -> Path:
-    """Return the path this collection's GeoParquet occupies, whether or not it exists yet.
+def validate_collection_id(dataset_id: str) -> str:
+    """Return *dataset_id* unchanged, or refuse an id that cannot name a file or a URL segment.
 
-    Derived from the dataset id rather than stored, so the writer and any future reader agree
-    on the location without consulting a record. `dataset_id` reaches here from a template id
-    or a provider, so it is checked rather than trusted: a name that escapes the store
-    directory would let a caller write through it.
+    `dataset_id` reaches here from a template id or a provider, so it is checked rather than
+    trusted: a path separator would escape the store directory, and a `?` or `#` would silently
+    change what every link to the collection means.
     """
     if (
         not dataset_id
@@ -82,11 +83,162 @@ def feature_store_path(dataset_id: str) -> Path:
         or dataset_id.startswith(".")
     ):
         raise ValueError(
-            f"invalid feature collection id {dataset_id!r}; it names one file in the feature store, "
+            f"invalid feature collection id {dataset_id!r}; it names files in the feature store, "
             "so it cannot be blank, have surrounding whitespace, contain a path separator or a "
             "non-printing character, or start with a dot"
         )
-    return api_config.get_features_root() / f"{dataset_id}.parquet"
+    return dataset_id
+
+
+def new_collection_file(dataset_id: str) -> Path:
+    """Return the path a *new* version of this collection will be written to.
+
+    Each write lands on its own immutable path rather than replacing one stable file, and the
+    record is what says which of them is current. That is what closes the gap between the bytes
+    and the record describing them: replacing a stable path makes the new bytes visible to every
+    reader the instant they land, while the record still says how many features the *old* file
+    held — and a crash in that window leaves the mismatch for good, because both the record and
+    the file are individually valid.
+
+    With a version per write, a reader resolves record then path and gets bytes that record
+    actually describes, whichever record it read. The cost is that old files outlive their
+    records until `prune_superseded_files` removes them, which is the right way round: an
+    unreferenced file wastes space, a misdescribed one gives wrong answers.
+    """
+    return _collection_root(dataset_id) / f"{dataset_id}.{uuid4().hex}.parquet"
+
+
+def superseded_collection_files(dataset_id: str, *, keep: Path | None) -> list[Path]:
+    """Return this collection's stored files other than *keep*, current and not-yet-pruned alike.
+
+    The uuid is matched exactly rather than globbed loosely, so a collection named `a` cannot
+    claim the files of one named `a.b` — ids may contain dots, and `a.*.parquet` would match
+    `a.b.<uuid>.parquet`. Grace markers (see `prune_superseded_files`) are a different suffix
+    and are not returned here — this lists the Parquet files themselves.
+    """
+    root = _collection_root(dataset_id)
+    if not root.is_dir():
+        return []
+    pattern = re.compile(rf"^{re.escape(dataset_id)}\.[0-9a-f]{{32}}\.parquet$")
+    kept = keep.resolve() if keep is not None else None
+    return [
+        candidate
+        for candidate in sorted(root.iterdir())
+        if pattern.fullmatch(candidate.name) and (kept is None or candidate.resolve() != kept)
+    ]
+
+
+SUPERSEDED_FILE_GRACE_SECONDS = 60
+"""How long a superseded file stays reachable at its original path before it may be removed.
+
+A reader resolves a record, then opens the file at `record.path` — two steps, not one, and
+nothing serializes them against a refresh running in between. Deleting a file the instant its
+record stops being current breaks a reader caught in exactly that gap: it read a valid record a
+moment ago, and the path that record named is now gone. This store has no reference count and no
+reader registry to know when the last such reader has finished, so the practical alternative is
+time: keep a just-superseded file untouched for comfortably longer than any real read takes, and
+remove it only once that window has passed.
+
+Sixty seconds is chosen to be far longer than opening one Parquet file ever needs — even a
+national hierarchy is a single file, read in a fraction of a second — while still bounding how
+long a superseded version lingers. It is not a hard guarantee against a reader that pauses for
+minutes with several refreshes in between; nothing short of reference counting is, and this
+module does not have one.
+
+Two further limits worth naming, both accepted rather than closed:
+
+The clock behind this is wall-clock (`time.time()`, via a marker file's mtime), not monotonic —
+deliberately, since the "first seen as superseded" moment has to survive a process restart, and
+a monotonic reading cannot. A backward clock step only delays deletion, which is safe; a large
+forward step (an NTP correction, a paused-and-resumed VM or container, a manual clock fix)
+landing between two prune calls can make a marker look older than it is and shorten the
+practical window below `SUPERSEDED_FILE_GRACE_SECONDS`. Closing this fully would need a
+process-local monotonic checkpoint alongside the on-disk marker; this module does not have one.
+
+The bound only holds across a dataset's *own* subsequent refreshes, because the only caller of
+`prune_superseded_files` is `refresh_feature_collection` — nothing sweeps the store
+independently. A collection refreshed once more and then never again (its template retired, its
+provider discontinued) has its superseded file marked exactly once and never revisited: the file
+and its marker persist indefinitely, one of each per abandoned collection, capped in size but
+not in time. An independent sweep (a scheduled job, a startup pass over every registered
+collection) would close this; none exists yet.
+"""
+
+_SUPERSEDED_MARKER_SUFFIX = ".superseded"
+
+
+def prune_superseded_files(dataset_id: str, *, keep: Path | None) -> None:
+    """Remove this collection's older files, but only once each has aged past the grace period.
+
+    `keep` is the file the current record (after any rollback) points at, or None when this
+    dataset has no current record at all -- a first-ever registration whose publish step failed
+    leaves nothing to keep, and every file `write_feature_collection` produced for it is stale.
+
+    Two-phase, not immediate. The first time a prune call finds a file no longer named by any
+    record, it leaves the file exactly as it is and only drops a marker beside it recording that
+    moment — so a reader that resolved the file's record just before this refresh still finds
+    the file untouched. Only a *later* prune call, once that marker is older than
+    `SUPERSEDED_FILE_GRACE_SECONDS`, actually deletes the file. A superseded file therefore
+    survives at least one full refresh cycle after it stops being current, and normally the
+    grace period on top of that.
+
+    The marker's own mtime is the clock, stamped fresh the moment a file is first seen as
+    superseded — not the file's mtime, which records when it was *written* and would make a
+    long-lived file that was *just* superseded look old enough to delete immediately.
+
+    Called after either outcome of a refresh, not only success: once the new record is durable
+    and superseded a prior one, or once a failed refresh has rolled its record back and `keep`
+    names whatever is current again. Either way, a file this drops the marker for is one no
+    *current* record names, never the file `keep` itself. A failure to delete, or to write a
+    marker, is logged rather than raised: the record state is already correct by the time this
+    runs, and a lingering file or marker is not a reason to fail the operation that triggered it.
+    """
+    now = time.time()
+    for stale in superseded_collection_files(dataset_id, keep=keep):
+        marker = stale.with_name(stale.name + _SUPERSEDED_MARKER_SUFFIX)
+        try:
+            marker_age = now - marker.stat().st_mtime
+        except FileNotFoundError:
+            # First time this file has been seen as superseded: mark it and leave it alone.
+            # It gets at least one more full refresh cycle before deletion is even considered.
+            try:
+                marker.touch()
+            except OSError:
+                logger.warning("Could not mark '%s' as superseded", stale, exc_info=True)
+            continue
+        if marker_age < SUPERSEDED_FILE_GRACE_SECONDS:
+            continue
+        try:
+            stale.unlink()
+            marker.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove the superseded feature collection file '%s'", stale, exc_info=True)
+    _prune_orphaned_markers(dataset_id)
+
+
+def _prune_orphaned_markers(dataset_id: str) -> None:
+    """Remove a marker whose Parquet file is already gone.
+
+    Reachable only if a previous prune deleted the file but then failed to delete its marker —
+    the two unlinks above are not atomic with each other. Harmless to leave (nothing reads a
+    marker for a file that is not also returned by `superseded_collection_files`), but there is
+    no reason to let them accumulate forever either.
+    """
+    root = _collection_root(dataset_id)
+    if not root.is_dir():
+        return
+    pattern = re.compile(rf"^{re.escape(dataset_id)}\.[0-9a-f]{{32}}\.parquet{re.escape(_SUPERSEDED_MARKER_SUFFIX)}$")
+    for marker in root.iterdir():
+        if not pattern.fullmatch(marker.name):
+            continue
+        if not marker.with_name(marker.name.removesuffix(_SUPERSEDED_MARKER_SUFFIX)).exists():
+            marker.unlink(missing_ok=True)
+
+
+def _collection_root(dataset_id: str) -> Path:
+    """Return the store directory, having checked the id that will name files inside it."""
+    validate_collection_id(dataset_id)
+    return api_config.get_features_root()
 
 
 def validate_features_for_write(*, dataset_id: str, features: object, id_property: str) -> gpd.GeoDataFrame:
@@ -148,9 +300,10 @@ def write_feature_collection(
 
     Returns exactly what `create_feature_artifact` needs to build a record, because those three
     facts are the store's to report: it is the thing that knows how many rows it wrote and what
-    it called the geometry column. Nothing is registered here — a caller that writes and then
-    fails to register has left a file the listing ignores, which is the intended failure rather
-    than a half-registered collection.
+    it called the geometry column. Nothing is registered here, and nothing existing is touched —
+    each write lands on its own path (see `new_collection_file`), so a caller that writes and
+    then fails to register has left an unreferenced file the listing ignores, with the previous
+    collection still in place and still correctly described by its record.
 
     Identity is validated before anything is written. A duplicate identifier is not a dropped
     feature: two features map onto one org unit, DHIS2 keeps whichever value arrives last, and
@@ -170,14 +323,11 @@ def write_feature_collection(
     if target != WGS84:
         frame = frame.to_crs(target)
 
-    path = feature_store_path(dataset_id)
+    path = new_collection_file(dataset_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Written beside the target and moved into place, so a reader never sees a partial file and
-    # a failed write leaves the previous collection intact. The staging name is unique per write
-    # rather than per collection: two refreshes of one collection run under the same record lock
-    # only once they reach registration, so until the replace they are genuinely concurrent —
-    # sharing one name, each would write into the other's file and the loser's cleanup would
-    # delete the winner's. Same directory, so the replace stays atomic.
+    # Written beside the target and moved into place, so a reader never sees a partial file.
+    # The target is new on every write, so this replaces nothing a record points at: an
+    # interrupted write leaves an unreferenced file, never a truncated collection.
     staging = path.with_name(f"{path.name}.{uuid4().hex}.writing")
     try:
         frame.to_parquet(staging, write_covering_bbox=True, schema_version="1.1.0")
