@@ -168,6 +168,105 @@ def _validate_event_references(config: AutomationConfig) -> None:
                 )
 
 
+FROM_FEATURES = "from_features"
+"""Trigger-argument key naming a declared feature collection instead of carrying its geometry."""
+
+
+def _feature_node_name(feature_id: str) -> str:
+    """The graph node that resolves one feature collection. Stable, so two references share one node."""
+    return f"features_{feature_id}"
+
+
+def _iter_feature_references(value: Any) -> Any:
+    """Yield valid feature ids and reject malformed `from_features` marker objects."""
+    if isinstance(value, list):
+        for item in value:
+            yield from _iter_feature_references(item)
+    elif isinstance(value, dict):
+        if FROM_FEATURES in value:
+            feature_id = value.get(FROM_FEATURES)
+            if set(value) != {FROM_FEATURES} or not isinstance(feature_id, str) or not feature_id.strip():
+                raise ValueError(
+                    f"{FROM_FEATURES!r} must be the only key in its object and name a non-empty feature id"
+                )
+            if feature_id != feature_id.strip():
+                raise ValueError(f"{FROM_FEATURES!r} feature id must not have leading or trailing whitespace")
+            yield feature_id
+            return
+        for item in value.values():
+            yield from _iter_feature_references(item)
+
+
+def _resolve_feature_references(
+    value: Any,
+    nodes: dict[str, Any] | None = None,
+    versions: dict[str, str] | None = None,
+) -> Any:
+    """Rewrite a feature marker into a pinned reference to a `load_features` node.
+
+    Geometry is resolved during execution and never copied into the persisted graph. The
+    submission-time record timestamp is passed as `version`, so a queued job either reads the
+    exact collection it declares or fails if a refresh has replaced that version.
+    """
+    if isinstance(value, list):
+        return [_resolve_feature_references(item, nodes, versions) for item in value]
+    if not isinstance(value, dict):
+        return value
+    if FROM_FEATURES in value:
+        references = list(_iter_feature_references(value))
+        feature_id = references[0]
+        name = _feature_node_name(feature_id)
+        if nodes is not None:
+            arguments = {"id": feature_id}
+            if versions is not None:
+                arguments["version"] = versions[feature_id]
+            nodes[name] = {"process_id": "load_features", "arguments": arguments}
+        return {"from_node": name}
+    return {key: _resolve_feature_references(item, nodes, versions) for key, item in value.items()}
+
+
+def _feature_versions(arguments: Any) -> dict[str, str]:
+    """Resolve and pin every referenced collection to its current registered record."""
+    from open_climate_service.features import services as feature_services
+
+    records = feature_services.registered_collections()
+    versions: dict[str, str] = {}
+    for feature_id in sorted(set(_iter_feature_references(arguments))):
+        record = records.get(feature_id)
+        if record is None:
+            raise ValueError(
+                f"Feature collection {feature_id!r} is declared but unregistered; refresh it before submitting "
+                "a workflow that references it"
+            )
+        versions[feature_id] = record.created_at.isoformat()
+    return versions
+
+
+def _feature_provenance(versions: dict[str, str]) -> str:
+    """Describe the pinned feature collection versions carried by a submitted process graph."""
+    parts = [f"{feature_id}@{version}" for feature_id, version in sorted(versions.items())]
+    return f" against features {', '.join(parts)}" if parts else ""
+
+
+def _validate_feature_references(config: AutomationConfig) -> None:
+    """Refuse malformed references and ids that no feature template declares at startup."""
+    from open_climate_service.features.templates import list_feature_templates
+
+    declared = {str(template["id"]) for template in list_feature_templates()}
+    for trigger in config.workflow_triggers:
+        try:
+            references = _iter_feature_references(trigger.arguments)
+            for feature_id in references:
+                if feature_id not in declared:
+                    available = ", ".join(sorted(declared)) or "none"
+                    raise ValueError(
+                        f"references feature {feature_id!r}, which does not name a declared feature template. "
+                        f"Declared: {available}"
+                    )
+        except ValueError as exc:
+            raise ValueError(f"Workflow trigger {trigger.id!r} has an invalid feature reference: {exc}") from exc
+
+
 class WorkflowAutomationService:
     """Dispatch configured workflows once for each matching durable event."""
 
@@ -195,6 +294,7 @@ class WorkflowAutomationService:
                 raise ValueError(f"Workflow trigger {trigger.id!r} references unknown workflow {trigger.workflow_id!r}")
         _validate_output_ownership(self._config)
         _validate_event_references(self._config)
+        _validate_feature_references(self._config)
         if api_config.is_read_only():
             return
         activations = _load_activations()
@@ -254,17 +354,22 @@ class WorkflowAutomationService:
     def _submit(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> None:
         """Create and start the deterministic job for one trigger/event pair."""
         dataset_id = event.data.get("dataset_id")
-        arguments = _resolve_event_values(trigger.arguments, event)
+        resolved = _resolve_event_values(trigger.arguments, event)
+        versions = _feature_versions(resolved)
+        provenance = _feature_provenance(versions)
+        feature_nodes: dict[str, Any] = {}
+        arguments = _resolve_feature_references(resolved, feature_nodes, versions)
         body = OpenEOJobCreate(
             title=f"{trigger.workflow_id} after {dataset_id} update",
-            description=f"Triggered by {event.event_id} using automation rule {trigger.id}",
+            description=f"Triggered by {event.event_id} using automation rule {trigger.id}{provenance}",
             process={
                 "process_graph": {
+                    **feature_nodes,
                     "workflow": {
                         "process_id": trigger.workflow_id,
                         "arguments": arguments,
                         "result": True,
-                    }
+                    },
                 }
             },
         )

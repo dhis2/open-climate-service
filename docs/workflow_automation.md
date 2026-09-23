@@ -17,9 +17,7 @@ automation:
       arguments:
         dataset_id: $event.dataset_id
         temporal_extent: [$event.previous_end, $event.current_end]
-        geometries:
-          type: FeatureCollection
-          features: []
+        geometries: { from_features: districts }
         method: mean
         period_type: day
 ```
@@ -38,6 +36,41 @@ exact event references can be used at any nesting level:
 
 The workflow definition remains reusable and deployment-independent. Operational bindings such
 as output dataset IDs, geometries, and DHIS2 identifiers remain in instance configuration.
+
+### Referencing a feature collection
+
+`geometries: { from_features: districts }` names a feature collection declared under
+`plugins/features/` (see [Installable plugins](installable_plugins.md#package-layout)) instead of
+embedding a `FeatureCollection` inline. An inline `FeatureCollection` still works for an ad-hoc
+call — the two forms are interchangeable wherever a `geometries`-shaped argument is expected.
+
+The reference is never resolved into geometry at submission. Instead OCS rewrites it into a
+sibling node in the process graph that the workflow calls `load_features` on:
+
+```json
+{
+  "features_districts": {
+    "process_id": "load_features",
+    "arguments": { "id": "districts", "version": "2026-09-01T06:00:00+00:00" }
+  },
+  "workflow": {
+    "process_id": "aggregate_to_chap_csv",
+    "arguments": { "geometries": { "from_node": "features_districts" } },
+    "result": true
+  }
+}
+```
+
+This keeps a country's whole org unit hierarchy out of the persisted job record. At submission,
+OCS resolves the current feature record and stores only the collection id, its refresh timestamp,
+and a `load_features` call. The timestamp pins execution to that record: if the collection is
+refreshed while the job is queued, the job refuses the stale binding instead of silently running
+against different geometry. The job description carries the same version (for example
+`against features districts@2026-09-01T06:00:00+00:00`), so it accurately explains why one run
+covered 47 districts and the next covered 48.
+
+A malformed reference or an id that no template declares fails at startup, like an unknown
+`workflow_id`. A declared collection must also be registered before an event can submit a job.
 
 ## Delivery behavior
 

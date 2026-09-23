@@ -24,9 +24,13 @@ _BBOX_KEYS = ("west", "south", "east", "north")
     parameters={
         "id": {"description": "Feature collection id, as registered under GET /features."},
         "spatial_extent": {"description": "Bounding box filter: {west, south, east, north, crs}."},
+        "version": {
+            "description": "Optional record timestamp that pins this read to the submitted collection version.",
+            "optional": True,
+        },
     },
 )
-def load_features(id: str, spatial_extent: Any = None) -> dict[str, Any]:
+def load_features(id: str, spatial_extent: Any = None, version: str | None = None) -> dict[str, Any]:
     """Load a registered feature collection as a GeoJSON FeatureCollection, reprojected to WGS 84.
 
     A fast local read of what is already registered, never a fetch -- materializing a collection
@@ -55,6 +59,12 @@ def load_features(id: str, spatial_extent: Any = None) -> dict[str, Any]:
         raise ValueError(
             f"load_features: feature collection '{id}' is declared but has never been ingested; "
             "refresh it before loading it"
+        )
+    actual_version = record.created_at.isoformat()
+    if version is not None and version != actual_version:
+        raise ValueError(
+            f"load_features: feature collection {id!r} changed after this job was submitted "
+            f"(expected {version}, current {actual_version})"
         )
     detail = record.features
     if detail is None:  # pragma: no cover -- registered_collections() already filters on this
