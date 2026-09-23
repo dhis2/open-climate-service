@@ -239,7 +239,7 @@ def _build_record(collection_id: str, record: ArtifactRecord, template: dict[str
         description=_as_text(template.get("description")),
         license=licence.stac_license,
         license_url=licence.url,
-        attribution=_as_text(template.get("attribution")),
+        attribution=_feature_attribution(template),
         id_property=detail.id_property,
         feature_count=detail.feature_count,
         geometry_types=store.stored_geometry_types(record),
@@ -256,3 +256,27 @@ def _as_text(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _feature_attribution(template: dict[str, Any]) -> str | None:
+    """Return attribution, preferring explicit prose over derived provider names.
+
+    STAC represents attribution as structured providers while the feature API has one prose
+    field. Older templates may still declare attribution; keep that as the explicit override.
+    Otherwise join valid provider names in declaration order, so the same metadata reaches both
+    surfaces without flattening provider roles and URLs into prose.
+    """
+    explicit = _as_text(template.get("attribution"))
+    if explicit is not None:
+        return explicit
+    declared = template.get("providers")
+    if not isinstance(declared, list):
+        return None
+    names: list[str] = []
+    for provider in declared:
+        if not isinstance(provider, dict):
+            continue
+        name = _as_text(provider.get("name"))
+        if name is not None and name not in names:
+            names.append(name)
+    return "; ".join(names) or None

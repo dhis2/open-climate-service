@@ -1120,6 +1120,47 @@ def test_features_reports_the_licence_and_prose_a_template_declares(
     assert listed["attribution"] == "Ministry of Health"
 
 
+def test_features_derives_attribution_from_the_template_providers(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same provider declaration that reaches STAC must also reach /features."""
+    _register()
+    monkeypatch.setattr(
+        feature_services.registry_datasets,
+        "get_dataset",
+        lambda _: {
+            "providers": [
+                {"name": " OpenStreetMap contributors ", "roles": ["licensor"]},
+                {"name": "National Mapping Agency", "roles": ["producer"]},
+                {"roles": ["host"]},
+            ]
+        },
+    )
+
+    listed = client.get("/features/districts").json()
+
+    assert listed["attribution"] == "OpenStreetMap contributors; National Mapping Agency"
+
+
+def test_explicit_attribution_takes_precedence_over_provider_names(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A template can supply intentional prose when provider names alone are insufficient."""
+    _register()
+    monkeypatch.setattr(
+        feature_services.registry_datasets,
+        "get_dataset",
+        lambda _: {
+            "attribution": "Contains OpenStreetMap data",
+            "providers": [{"name": "OpenStreetMap contributors", "roles": ["licensor"]}],
+        },
+    )
+
+    listed = client.get("/features/districts").json()
+
+    assert listed["attribution"] == "Contains OpenStreetMap data"
+
+
 def test_features_reports_other_when_no_template_declares_a_licence(client: TestClient) -> None:
     """Never absent, and never something that reads as permissive."""
     _register()
