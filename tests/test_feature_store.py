@@ -1104,8 +1104,8 @@ def test_features_reports_the_licence_and_prose_a_template_declares(
     """Sourced through the existing registry, so these populate when CLIM-926 adds templates."""
     _register()
     monkeypatch.setattr(
-        feature_services.registry_datasets,
-        "get_dataset",
+        feature_services.feature_templates,
+        "get_feature_template",
         lambda _: {
             "license": "CC-BY-4.0",
             "description": "  District boundaries from the national hierarchy.\n",
@@ -1126,8 +1126,8 @@ def test_features_derives_attribution_from_the_template_providers(
     """The same provider declaration that reaches STAC must also reach /features."""
     _register()
     monkeypatch.setattr(
-        feature_services.registry_datasets,
-        "get_dataset",
+        feature_services.feature_templates,
+        "get_feature_template",
         lambda _: {
             "providers": [
                 {"name": " OpenStreetMap contributors ", "roles": ["licensor"]},
@@ -1148,8 +1148,8 @@ def test_explicit_attribution_takes_precedence_over_provider_names(
     """A template can supply intentional prose when provider names alone are insufficient."""
     _register()
     monkeypatch.setattr(
-        feature_services.registry_datasets,
-        "get_dataset",
+        feature_services.feature_templates,
+        "get_feature_template",
         lambda _: {
             "attribution": "Contains OpenStreetMap data",
             "providers": [{"name": "OpenStreetMap contributors", "roles": ["licensor"]}],
@@ -1281,3 +1281,13 @@ def test_provenance_still_reports_broken_identity_as_invalid() -> None:
         record_features(collection)
 
     assert evidence.features[0]["ids_valid"] is False
+
+
+def test_refresh_rejects_padded_id_property_before_writing(
+    feature_store_root: Path,
+) -> None:
+    template = {**DISTRICTS_TEMPLATE, "id_property": " orgUnitCode "}
+    with pytest.raises(ValueError, match="leading or trailing whitespace"):
+        feature_services.refresh_feature_collection(template=template, features=_collection())
+
+    assert list(feature_store_root.glob("*.parquet")) == []

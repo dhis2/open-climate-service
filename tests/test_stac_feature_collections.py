@@ -104,11 +104,9 @@ def _raster(dataset_id: str = "chirps3_precipitation_daily") -> ArtifactRecord:
 def _declare_template(monkeypatch: pytest.MonkeyPatch, template: dict[str, Any] | None) -> None:
     """Declare the metadata source explicitly.
 
-    `plugins/features/` is CLIM-926's registry and does not exist yet, so the feature path reads
-    through the same dataset registry the raster path does. Steering that lookup is how this
-    exercises declared licence and attribution without inventing a second registry here.
+    Feature collections resolve metadata only through the feature template registry.
     """
-    monkeypatch.setattr(stac_services.registry_datasets, "get_dataset", lambda _: template)
+    monkeypatch.setattr(stac_services.feature_templates, "get_feature_template", lambda _: template)
 
 
 # --- the collection document ---------------------------------------------------------------
