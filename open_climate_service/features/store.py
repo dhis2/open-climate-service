@@ -22,6 +22,7 @@ from open_climate_service import config as api_config
 from open_climate_service.ingestions.schemas import ArtifactRecord
 from open_climate_service.shared import geoparquet
 from open_climate_service.shared.crs import canonical_crs_code, transform_bbox
+from open_climate_service.shared.urls import is_segment_safe_id
 
 if TYPE_CHECKING:
     import geopandas as gpd
@@ -71,21 +72,14 @@ def validate_collection_id(dataset_id: str) -> str:
     """Return *dataset_id* unchanged, or refuse an id that cannot name a file or a URL segment.
 
     `dataset_id` reaches here from a template id or a provider, so it is checked rather than
-    trusted: a path separator would escape the store directory, and a `?` or `#` would silently
-    change what every link to the collection means.
+    trusted — see `shared.urls.SEGMENT_SAFE_ID_PATTERN` for what the id has to satisfy and why.
+    The same constraint governs raster template ids, because both become URL path segments.
     """
-    if (
-        not dataset_id
-        or dataset_id != dataset_id.strip()
-        or any(not char.isprintable() for char in dataset_id)
-        or "/" in dataset_id
-        or "\\" in dataset_id
-        or dataset_id.startswith(".")
-    ):
+    if not is_segment_safe_id(dataset_id):
         raise ValueError(
-            f"invalid feature collection id {dataset_id!r}; it names files in the feature store, "
-            "so it cannot be blank, have surrounding whitespace, contain a path separator or a "
-            "non-printing character, or start with a dot"
+            f"invalid feature collection id {dataset_id!r}; it names one file in the feature store "
+            "and one segment of every URL that points at the collection, so it must start with a "
+            "letter or digit and carry only letters, digits, '.', '_' or '-'"
         )
     return dataset_id
 

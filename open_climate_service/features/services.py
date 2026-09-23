@@ -188,6 +188,39 @@ def get_collection_record_or_404(collection_id: str) -> ArtifactRecord:
     return record
 
 
+def published_collection_file_or_404(collection_id: str) -> Path:
+    """Return the GeoParquet file a *published* collection is registered at, or raise 404.
+
+    Resolved through the record, never by looking in the store directory. That is the same rule
+    the listing follows, and it is what stops this route becoming a way to read any file that
+    happens to be under the store root: a caller can only reach bytes some record already points
+    at, and the record is the only thing that puts a file there.
+
+    Publication is required here, unlike `/features`. The listing is the operator's inventory of
+    what this instance holds; this is the asset a STAC collection advertises, and STAC only
+    advertises published collections — so serving an unpublished one would hand out data the
+    catalogue deliberately withholds. Resolved through the catalogue's own gate rather than a
+    publication test of our own, so the two cannot disagree about which artifact that is.
+    """
+    # The STAC gate, not `registered_collections`. That one answers "what does this instance
+    # hold" and returns the newest record; STAC advertises the newest *published* one. With an
+    # older published collection and a newer unpublished one — the state `_dataset_links` and
+    # the catalogue already handle — taking the newest first and then testing publication would
+    # 404 the very asset the catalogue is advertising.
+    record = ingestion_services.stac_eligible_artifacts_by_dataset().get(collection_id)
+    if record is None or record.format != ArtifactFormat.GEOPARQUET:
+        raise HTTPException(status_code=404, detail=f"Feature collection '{collection_id}' not found")
+    raw = record.path or (record.asset_paths[0] if record.asset_paths else None)
+    if raw is None:
+        raise HTTPException(status_code=409, detail=f"Feature collection '{collection_id}' has no stored path")
+    path = Path(raw)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"Feature collection '{collection_id}' is registered but its file is missing"
+        )
+    return path
+
+
 def _build_record(collection_id: str, record: ArtifactRecord, template: dict[str, Any]) -> FeatureCollectionRecord:
     """Build one response row from a record and its already-resolved template.
 
@@ -206,7 +239,7 @@ def _build_record(collection_id: str, record: ArtifactRecord, template: dict[str
         description=_as_text(template.get("description")),
         license=licence.stac_license,
         license_url=licence.url,
-        attribution=_as_text(template.get("attribution")),
+        attribution=_feature_attribution(template),
         id_property=detail.id_property,
         feature_count=detail.feature_count,
         geometry_types=store.stored_geometry_types(record),
@@ -223,3 +256,27 @@ def _as_text(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _feature_attribution(template: dict[str, Any]) -> str | None:
+    """Return attribution, preferring explicit prose over derived provider names.
+
+    STAC represents attribution as structured providers while the feature API has one prose
+    field. Older templates may still declare attribution; keep that as the explicit override.
+    Otherwise join valid provider names in declaration order, so the same metadata reaches both
+    surfaces without flattening provider roles and URLs into prose.
+    """
+    explicit = _as_text(template.get("attribution"))
+    if explicit is not None:
+        return explicit
+    declared = template.get("providers")
+    if not isinstance(declared, list):
+        return None
+    names: list[str] = []
+    for provider in declared:
+        if not isinstance(provider, dict):
+            continue
+        name = _as_text(provider.get("name"))
+        if name is not None and name not in names:
+            names.append(name)
+    return "; ".join(names) or None

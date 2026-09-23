@@ -69,6 +69,7 @@ from open_climate_service.shared.time import (
     utc_now,
     utc_today,
 )
+from open_climate_service.shared.urls import path_segment as _segment
 from open_climate_service.streaming.orchestrator import run_streaming_ingest_sync
 from open_climate_service.streaming.protocol import IngestionPlugin, close_ingestion_plugin
 from open_climate_service.streaming.store import (
@@ -230,23 +231,35 @@ def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     }
 
 
+CATALOGUED_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
+"""Stored formats the STAC catalogue describes.
+
+Wider than `LOADABLE_RASTER_FORMATS` because STAC describes what *exists* while openEO
+advertises what `load_collection` can *consume*. A feature collection genuinely is a STAC
+collection — it has a licence, an attribution, a spatial extent and a table schema — and
+genuinely is not an openEO datacube. That divergence is the whole reason CLIM-1066 split the
+two gates, and this is the value that makes them differ.
+"""
+
+
 def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     """Return the artifacts the STAC catalogue advertises.
 
-    Identical to the raster set, and deliberately a separate function rather than an alias:
-    STAC describes what exists, while openEO advertises what `load_collection` can consume,
-    and those stop being the same question once a non-raster artifact is catalogued.
+    Every published raster, plus every published feature collection. Publication and recency are
+    answered once, format-neutrally, by `_latest_published_artifacts_by_dataset`; this only
+    decides which formats the catalogue has a representation for. `stac/services.py` has one per
+    format — a datacube document for a raster, a table document for a collection — so admitting
+    GEOPARQUET here never advertises a child the catalogue cannot serve.
 
-    A GEOPARQUET record is deliberately *not* admitted here yet, even though it is a published
-    artifact and genuinely is a STAC collection. Admitting it would advertise a collection URL
-    whose document does not exist: `build_collection` is entirely raster — xstac opens the
-    store as an xarray dataset to derive `cube:dimensions`, and the assets, media types and
-    render hints are Zarr's. A catalogue that lists a child it cannot serve is worse than one
-    that lists nothing, so exposure lands atomically with the feature collection document and
-    the `table` extension in CLIM-1069, which widens this gate and builds that document
-    together.
+    Deliberately not an alias for the raster gate, and the raster gate is deliberately not
+    widened: `load_collection` still cannot consume a feature collection, so openEO must keep
+    answering this question for itself.
     """
-    return latest_published_raster_artifacts_by_dataset()
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in CATALOGUED_FORMATS
+    }
 
 
 def list_ingestions() -> IngestionListResponse:
@@ -2381,7 +2394,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         license_url=_licence_for(source_dataset).url,
         extent=latest.coverage,
         last_updated=latest.created_at,
-        links=_dataset_links(dataset_id, latest),
+        links=_dataset_links(dataset_id, latest, published=_latest_published(artifacts)),
         publication=DatasetPublication(
             status=latest.publication.status,
             published_at=latest.publication.published_at,
@@ -2454,19 +2467,54 @@ def _item_type_for(artifact: ArtifactRecord) -> DatasetItemType:
     return DatasetItemType.COVERAGE
 
 
-def _dataset_links(dataset_id: str, latest: ArtifactRecord) -> list[DatasetAccessLink]:
-    links = [DatasetAccessLink(href=f"/datasets/{dataset_id}", rel="self", title="Dataset detail")]
-    published = latest.publication.status == PublicationStatus.PUBLISHED
-    if published and latest.format in LOADABLE_RASTER_FORMATS:
-        links.append(DatasetAccessLink(href=f"/zarr/{dataset_id}", rel="zarr", title="Zarr store"))
+def _latest_published(artifacts: list[ArtifactRecord]) -> ArtifactRecord | None:
+    """Return the artifact every published-data surface resolves for this dataset, or None.
+
+    The same rule `_latest_published_artifacts_by_dataset` applies, from the same grouping:
+    filter by publication *first*, then take the newest. Recomputed from the caller's own list
+    rather than read back through that function, because `_build_dataset_record` runs once per
+    dataset and the gate rescans every artifact in the store.
+    """
+    published = [artifact for artifact in artifacts if artifact.publication.status == PublicationStatus.PUBLISHED]
+    return max(published, key=lambda artifact: artifact.created_at) if published else None
+
+
+def _dataset_links(
+    dataset_id: str, latest: ArtifactRecord, *, published: ArtifactRecord | None
+) -> list[DatasetAccessLink]:
+    """Build the access links for a dataset, each keyed on the artifact its route resolves.
+
+    Two different artifacts answer here, which is why `published` is separate from `latest`.
+    Every published-data route — `/zarr`, `/stac/collections`, `/features` — resolves the latest
+    *published* artifact, so an ingest with `publish: false` over an already-published dataset
+    leaves those routes serving the earlier record. Keying the links on `latest` instead made
+    `/datasets` withhold links to collections STAC was still advertising: the newest artifact was
+    unpublished, so `published` read false, while the catalogue went on serving the older one.
+
+    `download` stays on `latest`, because `download_artifact_file` resolves the latest artifact
+    regardless of publication. The rule is the same throughout: a link says what its own route
+    will do.
+    """
+    links = [DatasetAccessLink(href=f"/datasets/{_segment(dataset_id)}", rel="self", title="Dataset detail")]
+    if published is not None and published.format in LOADABLE_RASTER_FORMATS:
+        links.append(DatasetAccessLink(href=f"/zarr/{_segment(dataset_id)}", rel="zarr", title="Zarr store"))
     # Tracks `stac_eligible_artifacts_by_dataset` exactly, so `/datasets` never offers a
-    # catalogue link the catalogue itself does not serve. A feature collection therefore has
-    # no `stac` link until CLIM-1069 admits it to both at once.
-    if published and latest.format in LOADABLE_RASTER_FORMATS:
-        links.append(DatasetAccessLink(href=f"/stac/collections/{dataset_id}", rel="stac", title="STAC collection"))
+    # catalogue link the catalogue itself does not serve, nor withholds one it does.
+    if published is not None and published.format in CATALOGUED_FORMATS:
+        links.append(
+            DatasetAccessLink(href=f"/stac/collections/{_segment(dataset_id)}", rel="stac", title="STAC collection")
+        )
+    if published is not None and published.format == ArtifactFormat.GEOPARQUET:
+        links.append(
+            DatasetAccessLink(
+                href=f"/features/{_segment(dataset_id)}", rel="features", title="Feature collection detail"
+            )
+        )
     if latest.format == ArtifactFormat.NETCDF:
         links.append(
-            DatasetAccessLink(href=f"/datasets/{dataset_id}/download", rel="download", title="Download NetCDF")
+            DatasetAccessLink(
+                href=f"/datasets/{_segment(dataset_id)}/download", rel="download", title="Download NetCDF"
+            )
         )
     return links
 
