@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -192,6 +195,63 @@ def test_an_instance_provider_overrides_an_installed_plugin_of_the_same_name(mon
     monkeypatch.setattr(feature_providers, "_scan_instance_providers", lambda: [instance])
 
     assert feature_providers.get_feature_provider("dhis2") is instance
+
+
+def test_an_instance_provider_file_is_discovered_from_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Exercises the real `_load_from_path` path, not the autouse fixture's `_scan_instance_providers` stub."""
+    monkeypatch.undo()  # drop the autouse fixture's stub of _scan_instance_providers for this one test
+    features_dir = tmp_path / "features"
+    features_dir.mkdir()
+    (features_dir / "dhis2.py").write_text(
+        "from open_climate_service.features.providers import feature_provider\n"
+        "\n"
+        "@feature_provider('dhis2')\n"
+        "def load_org_units(**kwargs):\n"
+        "    return {'type': 'FeatureCollection', 'features': [], 'kwargs': kwargs}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": str(tmp_path)})
+    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "climate-service.yaml")
+
+    provider = feature_providers.get_feature_provider("dhis2")
+
+    assert provider is not None
+    assert provider(level=2) == {"type": "FeatureCollection", "features": [], "kwargs": {"level": 2}}
+
+
+def test_the_instance_provider_module_name_does_not_depend_on_a_per_process_salt(tmp_path: Path) -> None:
+    """`hash()` is salted per process (`PYTHONHASHSEED`); the synthetic module name must not be.
+
+    A single test process can't observe `hash()`'s own per-process instability directly -- its
+    salt is fixed for the process's lifetime, so two calls in one test always agree regardless of
+    which formula is used. This runs the real `_load_from_path` in two interpreters with
+    different hash seeds and checks the module name each one derives for the same path agrees.
+    """
+    provider_file = tmp_path / "dhis2.py"
+    provider_file.write_text(
+        "from open_climate_service.features.providers import feature_provider\n"
+        "\n"
+        "@feature_provider('dhis2')\n"
+        "def load_org_units(**_):\n"
+        "    return {'type': 'FeatureCollection', 'features': []}\n",
+        encoding="utf-8",
+    )
+    script = (
+        "from pathlib import Path\n"
+        "from open_climate_service.features.providers import _load_from_path\n"
+        f"funcs = _load_from_path(Path(r'{provider_file}'))\n"
+        "print(funcs[0].__module__)\n"
+    )
+
+    first = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env={**os.environ, "PYTHONHASHSEED": "1"}
+    )
+    second = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env={**os.environ, "PYTHONHASHSEED": "2"}
+    )
+
+    assert first.stdout.strip(), first.stderr
+    assert first.stdout == second.stdout
 
 
 # --- @feature_provider decorator itself -------------------------------------------------------

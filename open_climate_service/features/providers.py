@@ -10,6 +10,7 @@ discovery path with the same shape.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.resources
 import importlib.util
@@ -153,8 +154,15 @@ def _scan_instance_providers() -> list[Any]:
 
 
 def _load_from_path(path: Path) -> list[Any]:
-    """Load one instance provider file without changing process-wide import search paths."""
-    module_name = f"_ocs_instance_feature_provider_{path.stem}_{abs(hash(path))}"
+    """Load one instance provider file without changing process-wide import search paths.
+
+    The synthetic module name is never looked up again -- the module is not registered in
+    `sys.modules` -- but it is derived from the path with a stable digest rather than the
+    built-in `hash()`, which is salted per process (`PYTHONHASHSEED`). A volatile name is
+    harmless today; it would only surprise a future caller that started relying on it.
+    """
+    digest = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:12]
+    module_name = f"_ocs_instance_feature_provider_{path.stem}_{digest}"
     try:
         spec = importlib.util.spec_from_file_location(module_name, path)
         if spec is None or spec.loader is None:
