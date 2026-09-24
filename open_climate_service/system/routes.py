@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import sys
 import urllib.parse
 from collections.abc import AsyncIterator
@@ -27,7 +28,32 @@ from .templates import (
     wants_json,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _describe_exception(exc: BaseException, *, with_type: bool = False) -> str:
+    """Return an operator-readable description, unwrapping exception groups.
+
+    An ``ExceptionGroup`` stringifies as ``unhandled errors in a TaskGroup (1 sub-exception)``,
+    which names the plumbing and discards the cause. Ingest reaches plenty of async code that
+    raises inside a task group — zarr's concurrent chunk reads, for one — so without this the
+    operator gets the wrapper and nothing to act on, and the sub-exception is lost for good
+    because these handlers turn it into a single error string.
+
+    The type prefix is added for members of a group, where the exception class is most of the
+    signal, and omitted for a lone exception so existing messages read unchanged.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        described: dict[str, None] = {}
+        for member in exc.exceptions:
+            described.setdefault(_describe_exception(member, with_type=True), None)
+        return "; ".join(described) or str(exc)
+    text = str(exc).strip()
+    if not text:
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {text}" if with_type else text
 
 
 async def _sse_events(queue: asyncio.Queue[dict[str, Any] | None]) -> AsyncIterator[str]:
@@ -52,10 +78,17 @@ def read_index(request: Request) -> Response:
     return HTMLResponse(render_landing(app_version, mount_prefix(request)))
 
 
+# These pages are single-file apps: the behaviour lives in inline JS that changes with every
+# release, and the data it renders is fetched separately by XHR. Cached, a browser will happily
+# run last week's JS against today's STAC payload — which reads as a bug in the data rather than
+# a stale page, and cannot be diagnosed from the server side.
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
 @router.get("/map", response_class=HTMLResponse, include_in_schema=False)
 def maps(request: Request) -> HTMLResponse:
     """Return the interactive map viewer."""
-    return HTMLResponse(render_maps(mount_prefix(request)))
+    return HTMLResponse(render_maps(mount_prefix(request)), headers=_NO_STORE)
 
 
 @router.get("/api", response_class=HTMLResponse, include_in_schema=False)
@@ -121,7 +154,8 @@ def _job_stream(work: Any, finished_message: str) -> StreamingResponse:
         except HTTPException as exc:
             loop.call_soon_threadsafe(queue.put_nowait, {"error": str(exc.detail)})
         except Exception as exc:
-            loop.call_soon_threadsafe(queue.put_nowait, {"error": str(exc)})
+            logger.exception("Manage operation failed")
+            loop.call_soon_threadsafe(queue.put_nowait, {"error": _describe_exception(exc)})
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, None)
 
@@ -166,7 +200,8 @@ async def manage_ingest(request: Request) -> Response:
     except HTTPException as exc:
         return _refusal(exc.status_code, str(exc.detail))
     except Exception as exc:
-        return _refusal(400, str(exc))
+        logger.exception("Manage form submission failed")
+        return _refusal(400, _describe_exception(exc))
 
     return _job_stream(
         lambda on_progress: create_artifact(
@@ -204,7 +239,8 @@ async def manage_sync(request: Request) -> Response:
     except HTTPException as exc:
         return _refusal(exc.status_code, str(exc.detail))
     except Exception as exc:
-        return _refusal(400, str(exc))
+        logger.exception("Manage form submission failed")
+        return _refusal(400, _describe_exception(exc))
 
     return _job_stream(
         lambda on_progress: sync_dataset(dataset_id=dataset_id, end=end, publish=publish, on_progress=on_progress),

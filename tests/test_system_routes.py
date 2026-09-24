@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable, Coroutine
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from fastapi import Request
@@ -394,6 +394,27 @@ def test_a_superseded_load_does_not_reach_the_map(client: TestClient) -> None:
     assert "loadGeneration++;" in body
 
 
+def test_inline_js_apps_are_not_cacheable(client: TestClient) -> None:
+    """A cached page runs last week's inline JS against today's STAC payload.
+
+    That reads as a data bug rather than a stale page, and nothing on the server can see it —
+    so the page must always be revalidated.
+    """
+    response = client.get("/map")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_map_viewer_pins_a_single_run_forecast_in_the_metadata(client: TestClient) -> None:
+    """A forecast's issue time is identity, not a choice, so one run must still be named."""
+    response = client.get("/map")
+
+    assert response.status_code == 200
+    assert "function renderPinnedDims()" in response.text
+    assert 'd.count === 1 && d.key === "reference_time"' in response.text
+
+
 def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     response = client.get("/map")
 
@@ -402,6 +423,95 @@ def test_map_viewer_initializes_at_latest_timestep(client: TestClient) -> None:
     assert "function renderDimControls()" in response.text
     # ...and a slider-type dimension (e.g. time) defaults to its last index (latest step).
     assert 'control === "slider" ? Math.max(0, count - 1) : 0' in response.text
+
+
+def test_manage_error_unwraps_an_exception_group_to_the_real_cause() -> None:
+    """`str(ExceptionGroup)` names the plumbing and drops the cause.
+
+    Anything asynchronous under an ingest can raise inside a task group — zarr's concurrent
+    chunk reads, for instance — and the operator then saw only "unhandled errors in a
+    TaskGroup (1 sub-exception)". These handlers turn the exception into a redirect, so the
+    sub-exception was lost with it.
+    """
+    inner = ValueError("Response payload is not completed")
+    group = ExceptionGroup("unhandled errors in a TaskGroup", [inner])
+
+    assert "sub-exception" in str(group), "precondition: the group hides its cause"
+    described = system_routes._describe_exception(group)
+
+    assert described == "ValueError: Response payload is not completed"
+    assert "sub-exception" not in described
+
+
+def test_manage_error_reports_every_cause_in_a_multi_error_group() -> None:
+    group = ExceptionGroup("oops", [ValueError("first"), KeyError("second")])
+
+    described = system_routes._describe_exception(group)
+
+    assert "ValueError: first" in described
+    assert "KeyError" in described and "second" in described
+
+
+def test_manage_error_unwraps_nested_groups_and_deduplicates() -> None:
+    """A task group inside a task group, and the same failure on several chunks."""
+    nested = ExceptionGroup("inner", [OSError("connection reset"), OSError("connection reset")])
+    group = ExceptionGroup("outer", [nested])
+
+    described = system_routes._describe_exception(group)
+
+    assert described == "OSError: connection reset", described
+
+
+def test_manage_error_leaves_a_plain_exception_message_unchanged() -> None:
+    """Existing single-error banners must read exactly as before."""
+    assert system_routes._describe_exception(RuntimeError("store is not empty")) == "store is not empty"
+
+
+def test_manage_error_falls_back_to_the_type_when_there_is_no_message() -> None:
+    assert system_routes._describe_exception(TimeoutError()) == "TimeoutError"
+
+
+@pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
+async def test_manage_sync_streams_the_real_cause_of_a_task_group_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end: what the operator's error event actually carries."""
+    scheduled: list[Coroutine[object, object, None]] = []
+
+    def exploding_sync_dataset(**_: object) -> None:
+        raise ExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [ValueError("Response payload is not completed")],
+        )
+
+    async def fake_to_thread(func: Callable[[], None]) -> None:
+        func()
+
+    def fake_create_task(coro: Coroutine[object, object, None]) -> None:
+        scheduled.append(coro)
+        return None
+
+    monkeypatch.setattr(ingestion_services, "sync_dataset", exploding_sync_dataset)
+    # The dataset is resolved before the stream opens, so it has to exist for the stream to start.
+    monkeypatch.setattr(ingestion_services, "get_latest_artifact_for_dataset_or_404", lambda _id: None)
+    monkeypatch.setattr(system_routes.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
+
+    response = await system_routes.manage_sync(
+        cast(Request, _FakeRequest({"dataset_id": "chirps3_precipitation_daily", "publish": "on"}))
+    )
+    assert isinstance(response, StreamingResponse)
+    await scheduled[0]
+
+    events: list[dict[str, Any]] = []
+    async for chunk in response.body_iterator:
+        text = bytes(chunk).decode() if not isinstance(chunk, str) else chunk
+        events.append(json.loads(text.removeprefix("data: ").strip()))
+    failures = [event for event in events if "error" in event]
+
+    assert failures, f"expected an error event, got {events}"
+    assert failures[0]["error"] == "ValueError: Response payload is not completed"
+    assert "sub-exception" not in failures[0]["error"]
 
 
 @pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
