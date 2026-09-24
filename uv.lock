@@ -526,6 +526,18 @@ wheels = [
 ]
 
 [[package]]
+name = "convertdate"
+version = "2.5.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pymeeus" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/ae/9169c1aec7b66002b95a793c996710fd4e78abad24d1ce941b29e2c88a92/convertdate-2.5.1.tar.gz", hash = "sha256:8ade438cced7eae579e622f3f54354e52609840f597f7b09a16d7789a15d4e0a", size = 52984, upload-time = "2026-09-13T21:20:17.633Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/34/b05d803dad6234b4cd1e724c2190bfdd1fb022df20a4c00d26dcbe9ab4d5/convertdate-2.5.1-py3-none-any.whl", hash = "sha256:f78f2c06d27825e6926aa14b2824845b7aeacbfbe426e8097681f160b12bb724", size = 47934, upload-time = "2026-09-13T21:20:16.529Z" },
+]
+
+[[package]]
 name = "cycler"
 version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
@@ -589,6 +601,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/d3/8ae2869247df154b64c1884d7346d412fed0c49df84db635aab2d1c40e62/deprecation-2.1.0.tar.gz", hash = "sha256:72b3bde64e5d778694b0cf68178aed03d15e15477116add3fb773e581f9518ff", size = 173788, upload-time = "2020-04-20T14:23:38.738Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/c3/253a89ee03fc9b9682f1541728eb66db7db22148cd94f89ab22528cd1e1b/deprecation-2.1.0-py2.py3-none-any.whl", hash = "sha256:a10811591210e1fb0e768a8c25517cabeabcba6f0bf96564f8ff45189f90b14a", size = 11178, upload-time = "2020-04-20T14:23:36.581Z" },
+]
+
+[[package]]
+name = "dhis2-client"
+version = "0.3.1"
+source = { git = "https://github.com/dhis2/dhis2-python-client.git?rev=41d696ad59f5ac09fce282ead80df32e451e7ff1#41d696ad59f5ac09fce282ead80df32e451e7ff1" }
+dependencies = [
+    { name = "convertdate" },
+    { name = "httpx" },
 ]
 
 [[package]]
@@ -1781,6 +1802,7 @@ dependencies = [
 server = [
     { name = "apscheduler" },
     { name = "dask-geopandas" },
+    { name = "dhis2-client" },
     { name = "earthkit-meteo" },
     { name = "earthkit-transforms" },
     { name = "earthkit-utils" },
@@ -1838,6 +1860,7 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'xarray'", specifier = ">=3.10" },
     { name = "apscheduler", marker = "extra == 'server'", specifier = ">=3.11,<4" },
     { name = "dask-geopandas", marker = "extra == 'server'", specifier = ">=0.4" },
+    { name = "dhis2-client", marker = "extra == 'server'", git = "https://github.com/dhis2/dhis2-python-client.git?rev=41d696ad59f5ac09fce282ead80df32e451e7ff1" },
     { name = "earthkit-meteo", marker = "extra == 'server'", specifier = ">=1.0" },
     { name = "earthkit-transforms", marker = "extra == 'server'", specifier = ">=1.0" },
     { name = "earthkit-utils", marker = "extra == 'server'", specifier = ">=1.0" },
@@ -2497,6 +2520,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
 ]
+
+[[package]]
+name = "pymeeus"
+version = "0.5.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/76/599896b37e60f43078afd8354b3802eb7ca257a7e7f6253cc21c4c672877/PyMeeus-0.5.12.tar.gz", hash = "sha256:548f7186bd8b96cbc069cf649a8e8e377dce49ac74486709849fe63a99cad684", size = 5752712, upload-time = "2022-12-11T11:37:48.504Z" }
 
 [[package]]
 name = "pyogrio"

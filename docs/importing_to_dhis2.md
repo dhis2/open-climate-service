@@ -46,10 +46,10 @@ section must be valid YAML before environment substitution; quote placeholders i
 other sections when necessary. Existing interpolation outside this section remains
 available.
 
-The client is optional and is supplied by the deployment or integration plugin.
-It is not yet available on PyPI. The connection accessor was tested against
-`dhis2-python-client` revision `41d696ad59f5ac09fce282ead80df32e451e7ff1` (0.3.1).
-For an instance managed with uv, add it to that instance's project:
+The server installation includes `dhis2-python-client` revision
+`41d696ad59f5ac09fce282ead80df32e451e7ff1` (0.3.1), pinned from Git because the client is
+not yet available on PyPI. A client-only OCS installation does not include it. If an existing
+deployment installed OCS without the server dependencies, add the same reviewed revision:
 
 ```bash
 uv add "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git@41d696ad59f5ac09fce282ead80df32e451e7ff1"

@@ -62,6 +62,10 @@ xarray = [
 # Full server stack — required to run your own Open Climate Service instance.
 server = [
     "fastapi>=0.100.0",
+    # Built-in DHIS2 exports and feature providers share the named-connection client. The
+    # client is not published on PyPI yet, so pin the reviewed revision rather than leaving a
+    # standard server installation with built-in integrations that fail only when invoked.
+    "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git@41d696ad59f5ac09fce282ead80df32e451e7ff1",
     # The SPDX register, for validating and canonicalising a template's declared `license`.
     # Vendoring the identifier list instead would avoid the dependency but go stale silently;
     # this package is the one SPDX tooling in Python agrees on, and it is pure Python.
