@@ -76,6 +76,26 @@ def test_a_trigger_reference_becomes_a_node_not_geometry() -> None:
     assert "coordinates" not in str(resolved) + str(nodes), "geometry must not reach the job record"
 
 
+def test_the_pinned_node_executes_through_the_real_process_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the executor boundary that normalizes timezone-qualified string arguments."""
+    from open_climate_service.openeo.execution import run_process_graph
+
+    _declare(monkeypatch, DISTRICTS_TEMPLATE)
+    feature_templates.reset_feature_template_caches()
+    _register("districts")
+    arguments = {"geometries": {"from_features": "districts"}}
+    versions = automation_service._feature_versions(arguments)
+    nodes: dict[str, Any] = {}
+    automation_service._resolve_feature_references(arguments, nodes, versions)
+    nodes["features_districts"]["result"] = True
+
+    result = run_process_graph({"process_graph": nodes})
+
+    assert result["features"][0]["id"] == "SL-01"
+
+
 def test_the_reference_is_a_node_the_executor_actually_resolves() -> None:
     """An inline `{"process_id": ...}` in an argument is *not* evaluated -- it is passed through.
 
@@ -106,6 +126,21 @@ def test_the_rewritten_node_stays_small() -> None:
 def test_a_literal_argument_is_left_alone() -> None:
     inline = {"type": "FeatureCollection", "features": []}
     assert automation_service._resolve_feature_references({"geometries": inline}) == {"geometries": inline}
+
+
+def test_inline_geojson_may_have_a_property_named_from_features() -> None:
+    inline = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                **_box("SL-01"),
+                "properties": {"orgUnitCode": "SL-01", "from_features": "source-system-value"},
+            }
+        ],
+    }
+
+    assert automation_service._resolve_feature_references({"geometries": inline}) == {"geometries": inline}
+    assert list(automation_service._iter_feature_references({"geometries": inline})) == []
 
 
 @pytest.mark.parametrize(
@@ -159,11 +194,45 @@ def test_an_unregistered_collection_is_refused_before_submission() -> None:
         automation_service._feature_versions({"geometries": {"from_features": "districts"}})
 
 
+def test_feature_versions_skips_registered_collection_lookup_without_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        feature_services,
+        "registered_collections",
+        lambda: (_ for _ in ()).throw(AssertionError("collection registry should not be loaded")),
+    )
+
+    assert automation_service._feature_versions({"dataset_id": "chirps"}) == {}
+
+
 def test_provenance_is_empty_when_nothing_is_referenced() -> None:
     assert automation_service._feature_provenance({}) == ""
 
 
 # --- startup validation: an undeclared id is a boot error, not a 3am failure ------------------
+
+
+def test_startup_skips_the_feature_registry_when_no_trigger_references_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        feature_templates,
+        "list_feature_templates",
+        lambda: (_ for _ in ()).throw(AssertionError("feature registry should not be loaded")),
+    )
+    config = AutomationConfig(
+        workflow_triggers=[
+            WorkflowTrigger(
+                id="t",
+                on_update_of="chirps",
+                workflow_id="w",
+                arguments={"geometries": {"type": "FeatureCollection", "features": []}},
+            )
+        ]
+    )
+
+    automation_service._validate_feature_references(config)
 
 
 def test_a_trigger_referencing_an_undeclared_feature_fails_at_startup(monkeypatch: pytest.MonkeyPatch) -> None:

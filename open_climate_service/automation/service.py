@@ -177,8 +177,15 @@ def _feature_node_name(feature_id: str) -> str:
     return f"features_{feature_id}"
 
 
+def _is_inline_geojson(value: Any) -> bool:
+    """Return whether a mapping is an inline GeoJSON feature or collection."""
+    return isinstance(value, dict) and value.get("type") in {"Feature", "FeatureCollection"}
+
+
 def _iter_feature_references(value: Any) -> Any:
     """Yield valid feature ids and reject malformed `from_features` marker objects."""
+    if _is_inline_geojson(value):
+        return
     if isinstance(value, list):
         for item in value:
             yield from _iter_feature_references(item)
@@ -208,6 +215,8 @@ def _resolve_feature_references(
     submission-time record timestamp is passed as `version`, so a queued job either reads the
     exact collection it declares or fails if a refresh has replaced that version.
     """
+    if _is_inline_geojson(value):
+        return value
     if isinstance(value, list):
         return [_resolve_feature_references(item, nodes, versions) for item in value]
     if not isinstance(value, dict):
@@ -229,9 +238,12 @@ def _feature_versions(arguments: Any) -> dict[str, str]:
     """Resolve and pin every referenced collection to its current registered record."""
     from open_climate_service.features import services as feature_services
 
+    feature_ids = sorted(set(_iter_feature_references(arguments)))
+    if not feature_ids:
+        return {}
     records = feature_services.registered_collections()
     versions: dict[str, str] = {}
-    for feature_id in sorted(set(_iter_feature_references(arguments))):
+    for feature_id in feature_ids:
         record = records.get(feature_id)
         if record is None:
             raise ValueError(
@@ -252,19 +264,26 @@ def _validate_feature_references(config: AutomationConfig) -> None:
     """Refuse malformed references and ids that no feature template declares at startup."""
     from open_climate_service.features.templates import list_feature_templates
 
-    declared = {str(template["id"]) for template in list_feature_templates()}
+    references_by_trigger: list[tuple[WorkflowTrigger, list[str]]] = []
     for trigger in config.workflow_triggers:
         try:
-            references = _iter_feature_references(trigger.arguments)
-            for feature_id in references:
-                if feature_id not in declared:
-                    available = ", ".join(sorted(declared)) or "none"
-                    raise ValueError(
-                        f"references feature {feature_id!r}, which does not name a declared feature template. "
-                        f"Declared: {available}"
-                    )
+            references = list(_iter_feature_references(trigger.arguments))
         except ValueError as exc:
             raise ValueError(f"Workflow trigger {trigger.id!r} has an invalid feature reference: {exc}") from exc
+        if references:
+            references_by_trigger.append((trigger, references))
+    if not references_by_trigger:
+        return
+
+    declared = {str(template["id"]) for template in list_feature_templates()}
+    for trigger, references in references_by_trigger:
+        for feature_id in references:
+            if feature_id not in declared:
+                available = ", ".join(sorted(declared)) or "none"
+                raise ValueError(
+                    f"Workflow trigger {trigger.id!r} has an invalid feature reference: references feature "
+                    f"{feature_id!r}, which does not name a declared feature template. Declared: {available}"
+                )
 
 
 class WorkflowAutomationService:

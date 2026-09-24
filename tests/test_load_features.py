@@ -92,6 +92,23 @@ def test_a_matching_version_pins_the_registered_collection() -> None:
     assert result["features"][0]["id"] == "SL-01"
 
 
+def test_a_naive_version_from_executor_normalization_matches_the_utc_record() -> None:
+    _register()
+    record = feature_services.registered_collections()["districts"]
+    naive_version = record.created_at.replace(tzinfo=None).isoformat()
+
+    result = load_features("districts", version=naive_version)
+
+    assert result["features"][0]["id"] == "SL-01"
+
+
+def test_an_invalid_version_is_refused() -> None:
+    _register()
+
+    with pytest.raises(ValueError, match="invalid feature collection version"):
+        load_features("districts", version="not-a-timestamp")
+
+
 def test_a_stale_version_is_refused_before_reading(monkeypatch: pytest.MonkeyPatch) -> None:
     _register()
     called = False

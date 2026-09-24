@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from open_climate_service.features import services as feature_services
@@ -25,8 +26,7 @@ _BBOX_KEYS = ("west", "south", "east", "north")
         "id": {"description": "Feature collection id, as registered under GET /features."},
         "spatial_extent": {"description": "Bounding box filter: {west, south, east, north, crs}."},
         "version": {
-            "description": "Optional record timestamp that pins this read to the submitted collection version.",
-            "optional": True,
+            "description": "Optional record timestamp that pins this read to the submitted collection version."
         },
     },
 )
@@ -60,11 +60,11 @@ def load_features(id: str, spatial_extent: Any = None, version: str | None = Non
             f"load_features: feature collection '{id}' is declared but has never been ingested; "
             "refresh it before loading it"
         )
-    actual_version = record.created_at.isoformat()
-    if version is not None and version != actual_version:
+    actual_version = record.created_at
+    if version is not None and _version_instant(version) != _version_instant(actual_version):
         raise ValueError(
             f"load_features: feature collection {id!r} changed after this job was submitted "
-            f"(expected {version}, current {actual_version})"
+            f"(expected {version}, current {actual_version.isoformat()})"
         )
     detail = record.features
     if detail is None:  # pragma: no cover -- registered_collections() already filters on this
@@ -83,6 +83,21 @@ def load_features(id: str, spatial_extent: Any = None, version: str | None = Non
         frame = frame.to_crs(store.WGS84)
 
     return _to_labeled_geojson(frame, id_property=detail.id_property)
+
+
+def _version_instant(value: str | datetime) -> datetime:
+    """Parse a feature version as a UTC instant, accepting the executor's naive ISO form."""
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        candidate = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError as exc:
+            raise ValueError(f"load_features: invalid feature collection version {value!r}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _parse_spatial_extent(spatial_extent: Any) -> tuple[tuple[float, float, float, float] | None, str]:

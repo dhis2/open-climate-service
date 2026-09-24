@@ -39,10 +39,12 @@ as output dataset IDs, geometries, and DHIS2 identifiers remain in instance conf
 
 ### Referencing a feature collection
 
-`geometries: { from_features: districts }` names a feature collection declared under
-`plugins/features/` (see [Installable plugins](installable_plugins.md#package-layout)) instead of
-embedding a `FeatureCollection` inline. An inline `FeatureCollection` still works for an ad-hoc
-call — the two forms are interchangeable wherever a `geometries`-shaped argument is expected.
+Within an automation trigger, `geometries: { from_features: districts }` names a feature
+collection declared under `plugins/features/` (see
+[Installable plugins](installable_plugins.md#package-layout)) instead of embedding a
+`FeatureCollection` inline. This shorthand is resolved by the automation service and is not a
+general openEO process-graph argument. Direct process graphs should call `load_features`
+explicitly. An inline `FeatureCollection` remains valid in either context.
 
 The reference is never resolved into geometry at submission. Instead OCS rewrites it into a
 sibling node in the process graph that the workflow calls `load_features` on:
