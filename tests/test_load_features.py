@@ -83,6 +83,49 @@ def test_a_declared_but_never_ingested_template_is_refused() -> None:
         load_features("districts")
 
 
+def test_a_matching_version_pins_the_registered_collection() -> None:
+    _register()
+    record = feature_services.registered_collections()["districts"]
+
+    result = load_features("districts", version=record.created_at.isoformat())
+
+    assert result["features"][0]["id"] == "SL-01"
+
+
+def test_a_naive_version_from_executor_normalization_matches_the_utc_record() -> None:
+    _register()
+    record = feature_services.registered_collections()["districts"]
+    naive_version = record.created_at.replace(tzinfo=None).isoformat()
+
+    result = load_features("districts", version=naive_version)
+
+    assert result["features"][0]["id"] == "SL-01"
+
+
+def test_an_invalid_version_is_refused() -> None:
+    _register()
+
+    with pytest.raises(ValueError, match="invalid feature collection version"):
+        load_features("districts", version="not-a-timestamp")
+
+
+def test_a_stale_version_is_refused_before_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    _register()
+    called = False
+
+    def read(*args: Any, **kwargs: Any) -> Any:
+        nonlocal called
+        called = True
+        raise AssertionError("stale bindings must fail before opening the collection")
+
+    monkeypatch.setattr(load_features_module.store, "read_feature_collection", read)
+
+    with pytest.raises(ValueError, match="changed after this job was submitted"):
+        load_features("districts", version="2026-01-01T00:00:00+00:00")
+
+    assert called is False
+
+
 # --- the CRS-reprojection contract --------------------------------------------------------------
 
 
