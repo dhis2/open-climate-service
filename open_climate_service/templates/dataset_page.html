@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ dataset.name }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/datasets">Datasets</a> / {{ dataset.id }}</p>
+        <div class="page-title">
+          <h2>{{ dataset.name }}</h2>
+          <span class="chip chip-{{ dataset.status }}">{{ dataset.status }}</span>
+        </div>
+
+        <div class="dataset-page">
+          <div class="stack">
+            <div class="panel item">
+              <div
+                class="thumb{% if dataset.has_thumbnail %} has-image{% endif %}"
+                style="--ramp: {{ dataset.ramp }}"
+              >
+                {% if dataset.has_thumbnail %}
+                <img
+                  src="{{ mount }}/datasets/{{ dataset.id }}/thumbnail.png"
+                  alt="Preview of {{ dataset.name }}"
+                />
+                {% else %}
+                <span class="no-preview">No preview yet</span>
+                {% endif %}
+              </div>
+            </div>
+
+            <section class="panel" aria-labelledby="description-title">
+              <h3 id="description-title">Description</h3>
+              {% if paragraphs %}
+              <div class="prose">
+                {% for paragraph in paragraphs %}
+                <p>{{ paragraph }}</p>
+                {% endfor %}
+              </div>
+              {% else %}
+              <p class="note">No description has been provided for this dataset.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="about-title">
+              <h3 id="about-title">About</h3>
+              <dl class="facts">
+                {% for label, value, href in data %}
+                <dt>{{ label }}</dt>
+                <dd>
+                  {% if href %}<a href="{{ href if href.startswith('http') else mount ~ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}
+                </dd>
+                {% endfor %}
+              </dl>
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel" aria-labelledby="sync-title">
+              <h3 id="sync-title">Sync</h3>
+              {% if syncable and not read_only %}
+              <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
+                Checking the source for new data…
+              </p>
+              <form id="sync-form" method="post" action="{{ mount }}/manage/sync">
+                <input type="hidden" name="dataset_id" value="{{ dataset.id }}" />
+                <div class="field" style="margin-top: var(--spacers-dp12)">
+                  <label for="sync-end">Sync through (optional)</label>
+                  <input type="text" id="sync-end" name="end" {% if format_hint %}placeholder="{{ format_hint }}"{% endif %} aria-describedby="sync-end-hint" />
+                  <span class="hint" id="sync-end-hint">Leave blank to sync through the latest available period.</span>
+                </div>
+                {% if published %}
+                <input type="hidden" name="publish" value="on" />
+                {% endif %}
+                <div class="form-actions">
+                  <button type="submit" class="primary" id="sync-button">Start sync</button>
+                  <span class="note">
+                    {% if published %}The dataset stays published.{% else %}The dataset stays unpublished.{% endif %}
+                  </span>
+                </div>
+                <div class="progress" data-job-progress hidden>
+                  <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
+                  <span class="progress-label" aria-live="polite">Starting…</span>
+                </div>
+                <div class="notice error" data-job-error role="alert" hidden></div>
+              </form>
+              {% elif not syncable %}
+              <p class="note">
+                {% if sync_kind == "static" %}This dataset does not update from a source, so there is nothing to sync.{% else %}This dataset has no source to sync from.{% endif %}
+              </p>
+              {% else %}
+              <p class="note">This instance is read-only, so datasets cannot be synced here.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="access-title">
+              <h3 id="access-title">Access</h3>
+              <div class="actions">
+                {% if published %}
+                <a class="button-link primary" href="{{ mount }}/map?dataset={{ dataset.id | urlencode }}">Open in map viewer</a>
+                {% endif %}
+                {% for link in links %}
+                <a class="button-link" href="{{ mount }}{{ link.href }}">{{ link.title }}</a>
+                {% endfor %}
+                <a class="button-link" href="{{ mount }}/datasets/{{ dataset.id }}?f=json">Metadata (JSON)</a>
+              </div>
+              {% if not published %}
+              <p class="note" style="margin-top: var(--spacers-dp8)">
+                This dataset is not published, so it is not in the map viewer or the STAC catalog.
+              </p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="status-title">
+              <h3 id="status-title">Status and display</h3>
+              <dl class="facts">
+                {% for label, value, href in status_facts %}
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+                {% endfor %}
+              </dl>
+              <span class="ramp-bar" style="--ramp: {{ dataset.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    {% if syncable and not read_only %}
+    <script>
+{{ job_script | safe }}
+      // Reload on success, so coverage and the version history show what the sync added.
+      runJobForm(document.getElementById("sync-form"), {
+        startLabel: "Starting sync…",
+        onDone: function () {
+          window.location.reload();
+        },
+      });
+
+      // The plan asks the provider what it has published, which can be slow, so it is fetched
+      // after the page has rendered rather than holding the page up.
+      (function () {
+        var line = document.getElementById("sync-plan");
+        fetch(line.getAttribute("data-plan-url"), { headers: { Accept: "application/json" } })
+          .then(function (response) {
+            return response.ok ? response.json() : Promise.reject(response.status);
+          })
+          .then(function (plan) {
+            line.textContent = plan.message || "";
+          })
+          .catch(function () {
+            line.textContent = "Could not check the source for new data.";
+          });
+      })();
+    </script>
+    {% endif %}
+  </body>
+</html>

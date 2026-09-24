@@ -7,7 +7,7 @@ import sys
 import urllib.parse
 from collections.abc import AsyncIterator
 from importlib.metadata import version as _pkg_version
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -20,9 +20,11 @@ from .schemas import AppInfo, HealthStatus, Status
 from .templates import (
     ROOT_RESPONSES,
     app_version,
+    render_api_page,
     render_landing,
-    render_manage,
     render_maps,
+    render_workflow_page,
+    render_workflows_page,
     wants_json,
 )
 
@@ -38,7 +40,7 @@ def _describe_exception(exc: BaseException, *, with_type: bool = False) -> str:
     which names the plumbing and discards the cause. Ingest reaches plenty of async code that
     raises inside a task group — zarr's concurrent chunk reads, for one — so without this the
     operator gets the wrapper and nothing to act on, and the sub-exception is lost for good
-    because these handlers turn it into a redirect.
+    because these handlers turn it into a single error string.
 
     The type prefix is added for members of a group, where the exception class is most of the
     signal, and omitted for a lone exception so existing messages read unchanged.
@@ -89,6 +91,31 @@ def maps(request: Request) -> HTMLResponse:
     return HTMLResponse(render_maps(mount_prefix(request)), headers=_NO_STORE)
 
 
+@router.get("/api", response_class=HTMLResponse, include_in_schema=False)
+def api_page(request: Request) -> HTMLResponse:
+    """Return the page listing this instance's API endpoints, built from its own OpenAPI schema."""
+    return HTMLResponse(render_api_page(request.app.openapi(), mount_prefix(request)))
+
+
+@router.get("/workflows", response_class=HTMLResponse, include_in_schema=False)
+def workflows_page(request: Request) -> HTMLResponse:
+    """Return the list of workflows. The machine-readable form is `GET /process_graphs`."""
+    return HTMLResponse(render_workflows_page(mount_prefix(request)))
+
+
+@router.get("/workflows/{workflow_id}", response_class=HTMLResponse, include_in_schema=False)
+def workflow_page(request: Request, workflow_id: str) -> HTMLResponse:
+    """Return the page for one workflow. The machine-readable form is `GET /process_graphs/{id}`."""
+    from fastapi import HTTPException
+
+    from open_climate_service.openeo.workflows import get_workflow
+
+    record = get_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+    return HTMLResponse(render_workflow_page(record, mount_prefix(request)))
+
+
 @router.get("/openeo", response_class=HTMLResponse, include_in_schema=False)
 def openeo_editor(request: Request) -> RedirectResponse:
     """Redirect to the openEO Web Editor pre-connected to this backend."""
@@ -97,37 +124,55 @@ def openeo_editor(request: Request) -> RedirectResponse:
     return RedirectResponse(f"https://editor.openeo.org/?{params}", status_code=302)
 
 
-@router.get("/manage", response_class=HTMLResponse, include_in_schema=False)
-def manage(
-    request: Request,
-    message: str | None = None,
-    error: str | None = None,
-) -> HTMLResponse:
-    """Return the management interface for ingestion and sync operations."""
-    return HTMLResponse(
-        render_manage(app_version, mount_prefix(request), message=message, error=error), headers=_NO_STORE
-    )
+def _refusal(status_code: int, message: str) -> JSONResponse:
+    """The answer to an ingest or sync request that cannot start.
 
-
-def _manage_url(mount: str, banner: Literal["error", "message"], text: str) -> str:
-    """A mount-relative `/manage` URL carrying one banner, with the text percent-encoded.
-
-    Every redirect back to the console goes through here, so none can miss the prefix.
+    JSON rather than a stream, so the page that posted can show the message in place: the
+    streams below only begin once the request is known to be runnable.
     """
-    return f"{mount}/manage?{banner}={urllib.parse.quote(text)}"
+    return JSONResponse(status_code=status_code, content={"error": message})
+
+
+def _job_stream(work: Any, finished_message: str) -> StreamingResponse:
+    """Run *work* in a thread and stream its progress as server-sent events.
+
+    Events are progress updates (`done`, `total`, `message`), then exactly one of `finished`
+    (with a message) or `error`. The stream then ends.
+    """
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_progress(done: int | None, total: int | None, message: str | None) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, {"done": done, "total": total, "message": message})
+
+    async def run() -> None:
+        from fastapi import HTTPException
+
+        try:
+            await asyncio.to_thread(lambda: work(on_progress))
+            loop.call_soon_threadsafe(queue.put_nowait, {"finished": True, "message": finished_message})
+        except HTTPException as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, {"error": str(exc.detail)})
+        except Exception as exc:
+            logger.exception("Manage operation failed")
+            loop.call_soon_threadsafe(queue.put_nowait, {"error": _describe_exception(exc)})
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    asyncio.create_task(run())
+    return StreamingResponse(_sse_events(queue), media_type="text/event-stream")
 
 
 @router.post("/manage/ingest", include_in_schema=False)
 async def manage_ingest(request: Request) -> Response:
-    """Handle ingest form submission and stream progress via SSE."""
+    """Ingest a dataset template from its page's form, streaming progress via SSE."""
     from fastapi import HTTPException
 
     from open_climate_service.data_registry.services import datasets as registry_datasets
     from open_climate_service.data_registry.services.datasets import get_dataset
     from open_climate_service.extents.services import get_extent_or_404
-    from open_climate_service.ingestions.services import create_artifact
+    from open_climate_service.ingestions.services import create_artifact, ensure_ingestable
 
-    mount = mount_prefix(request)
     try:
         form = await request.form()
         dataset_id = str(form.get("dataset_id", "")).strip()
@@ -139,137 +184,68 @@ async def manage_ingest(request: Request) -> Response:
 
         template = get_dataset(dataset_id)
         if template is None:
-            return RedirectResponse(
-                _manage_url(mount, "error", f"Dataset template '{dataset_id}' not found"), status_code=303
-            )
+            return _refusal(404, f"Dataset template '{dataset_id}' not found")
 
-        # Validate the blank start here rather than leaving it to create_artifact. The work
-        # below runs inside an SSE stream, and a response that has already begun cannot
-        # redirect — the operator would get a progress bar that fails mid-flight instead of
-        # the error banner. Only a forecast may omit it (see temporal_direction).
+        # Both checks belong here rather than inside create_artifact: the work below runs in an
+        # event stream, where a refusal arrives as an event after a 200 instead of as the
+        # refusal it is. A workflow output has nothing to fetch from...
+        ensure_ingestable(template)
+        # ...and only a forecast may leave the start blank.
         if start is None and not registry_datasets.is_future_facing(template):
-            return RedirectResponse(
-                _manage_url(
-                    mount,
-                    "error",
-                    f"Start period is required for '{dataset_id}': its periods are not in the future",
-                ),
-                status_code=303,
-            )
+            return _refusal(400, f"Start period is required for '{dataset_id}': its periods are not in the future")
 
         extent = get_extent_or_404()
         resolved_bbox = list(extent["bbox"])
         country_code = extent.get("country_code")
     except HTTPException as exc:
-        return RedirectResponse(_manage_url(mount, "error", str(exc.detail)), status_code=303)
+        return _refusal(exc.status_code, str(exc.detail))
     except Exception as exc:
         logger.exception("Manage form submission failed")
-        return RedirectResponse(_manage_url(mount, "error", _describe_exception(exc)), status_code=303)
+        return _refusal(400, _describe_exception(exc))
 
-    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def on_progress(done: int | None, total: int | None, message: str | None) -> None:
-        loop.call_soon_threadsafe(
-            queue.put_nowait,
-            {"done": done, "total": total, "message": message},
-        )
-
-    async def run() -> None:
-        try:
-            await asyncio.to_thread(
-                lambda: create_artifact(
-                    dataset=template,
-                    start=start,
-                    end=end,
-                    bbox=resolved_bbox,
-                    country_code=country_code,
-                    overwrite=overwrite,
-                    publish=publish,
-                    on_progress=on_progress,
-                )
-            )
-            name = str(template.get("name", dataset_id))
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"redirect": _manage_url(mount, "message", f"Ingested {name}")},
-            )
-        except HTTPException as exc:
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"error": str(exc.detail), "redirect": _manage_url(mount, "error", str(exc.detail))},
-            )
-        except Exception as exc:
-            logger.exception("Manage operation failed")
-            detail = _describe_exception(exc)
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"error": detail, "redirect": _manage_url(mount, "error", detail)},
-            )
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    asyncio.create_task(run())
-    return StreamingResponse(_sse_events(queue), media_type="text/event-stream")
+    return _job_stream(
+        lambda on_progress: create_artifact(
+            dataset=template,
+            start=start,
+            end=end,
+            bbox=resolved_bbox,
+            country_code=country_code,
+            overwrite=overwrite,
+            publish=publish,
+            on_progress=on_progress,
+        ),
+        f"Ingested {template.get('name', dataset_id)}",
+    )
 
 
 @router.post("/manage/sync", include_in_schema=False)
 async def manage_sync(request: Request) -> Response:
-    """Handle sync form submission and stream progress via SSE."""
+    """Sync a dataset from its page's form, streaming progress via SSE."""
     from fastapi import HTTPException
 
-    from open_climate_service.ingestions.services import sync_dataset
+    from open_climate_service.ingestions.services import get_latest_artifact_for_dataset_or_404, sync_dataset
 
-    mount = mount_prefix(request)
     try:
         form = await request.form()
         dataset_id = str(form.get("dataset_id", "")).strip()
         end = str(form.get("end", "")).strip() or None
         publish = "publish" in form
-
         if not dataset_id:
-            raise HTTPException(status_code=400, detail="Dataset ID is required")
+            return _refusal(400, "Dataset ID is required")
+        # Resolve the dataset before the stream opens, for the same reason as ingest: an id
+        # that names nothing is a client mistake, and inside the stream it would reach the page
+        # as an error event on a 200.
+        get_latest_artifact_for_dataset_or_404(dataset_id)
     except HTTPException as exc:
-        return RedirectResponse(_manage_url(mount, "error", str(exc.detail)), status_code=303)
+        return _refusal(exc.status_code, str(exc.detail))
     except Exception as exc:
         logger.exception("Manage form submission failed")
-        return RedirectResponse(_manage_url(mount, "error", _describe_exception(exc)), status_code=303)
+        return _refusal(400, _describe_exception(exc))
 
-    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def on_progress(done: int | None, total: int | None, message: str | None) -> None:
-        loop.call_soon_threadsafe(
-            queue.put_nowait,
-            {"done": done, "total": total, "message": message},
-        )
-
-    async def run() -> None:
-        try:
-            await asyncio.to_thread(
-                lambda: sync_dataset(dataset_id=dataset_id, end=end, publish=publish, on_progress=on_progress)
-            )
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"redirect": _manage_url(mount, "message", "Sync completed")},
-            )
-        except HTTPException as exc:
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"error": str(exc.detail), "redirect": _manage_url(mount, "error", str(exc.detail))},
-            )
-        except Exception as exc:
-            logger.exception("Manage operation failed")
-            detail = _describe_exception(exc)
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"error": detail, "redirect": _manage_url(mount, "error", detail)},
-            )
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    asyncio.create_task(run())
-    return StreamingResponse(_sse_events(queue), media_type="text/event-stream")
+    return _job_stream(
+        lambda on_progress: sync_dataset(dataset_id=dataset_id, end=end, publish=publish, on_progress=on_progress),
+        "Sync completed",
+    )
 
 
 @router.get("/health")

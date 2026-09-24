@@ -1,6 +1,6 @@
 # Built-in datasets
 
-The Open Climate Service ships with built-in dataset templates covering precipitation, temperature, and population. Each template describes a data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
+The Open Climate Service ships with built-in dataset templates covering precipitation, temperature, and population. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
 
 To ingest a built-in dataset for your configured extent, see the [API reference](managed_data_api_guide.md). To add datasets beyond these, see [Adding custom datasets](adding_custom_datasets.md).
 
@@ -62,7 +62,7 @@ See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, incl
 
 | Property               | Value                                                                |
 | ---------------------- | -------------------------------------------------------------------- |
-| **Dataset ID**         | `worldpop_population_global2_R2025A_100m`                            |
+| **Dataset ID**         | `worldpop_population_global2_100m`                                   |
 | **Variable**           | `pop_total`                                                          |
 | **Units**              | people                                                               |
 | **Period**             | Yearly                                                               |
@@ -84,7 +84,7 @@ WorldPop Global2 provides gridded population estimates and projections at 100 m 
 
 | Property               | Value                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------- |
-| **Dataset ID**         | `worldpop_agesex_global2_R2025A_100m`                                                     |
+| **Dataset ID**         | `worldpop_agesex_global2_100m`                                                            |
 | **Variable**           | `population` (over `sex` and `age_group` dimensions)                                      |
 | **Units**              | people                                                                                    |
 | **Period**             | Yearly                                                                                    |

@@ -11,6 +11,10 @@
 - id: c3s_seasonal_temperature_anomaly
   name: Temperature anomaly, seasonal forecast (C3S)
   short_name: Temp anomaly forecast
+  description: >-
+    Monthly temperature forecast to six months ahead at 110 km, worldwide, as a departure from
+    the model's own 1993-2016 climatology rather than an absolute value. ECMWF SEAS5.1, carried
+    as the 10th, 50th and 90th percentiles across its members.
   standard_name: air_temperature_anomaly
   variable: t2a
   period_type: monthly
@@ -55,6 +59,10 @@
 - id: c3s_seasonal_precipitation_anomaly
   name: Precipitation anomaly, seasonal forecast (C3S)
   short_name: Precip anomaly forecast
+  description: >-
+    Monthly rainfall forecast to six months ahead at 110 km, worldwide, as a departure from
+    the model's own 1993-2016 climatology rather than an absolute value. ECMWF SEAS5.1, carried
+    as the 10th, 50th and 90th percentiles across its members.
   standard_name: precipitation_flux_anomaly
   variable: tpara
   period_type: monthly

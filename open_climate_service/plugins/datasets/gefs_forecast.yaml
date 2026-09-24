@@ -4,6 +4,9 @@
 - id: gefs_temperature_forecast
   name: Temperature forecast, 35-day ensemble (GEFS)
   short_name: Temp forecast
+  description: >-
+    Daily temperature forecast to 35 days ahead at 28 km, worldwide. From the NOAA GEFS
+    ensemble, carried as the 10th, 50th and 90th percentiles across its members.
   standard_name: air_temperature
   variable: temperature_2m
   period_type: daily
@@ -43,6 +46,9 @@
 - id: gefs_precipitation_forecast
   name: Precipitation forecast, 35-day ensemble (GEFS)
   short_name: Precip forecast
+  description: >-
+    Daily rainfall forecast to 35 days ahead at 28 km, worldwide. From the NOAA GEFS
+    ensemble, carried as the 10th, 50th and 90th percentiles across its members.
   standard_name: precipitation_amount
   variable: precipitation_surface
   period_type: daily

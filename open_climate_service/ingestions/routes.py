@@ -1,7 +1,7 @@
 """Routes for EO ingestion, datasets, and sync operations."""
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from starlette.responses import Response
 
 from open_climate_service.data_registry.routes import _get_dataset_or_404
@@ -9,6 +9,7 @@ from open_climate_service.extents.services import get_extent_or_404
 from open_climate_service.ingestions import services
 from open_climate_service.ingestions.job_submission import INGESTION_JOB_HREF_BASE, submit_sync_job
 from open_climate_service.ingestions.schemas import (
+    ArtifactFormat,
     CreateIngestionRequest,
     DatasetDetailRecord,
     DatasetListResponse,
@@ -21,6 +22,7 @@ from open_climate_service.ingestions.schemas import (
 from open_climate_service.jobs.models import JobLink, JobRecord
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.shared.thumbnails import thumbnail_path
+from open_climate_service.shared.urls import mount_prefix
 
 ingestions_router = APIRouter()
 datasets_router = APIRouter()
@@ -72,7 +74,11 @@ def create_ingestion(
     return immediately with 202 + ``Location: /ingestions/jobs/{id}``.
     """
     if _prefer_respond_async(prefer):
-        _get_dataset_or_404(request.dataset_id)
+        # Refuse here, not in the worker. Everything past `submit_callable_job` is reported
+        # through the job record, so a non-ingestable template would be accepted with 202 and
+        # then fail — logging a traceback for what is a client mistake, and hiding the reason
+        # from the response that was supposed to carry it (CLIM-912).
+        services.ensure_ingestable(_get_dataset_or_404(request.dataset_id))
         get_extent_or_404()
 
         from open_climate_service.ingestions.processes import execute_ingestion
@@ -119,16 +125,51 @@ def get_ingestion(ingestion_id: str) -> IngestionResponse:
     return services.get_ingestion_or_404(ingestion_id)
 
 
-@datasets_router.get("", response_model=DatasetListResponse)
-def list_datasets() -> DatasetListResponse:
-    """List managed datasets."""
+@datasets_router.get(
+    "",
+    response_model=DatasetListResponse,
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
+def list_datasets(request: Request, response: Response) -> DatasetListResponse | HTMLResponse:
+    """List managed datasets.
+
+    JSON by default, as it has always been. A browser gets the page the rail links to, on the
+    same terms as a single dataset: only a client ranking `text/html` above JSON, with `?f=html`
+    and `?f=json` deciding outright.
+    """
+    from open_climate_service.system.templates import prefers_html, render_datasets_page
+
+    response.headers["Vary"] = "Accept"
+    if prefers_html(request):
+        page = HTMLResponse(render_datasets_page(mount_prefix(request)))
+        page.headers["Vary"] = "Accept"
+        return page
     return services.list_datasets()
 
 
-@datasets_router.get("/{dataset_id}", response_model=DatasetDetailRecord)
-def get_dataset(dataset_id: str) -> DatasetDetailRecord:
-    """Get managed dataset metadata and available versions."""
-    return services.get_dataset_or_404(dataset_id)
+@datasets_router.get(
+    "/{dataset_id}",
+    response_model=DatasetDetailRecord,
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
+def get_dataset(dataset_id: str, request: Request, response: Response) -> DatasetDetailRecord | HTMLResponse:
+    """Get managed dataset metadata and available versions.
+
+    JSON by default. A browser, which ranks `text/html` first, gets the dataset page the landing
+    page links to; `?f=html` and `?f=json` choose explicitly.
+    """
+    record = services.get_dataset_or_404(dataset_id)
+    from open_climate_service.system.templates import prefers_html, render_dataset_page
+
+    # Two representations share this URL, so a cache keyed on the URL alone would serve one
+    # client the other's. Set on both arms: the JSON arm is a model FastAPI serialises, so the
+    # header goes on the shared `response` rather than on a response object of our own.
+    response.headers["Vary"] = "Accept"
+    if prefers_html(request):
+        page = HTMLResponse(render_dataset_page(record, mount_prefix(request)))
+        page.headers["Vary"] = "Accept"
+        return page
+    return record
 
 
 @datasets_router.get("/{dataset_id}/thumbnail.png", response_class=FileResponse)
@@ -150,17 +191,30 @@ def get_dataset_thumbnail(dataset_id: str) -> FileResponse:
 
 @datasets_router.get("/{dataset_id}/download")
 def download_artifact_file(dataset_id: str) -> FileResponse:
-    """Download the primary saved file for a dataset when available."""
+    """Download the primary saved file for a dataset, for the one format that is a single file.
+
+    An allowlist rather than a denylist. This used to refuse `zarr` and serve everything else
+    as `application/x-netcdf` under a `.nc` filename, which was true while NetCDF was the only
+    single-file format left. `GEOPARQUET` broke that assumption: a feature collection is one
+    file with a path, so it passed the check and came back as Parquet bytes wearing NetCDF's
+    media type and extension — a wrong answer rather than a refusal.
+
+    Naming the format the response is built for means the next format added is refused here by
+    default and has to claim its own branch, which is the failure a caller can act on. Serving
+    a feature collection is `GET /features` in CLIM-1068, with the Parquet media type settled
+    in CLIM-1069.
+    """
     artifact = services.get_latest_artifact_for_dataset_or_404(dataset_id)
-    if artifact.path is None or artifact.format.value == "zarr":
+    if artifact.path is None or artifact.format != ArtifactFormat.NETCDF:
         raise HTTPException(
             status_code=409,
-            detail="Dataset is not a single downloadable file; use metadata and dataset assets instead",
+            detail=(
+                f"Dataset '{dataset_id}' is stored as {artifact.format} and is not a single "
+                "downloadable file; use metadata and dataset assets instead"
+            ),
         )
 
-    media_type = "application/x-netcdf"
-    filename = f"{dataset_id}.nc"
-    return FileResponse(artifact.path, media_type=media_type, filename=filename)
+    return FileResponse(artifact.path, media_type="application/x-netcdf", filename=f"{dataset_id}.nc")
 
 
 @zarr_router.api_route("/{dataset_id}/{relative_path:path}", methods=["GET", "HEAD"], response_model=None)

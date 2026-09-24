@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from open_climate_service.openeo import collections as collections_service
 from open_climate_service.openeo import processes as processes_service
@@ -20,7 +20,8 @@ from open_climate_service.openeo.schemas import (
     WorkflowListResponse,
     WorkflowRecord,
 )
-from open_climate_service.shared.urls import absolute_base
+from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
+from open_climate_service.shared.urls import absolute_base, mount_prefix
 
 capabilities_router = APIRouter(tags=["openEO"])
 collections_router = APIRouter(tags=["openEO"])
@@ -189,9 +190,26 @@ def get_collection(collection_id: str, request: Request) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@processes_router.get("")
-def list_processes(request: Request) -> dict[str, Any]:
-    """Return all available openEO processes."""
+@processes_router.get(
+    "",
+    # The JSON schema FastAPI inferred before, kept explicitly: `response_model=None` alone
+    # would drop it, so a negotiated endpoint would quietly lose its machine-readable contract.
+    response_model=dict[str, Any],
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
+def list_processes(request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
+    """Return all available openEO processes.
+
+    The openEO JSON by default, as clients expect. A browser gets the catalogue page the rail
+    links to, on the same terms as a single process.
+    """
+    from open_climate_service.system.templates import prefers_html, render_processes_page
+
+    response.headers["Vary"] = "Accept"
+    if prefers_html(request):
+        page = HTMLResponse(render_processes_page(mount_prefix(request)))
+        page.headers["Vary"] = "Accept"
+        return page
     procs = processes_service.list_openeo_processes()
     base_url = absolute_base(request)
     return {
@@ -200,13 +218,29 @@ def list_processes(request: Request) -> dict[str, Any]:
     }
 
 
-@processes_router.get("/{process_id}")
-def get_process_spec(process_id: str) -> dict[str, Any]:
-    """Return one openEO process description by id."""
+@processes_router.get(
+    "/{process_id}",
+    response_model=dict[str, Any],
+    responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
+)
+def get_process_spec(process_id: str, request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
+    """Return one openEO process description by id.
+
+    JSON by default, as openEO clients expect. A browser, which ranks `text/html` first, gets
+    the process page; `?f=html` and `?f=json` choose explicitly.
+    """
     p = processes_service.get_openeo_process(process_id)
-    if p is not None:
-        return p
-    raise HTTPException(status_code=404, detail=f"Process '{process_id}' not found")
+    if p is None:
+        raise HTTPException(status_code=404, detail=f"Process '{process_id}' not found")
+    from open_climate_service.system.templates import prefers_html, render_process_page
+
+    # Two representations on one URL — see the dataset page's note on Vary.
+    response.headers["Vary"] = "Accept"
+    if prefers_html(request):
+        page = HTMLResponse(render_process_page(p, mount_prefix(request)))
+        page.headers["Vary"] = "Accept"
+        return page
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +343,7 @@ _RESULT_MEDIA_TYPES: dict[str, str] = {
     ".csv": "text/csv",
     ".json": "application/json",
     ".geojson": "application/geo+json",
-    ".parquet": "application/vnd.apache.parquet",
+    ".parquet": PARQUET_MEDIA_TYPE,
 }
 
 

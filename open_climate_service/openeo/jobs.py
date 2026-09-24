@@ -51,6 +51,7 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobUpdate,
 )
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
@@ -948,8 +949,20 @@ def _reject_incompatible_template_units(ds: Any, variable: str, cf_attrs: dict[s
 
     Overwriting a *placeholder* unit remains the point of the call site — a placeholder is not
     a parseable unit, so `_variable_units` reports it as absent and this never fires. What is
-    refused is overwriting a unit the result genuinely carries; `units` in the save_result
-    options is the way to say the relabel is intended.
+    refused is overwriting a unit the result genuinely carries.
+
+    `units` in the save_result options is **not** an escape hatch from that refusal, and the
+    messages below deliberately do not offer it as one (CLIM-918). It is a declaration of what
+    the result already is, never a conversion or an override:
+
+    * With a **pre-registered** template, `cf_attrs` comes from the template and the option is
+      never read, so passing it re-raises this same error.
+    * With an **auto-derived** template, the option becomes the declared unit, so it is checked
+      here like any other declaration — it can only cause this refusal, never avoid it. Omitting
+      it is what lets the produced unit through.
+
+    The two real recoveries are converting the result in the process graph, or targeting a
+    template that declares the units the process produces.
     """
     declared = cf_attrs.get("units")
     produced = _variable_units(ds, variable)
@@ -976,15 +989,13 @@ def _reject_incompatible_template_units(ds: Any, variable: str, cf_attrs: dict[s
             f"({declared_unit.dimensionality or 'dimensionless'} vs "
             f"{produced_unit.dimensionality or 'dimensionless'}). Publishing would relabel the values "
             "rather than convert them. Use a template whose units match the process output (a relative "
-            "anomaly is a percentage, not the observed variable's unit), or pass an explicit "
-            "'units' in the save_result options."
+            "anomaly is a percentage, not the observed variable's unit)."
         )
     raise ValueError(
         f"dataset template declares units '{declared or 'dimensionless'}' but the result carries "
         f"'{produced}'. They measure the same quantity on different scales, so publishing would "
-        "relabel the values without converting them. Convert the result in the process graph, use a "
-        "template declaring the units the process produces, or pass an explicit 'units' in the "
-        "save_result options."
+        "relabel the values without converting them. Convert the result in the process graph, or use "
+        "a template declaring the units the process produces."
     )
 
 
@@ -1302,11 +1313,14 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
             },
         }
         # Advertise the STAC collection only when the dataset is actually published.
+        # The raster gate rather than the STAC one, even though the asset points at STAC:
+        # the record is dereferenced as a Zarr store just below, to keep the media type in
+        # step with the collection's own asset.
         try:
             from open_climate_service.ingestions import services as _ingestion_services
             from open_climate_service.ingestions.schemas import ArtifactFormat
 
-            artifact = _ingestion_services.latest_published_zarr_artifacts_by_dataset().get(dataset_id)
+            artifact = _ingestion_services.latest_published_raster_artifacts_by_dataset().get(dataset_id)
             if artifact is not None:
                 assets["stac"] = {
                     "href": f"/stac/collections/{dataset_id}",
@@ -1351,7 +1365,7 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
         ".png": ("image/png", "PNG result"),
         ".csv": ("text/csv", "CSV result"),
         ".json": ("application/json", "JSON result"),
-        ".parquet": ("application/vnd.apache.parquet", "GeoParquet result"),
+        ".parquet": (PARQUET_MEDIA_TYPE, "GeoParquet result"),
     }
     for ext, (mime, title) in ext_map.items():
         if output_path.endswith(ext):
@@ -1387,7 +1401,7 @@ _RASTER_FORMATS: dict[str, tuple[str, str]] = {
 _VECTOR_FORMATS: dict[str, tuple[str, str]] = {
     "GEOJSON": (".geojson", "application/geo+json"),
     "CSV": (".csv", "text/csv"),
-    "PARQUET": (".parquet", "application/vnd.apache.parquet"),
+    "PARQUET": (".parquet", PARQUET_MEDIA_TYPE),
 }
 
 _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
