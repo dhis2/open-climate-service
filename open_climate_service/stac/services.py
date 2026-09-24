@@ -20,6 +20,7 @@ from xstac import xarray_to_stac
 from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset, open_zarr_dataset
 from open_climate_service.data_manager.services.utils import get_time_dim, get_x_y_dims
 from open_climate_service.data_registry.services import datasets as registry_datasets
+from open_climate_service.features import templates as feature_templates
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord, FeatureDetail
 from open_climate_service.shared import geoparquet
@@ -281,7 +282,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             status_code=500,
             detail=f"Feature collection '{dataset_id}' has no feature detail to describe",
         )
-    source_dataset = registry_datasets.get_dataset(artifact.dataset_id) or {}
+    source_dataset = feature_templates.get_feature_template(artifact.dataset_id) or {}
     licence = parse_licence(source_dataset.get("license"))
     spatial = artifact.coverage.spatial_wgs84 or artifact.coverage.spatial
 

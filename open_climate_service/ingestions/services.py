@@ -27,6 +27,7 @@ from open_climate_service.data_accessor.services.accessor import get_data_covera
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
+from open_climate_service.features import templates as feature_templates
 from open_climate_service.ingestions.artifact_paths import decode_record_paths, encode_record_paths
 from open_climate_service.ingestions.schemas import (
     ArtifactCoverage,
@@ -446,6 +447,7 @@ def create_feature_artifact(
     crs: str,
     bbox: Sequence[float] | None = None,
     primary_geometry: str = DEFAULT_PRIMARY_GEOMETRY,
+    provider: str | None = None,
     publish: bool = True,
 ) -> ArtifactRecord:
     """Register one already-written feature collection as a managed dataset.
@@ -480,6 +482,11 @@ def create_feature_artifact(
     contradicts. An empty collection is refused rather than registered, because a provider that
     returned nothing is reporting a failure, and a record for it would advertise a collection
     with no extent.
+
+    `provider` names the `@feature_provider` that produced `features`, stamped verbatim onto
+    `FeatureDetail.provider` (CLIM-926). None for a hand-registered collection. The caller's
+    own selected registry name, never read from the payload: a provider does not get to declare
+    its own identity, or one could claim ownership of a collection another provider wrote.
     """
     dataset_id = _require_template_str(template, "id")
     dataset_name = _require_template_str(template, "name")
@@ -517,6 +524,7 @@ def create_feature_artifact(
             feature_count=len(feature_list),
             primary_geometry=primary_geometry,
             crs=stored_crs,
+            provider=provider,
         ),
     )
     # Overwrite semantics, which is what a refresh is: replace this collection's name, extent
@@ -2376,7 +2384,11 @@ def _temporal_coverage_matches_streaming_request_scope(
 
 def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> DatasetRecord:
     latest = max(artifacts, key=lambda artifact: artifact.created_at)
-    source_dataset = registry_datasets.get_dataset(latest.dataset_id) or {}
+    source_dataset = (
+        feature_templates.get_feature_template(latest.dataset_id)
+        if latest.format == ArtifactFormat.GEOPARQUET
+        else registry_datasets.get_dataset(latest.dataset_id)
+    ) or {}
     return DatasetRecord(
         dataset_id=dataset_id,
         source_dataset_id=latest.source_dataset_id or latest.dataset_id,

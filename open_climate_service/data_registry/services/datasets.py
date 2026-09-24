@@ -169,7 +169,7 @@ def is_ingestable(dataset: dict[str, Any]) -> bool:
 
 
 def get_dataset(dataset_id: str) -> dict[str, Any] | None:
-    """Get dataset dict for a given id."""
+    """Get a raster dataset template for a given id."""
     datasets_lookup = {d["id"]: d for d in list_datasets()}
     return datasets_lookup.get(dataset_id)
 

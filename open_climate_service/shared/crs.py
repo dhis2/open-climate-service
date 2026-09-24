@@ -55,21 +55,22 @@ def is_builtin_crs(code: str | int) -> bool:
 
 
 @functools.lru_cache(maxsize=128)
-def _require_known_crs(code: str) -> None:
-    """Raise ValueError unless *code* names a CRS pyproj can resolve.
+def validate_crs_code(code: str | int) -> str:
+    """Return the canonical code after verifying that pyproj can resolve it.
 
     Cached because it is on the read path: a windowed read of a WGS 84 collection asks this
     twice per call and the answer never changes for a given code. pyproj's own construction is
-    not free, and the shortcut below exists precisely to avoid paying for a transform that does
-    nothing.
+    not free.
     """
+    canonical = canonical_crs_code(code)
     from pyproj import CRS
     from pyproj.exceptions import CRSError
 
     try:
-        CRS.from_user_input(code)
+        CRS.from_user_input(canonical)
     except (CRSError, TypeError, ValueError) as exc:
-        raise ValueError(f"'{code}' is not a CRS this service can resolve: {exc}") from exc
+        raise ValueError(f"'{canonical}' is not a CRS this service can resolve: {exc}") from exc
+    return canonical
 
 
 def transform_bbox(
@@ -89,14 +90,12 @@ def transform_bbox(
     a future process — promises its own callers ValueError, and an authority-shaped code that
     simply does not exist ('EPSG:999999') is the ordinary typo, not an internal fault.
     """
-    source_code = canonical_crs_code(source)
-    target_code = canonical_crs_code(target)
+    source_code = validate_crs_code(source)
+    target_code = validate_crs_code(target)
     # Checked before the shortcut below, not after it. Returning the box unchanged for a
     # same-CRS call is the common case and worth keeping cheap, but skipping the checks with it
     # meant this helper's promise held only when it actually did work: two identical *unknown*
     # codes came back fine, and so did a non-finite box.
-    _require_known_crs(source_code)
-    _require_known_crs(target_code)
     if not all(math.isfinite(value) for value in bbox):
         raise ValueError(f"bbox {bbox} is not a finite box, so it cannot be transformed or compared")
     if source_code == target_code:
