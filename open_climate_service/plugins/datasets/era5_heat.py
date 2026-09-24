@@ -175,9 +175,9 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
     max_concurrency = 1
     commit_batch_size = 30
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, temporal_aggregation: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._temporal_aggregation = "mean"
+        self._temporal_aggregation = temporal_aggregation
 
     async def periods(self, start: str, end: str) -> list[str]:
         hour_periods = await super().periods(start=start, end=end)
