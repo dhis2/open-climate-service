@@ -16,10 +16,17 @@
     plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
     params: 
       temporal_aggregation: mean
-  units: Degrees Celsius
+  units: degC
+  cell_methods: "time: mean"
   resolution: 0.25 deg x 0.25 deg
   source: ERA5-Heat
   source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
     range: [0, 50]
@@ -42,10 +49,14 @@
     plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
     params: 
       temporal_aggregation: max
-  units: Degrees Celsius
+  units: degC
+  cell_methods: "time: max"
   resolution: 0.25 deg x 0.25 deg
   source: ERA5-Heat
   source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
   display:
     colormap: YlOrRd
     range: [0, 50]
@@ -68,10 +79,14 @@
     plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
     params: 
       temporal_aggregation: min
-  units: Degrees Celsius
+  units: degC
+  cell_methods: "time: min"
   resolution: 0.25 deg x 0.25 deg
   source: ERA5-Heat
   source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
   display:
     colormap: YlOrRd
     range: [0, 50]
