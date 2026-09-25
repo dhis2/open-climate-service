@@ -21,7 +21,7 @@ class CopDEM30Plugin(BaseDatasetPlugin):
     """
 
     async def periods(self, start: str, end: str) -> list[str]:
-        if end < '2010' or start > '2010':
+        if int(end[:4]) < 2010 or int(start[:4]) > 2010:
             # start-end range does not include 2010, we therefore return no valid periods
             return []
         else:

@@ -18,6 +18,10 @@ def test_periods():
     assert asyncio.run(plugin.periods("2010", "2020")) == ["2010"]
     assert asyncio.run(plugin.periods("2011", "2020")) == []
 
+    assert asyncio.run(plugin.periods("2009-01-01", "2011-01-01")) == ["2010"]
+    assert asyncio.run(plugin.periods("2010-01-01", "2010-01-01")) == ["2010"]
+    assert asyncio.run(plugin.periods("2009-01-01", "2009-01-01")) == []
+
 @pytest.fixture
 def elevation_data():
     # hacky check for TEST_INTEGRATIONS flag for integration tests that should only be run manually
