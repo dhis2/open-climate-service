@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from open_climate_service import config as api_config
 from open_climate_service.features import providers as feature_providers
@@ -161,6 +162,12 @@ def _refresh_feature_collection_locked(
     return record
 
 
+def _first_validation_message(exc: ValidationError) -> str:
+    """The first pydantic complaint, as one line fit to append to an operator-facing error."""
+    errors = exc.errors()
+    return str(errors[0].get("msg", exc)) if errors else str(exc)
+
+
 def _unpack_provider_result(result: Any, *, provider_name: str) -> tuple[Mapping[str, Any], ArtifactVersion | None]:
     """Accept either return form a provider may use: a collection, or one with its version.
 
@@ -189,12 +196,21 @@ def _unpack_provider_result(result: Any, *, provider_name: str) -> tuple[Mapping
             )
         if declared is None:
             return collection, None
-        if not isinstance(declared, str) or not declared.strip():
+        if not isinstance(declared, str):
             raise ValueError(
                 f"Feature provider {provider_name!r} reported version {declared!r}; a version must be a "
                 "non-empty string identifying the upstream release"
             )
-        return collection, ArtifactVersion(value=declared.strip(), authority=provider_name)
+        # Not stripped. `ArtifactVersion.value` rejects padding rather than trimming it, so that
+        # "verbatim" stays true of the recorded identifier — trimming here would let a provider
+        # register a value the same string could not be declared with in a template.
+        try:
+            return collection, ArtifactVersion(value=declared, authority=provider_name)
+        except ValidationError as exc:
+            raise ValueError(
+                f"Feature provider {provider_name!r} reported version {declared!r}, which is not a usable "
+                f"release identifier: {_first_validation_message(exc)}"
+            ) from exc
     if not isinstance(result, Mapping):
         raise ValueError(
             f"Feature provider {provider_name!r} returned {type(result).__name__}; it must return either a "

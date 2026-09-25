@@ -350,12 +350,24 @@ def test_a_reported_version_of_none_records_nothing() -> None:
     assert version is None
 
 
+def test_a_non_string_reported_version_is_refused() -> None:
+    with pytest.raises(ValueError, match="a version must be a non-empty string"):
+        feature_services._unpack_provider_result(
+            ({"type": "FeatureCollection", "features": []}, 7), provider_name="overture"
+        )
+
+
 @pytest.mark.parametrize(
     "reported",
-    [pytest.param("", id="empty"), pytest.param("   ", id="whitespace"), pytest.param(7, id="not a string")],
+    [pytest.param("", id="empty"), pytest.param("   ", id="whitespace"), pytest.param(" v1 ", id="padded")],
 )
-def test_a_malformed_reported_version_is_refused(reported: object) -> None:
-    with pytest.raises(ValueError, match="a version must be a non-empty string"):
+def test_a_reported_version_is_not_trimmed_into_validity(reported: str) -> None:
+    """`ArtifactVersion.value` rejects padding rather than trimming it, so 'verbatim' stays true.
+
+    Trimming here would let a provider register a value that the same string could not be
+    *declared* with in a template — two doors to one field disagreeing about what it accepts.
+    """
+    with pytest.raises(ValueError, match="not a usable release identifier"):
         feature_services._unpack_provider_result(
             ({"type": "FeatureCollection", "features": []}, reported), provider_name="overture"
         )

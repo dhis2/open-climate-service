@@ -40,6 +40,15 @@ def _row(uid: str, subtype: str = "county", name: str = "Western Area Rural", **
     }
 
 
+def _feat(uid: str) -> dict[str, Any]:
+    """A plain GeoJSON feature, for the store-level tests that bypass the Arrow reader."""
+    return {
+        "type": "Feature",
+        "properties": {"id": uid},
+        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+    }
+
+
 def _reader(rows: list[dict[str, Any]]) -> pa.RecordBatchReader:
     """A RecordBatchReader over `rows`, with the real extract's column set."""
     names_type = pa.struct([("primary", pa.string()), ("common", pa.string()), ("rules", pa.string())])
@@ -221,6 +230,17 @@ def test_an_explicit_country_may_be_given_in_either_form(stub_reader: Any, monke
     for given in ("SL", "sle", "SLE"):
         collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE, country=given)
         assert [f["properties"]["id"] for f in collection["features"]] == ["a"], given
+
+
+def test_an_invalid_explicit_country_is_refused_not_silently_ignored(
+    stub_reader: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo would otherwise widen the extract to the neighbours it just asked to exclude."""
+    _sl_extent(monkeypatch)
+    stub_reader([_row("a", country="SL"), _row("b", country="GN")])
+
+    with pytest.raises(ValueError, match="not an ISO 3166-1 alpha-2 or alpha-3 code"):
+        overture.overture_features(release="r", bbox=SIERRA_LEONE, country="SLEE")
 
 
 def test_any_country_keeps_the_neighbours(stub_reader: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -460,3 +480,79 @@ def test_the_reported_release_becomes_the_collection_version(
     # something the provider declared about itself.
     assert record.version.authority == "overture"
     assert record.features is not None and record.features.feature_count == 2
+
+
+# --- precedence: a reported version wins over a declared one -----------------------------------
+
+
+def _feature_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    from open_climate_service import config as api_config
+    from open_climate_service.ingestions import services as ingestion_services
+
+    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
+    artifacts = tmp_path / "artifacts"
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts)
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", artifacts / "records.json")
+
+
+_DECLARED_VERSION = {
+    "sync": {"kind": "release", "version": {"value": "2026-01-01.0", "authority": "stale-declaration"}}
+}
+
+
+def _template(**extra: Any) -> dict[str, Any]:
+    return {
+        "id": "divisions_under_test",
+        "name": "Divisions",
+        "id_property": "id",
+        "provider": "overture",
+        **extra,
+    }
+
+
+def test_a_reported_version_overrides_a_conflicting_declared_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Both describe the same release, but only the reported one was true of this extract.
+
+    The template below declares `sync.version` *and* its provider reports a different release.
+    The companion test covers the other half of the branch: a provider that reports nothing
+    leaves the declaration standing, so the two together pin the precedence in both directions.
+    """
+    _feature_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        feature_providers,
+        "get_feature_provider",
+        lambda _name: lambda **_: ({"type": "FeatureCollection", "features": [_feat("a")]}, "2026-09-23.0"),
+    )
+    monkeypatch.setattr(
+        __import__("open_climate_service.features.templates", fromlist=["x"]),
+        "get_feature_template",
+        lambda _id: _template(**_DECLARED_VERSION),
+    )
+    refreshed = feature_services.refresh_feature_collection_from_provider("divisions_under_test")
+
+    assert refreshed.version is not None
+    assert (refreshed.version.value, refreshed.version.authority) == ("2026-09-23.0", "overture")
+
+
+def test_a_provider_reporting_nothing_leaves_the_declared_version_in_place(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The fallback half of the same branch: silence is not an instruction to erase."""
+    _feature_store(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        feature_providers,
+        "get_feature_provider",
+        lambda _name: lambda **_: {"type": "FeatureCollection", "features": [_feat("a")]},
+    )
+    monkeypatch.setattr(
+        __import__("open_climate_service.features.templates", fromlist=["x"]),
+        "get_feature_template",
+        lambda _id: _template(**_DECLARED_VERSION),
+    )
+
+    record = feature_services.refresh_feature_collection_from_provider("divisions_under_test")
+
+    assert record.version is not None
+    assert (record.version.value, record.version.authority) == ("2026-01-01.0", "stale-declaration")

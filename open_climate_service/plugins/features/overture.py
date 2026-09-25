@@ -27,7 +27,9 @@ a template to restate a code the instance already holds.
 **The release id is the version.** Overture publishes monthly, so a release *is* a version and
 "is there a newer one than we hold" is answerable without comparing data. It is passed
 explicitly rather than resolved to `latest`, so an instance upgrades deliberately and a
-re-extract is reproducible.
+re-extract is reproducible. Bumping it selects what the *next* run extracts rather than
+triggering one: a feature collection is not on the raster sync path, so a refresh is an explicit
+provider run.
 
 **Licence.** Divisions incorporate OpenStreetMap, so the theme is ODbL: attribution plus
 share-alike on a derived database. The template declaring this provider carries `license` and
@@ -200,7 +202,20 @@ def _with_country(filters: Mapping[str, Any] | None, *, country: str | None) -> 
         return selection
     if country is not None and country.strip().lower() == ANY_COUNTRY:
         return selection
-    code = _alpha_2(country) if country is not None else _instance_alpha_2()
+    if country is not None:
+        # An explicit code is a request, so a typo is refused rather than quietly widening the
+        # extract: `country: SLEE` would otherwise fall back to no filter at all and return the
+        # neighbours the caller just asked to exclude. The instance's own code is treated more
+        # leniently below, because an instance may legitimately have no usable one.
+        code = _alpha_2(country)
+        if code is None:
+            raise ValueError(
+                f"Overture country {country!r} is not an ISO 3166-1 alpha-2 or alpha-3 code; "
+                f"use a valid code, or {ANY_COUNTRY!r} to keep every country the bbox covers"
+            )
+        selection[_COUNTRY_COLUMN] = code
+        return selection
+    code = _instance_alpha_2()
     if code is not None:
         selection[_COUNTRY_COLUMN] = code
     return selection

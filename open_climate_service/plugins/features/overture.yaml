@@ -2,7 +2,9 @@
 # own (CLIM-893). The extract is per-instance: `bbox` defaults to this instance's declared
 # extent and `country` to its `extent.country_code`, so the template below needs neither a
 # coordinate list nor a country. The `release` is pinned deliberately rather than resolved to
-# "latest" — bumping it is a visible config change that forces a re-extract.
+# "latest", so an upgrade is a visible config change — but bumping it only selects what the
+# NEXT provider run extracts; it does not trigger one. A feature collection is not on the
+# raster sync path, so refreshing means re-running the provider.
 #
 # A bbox is a rectangle, not a border, so the window crosses into neighbouring countries: a
 # Sierra Leone extent also returns Coyah and Conakry in Guinea. The country default drops them.
