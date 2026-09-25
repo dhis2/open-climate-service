@@ -1,0 +1,92 @@
+- id: era5heat_utci_daily
+  name: Universal Thermal Climate Index (ERA5-Heat, daily average)
+  short_name: Heat Index
+  variable: utci
+  description: Universal Thermal Climate Index (UTCI) representing human thermal stress and discomfort in outdoor conditions. 
+  period_type: daily
+  sync:
+    kind: temporal
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1939"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
+    params: 
+      temporal_aggregation: mean
+  units: degC
+  cell_methods: "time: mean"
+  resolution: 0.25 deg x 0.25 deg
+  source: ERA5-Heat
+  source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: YlOrRd
+    range: [0, 50]
+
+- id: era5heat_utci_daily_max
+  name: Universal Thermal Climate Index (ERA5-Heat, daily maximum)
+  short_name: Heat Index, Max
+  variable: utci
+  description: Universal Thermal Climate Index (UTCI) representing human thermal stress and discomfort in outdoor conditions. 
+  period_type: daily
+  sync:
+    kind: temporal
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1939"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
+    params: 
+      temporal_aggregation: max
+  units: degC
+  cell_methods: "time: max"
+  resolution: 0.25 deg x 0.25 deg
+  source: ERA5-Heat
+  source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  display:
+    colormap: YlOrRd
+    range: [0, 50]
+
+- id: era5heat_utci_daily_min
+  name: Universal Thermal Climate Index (ERA5-Heat, daily minimum)
+  short_name: Heat Index, Min
+  variable: utci
+  description: Universal Thermal Climate Index (UTCI) representing human thermal stress and discomfort in outdoor conditions. 
+  period_type: daily
+  sync:
+    kind: temporal
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1939"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
+    params: 
+      temporal_aggregation: min
+  units: degC
+  cell_methods: "time: min"
+  resolution: 0.25 deg x 0.25 deg
+  source: ERA5-Heat
+  source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  display:
+    colormap: YlOrRd
+    range: [0, 50]
