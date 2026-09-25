@@ -23,7 +23,7 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
-from open_climate_service.shared.time import datetime_to_period_string
+from open_climate_service.shared.time import datetime_to_period_string, has_calendar_periods
 
 from .schemas import Link, RootResponse
 
@@ -434,7 +434,10 @@ def _period_value(value: str, period: str) -> str:
     string, because a week's identifier is not a prefix of the date it falls in — truncating
     left `2026-09-17` unchanged and the form then asked for something the source cannot read.
     """
-    if not value or not period:
+    if not value or not period or not has_calendar_periods(period):
+        # A climatology's ids are ordinals, so there is no date to offer. `_ingest_defaults`
+        # leaves the field empty for one; this guard keeps a direct caller from logging a
+        # stack trace for a question that has no answer.
         return value
     try:
         moment = datetime.fromisoformat(value)
@@ -456,6 +459,11 @@ def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
     """
     direction = str(template.get("temporal_direction") or "past")
     period = str(template.get("period_type") or "")
+    if period and not has_calendar_periods(period):
+        # A climatology covers a reference period fixed by the template — ERA5-Land's normals
+        # carry `period: [1991, 2020]` in their ingestion params — so there is nothing for an
+        # operator to choose, and no date that would mean anything in these fields.
+        return {"start": "", "end": "", "start_required": False, "direction": "ordinal"}
     # Keep the day, and only give it up where it does not exist: clamping every date to the
     # 28th moved the default start back by up to three days for most of each month, which a
     # daily or dekadal source ingests as real extra periods.
