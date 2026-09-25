@@ -8,6 +8,7 @@ from open_climate_service.plugins.datasets.copdem30 import CopDEM30Plugin
 
 _TEST_BBOX = [28.7, -2.9, 28.8, -2.8]
 
+
 def test_periods():
     plugin = CopDEM30Plugin()
 
@@ -22,6 +23,7 @@ def test_periods():
     assert asyncio.run(plugin.periods("2010-01-01", "2010-01-01")) == ["2010"]
     assert asyncio.run(plugin.periods("2009-01-01", "2009-01-01")) == []
 
+
 @pytest.fixture
 def elevation_data():
     # hacky check for TEST_INTEGRATIONS flag for integration tests that should only be run manually
@@ -29,8 +31,9 @@ def elevation_data():
         pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
 
     plugin = CopDEM30Plugin()
-    ds = plugin.fetch_period(period_id='2010', bbox=_TEST_BBOX)
+    ds = plugin.fetch_period(period_id="2010", bbox=_TEST_BBOX)
     return ds
+
 
 def test_copdem30_dims_and_values(elevation_data: xr.Dataset):
     assert isinstance(elevation_data, xr.Dataset)

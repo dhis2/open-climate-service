@@ -1,14 +1,10 @@
 """Copernicus DEM 30m streaming plugin."""
 
-import logging
 from typing import Any
 
 import xarray as xr
 
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
-
-logger = logging.getLogger(__name__)
-
 
 _DEM30_ZARR_URL = "https://api.earthdatahub.destine.eu/copernicus-dem/GLO-30-v0.zarr"
 
@@ -26,7 +22,7 @@ class CopDEM30Plugin(BaseDatasetPlugin):
             return []
         else:
             # start-end range includes 2010, we can then constrain that range to only 2010
-            return ['2010']
+            return ["2010"]
 
     def fetch_period(self, period_id: str, bbox: list[float], **params: Any) -> xr.Dataset:
         # read the source raster for this period
