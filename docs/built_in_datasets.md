@@ -98,6 +98,62 @@ Population disaggregated by sex and 5-year age band. Population is the quantity;
 
 ---
 
+## Overture Maps — administrative divisions (feature collection)
+
+| Property             | Value                                                                   |
+| -------------------- | ----------------------------------------------------------------------- |
+| **Collection ID**    | `overture_divisions`                                                    |
+| **Item type**        | Feature collection (GeoParquet), not a raster                           |
+| **Identity**         | `id_property: id` — Overture's own division id                          |
+| **Spatial coverage** | Global; extracted for this instance's configured extent                 |
+| **Version**          | The pinned Overture release, e.g. `2026-09-23.0`                        |
+| **Licence**          | ODbL-1.0 — attribution **and** share-alike                              |
+| **Source**           | [Overture Maps divisions](https://docs.overturemaps.org/guides/divisions/) |
+
+Administrative boundaries for countries with no usable DHIS2 hierarchy of their own — the polygons
+an aggregation runs over when `dhis2` org units are unavailable. Registered collections are served
+under `GET /features` and loaded inside a process graph by id with `load_features`.
+
+**Pick one administrative level.** A bounding-box window returns every level that overlaps it.
+Measured for the Sierra Leone extent: 201 features spanning `country` (6), `region` (18), `county`
+(44), `localadmin` (15), `locality` (43), `macrohood` (24), `neighborhood` (49) and `dependency`
+(2). Aggregating over that mixture is meaningless, so the shipped template filters to a single
+`subtype`, coarsest first: `country`, `dependency`, `region`, `county`, `localadmin`, `locality`,
+`macrohood`, `neighborhood`.
+
+**A window crosses borders.** The bbox is a rectangle, not a country outline, so a neighbouring
+country's divisions come back too — a Sierra Leone extent also returns Coyah and Conakry in
+Guinea. Add `country` to `filters` when that matters.
+
+```yaml
+- id: overture_divisions
+  name: Administrative divisions (Overture Maps)
+  license: ODbL-1.0
+  attribution: © OpenStreetMap contributors, © Overture Maps Foundation
+  id_property: id
+  provider: overture
+  params:
+    release: 2026-09-23.0
+    theme: divisions
+    filters: { subtype: county, country: SL }
+```
+
+**Sync behaviour** — Overture publishes monthly and the release id *is* the version, so bumping
+`release` is what forces a re-extract. It is pinned rather than resolved to `latest`, so an
+upgrade is a visible configuration change and an extract is reproducible.
+
+**Other themes** — the provider is generic: `theme` selects the family (`divisions`, `buildings`,
+`places`, `transportation`, `addresses`, `base`) and resolves to the type worth extracting, or
+name `type` outright. Only `divisions` is shipped as a template. Large themes such as `buildings`
+are a different problem — millions of features per country, needing tile generation rather than a
+feature collection — and are out of scope here.
+
+**Licence obligation** — ODbL because divisions incorporate OpenStreetMap. The `license` and
+`attribution` fields are the obligation, not decoration: publishing an extract without surfacing
+them is a breach, and share-alike attaches to a publicly served derived database.
+
+---
+
 ## Temporal resampling
 
 Any ingested dataset can be resampled to a coarser temporal resolution (e.g. hourly → daily, daily → monthly) using the standard openEO `aggregate_temporal_period` process in a process graph. See [Processes](processes.md) for an example.

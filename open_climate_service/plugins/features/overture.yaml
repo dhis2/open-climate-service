@@ -1,0 +1,66 @@
+# Overture Maps administrative divisions, for a country with no usable DHIS2 hierarchy of its
+# own (CLIM-893). The extract is per-instance: `bbox` defaults to this instance's declared
+# extent and `country` to its `extent.country_code`, so the template below needs neither a
+# coordinate list nor a country. The `release` is pinned deliberately rather than resolved to
+# "latest" — bumping it is a visible config change that forces a re-extract.
+#
+# A bbox is a rectangle, not a border, so the window crosses into neighbouring countries: a
+# Sierra Leone extent also returns Coyah and Conakry in Guinea. The country default drops them.
+# An instance whose extent is deliberately transboundary sets `country: any` to keep them.
+#
+# `filters` is not optional in spirit. A bbox window returns every administrative level that
+# overlaps it; for Sierra Leone that is 201 features spanning country, region, county,
+# localadmin, locality, macrohood, neighborhood and dependency. Aggregating over that mixture
+# is meaningless, so pick the one level you mean. Overture's `subtype` vocabulary, coarsest
+# first: country, dependency, region, county, localadmin, locality, macrohood, neighborhood.
+#
+# LICENCE: divisions incorporate OpenStreetMap, so this is ODbL — attribution plus share-alike
+# on a derived database. Both fields below are the obligation, not decoration; publishing an
+# extract without surfacing them is a licence breach.
+- id: overture_divisions
+  name: Administrative divisions (Overture Maps)
+  description: >-
+    Administrative boundaries for this instance's extent, from Overture Maps. One
+    administrative level, chosen by the `subtype` filter. Overture publishes monthly; the
+    pinned release is the collection's version.
+  license: ODbL-1.0
+  attribution: © OpenStreetMap contributors, © Overture Maps Foundation
+  id_property: id
+  provider: overture
+  params:
+    release: 2026-09-23.0
+    theme: divisions
+    filters:
+      subtype: county
+
+# Everything under `params` is passed to the provider as keyword arguments, so a copy of this
+# template in an instance's own `plugins/features/` can narrow the extract further without any
+# code change. The full vocabulary:
+#
+#   release:  Overture release id. Required, and pinned — it becomes the collection's version.
+#   theme:    divisions (default), buildings, places, transportation, addresses, base.
+#   type:     the exact Overture type, when a theme's default is not the one you want.
+#             divisions resolves to division_area (polygons); its siblings are division
+#             (points) and division_boundary (lines).
+#   bbox:     [west, south, east, north]. Defaults to this instance's extent.
+#   country:  ISO 3166-1 alpha-2 or alpha-3. Defaults to the instance's extent.country_code;
+#             `any` keeps neighbouring countries.
+#   columns:  which source columns become feature properties. Defaults to
+#             [id, subtype, class, names, country, region, admin_level], with the `names`
+#             struct flattened to a plain `name`.
+#   filters:  {column: value} or {column: [value, ...]}, on any column the type has. A column
+#             that does not exist is refused outright rather than matching nothing.
+#   stac:     Overture's STAC partition pruning. Off by default — it returns nothing at all for
+#             division_area, while the ordinary path answers in seconds. Worth turning on for a
+#             large theme such as buildings.
+#
+# A more selective example — two administrative levels, a named country, and fewer properties:
+#
+#   params:
+#     release: 2026-09-23.0
+#     theme: divisions
+#     country: SLE
+#     columns: [id, names, subtype]
+#     filters:
+#       subtype: [county, region]
+#       class: land
