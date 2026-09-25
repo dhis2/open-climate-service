@@ -7,7 +7,7 @@ from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 logger = logging.getLogger(__name__)
 
 
-_DEM30_ZARR_URL = "https://data.earthdatahub.destine.eu/copernicus-dem/GLO-30-v0.zarr"
+_DEM30_ZARR_URL = "https://api.earthdatahub.destine.eu/copernicus-dem/GLO-30-v0.zarr"
 
 
 class CopDEM30Plugin(BaseDatasetPlugin):
