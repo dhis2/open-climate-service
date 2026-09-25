@@ -16,6 +16,7 @@ from shapely.geometry import Polygon
 
 from open_climate_service.extents import services as extent_services
 from open_climate_service.features import providers as feature_providers
+from open_climate_service.features import services as feature_services
 from open_climate_service.plugins.features import overture
 
 SIERRA_LEONE = [-13.5, 6.9, -10.1, 10.0]
@@ -80,7 +81,7 @@ def stub_reader(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def
 def test_divisions_become_a_geojson_feature_collection(stub_reader: Any) -> None:
     stub_reader([_row("a"), _row("b", name="Bo")])
 
-    collection = overture.overture_features(release="2026-09-23.0", bbox=SIERRA_LEONE)
+    collection, _release = overture.overture_features(release="2026-09-23.0", bbox=SIERRA_LEONE)
 
     assert collection["type"] == "FeatureCollection"
     assert [f["properties"]["id"] for f in collection["features"]] == ["a", "b"]
@@ -115,7 +116,7 @@ def test_the_names_struct_is_flattened_to_a_plain_name(stub_reader: Any) -> None
     """`{primary, common, rules}` would otherwise reach GeoJSON as a dict nobody reads."""
     stub_reader([_row("a", name="Bombali")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE)
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE)
 
     assert collection["features"][0]["properties"]["name"] == "Bombali"
     assert "names" not in collection["features"][0]["properties"]
@@ -124,7 +125,7 @@ def test_the_names_struct_is_flattened_to_a_plain_name(stub_reader: Any) -> None
 def test_a_column_projection_keeps_only_what_it_names(stub_reader: Any) -> None:
     stub_reader([_row("a")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE, columns=["id", "subtype"])
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE, columns=["id", "subtype"])
 
     assert collection["features"][0]["properties"] == {"id": "a", "subtype": "county"}
 
@@ -136,7 +137,7 @@ def test_a_subtype_filter_keeps_one_administrative_level(stub_reader: Any) -> No
     """The whole point: a bbox window spans country through neighbourhood."""
     stub_reader([_row("a", subtype="county"), _row("b", subtype="neighborhood"), _row("c", subtype="country")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE, filters={"subtype": "county"})
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE, filters={"subtype": "county"})
 
     assert [f["properties"]["id"] for f in collection["features"]] == ["a"]
 
@@ -144,7 +145,9 @@ def test_a_subtype_filter_keeps_one_administrative_level(stub_reader: Any) -> No
 def test_a_filter_accepts_several_values(stub_reader: Any) -> None:
     stub_reader([_row("a", subtype="county"), _row("b", subtype="region"), _row("c", subtype="locality")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE, filters={"subtype": ["county", "region"]})
+    collection, _release = overture.overture_features(
+        release="r", bbox=SIERRA_LEONE, filters={"subtype": ["county", "region"]}
+    )
 
     assert [f["properties"]["id"] for f in collection["features"]] == ["a", "b"]
 
@@ -194,7 +197,7 @@ def test_a_neighbouring_countrys_divisions_are_dropped_by_default(
         ]
     )
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE)
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE)
 
     assert [f["properties"]["name"] for f in collection["features"]] == ["Western Area Rural"]
 
@@ -206,7 +209,7 @@ def test_the_instance_alpha_3_code_is_matched_against_overtures_alpha_2(
     monkeypatch.setattr(overture, "get_extent", lambda: {"bbox": SIERRA_LEONE, "country_code": "NPL"})
     stub_reader([_row("a", country="NP"), _row("b", country="IN")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE)
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE)
 
     assert [f["properties"]["id"] for f in collection["features"]] == ["a"]
 
@@ -216,7 +219,7 @@ def test_an_explicit_country_may_be_given_in_either_form(stub_reader: Any, monke
     stub_reader([_row("a", country="SL"), _row("b", country="GN")])
 
     for given in ("SL", "sle", "SLE"):
-        collection = overture.overture_features(release="r", bbox=SIERRA_LEONE, country=given)
+        collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE, country=given)
         assert [f["properties"]["id"] for f in collection["features"]] == ["a"], given
 
 
@@ -225,7 +228,7 @@ def test_any_country_keeps_the_neighbours(stub_reader: Any, monkeypatch: pytest.
     _sl_extent(monkeypatch)
     stub_reader([_row("a", country="SL"), _row("b", country="GN")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE, country=overture.ANY_COUNTRY)
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE, country=overture.ANY_COUNTRY)
 
     assert [f["properties"]["id"] for f in collection["features"]] == ["a", "b"]
 
@@ -237,7 +240,7 @@ def test_an_explicit_country_filter_wins_over_the_instance_code(
     _sl_extent(monkeypatch)
     stub_reader([_row("a", country="SL"), _row("b", country="GN")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE, filters={"country": "GN"})
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE, filters={"country": "GN"})
 
     assert [f["properties"]["id"] for f in collection["features"]] == ["b"]
 
@@ -249,7 +252,7 @@ def test_no_declared_country_code_leaves_the_window_unconfined(
     _sl_extent(monkeypatch, country_code=None)
     stub_reader([_row("a", country="SL"), _row("b", country="GN")])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE)
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE)
 
     assert [f["properties"]["id"] for f in collection["features"]] == ["a", "b"]
 
@@ -262,7 +265,7 @@ def test_an_unrecognised_instance_country_code_warns_and_does_not_confine(
     stub_reader([_row("a", country="SL"), _row("b", country="GN")])
 
     with caplog.at_level("WARNING"):
-        collection = overture.overture_features(release="r", bbox=SIERRA_LEONE)
+        collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE)
 
     assert len(collection["features"]) == 2
     assert "not an ISO 3166-1 code" in caplog.text
@@ -340,7 +343,7 @@ def test_a_row_without_geometry_is_dropped_not_emitted(stub_reader: Any) -> None
     """A boundary with no shape is nothing to aggregate over."""
     stub_reader([_row("a"), _row("b", geometry=None)])
 
-    collection = overture.overture_features(release="r", bbox=SIERRA_LEONE)
+    collection, _release = overture.overture_features(release="r", bbox=SIERRA_LEONE)
 
     assert [f["properties"]["id"] for f in collection["features"]] == ["a"]
 
@@ -409,7 +412,51 @@ def test_template_params_reach_the_provider_as_keyword_arguments(
 
     provider = feature_providers.get_feature_provider(str(template["provider"]))
     assert provider is not None, "the shipped template names a provider that is not registered"
-    collection = provider(**params)
+    # Unpacked the way the refresh path does it, rather than assuming which return form this
+    # provider happens to use — that is the seam's job, and a provider may use either.
+    collection, _version = feature_services._unpack_provider_result(provider(**params), provider_name="overture")
 
     assert calls["release"] == template["params"]["release"]
     assert [f["properties"] for f in collection["features"]] == [{"id": "a", "subtype": "region"}]
+
+
+# --- the release reaches the record as its version ---------------------------------------------
+
+
+def test_the_provider_reports_the_release_it_read(stub_reader: Any) -> None:
+    """The second half of the pair: what makes a monthly-release source answerable."""
+    stub_reader([_row("a")])
+
+    _collection, release = overture.overture_features(release="2026-09-23.0", bbox=SIERRA_LEONE)
+
+    assert release == "2026-09-23.0"
+
+
+def test_the_reported_release_becomes_the_collection_version(
+    stub_reader: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """End to end through the seam: provider -> record.version, authority naming the provider."""
+    from open_climate_service import config as api_config
+    from open_climate_service.features import services as feature_services
+    from open_climate_service.features import templates as feature_templates
+    from open_climate_service.ingestions import services as ingestion_services
+
+    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
+    artifacts = tmp_path / "artifacts"
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts)
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", artifacts / "records.json")
+    monkeypatch.setattr(overture, "get_extent", lambda: {"bbox": SIERRA_LEONE, "country_code": "SLE"})
+    stub_reader([_row("a", country="SL"), _row("b", country="SL")])
+    # `get_feature_template` reads an lru_cache that `list_feature_templates` bypasses, so a
+    # stubbed template list from an earlier test outlives its monkeypatch here.
+    feature_templates.reset_feature_template_caches()
+
+    template = {str(t["id"]): t for t in feature_templates.list_feature_templates()}["overture_divisions"]
+    record = feature_services.refresh_feature_collection_from_provider(str(template["id"]))
+
+    assert record.version is not None, "the release the provider read was not recorded"
+    assert record.version.value == template["params"]["release"]
+    # The authority is the registry name the caller looked the provider up under, never
+    # something the provider declared about itself.
+    assert record.version.authority == "overture"
+    assert record.features is not None and record.features.feature_count == 2

@@ -88,8 +88,11 @@ def overture_features(
     columns: Sequence[str] | None = None,
     filters: Mapping[str, Any] | None = None,
     stac: bool = False,
-) -> dict[str, Any]:
-    """Extract one Overture theme for a bounding box as a GeoJSON FeatureCollection.
+) -> tuple[dict[str, Any], str]:
+    """Extract one Overture theme for a bounding box, with the release it was read from.
+
+    Returns `(FeatureCollection, release)`. The release becomes the collection's recorded
+    version, which is what makes a monthly-release source answerable without comparing data.
 
     `bbox` is `[west, south, east, north]` in lon/lat. Omitted, it defaults to the instance
     extent, which is what a template almost always wants and keeps the shipped template free of
@@ -151,7 +154,10 @@ def overture_features(
         overture_type,
         list(window),
     )
-    return {"type": "FeatureCollection", "features": features}
+    # The release is returned, not just used: it is what makes "is there a newer one than we
+    # hold" answerable without comparing data, and the provider is the only thing that knows
+    # which release was actually read.
+    return {"type": "FeatureCollection", "features": features}, release
 
 
 def _record_batch_reader(overture_type: str, *, bbox: tuple[float, float, float, float], release: str, stac: bool):  # type: ignore[no-untyped-def]
