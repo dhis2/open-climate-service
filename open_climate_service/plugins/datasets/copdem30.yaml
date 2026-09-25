@@ -21,7 +21,10 @@
   source_url: https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30
   license:
     name: Licence to Use Copernicus DEM
-    url: https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM
+    url: https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/DEM/resources/license/License-COPDEM-30.pdf
+  providers:
+    - name: Copernicus
+      url: https://www.copernicus.eu/
   display:
     colormap: viridis
     range: [0, 4500]
