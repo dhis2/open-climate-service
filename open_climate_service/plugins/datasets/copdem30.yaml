@@ -19,6 +19,9 @@
   resolution: 30 m x 30 m
   source: Copernicus / DestinE
   source_url: https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30
+  license:
+    name: Licence to Use Copernicus DEM
+    url: https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM
   display:
     colormap: viridis
     range: [0, 4500]
