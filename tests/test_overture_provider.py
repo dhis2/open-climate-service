@@ -408,6 +408,7 @@ def test_template_params_reach_the_provider_as_keyword_arguments(
     params = {**template["params"], "columns": ["id", "subtype"], "filters": {"subtype": "region"}}
 
     provider = feature_providers.get_feature_provider(str(template["provider"]))
+    assert provider is not None, "the shipped template names a provider that is not registered"
     collection = provider(**params)
 
     assert calls["release"] == template["params"]["release"]

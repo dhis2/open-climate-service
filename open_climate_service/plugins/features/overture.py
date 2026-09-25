@@ -163,14 +163,17 @@ def _record_batch_reader(overture_type: str, *, bbox: tuple[float, float, float,
 
 def _resolve_bbox(bbox: Sequence[float] | None) -> tuple[float, float, float, float]:
     """Validate an explicit window, or fall back to the instance extent."""
+    declared: Sequence[float]
     if bbox is None:
         extent = get_extent()
         if not extent or not extent.get("bbox"):
             raise ValueError(
                 "Overture extract needs a bbox: none was given and this instance declares no extent to fall back on"
             )
-        bbox = extent["bbox"]
-    values = list(bbox)
+        declared = extent["bbox"]
+    else:
+        declared = bbox
+    values = list(declared)
     if len(values) != 4:
         raise ValueError(f"Overture bbox must be [west, south, east, north], got {values!r}")
     west, south, east, north = (float(value) for value in values)
