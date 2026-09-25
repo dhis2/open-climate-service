@@ -42,5 +42,5 @@ class CopDEM30Plugin(BaseDatasetPlugin):
         ds = normalize_period(ds, source_variable="dsm", variable="elevation", period=period_id, bbox=bbox)
         # load into memory before returning
         ds = ds.load()
-        
+
         return ds
