@@ -13,8 +13,12 @@ _DEM30_ZARR_URL = "https://api.earthdatahub.destine.eu/copernicus-dem/GLO-30-v0.
 class CopDEM30Plugin(BaseDatasetPlugin):
     async def periods(self, start: str, end: str) -> list[str]:
         """Return the ordered list of period ids available between start and end."""
-        # in theory this should never be called since sync.kind = static
-        return ['2010']
+        if end < '2010' or start > '2010':
+            # start-end range does not include 2010, we therefore return no valid periods
+            return []
+        else:
+            # start-end range includes 2010, we can then constrain that range to only 2010
+            return ['2010']
 
     def fetch_period(self, period_id: str, bbox: list[float], **params) -> xr.Dataset:
         """Fetch one period and return it as an xarray Dataset."""
