@@ -1,4 +1,4 @@
-- id: cop_elevation_static
+- id: copdem30_elevation_static
   name: Elevation (Copernicus 30m DEM, static)
   short_name: Elevation
   variable: elevation

@@ -100,17 +100,17 @@ Population disaggregated by sex and 5-year age band. Population is the quantity;
 
 ## Copernicus — elevation (static)
 
-| Property               | Value                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| **Dataset ID**         | `cop_elevation_static`                                                            |
-| **Variable**           | `elevation`                                   |
-| **Units**              | meters                                                                                    |
-| **Period**             | Yearly                                                                                    |
-| **Spatial coverage**   | Global                                                   |
-| **Spatial resolution** | ~30 m                                                                                    |
-| **Record start**       | 2010                                                                                      |
-| **Record end**         | 2010                                                                                      |
-| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30) |
+| Property               | Value                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `copdem30_elevation_static`                                                                          |
+| **Variable**           | `elevation`                                                                                          |
+| **Units**              | meters                                                                                               |
+| **Period**             | Yearly                                                                                               |
+| **Spatial coverage**   | Global                                                                                               |
+| **Spatial resolution** | ~30 m                                                                                                |
+| **Record start**       | 2010                                                                                                 |
+| **Record end**         | 2010                                                                                                 |
+| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
 
 Copernicus DEM Global 30m, recording elevation height above sea level. 
 
