@@ -399,9 +399,7 @@ slice is entirely missing, leaves the previous image in place rather than deleti
 served thumbnail can be a run or more stale. The STAC collection advertises the `thumbnail`
 asset only when the image exists.
 
-A feature collection gets a thumbnail too, at the same path: its geometry drawn in the
-instance CRS, with polygons filled and outlined, lines as lines and points as dots. It is
-written each time the collection is refreshed, on the same terms as a raster's.
+A feature collection gets a thumbnail at the same path, written each time the collection is refreshed.
 
 ## 10. Access published STAC collections
 
