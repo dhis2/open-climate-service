@@ -401,30 +401,7 @@ _FEATURE_LINE_WIDTH = 0.4
 _FEATURE_POINT_SIZE = 6.0
 
 
-def feature_display_frame(frame: Any) -> tuple[Any, float]:
-    """Reproject *frame* for drawing, and return it with the y/x aspect to draw it at.
-
-    Drawn in the instance CRS, because that is the projection the instance's rasters are stored
-    and viewed in, so a collection's thumbnail matches the country's shape in the map viewer.
-    When that CRS is geographic, one degree of longitude is not one degree of latitude on the
-    ground: drawn 1:1, Norway at 65 degrees north comes out more than twice as wide as it is.
-    The aspect then stretches y by 1/cos(latitude) at the collection's middle, which is exact
-    enough for an icon.
-    """
-    import math
-
-    from pyproj import CRS
-
-    display_crs = CRS.from_user_input(api_config.get_crs())
-    if not display_crs.is_geographic:
-        return frame.to_crs(display_crs), 1.0
-    frame = frame.to_crs(display_crs) if frame.crs is not None and not frame.crs.equals(display_crs) else frame
-    _xmin, ymin, _xmax, ymax = frame.total_bounds
-    middle = math.radians((float(ymin) + float(ymax)) / 2)
-    return frame, 1.0 / max(math.cos(middle), 0.05)
-
-
-def render_features_png(frame: Any, path: str | Path, *, long_side: int, aspect: float = 1.0) -> Path:
+def render_features_png(frame: Any, path: str | Path, *, long_side: int) -> Path:
     """Draw a GeoDataFrame's geometry to a transparent PNG whose longest side is *long_side*.
 
     Polygons are filled and outlined, lines drawn as lines and points as dots, so a mixed
@@ -450,8 +427,7 @@ def render_features_png(frame: Any, path: str | Path, *, long_side: int, aspect:
     elif height == 0:
         ymin, ymax, height = ymin - width / 2, ymax + width / 2, width
 
-    drawn_height = height * aspect
-    scale = long_side / max(width, drawn_height)
+    scale = long_side / max(width, height)
     pixel = max(width, height) / long_side
     geometry_types = frame.geometry.geom_type
     areas = frame[geometry_types.isin(["Polygon", "MultiPolygon"])]
@@ -460,7 +436,7 @@ def render_features_png(frame: Any, path: str | Path, *, long_side: int, aspect:
 
     dpi = 100
     fig = plt.figure(
-        figsize=(max(1, round(width * scale)) / dpi, max(1, round(drawn_height * scale)) / dpi),
+        figsize=(max(1, round(width * scale)) / dpi, max(1, round(height * scale)) / dpi),
         dpi=dpi,
     )
     path = Path(path)
@@ -479,7 +455,7 @@ def render_features_png(frame: Any, path: str | Path, *, long_side: int, aspect:
         # Half a pixel of margin, so outlines along the frame's edge are not clipped in half.
         ax.set_xlim(xmin - pixel / 2, xmax + pixel / 2)
         ax.set_ylim(ymin - pixel / 2, ymax + pixel / 2)
-        ax.set_aspect(aspect, adjustable="datalim")
+        ax.set_aspect("equal", adjustable="datalim")
         fig.savefig(path, dpi=dpi, transparent=True)
     finally:
         plt.close(fig)
@@ -511,10 +487,11 @@ def write_feature_thumbnail(collection_path: str | Path, collection_id: str) -> 
         if frame.empty:
             logger.warning("Feature collection '%s' has no geometry to draw; no thumbnail", collection_id)
             return None
-        frame, aspect = feature_display_frame(frame)
+        # Drawn in the instance CRS, the projection the instance's rasters are stored in.
+        frame = frame.to_crs(api_config.get_crs())
         return _publish_thumbnail(
             collection_id,
-            lambda pending: render_features_png(frame, pending, long_side=THUMBNAIL_LONG_SIDE_PIXELS, aspect=aspect),
+            lambda pending: render_features_png(frame, pending, long_side=THUMBNAIL_LONG_SIDE_PIXELS),
         )
     except Exception:
         logger.warning("Could not draw a thumbnail for '%s'; registering without one", collection_id, exc_info=True)

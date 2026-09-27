@@ -9,7 +9,6 @@ because a thumbnail that exists but shows the wrong shape is the failure worth c
 from __future__ import annotations
 
 import io
-import math
 from pathlib import Path
 from typing import Any
 
@@ -79,13 +78,13 @@ def test_a_refresh_draws_the_collection_to_its_thumbnail() -> None:
     assert _alpha_at(image, 0.5, 0.5) == 0  # the gap between them
 
 
-def test_a_geographic_instance_draws_ground_proportions_not_degree_proportions() -> None:
-    # One degree square at 60 degrees north is half as wide on the ground as it is tall.
+def test_a_geographic_instance_draws_in_degrees() -> None:
+    # Drawn in the instance CRS as it is: a one-degree square is square in the image.
     _refresh(_box("N", 10.0, 59.5, 11.0, 60.5))
 
     width, height = _image().size
     assert height == THUMBNAIL_LONG_SIDE_PIXELS
-    assert width == pytest.approx(THUMBNAIL_LONG_SIDE_PIXELS * math.cos(math.radians(60.0)), abs=3)
+    assert width == pytest.approx(THUMBNAIL_LONG_SIDE_PIXELS, abs=3)
 
 
 def test_a_projected_instance_draws_in_its_own_crs(monkeypatch: pytest.MonkeyPatch) -> None:
