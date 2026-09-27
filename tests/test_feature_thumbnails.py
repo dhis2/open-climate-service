@@ -120,6 +120,20 @@ def test_a_single_point_collection_still_gets_a_thumbnail() -> None:
     assert _alpha_at(image, 0.5, 0.5) > 0
 
 
+def test_a_geometry_collection_is_drawn_as_its_parts() -> None:
+    # A polygon in the lower left and a point in the upper right, in one GeometryCollection.
+    ring = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]
+    collection = {
+        "type": "GeometryCollection",
+        "geometries": [{"type": "Polygon", "coordinates": [ring]}, {"type": "Point", "coordinates": [3.0, 3.0]}],
+    }
+    _refresh(_feature("GC", collection))
+
+    image = _image()
+    assert _alpha_at(image, 0.15, 0.85) == 255  # inside the polygon
+    assert _alpha_at(image, 0.6, 0.4) == 0  # between the polygon and the point
+
+
 def test_a_failed_draw_keeps_the_previous_thumbnail_and_the_refresh_still_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -429,10 +429,16 @@ def render_features_png(frame: Any, path: str | Path, *, long_side: int) -> Path
 
     scale = long_side / max(width, height)
     pixel = max(width, height) / long_side
-    geometry_types = frame.geometry.geom_type
-    areas = frame[geometry_types.isin(["Polygon", "MultiPolygon"])]
-    lines = frame[geometry_types.isin(["LineString", "MultiLineString", "LinearRing"])]
-    points = frame[geometry_types.isin(["Point", "MultiPoint"])]
+    # A GeometryCollection belongs to none of the buckets below, so a collection of them would
+    # draw nothing. Exploding splits it (and every multi-part geometry) into single parts first.
+    parts = frame.explode(index_parts=False)
+    geometry_types = parts.geometry.geom_type
+    areas = parts[geometry_types.isin(["Polygon", "MultiPolygon"])]
+    lines = parts[geometry_types.isin(["LineString", "MultiLineString", "LinearRing"])]
+    points = parts[geometry_types.isin(["Point", "MultiPoint"])]
+    if areas.empty and lines.empty and points.empty:
+        # Raised rather than drawn: a blank image would replace a previous, useful thumbnail.
+        raise ValueError(f"No drawable geometry among types {sorted(set(geometry_types))}")
 
     dpi = 100
     fig = plt.figure(
