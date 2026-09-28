@@ -20,6 +20,7 @@ from open_climate_service.openeo.schemas import (
     WorkflowListResponse,
     WorkflowRecord,
 )
+from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.urls import absolute_base, mount_prefix
 
 capabilities_router = APIRouter(tags=["openEO"])
@@ -342,7 +343,7 @@ _RESULT_MEDIA_TYPES: dict[str, str] = {
     ".csv": "text/csv",
     ".json": "application/json",
     ".geojson": "application/geo+json",
-    ".parquet": "application/vnd.apache.parquet",
+    ".parquet": PARQUET_MEDIA_TYPE,
 }
 
 

@@ -7,6 +7,7 @@ The current public story is:
 - run and inspect ingestion operations with `/ingestions`
 - discover the configured extent with `/extent`
 - discover managed datasets with `/datasets`
+- discover vector feature collections with `/features`
 - discover published GeoZarr datasets with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
@@ -29,6 +30,9 @@ Operational note:
 - `GET /datasets/{dataset_id}`
 - `GET /datasets/{dataset_id}/download`
 - `GET /datasets/{dataset_id}/thumbnail.png`
+- `GET /features`
+- `GET /features/{collection_id}`
+- `GET /features/{collection_id}/data.parquet`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
@@ -395,6 +399,8 @@ slice is entirely missing, leaves the previous image in place rather than deleti
 served thumbnail can be a run or more stale. The STAC collection advertises the `thumbnail`
 asset only when the image exists.
 
+A feature collection gets a thumbnail at the same path, written each time the collection is refreshed.
+
 ## 10. Access published STAC collections
 
 Published Zarr-backed datasets are exposed through `/stac` for discovery.
@@ -408,11 +414,110 @@ curl -s "http://127.0.0.1:9000/stac/collections/chirps3_precipitation_daily" | j
 
 What this means:
 
-- `/stac` is the public STAC discovery surface for published Zarr-backed datasets
+- `/stac` is the public STAC discovery surface for published datasets, raster and vector alike
 - native FastAPI no longer exposes `/collections`
 - dataset responses include `/stac/collections/{dataset_id}`
 
-## 11. `/sync`
+### Raster and feature collections are described differently
+
+One catalogue, two representations. STAC has no `itemType` — a Collection's `type` is always
+`"Collection"` — so a client tells them apart by the extensions and asset media types they
+declare:
+
+| | Raster | Feature collection |
+| --- | --- | --- |
+| Extensions | `datacube`, `zarr`, `projection` | `table`, `projection` |
+| Describes the data with | `cube:dimensions`, `cube:variables` | `table:row_count`, `table:primary_geometry`, `table:columns` |
+| Data asset | `zarr` (plus `icechunk`) | `data`, `application/x-parquet` |
+
+A feature collection emits no `cube:` fields and no Zarr asset, and a raster emits no `table:`
+fields. Both carry the same envelope: licence, `rel: license` link when the licence is a URL
+rather than an SPDX identifier, `providers` for attribution, and the self/root/parent links.
+
+Two things worth knowing about a feature collection's document:
+
+- **`table:primary_geometry` names a column, not a geometry type.** One column can hold points
+  and polygons together, which is what an org unit hierarchy looks like: polygons at the upper
+  levels, facility points at the lower ones.
+- **It declares no temporal extent** (`[[null, null]]`). Static geometry has no time axis, and a
+  release identifier such as `2026-08-19.0` is not an instant — turning one into a temporal
+  extent would publish a range no feature was observed in.
+
+## 11. Discover feature collections
+
+`GET /features` is the inventory of the vector collections this instance holds — org unit
+boundaries and facility points, stored as GeoParquet. They also appear under `/datasets` with
+`itemType: "feature"`; `/features` is where the vector-specific facts live.
+
+```bash
+curl -s http://127.0.0.1:9000/features | jq
+curl -s http://127.0.0.1:9000/features/districts | jq
+```
+
+Example response:
+
+```json
+{
+  "kind": "FeatureCollectionList",
+  "items": [
+    {
+      "id": "districts",
+      "name": "District boundaries",
+      "description": "District boundaries from the national hierarchy.",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution": "Ministry of Health",
+      "id_property": "orgUnitCode",
+      "feature_count": 202,
+      "geometry_types": ["Polygon"],
+      "primary_geometry": "geometry",
+      "crs": "EPSG:4326",
+      "version": null,
+      "extent": {
+        "spatial": {
+          "xmin": -13.5,
+          "ymin": 6.9,
+          "xmax": -10.1,
+          "ymax": 10.0
+        },
+        "temporal": { "start": null, "end": null }
+      },
+      "last_updated": "2026-09-21T10:14:02.118330Z"
+    }
+  ]
+}
+```
+
+What this means:
+
+- **A record is what makes a collection exist.** The listing reads records, never the
+  filesystem, so a GeoParquet file placed in the store directory by hand does not appear. The
+  store directory is not an inbox, and there is no reconciliation step in which disk and index
+  can disagree.
+- `id_property` names the property each feature is identified by. That value becomes the
+  location column of a DHIS2 or CHAP export, so it must identify exactly one feature — a
+  duplicate is not a dropped feature, it is two features pushing values against one org unit.
+- `crs` is the CRS the geometry is actually stored in, and is never assumed. A collection in a
+  projected CRS reports its own extent under `extent.spatial` and the WGS 84 one under
+  `extent.spatial_wgs84`, the same convention a raster in a projected CRS uses.
+- `geometry_types` is read from the stored file's own metadata. An empty list means the file
+  declares none, which is "not stated" rather than "no geometry".
+- `description`, `license` and `attribution` come from the collection's template. Until feature
+  templates land (CLIM-926) they read as `null` and `other` — `license` is never absent, and an
+  undeclared licence reports `other` rather than something that reads as permissive.
+- Unpublished collections are listed. `/features` reports what this instance *holds*;
+  publication decides what the catalogues *advertise*, which is a different question.
+
+Reads of the geometry itself are windowed by a bounding box, and an unwindowed read of a large
+collection is refused rather than served by accident — a national hierarchy runs to the
+thousands of features, and pulling all of it should be deliberate.
+
+`GET /features/{collection_id}/data.parquet` serves the stored GeoParquet for a **published**
+collection, as `application/x-parquet`. It is the href the collection's STAC `data` asset
+advertises, and it resolves through the registered record — an unregistered file in the store
+directory is not reachable through it.
+
+## 12. `/sync`
 
 `/sync` advances an existing managed dataset from its latest local coverage toward a requested upstream period.
 

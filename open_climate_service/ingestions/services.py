@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mappin
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
 import portalocker
@@ -27,6 +27,7 @@ from open_climate_service.data_accessor.services.accessor import get_data_covera
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
+from open_climate_service.features import templates as feature_templates
 from open_climate_service.ingestions.artifact_paths import decode_record_paths, encode_record_paths
 from open_climate_service.ingestions.schemas import (
     ArtifactCoverage,
@@ -58,6 +59,7 @@ from open_climate_service.ingestions.schemas import (
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
+from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -68,6 +70,7 @@ from open_climate_service.shared.time import (
     utc_now,
     utc_today,
 )
+from open_climate_service.shared.urls import path_segment as _segment
 from open_climate_service.streaming.orchestrator import run_streaming_ingest_sync
 from open_climate_service.streaming.protocol import IngestionPlugin, close_ingestion_plugin
 from open_climate_service.streaming.store import (
@@ -76,6 +79,7 @@ from open_climate_service.streaming.store import (
 )
 
 logger = logging.getLogger(__name__)
+MutationResult = TypeVar("MutationResult")
 
 # Per-store threading locks prevent two concurrent ingest/sync runs from writing
 # to the same Icechunk store simultaneously (which causes MVCC commit conflicts).
@@ -228,23 +232,35 @@ def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     }
 
 
+CATALOGUED_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
+"""Stored formats the STAC catalogue describes.
+
+Wider than `LOADABLE_RASTER_FORMATS` because STAC describes what *exists* while openEO
+advertises what `load_collection` can *consume*. A feature collection genuinely is a STAC
+collection — it has a licence, an attribution, a spatial extent and a table schema — and
+genuinely is not an openEO datacube. That divergence is the whole reason CLIM-1066 split the
+two gates, and this is the value that makes them differ.
+"""
+
+
 def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     """Return the artifacts the STAC catalogue advertises.
 
-    Identical to the raster set, and deliberately a separate function rather than an alias:
-    STAC describes what exists, while openEO advertises what `load_collection` can consume,
-    and those stop being the same question once a non-raster artifact is catalogued.
+    Every published raster, plus every published feature collection. Publication and recency are
+    answered once, format-neutrally, by `_latest_published_artifacts_by_dataset`; this only
+    decides which formats the catalogue has a representation for. `stac/services.py` has one per
+    format — a datacube document for a raster, a table document for a collection — so admitting
+    GEOPARQUET here never advertises a child the catalogue cannot serve.
 
-    A GEOPARQUET record is deliberately *not* admitted here yet, even though it is a published
-    artifact and genuinely is a STAC collection. Admitting it would advertise a collection URL
-    whose document does not exist: `build_collection` is entirely raster — xstac opens the
-    store as an xarray dataset to derive `cube:dimensions`, and the assets, media types and
-    render hints are Zarr's. A catalogue that lists a child it cannot serve is worse than one
-    that lists nothing, so exposure lands atomically with the feature collection document and
-    the `table` extension in CLIM-1069, which widens this gate and builds that document
-    together.
+    Deliberately not an alias for the raster gate, and the raster gate is deliberately not
+    widened: `load_collection` still cannot consume a feature collection, so openEO must keep
+    answering this question for itself.
     """
-    return latest_published_raster_artifacts_by_dataset()
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in CATALOGUED_FORMATS
+    }
 
 
 def list_ingestions() -> IngestionListResponse:
@@ -431,6 +447,8 @@ def create_feature_artifact(
     crs: str,
     bbox: Sequence[float] | None = None,
     primary_geometry: str = DEFAULT_PRIMARY_GEOMETRY,
+    provider: str | None = None,
+    version: ArtifactVersion | None = None,
     publish: bool = True,
 ) -> ArtifactRecord:
     """Register one already-written feature collection as a managed dataset.
@@ -453,25 +471,33 @@ def create_feature_artifact(
     to hold in memory, so there is no streaming-to-file variant to serve.
 
     `crs` is required rather than defaulted, and describes the geometry as the GeoParquet at
-    `store_path` stores it. ADR 0002 decision 9 makes an explicit CRS a property of every stored
-    collection; a default here would let a caller that reprojected before writing record WGS 84
-    by omission, and the extent below would then describe a store it does not match.
+    `store_path` stores it — checked against the file's own footer rather than taken on trust.
+    ADR 0002 decision 9 makes an explicit CRS a property of every stored collection; a default
+    here would let a caller that reprojected before writing record WGS 84 by omission, and the
+    extent would then describe a store it does not match. A projected store is recorded with its
+    own extent as `coverage.spatial` and the WGS 84 one beside it.
 
     Raises ValueError for a template or collection that cannot produce a record: a missing
     `id_property`, a payload that is not a FeatureCollection, a malformed member, an empty
-    collection, a `store_path` with no file at it, or a stored CRS this entry point cannot
-    honestly describe. An empty collection is refused rather than registered, because a
-    provider that returned nothing is reporting a failure, and a record for it would advertise
-    a collection with no extent.
+    collection, a `store_path` with no file at it, or a declared CRS the stored file
+    contradicts. An empty collection is refused rather than registered, because a provider that
+    returned nothing is reporting a failure, and a record for it would advertise a collection
+    with no extent.
+
+    `provider` names the `@feature_provider` that produced `features`, stamped verbatim onto
+    `FeatureDetail.provider` (CLIM-926). None for a hand-registered collection. The caller's
+    own selected registry name, never read from the payload: a provider does not get to declare
+    its own identity, or one could claim ownership of a collection another provider wrote.
     """
     dataset_id = _require_template_str(template, "id")
     dataset_name = _require_template_str(template, "name")
     # Required by FeatureDetail too, but read here so the error names the template field the
     # author has to fix rather than surfacing as a pydantic failure on a nested submodel.
     id_property = _require_template_str(template, "id_property")
-    stored_crs = _require_wgs84_feature_crs(crs, dataset_id=dataset_id)
+    stored_crs = _require_feature_crs(crs, dataset_id=dataset_id)
     requested_bbox = _requested_extract_bbox(bbox, dataset_id=dataset_id)
     resolved_path = _require_written_feature_store(store_path, dataset_id=dataset_id)
+    _require_declaration_matches_file(resolved_path, declared_crs=stored_crs, dataset_id=dataset_id)
     feature_list = _feature_collection_members(features, dataset_id=dataset_id)
     # Deliberately not validated per feature here. That each id_property value is present and
     # identifies exactly one feature is the identity contract, and it needs one implementation
@@ -485,21 +511,16 @@ def create_feature_artifact(
         # precisely so this record does not have to invent values for them.
         variable=None,
         period_type=None,
-        version=_resolve_artifact_version(template),
+        # A provider reports what it actually fetched, so that wins over the template's
+        # declaration: the two can disagree, and only one of them was true of this extract.
+        # A provider that reports nothing leaves the declared `sync.version` in place.
+        version=version or _resolve_artifact_version(template),
         format=ArtifactFormat.GEOPARQUET,
         path=str(resolved_path),
         asset_paths=[str(resolved_path)],
         variables=[],
         request_scope=ArtifactRequestScope(start=None, end=None, bbox=requested_bbox),
-        coverage=ArtifactCoverage(
-            spatial=bounds,
-            # `spatial` is already the WGS 84 extent: it is computed from GeoJSON coordinates,
-            # which RFC 7946 defines as WGS 84, and the guard above has established that the
-            # store is in that CRS too. The field means "the WGS 84 extent when `spatial` is in
-            # some other CRS", so a separate copy would only repeat it.
-            spatial_wgs84=None,
-            temporal=CoverageTemporal(start=None, end=None),
-        ),
+        coverage=_feature_coverage(bounds, stored_crs=stored_crs, dataset_id=dataset_id),
         created_at=datetime.now(UTC),
         publication=ArtifactPublication(),
         features=FeatureDetail(
@@ -507,6 +528,7 @@ def create_feature_artifact(
             feature_count=len(feature_list),
             primary_geometry=primary_geometry,
             crs=stored_crs,
+            provider=provider,
         ),
     )
     # Overwrite semantics, which is what a refresh is: replace this collection's name, extent
@@ -517,19 +539,19 @@ def create_feature_artifact(
     return register_artifact_record(record, publish=publish)
 
 
-def _require_wgs84_feature_crs(crs: str, *, dataset_id: str) -> str:
-    """Return the canonical form of a declared store CRS, or refuse what this door cannot record.
+def _require_feature_crs(crs: str, *, dataset_id: str) -> str:
+    """Return the canonical form of a declared store CRS, or refuse what is not a CRS at all.
 
     Two CRSs meet here and this is the only place that can tell them apart. The incoming
     `features` payload is GeoJSON, which RFC 7946 defines as WGS 84, and `crs` describes the
-    GeoParquet already written at `store_path`. The extent on the record is derived from the
-    GeoJSON, so it is a WGS 84 extent — and it only describes the store when the two agree.
+    GeoParquet already written at `store_path` — which the store may have reprojected on the
+    way in. The coverage below is what keeps both true: the extent derived from the GeoJSON is
+    recorded as `spatial_wgs84`, and `spatial` is that extent expressed in the store's own CRS,
+    which is the same arrangement every raster record uses.
 
-    So a declared non-WGS 84 store is refused rather than recorded. The alternative is
-    registering an extent in one CRS against a store in another, which is exactly the silent
-    mismatch ADR 0002 decision 9 exists to prevent. Reprojection-aware registration belongs
-    with the component that does the reprojecting: CLIM-1068 owns the writer and the
-    CRS-correct windowing, and widens this when a provider contract needs it.
+    A projected store was refused here until CLIM-1068, because until there was a CRS-correct
+    reader there was nothing that could window one. Now that there is, refusing would only
+    stop a collection being registered that the rest of the system can read.
 
     Normalized through `canonical_feature_crs`, the same function `FeatureDetail` validates
     with, so a provider declaring 'OGC:CRS84' — the spelling GeoJSON and GeoParquet both use —
@@ -541,13 +563,35 @@ def _require_wgs84_feature_crs(crs: str, *, dataset_id: str) -> str:
             f"feature collection '{dataset_id}' must declare the CRS of its stored geometry as an "
             "authority code such as 'EPSG:4326'"
         )
-    if canonical != "EPSG:4326":
-        raise ValueError(
-            f"feature collection '{dataset_id}' declares stored CRS {canonical}, but its extent is "
-            "derived from GeoJSON, which RFC 7946 defines as WGS 84; registering a reprojected "
-            "store needs the CRS-correct path in CLIM-1068"
-        )
     return canonical
+
+
+def _feature_coverage(bounds: CoverageSpatial, *, stored_crs: str, dataset_id: str) -> ArtifactCoverage:
+    """Return the coverage for a feature collection, with `spatial` in the store's own CRS.
+
+    `bounds` comes from GeoJSON coordinates, so it is a WGS 84 extent whatever the store holds.
+    The record's convention is that `spatial` is native and `spatial_wgs84` is the WGS 84 copy —
+    None when the two are the same — so a reprojected store records the projected extent as
+    `spatial` and keeps the WGS 84 one beside it, exactly as a raster in a projected CRS does.
+    Recording the WGS 84 extent as `spatial` for a projected store is the silent mismatch ADR
+    0002 decision 9 exists to prevent.
+    """
+    if stored_crs == "EPSG:4326":
+        return ArtifactCoverage(spatial=bounds, spatial_wgs84=None, temporal=CoverageTemporal(start=None, end=None))
+    try:
+        west, south, east, north = transform_bbox(
+            (bounds.xmin, bounds.ymin, bounds.xmax, bounds.ymax), source="EPSG:4326", target=stored_crs
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"feature collection '{dataset_id}' declares stored CRS {stored_crs}, but its features do "
+            f"not map into it: {exc}"
+        ) from exc
+    return ArtifactCoverage(
+        spatial=CoverageSpatial(xmin=west, ymin=south, xmax=east, ymax=north),
+        spatial_wgs84=bounds,
+        temporal=CoverageTemporal(start=None, end=None),
+    )
 
 
 def _require_written_feature_store(store_path: Path | str, *, dataset_id: str) -> Path:
@@ -571,6 +615,31 @@ def _require_written_feature_store(store_path: Path | str, *, dataset_id: str) -
             "writes the file, and this registers what it wrote"
         )
     return resolved
+
+
+def _require_declaration_matches_file(path: Path, *, declared_crs: str, dataset_id: str) -> None:
+    """Refuse a declared CRS the stored file contradicts.
+
+    `crs` is the caller's word for what it wrote, and until here nothing checked it against the
+    bytes. Getting it wrong is not a cosmetic error: declaring an EPSG:4326 file as EPSG:3857
+    publishes coverage reprojected from degrees it never left, and every later read transforms
+    its window into metres against a file indexed in degrees — so the reads return nothing, or
+    the wrong rows, with no error anywhere.
+
+    GeoParquet records the CRS in its footer. Missing or unreadable metadata cannot establish
+    what was written; an omitted CRS in valid metadata means OGC:CRS84.
+    """
+    from open_climate_service.shared import geoparquet
+
+    actual = geoparquet.stored_crs(path)
+    if actual is None:
+        raise ValueError(f"feature collection '{dataset_id}' has no readable GeoParquet CRS at {path}")
+    if actual == declared_crs:
+        return
+    raise ValueError(
+        f"feature collection '{dataset_id}' is declared as {declared_crs}, but the GeoParquet at "
+        f"{path} stores {actual}; the record would describe a file it does not match"
+    )
 
 
 def _requested_extract_bbox(
@@ -2060,7 +2129,7 @@ def _upsert_artifact_record(
     return _mutate_records(mutate)
 
 
-def _mutate_records(mutation: Callable[[list[ArtifactRecord]], ArtifactRecord]) -> ArtifactRecord:
+def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
     """Apply a read-modify-write mutation under an exclusive file lock."""
     ensure_store()
     with ARTIFACTS_INDEX_PATH.open("a+", encoding="utf-8") as handle:
@@ -2319,7 +2388,11 @@ def _temporal_coverage_matches_streaming_request_scope(
 
 def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> DatasetRecord:
     latest = max(artifacts, key=lambda artifact: artifact.created_at)
-    source_dataset = registry_datasets.get_dataset(latest.dataset_id) or {}
+    source_dataset = (
+        feature_templates.get_feature_template(latest.dataset_id)
+        if latest.format == ArtifactFormat.GEOPARQUET
+        else registry_datasets.get_dataset(latest.dataset_id)
+    ) or {}
     return DatasetRecord(
         dataset_id=dataset_id,
         source_dataset_id=latest.source_dataset_id or latest.dataset_id,
@@ -2337,7 +2410,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         license_url=_licence_for(source_dataset).url,
         extent=latest.coverage,
         last_updated=latest.created_at,
-        links=_dataset_links(dataset_id, latest),
+        links=_dataset_links(dataset_id, latest, published=_latest_published(artifacts)),
         publication=DatasetPublication(
             status=latest.publication.status,
             published_at=latest.publication.published_at,
@@ -2410,19 +2483,54 @@ def _item_type_for(artifact: ArtifactRecord) -> DatasetItemType:
     return DatasetItemType.COVERAGE
 
 
-def _dataset_links(dataset_id: str, latest: ArtifactRecord) -> list[DatasetAccessLink]:
-    links = [DatasetAccessLink(href=f"/datasets/{dataset_id}", rel="self", title="Dataset detail")]
-    published = latest.publication.status == PublicationStatus.PUBLISHED
-    if published and latest.format in LOADABLE_RASTER_FORMATS:
-        links.append(DatasetAccessLink(href=f"/zarr/{dataset_id}", rel="zarr", title="Zarr store"))
+def _latest_published(artifacts: list[ArtifactRecord]) -> ArtifactRecord | None:
+    """Return the artifact every published-data surface resolves for this dataset, or None.
+
+    The same rule `_latest_published_artifacts_by_dataset` applies, from the same grouping:
+    filter by publication *first*, then take the newest. Recomputed from the caller's own list
+    rather than read back through that function, because `_build_dataset_record` runs once per
+    dataset and the gate rescans every artifact in the store.
+    """
+    published = [artifact for artifact in artifacts if artifact.publication.status == PublicationStatus.PUBLISHED]
+    return max(published, key=lambda artifact: artifact.created_at) if published else None
+
+
+def _dataset_links(
+    dataset_id: str, latest: ArtifactRecord, *, published: ArtifactRecord | None
+) -> list[DatasetAccessLink]:
+    """Build the access links for a dataset, each keyed on the artifact its route resolves.
+
+    Two different artifacts answer here, which is why `published` is separate from `latest`.
+    Every published-data route — `/zarr`, `/stac/collections`, `/features` — resolves the latest
+    *published* artifact, so an ingest with `publish: false` over an already-published dataset
+    leaves those routes serving the earlier record. Keying the links on `latest` instead made
+    `/datasets` withhold links to collections STAC was still advertising: the newest artifact was
+    unpublished, so `published` read false, while the catalogue went on serving the older one.
+
+    `download` stays on `latest`, because `download_artifact_file` resolves the latest artifact
+    regardless of publication. The rule is the same throughout: a link says what its own route
+    will do.
+    """
+    links = [DatasetAccessLink(href=f"/datasets/{_segment(dataset_id)}", rel="self", title="Dataset detail")]
+    if published is not None and published.format in LOADABLE_RASTER_FORMATS:
+        links.append(DatasetAccessLink(href=f"/zarr/{_segment(dataset_id)}", rel="zarr", title="Zarr store"))
     # Tracks `stac_eligible_artifacts_by_dataset` exactly, so `/datasets` never offers a
-    # catalogue link the catalogue itself does not serve. A feature collection therefore has
-    # no `stac` link until CLIM-1069 admits it to both at once.
-    if published and latest.format in LOADABLE_RASTER_FORMATS:
-        links.append(DatasetAccessLink(href=f"/stac/collections/{dataset_id}", rel="stac", title="STAC collection"))
+    # catalogue link the catalogue itself does not serve, nor withholds one it does.
+    if published is not None and published.format in CATALOGUED_FORMATS:
+        links.append(
+            DatasetAccessLink(href=f"/stac/collections/{_segment(dataset_id)}", rel="stac", title="STAC collection")
+        )
+    if published is not None and published.format == ArtifactFormat.GEOPARQUET:
+        links.append(
+            DatasetAccessLink(
+                href=f"/features/{_segment(dataset_id)}", rel="features", title="Feature collection detail"
+            )
+        )
     if latest.format == ArtifactFormat.NETCDF:
         links.append(
-            DatasetAccessLink(href=f"/datasets/{dataset_id}/download", rel="download", title="Download NetCDF")
+            DatasetAccessLink(
+                href=f"/datasets/{_segment(dataset_id)}/download", rel="download", title="Download NetCDF"
+            )
         )
     return links
 

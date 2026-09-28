@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -97,27 +97,41 @@ def record_features(geometries: Any) -> None:
     evidence = _current.get()
     if evidence is None:
         return
-    if evidence.require_feature_ids:
-        from open_climate_service.shared.features import validate_feature_ids
+    from open_climate_service.shared.features import validate_feature_ids
 
+    if evidence.require_feature_ids:
         validate_feature_ids(geometries)
     if not isinstance(geometries, dict) or geometries.get("type") not in {"Feature", "FeatureCollection"}:
         evidence.features.append({"input_sha256": None, "ids_valid": False, "reason": "no_feature_ids"})
         return
     features = geometries.get("features", []) if geometries.get("type") == "FeatureCollection" else [geometries]
-    if not isinstance(features, list) or not all(isinstance(feature, dict) for feature in features):
+    # The same shapes `validate_feature_ids` accepts. A tuple is what a provider that built its
+    # features with a comprehension hands over, and a recorder that silently skipped one would
+    # leave an execution with no feature fingerprint at all while the aggregation succeeded.
+    if not isinstance(features, Sequence) or isinstance(features, (str, bytes)):
+        return
+    # Annotated, because the union of the two branches above narrows to dict on one of them and
+    # the members of a FeatureCollection are whatever the caller put there.
+    members: list[Any] = list(features)
+    if not all(isinstance(feature, dict) for feature in members):
         return
     # Properties are irrelevant to spatial aggregation and may contain incidental
     # metadata. Fingerprint only the geometry and identity actually used here.
-    relevant = [{"id": feature.get("id"), "geometry": feature.get("geometry")} for feature in features]
-    identifiers = [feature["id"] for feature in relevant]
-    valid = all(isinstance(identifier, str) and bool(identifier.strip()) for identifier in identifiers)
-    valid = valid and len(set(identifiers)) == len(identifiers)
+    relevant = [{"id": feature.get("id"), "geometry": feature.get("geometry")} for feature in members]
+    # Asked of the validator rather than re-derived here. Two implementations of "is this
+    # identity usable" drift: this one read non-blank strings while the validator also accepts
+    # an integer id, so a named DHIS2 export could pass validation and still be manifested as
+    # `ids_valid: false`. One rule, one answer.
+    try:
+        validate_feature_ids(geometries)
+        valid = True
+    except ValueError:
+        valid = False
     try:
         digest = json_digest(relevant)
     except (TypeError, ValueError):
         digest = None
-    evidence.features.append({"input_sha256": digest, "feature_count": len(features), "ids_valid": valid})
+    evidence.features.append({"input_sha256": digest, "feature_count": len(members), "ids_valid": valid})
 
 
 def _has_named_dhis2_export(value: Any) -> bool:

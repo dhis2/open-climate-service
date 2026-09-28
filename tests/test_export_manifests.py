@@ -277,7 +277,11 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
             def execute():
                 execution._load_collection_impl("managed-rain")
                 _parse_geometries(
-                    {"type": "Feature", "id": "DiszpKrYNg8", "geometry": {"type": "Point", "coordinates": [0, 0]}}
+                    {
+                        "type": "Feature",
+                        "id": "DiszpKrYNg8",
+                        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                    }
                 )
                 return execution.SaveResultEnvelope(_data(), "DHIS2JSON", {"export": "rain"})
 

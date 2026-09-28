@@ -10,6 +10,8 @@ import xarray as xr
 from open_climate_service.process import process
 from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
 
+_SUPPORTED_GEOMETRY_TYPES = frozenset({"Polygon", "MultiPolygon"})
+
 
 def _parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
     """Extract Shapely geometries and stable string labels from GeoJSON input.
@@ -28,12 +30,36 @@ def _parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
             features = geometries.get("features", [])
             geoms = [shape(f["geometry"]) for f in features]
             labels = [str(f.get("id", i)) for i, f in enumerate(features)]
-            return geoms, labels
-        if gtype == "Feature":
-            return [shape(geometries["geometry"])], [str(geometries.get("id", 0))]
-        return [shape(geometries)], ["0"]
-    items = [shape(g) if isinstance(g, dict) else g for g in geometries]
-    return items, [str(i) for i in range(len(items))]
+        elif gtype == "Feature":
+            geoms, labels = [shape(geometries["geometry"])], [str(geometries.get("id", 0))]
+        else:
+            geoms, labels = [shape(geometries)], ["0"]
+    else:
+        geoms = [shape(g) if isinstance(g, dict) else g for g in geometries]
+        labels = [str(i) for i in range(len(geoms))]
+    _require_supported_geometry_types(geoms, labels)
+    return geoms, labels
+
+
+def _require_supported_geometry_types(geoms: list[Any], labels: list[str]) -> None:
+    """Refuse a geometry type this process has no defined behaviour for yet.
+
+    Feeding a Point through the polygon-rasterization path below still "works" in the sense
+    that it doesn't raise: `rasterio.features.geometry_mask` marks whichever single pixel
+    geometrically contains it, or produces an all-False mask (silently NaN) if it falls on a
+    pixel boundary or just outside the grid. That is an incidental side effect of the
+    implementation, not a decided sampling rule, and it would change silently whenever a real
+    one is decided -- refusing outright is safer than a result that looks real. Point sampling
+    semantics (nearest pixel, a buffer, or an explicit refusal) are being decided in CLIM-785;
+    org-unit hierarchies with facility-level (point) geometry hit this today (CLIM-1009).
+    """
+    for geom, label in zip(geoms, labels, strict=True):
+        if geom.geom_type not in _SUPPORTED_GEOMETRY_TYPES:
+            raise ValueError(
+                f"aggregate_spatial: geometry '{label}' is a {geom.geom_type}, which is not "
+                "supported; only Polygon and MultiPolygon are (point sampling semantics are "
+                "being decided in CLIM-785)"
+            )
 
 
 def _find_dim(data: xr.Dataset | xr.DataArray, candidates: list[str]) -> str | None:

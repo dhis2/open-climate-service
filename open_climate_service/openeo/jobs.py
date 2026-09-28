@@ -51,6 +51,7 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobUpdate,
 )
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
@@ -1364,7 +1365,7 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
         ".png": ("image/png", "PNG result"),
         ".csv": ("text/csv", "CSV result"),
         ".json": ("application/json", "JSON result"),
-        ".parquet": ("application/vnd.apache.parquet", "GeoParquet result"),
+        ".parquet": (PARQUET_MEDIA_TYPE, "GeoParquet result"),
     }
     for ext, (mime, title) in ext_map.items():
         if output_path.endswith(ext):
@@ -1400,7 +1401,7 @@ _RASTER_FORMATS: dict[str, tuple[str, str]] = {
 _VECTOR_FORMATS: dict[str, tuple[str, str]] = {
     "GEOJSON": (".geojson", "application/geo+json"),
     "CSV": (".csv", "text/csv"),
-    "PARQUET": (".parquet", "application/vnd.apache.parquet"),
+    "PARQUET": (".parquet", PARQUET_MEDIA_TYPE),
 }
 
 _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {

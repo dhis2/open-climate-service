@@ -13,7 +13,7 @@ The full runnable script is [`examples/aggregate_and_import_to_dhis2.py`](https:
 - The two clients:
 
   ```bash
-  pip install open-climate-service "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git"
+  pip install open-climate-service "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git@41d696ad59f5ac09fce282ead80df32e451e7ff1"
   ```
 
   `open-climate-service` ships the `ClimateService` client; [dhis2-python-client](https://github.com/dhis2/dhis2-python-client) handles the DHIS2 Web API calls.
@@ -46,10 +46,10 @@ section must be valid YAML before environment substitution; quote placeholders i
 other sections when necessary. Existing interpolation outside this section remains
 available.
 
-The client is optional and is supplied by the deployment or integration plugin.
-It is not yet available on PyPI. The connection accessor was tested against
-`dhis2-python-client` revision `41d696ad59f5ac09fce282ead80df32e451e7ff1` (0.3.1).
-For an instance managed with uv, add it to that instance's project:
+The client is optional and supplied by the deployment or integration plugin because it is not
+yet available on PyPI. The connection accessor is tested against `dhis2-python-client` revision
+`41d696ad59f5ac09fce282ead80df32e451e7ff1` (0.3.1). For an instance managed with uv, add that
+reviewed revision to the instance's project:
 
 ```bash
 uv add "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git@41d696ad59f5ac09fce282ead80df32e451e7ff1"
