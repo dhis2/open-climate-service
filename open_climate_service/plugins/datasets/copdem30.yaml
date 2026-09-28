@@ -6,6 +6,7 @@
   period_type: yearly
   sync:
     kind: release
+    execution: rematerialize
     version:
       value: v0
       authority: destine
