@@ -68,7 +68,14 @@ def _fetch_org_units(client: _OrgUnitClient, *, level: int | None, parent: str |
     # `parent` means a subtree boundary. The ordinary metadata endpoint understands level,
     # but not that boundary parameter, so translate it to the equivalent path filter rather
     # than forwarding the same-looking query and comparing two different populations.
-    metadata_selection: dict[str, Any] = {"level": level if level is not None else 1}
+    metadata_selection: dict[str, Any] = {}
+    if level is not None:
+        metadata_selection["level"] = level
+    elif parent is None:
+        # With no selection the GeoJSON endpoint defaults to the hierarchy root. Preserve that
+        # default in the metadata audit, but do not combine it with a descendant path filter:
+        # a level-1 root cannot itself be below `parent`.
+        metadata_selection["level"] = 1
     if parent is not None:
         metadata_selection["filter"] = f"path:like:/{parent}/"
     all_units = {

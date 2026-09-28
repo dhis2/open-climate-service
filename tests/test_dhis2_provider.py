@@ -81,6 +81,17 @@ def test_fetch_org_units_translates_the_geojson_parent_for_the_metadata_audit() 
     ]
 
 
+def test_fetch_org_units_does_not_add_the_default_level_to_a_parent_only_audit() -> None:
+    client = _FakeClient([_org_unit("ou1", "A")], [_feature("ou1", "A")])
+
+    _fetch_org_units(client, level=None, parent="root")
+
+    assert client.calls == [
+        ("geojson", {"fields": "id,displayName,geometry", "parent": "root"}),
+        ("list", {"fields": "id,displayName", "filter": "path:like:/root/"}),
+    ]
+
+
 def test_fetch_org_units_mirrors_the_geojson_default_level_in_the_metadata_audit() -> None:
     client = _FakeClient([_org_unit("ou1", "A")], [_feature("ou1", "A")])
 
