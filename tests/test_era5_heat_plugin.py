@@ -1,6 +1,10 @@
 import asyncio
+import os
 import time
 from datetime import date, timedelta
+
+import pytest
+import xarray as xr
 
 from open_climate_service.plugins.datasets.era5_heat import (
     ERA5HeatCDSDailyFromHourlyPlugin,
@@ -8,7 +12,7 @@ from open_climate_service.plugins.datasets.era5_heat import (
     ERA5HeatDailyUTCIPlugin,
 )
 
-_TEST_BBOX = [28.7, -2.9, 28.8, -2.8]
+_TEST_BBOX = [28, -3, 29, -2]
 
 
 def test_hourly_periods():
@@ -76,3 +80,29 @@ def test_daily_periods():
     days = asyncio.run(plugin.periods(start, end))
     assert days[0] == start
     assert days[-1] < end
+
+
+@pytest.fixture
+def daily_utci_data():
+    """Fetches data for a single day of UTCI heat index data"""
+    # hacky check for TEST_INTEGRATIONS flag for integration tests that should only be run manually
+    if not os.getenv("TEST_INTEGRATIONS"):
+        pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
+
+    plugin = ERA5HeatDailyUTCIPlugin(temporal_aggregation="mean")
+    ds = plugin.fetch_period(period_id="2023-01-01", bbox=_TEST_BBOX)
+    return ds
+
+
+def test_heat_dims_and_values(daily_utci_data: xr.Dataset):
+    assert isinstance(daily_utci_data, xr.Dataset)
+
+    assert set(("t", "y", "x")).issubset(daily_utci_data.dims)
+
+    assert daily_utci_data.sizes["x"] > 1
+    assert daily_utci_data.sizes["y"] > 1
+    assert daily_utci_data.sizes["t"] == 1
+    assert str(daily_utci_data.t.values[0])[:10] == "2023-01-01"  # hardcoded to the date specified in fixture
+
+    assert "utci" in daily_utci_data.data_vars
+    assert daily_utci_data["utci"].size > 0
