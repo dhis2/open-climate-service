@@ -74,7 +74,6 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
         last = last.replace(hour=23, minute=59)  # make sure user requested end time is at the very end of the day
         limit = min(last, cutoff)
 
-        # logger.info(f'current {current}, limit {limit}, cutoff {cutoff}')
         if current > limit:
             return []
         result: list[str] = []
@@ -82,7 +81,6 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
             result.append(datetime_to_period_string(current, "hourly"))
             current += timedelta(hours=1)
 
-        # logger.info(f'hour periods {result}')
         return result
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
@@ -104,7 +102,6 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
         timestamp = np.datetime64(dt.replace(tzinfo=None), "h").astype("datetime64[ns]")
         hour_ds = monthly_ds.sel(t=timestamp)
 
-        # logger.info(f'hour ds for {period_id}: {hour_ds}')
         return hour_ds
 
     def _fetch_month(self, year: int, month: int, bbox: tuple[float, float, float, float]) -> xr.Dataset:
@@ -127,7 +124,7 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
             "time": [f"{h:02d}:00" for h in range(24)],
             "area": [ymax, xmin, ymin, xmax],  # N, W, S, E
         }
-        logger.info(f"fetching month data from CDS {params}")
+        logger.info(f"Fetching and caching month data from CDS {params}")
         remote = _CdsClient().submit(_CDS_HOURLY_COLLECTION, params)
 
         # Download comes as zipfile with one nc file per day
@@ -160,7 +157,6 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
         ds = kelvin_to_celsius(ds, {"variable": self.variable})
 
         # Return
-        logger.info(f"month ds {ds}")
         return ds
 
 
@@ -178,7 +174,6 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
         cutoff = await asyncio.to_thread(_hourly_availability_cutoff)
         periods = daily_period_ids(start=start, end=end, cutoff=cutoff)
 
-        # logger.info(f'day periods {result}')
         return periods
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
@@ -188,7 +183,6 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
         """
         # get hourly periods for the day
         hour_periods = asyncio.run(super().periods(start=period_id, end=period_id))
-        logger.info(f"merge hours: {hour_periods}")
 
         # load each hour dataset and merge
         # NOTE: this is probably not very efficient but should reuse code and produce correct results
@@ -196,7 +190,6 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
             [super().fetch_period(period_id=hour_period, bbox=bbox) for hour_period in hour_periods],
             dim="t",
         )
-        # logger.info(f'hourly_ds {hourly_ds}')
 
         # aggregate to daily
         daily_ds = daily_reduce(
@@ -205,7 +198,6 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
             time_shift={"hours": 0},  # TODO: Later should support local UTC offset
             remove_partial_periods=False,
         )
-        # logger.info(f'daily_ds {daily_ds}')
 
         return daily_ds
 
