@@ -7,6 +7,7 @@ builders below them are how it is read back.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactReco
 from open_climate_service.publications.services import managed_dataset_id_for
 from open_climate_service.shared.licences import parse_licence
 from open_climate_service.shared.thumbnails import write_feature_thumbnail
+
+logger = logging.getLogger(__name__)
 
 
 def refresh_feature_collection(
@@ -220,6 +223,88 @@ def _unpack_provider_result(result: Any, *, provider_name: str) -> tuple[Mapping
             "FeatureCollection or a (FeatureCollection, version) pair"
         )
     return result, None
+
+
+def is_refreshable(template: Mapping[str, Any], providers: Mapping[str, Any] | None = None) -> bool:
+    """Whether *template* names a provider this instance has, so it can be fetched.
+
+    Pass *providers* (from `load_feature_providers()`) when checking many templates: loading
+    scans every plugin directory, deliberately uncached across requests, so a listing loads it
+    once rather than once per template.
+    """
+    provider = template.get("provider")
+    if not isinstance(provider, str):
+        return False
+    known = providers if providers is not None else feature_providers.load_feature_providers()
+    return provider in known
+
+
+def _raster_template_ids() -> set[str]:
+    from open_climate_service.data_registry.services import datasets as raster_templates
+
+    return {str(template["id"]) for template in raster_templates.list_datasets()}
+
+
+def usable_feature_templates() -> list[dict[str, Any]]:
+    """Feature templates whose id no raster template also declares.
+
+    The two registries validate ids independently, so an instance can declare one id in both.
+    That is a configuration error: it is logged, naming the id, and the feature template is left
+    out, so listings never carry two resources with one id. The raster template keeps the id,
+    as `GET /dataset-templates/{id}` resolves it, and refreshing the feature one is refused.
+    """
+    raster_ids = _raster_template_ids()
+    usable = []
+    for template in feature_templates.list_feature_templates():
+        if str(template["id"]) in raster_ids:
+            logger.warning(
+                "Feature collection template '%s' has the same id as a dataset template; "
+                "it is not listed and cannot be fetched until one of them is renamed",
+                template["id"],
+            )
+            continue
+        usable.append(template)
+    return usable
+
+
+def refreshable_feature_template_or_error(collection_id: str) -> dict[str, Any]:
+    """The template for *collection_id* if its provider can fetch it, else an HTTPException.
+
+    Checked before a refresh is accepted, so an HTTP caller gets a 404 or 400 rather than a
+    job that fails: a missing template, or one naming no provider this instance has.
+    """
+    template = feature_templates.get_feature_template(collection_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Feature collection template '{collection_id}' not found")
+    if collection_id in _raster_template_ids():
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{collection_id}' is declared as both a dataset template and a feature collection template; "
+            "rename one of them",
+        )
+    if not is_refreshable(template):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature collection template '{collection_id}' names no provider this instance has",
+        )
+    return template
+
+
+def execute_feature_refresh(
+    *,
+    collection_id: str,
+    publish: bool = True,
+    on_progress: Callable[[int | None, int | None, str | None], None] | None = None,
+) -> FeatureCollectionRecord:
+    """Fetch one collection from its provider: the body of a refresh job and of the page's fetch.
+
+    A module-level function, so a background job can store its path and re-import it.
+    """
+    template = refreshable_feature_template_or_error(collection_id)
+    if on_progress is not None:
+        on_progress(None, None, f"Fetching {template.get('name') or collection_id}")
+    refresh_feature_collection_from_provider(collection_id, publish=publish)
+    return get_feature_collection_or_404(collection_id)
 
 
 def refresh_feature_collection_from_provider(

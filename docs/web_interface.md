@@ -27,7 +27,7 @@ JavaScript.
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, dataset templates and workflows, the size of everything stored, plus access mode and version |
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
-| **Dataset templates** (`/dataset-templates`) | Data the instance can fetch from outside providers, titled by dataset with the provider beneath                 |
+| **Dataset templates** (`/dataset-templates`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
@@ -56,6 +56,13 @@ and the full declared range for a source that runs into the future. Progress is 
 page; when ingestion finishes the dataset page opens, and an error is shown in place. Data is
 always fetched for the instance's configured extent. The form is not shown on a read-only
 instance or when no extent is configured.
+
+A **feature collection template** (boundaries or points, labelled *Features* in the list) has a
+page of its own: the provider, the pinned release, any filters such as the administrative level,
+and the licence with what it requires when the data is served. Its form has no date range, since
+a collection has no time axis: **Fetch** runs the provider and opens the collection when it
+finishes, and fetching again replaces it. A template whose provider this instance lacks is not
+listed.
 
 ### The API page (`/api`)
 
@@ -105,6 +112,8 @@ There is no separate console: data is added from the page of the thing it concer
 - **Ingest** from a dataset template page (`/dataset-templates/{dataset_id}`): enter a start and an
   optional end, choose whether to publish and whether to overwrite an existing store, and
   start. Progress streams on the page; the dataset page opens when it finishes.
+- **Fetch** a feature collection from its template page: choose whether to publish and start.
+  Progress streams on the page; the collection opens when it finishes.
 - **Sync** from a dataset page (`/datasets/{dataset_id}`): the page shows what the source
   has published since the last sync, and **Start sync** fetches it, optionally only up to a
   cutoff date. The page reloads with the new coverage when it finishes. A sync keeps the
