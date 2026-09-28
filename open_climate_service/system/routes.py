@@ -212,6 +212,33 @@ async def manage_sync(request: Request) -> Response:
     )
 
 
+@router.post("/manage/features/refresh", include_in_schema=False)
+async def manage_feature_refresh(request: Request) -> Response:
+    """Fetch a feature collection from its template page's form, streaming progress via SSE."""
+    from fastapi import HTTPException
+
+    from open_climate_service.features.services import execute_feature_refresh, refreshable_feature_template_or_error
+
+    try:
+        form = await request.form()
+        collection_id = str(form.get("collection_id", "")).strip()
+        publish = "publish" in form
+        # Checked before the stream starts, as for ingest: a refusal inside the stream would
+        # arrive as an event after a 200 instead of as the refusal it is.
+        template = refreshable_feature_template_or_error(collection_id)
+    except HTTPException as exc:
+        return _refusal(exc.status_code, str(exc.detail))
+    except Exception as exc:
+        return _refusal(400, str(exc))
+
+    return _job_stream(
+        lambda on_progress: execute_feature_refresh(
+            collection_id=collection_id, publish=publish, on_progress=on_progress
+        ),
+        f"Fetched {template.get('name', collection_id)}",
+    )
+
+
 @router.get("/health")
 def health() -> HealthStatus:
     """Return health status for container health checks."""

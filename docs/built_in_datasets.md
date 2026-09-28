@@ -137,7 +137,9 @@ country's divisions come back too. Add `country` to `filters` when that matters.
 comparing what an instance holds against the latest release answers "is this stale" without
 reading the data. Bumping `release` selects which release the **next** provider run extracts; it
 does not itself trigger one. A feature collection is not on the raster sync path — `POST
-/sync/{id}` refuses it — so refreshing means re-running the provider. The release is pinned
+/sync/{id}` refuses it — so refreshing means re-running the provider: **Fetch** on its template
+page, or `POST /features/{id}/refresh` (add `Prefer: respond-async` to run it as a background
+job). The release is pinned
 rather than resolved to `latest`, so an upgrade is a visible configuration change and an extract
 is reproducible.
 

@@ -222,6 +222,46 @@ def _unpack_provider_result(result: Any, *, provider_name: str) -> tuple[Mapping
     return result, None
 
 
+def is_refreshable(template: Mapping[str, Any]) -> bool:
+    """Whether *template* names a provider this instance has, so it can be fetched."""
+    provider = template.get("provider")
+    return isinstance(provider, str) and feature_providers.get_feature_provider(provider) is not None
+
+
+def refreshable_feature_template_or_error(collection_id: str) -> dict[str, Any]:
+    """The template for *collection_id* if its provider can fetch it, else an HTTPException.
+
+    Checked before a refresh is accepted, so an HTTP caller gets a 404 or 400 rather than a
+    job that fails: a missing template, or one naming no provider this instance has.
+    """
+    template = feature_templates.get_feature_template(collection_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Feature collection template '{collection_id}' not found")
+    if not is_refreshable(template):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature collection template '{collection_id}' names no provider this instance has",
+        )
+    return template
+
+
+def execute_feature_refresh(
+    *,
+    collection_id: str,
+    publish: bool = True,
+    on_progress: Callable[[int | None, int | None, str | None], None] | None = None,
+) -> FeatureCollectionRecord:
+    """Fetch one collection from its provider: the body of a refresh job and of the page's fetch.
+
+    A module-level function, so a background job can store its path and re-import it.
+    """
+    template = refreshable_feature_template_or_error(collection_id)
+    if on_progress is not None:
+        on_progress(None, None, f"Fetching {template.get('name') or collection_id}")
+    refresh_feature_collection_from_provider(collection_id, publish=publish)
+    return get_feature_collection_or_404(collection_id)
+
+
 def refresh_feature_collection_from_provider(
     collection_id: str,
     *,
