@@ -5,13 +5,10 @@ import importlib.resources
 import json
 import logging
 import math
-import os
 import re
-import time
 from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
-from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -1371,62 +1368,29 @@ def _extent_globe(extent: dict[str, Any] | None) -> dict[str, Any] | None:
     return _globe((xmin, ymin, xmax, ymax))
 
 
-_SIZE_CACHE_SECONDS = 60.0
-
-
-def _directory_bytes(path: Path) -> int:
-    """Bytes held under a store directory, following none of its symlinks."""
-    total = 0
-    stack = [path]
-    while stack:
-        try:
-            entries = list(os.scandir(stack.pop()))
-        except OSError:
-            continue
-        for entry in entries:
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    stack.append(Path(entry.path))
-                elif entry.is_file(follow_symlinks=False):
-                    total += entry.stat(follow_symlinks=False).st_size
-            except OSError:
-                continue
-    return total
-
-
-_stored_bytes_cache: tuple[float, int] | None = None
-
-
 def _stored_bytes() -> int:
-    """Total size on disk of every store this instance's artifacts point at.
+    """Total size of every store this instance's artifacts point at.
 
-    Walked rather than read from a record: nothing stores a size, and an Icechunk store grows
-    with each sync, so a recorded one would be stale. Distinct paths only — successive
-    ingestions of the same dataset append to a single store. Cached for a minute, because a
-    store is tens of thousands of chunk files and the overview is reloaded far more often than
-    the data changes.
+    Read from the records, never measured here. A store can be hundreds of thousands of chunk
+    files, and walking them on a page load while a heavy job held the GIL took this page from
+    seconds to many minutes. Each ingest, sync, openEO publish and feature refresh records the
+    size it leaves behind, so the newest record for a path carries that store's current size;
+    distinct paths only, since successive ingestions of a dataset append to one store. A record
+    without a size (written before sizes were recorded) counts as nothing until re-ingested.
     """
-    global _stored_bytes_cache
-    now = time.monotonic()
-    if _stored_bytes_cache is not None and now - _stored_bytes_cache[0] < _SIZE_CACHE_SECONDS:
-        return _stored_bytes_cache[1]
     try:
         from open_climate_service.ingestions.services import list_artifacts
 
-        paths = {artifact.path for artifact in list_artifacts().items if artifact.path}
-        total = sum(_directory_bytes(Path(path)) if Path(path).is_dir() else _file_bytes(Path(path)) for path in paths)
+        newest: dict[str, Any] = {}
+        for artifact in list_artifacts().items:
+            if artifact.path and (
+                artifact.path not in newest or artifact.created_at > newest[artifact.path].created_at
+            ):
+                newest[artifact.path] = artifact
     except Exception:
-        _log.exception("Unexpected error measuring stored data")
-        total = 0
-    _stored_bytes_cache = (now, total)
-    return total
-
-
-def _file_bytes(path: Path) -> int:
-    try:
-        return path.stat().st_size
-    except OSError:
+        _log.exception("Unexpected error reading stored data sizes")
         return 0
+    return sum(artifact.size_bytes or 0 for artifact in newest.values())
 
 
 def _format_bytes(total: int) -> str:

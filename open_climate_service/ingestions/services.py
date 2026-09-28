@@ -61,6 +61,7 @@ from open_climate_service.ingestions.sync_engine import SyncConfigurationError, 
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
+from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
     datetime_to_period_string,
@@ -518,6 +519,7 @@ def create_feature_artifact(
         format=ArtifactFormat.GEOPARQUET,
         path=str(resolved_path),
         asset_paths=[str(resolved_path)],
+        size_bytes=stored_bytes(resolved_path),
         variables=[],
         request_scope=ArtifactRequestScope(start=None, end=None, bbox=requested_bbox),
         coverage=_feature_coverage(bounds, stored_crs=stored_crs, dataset_id=dataset_id),
@@ -1308,6 +1310,8 @@ def _create_streaming_artifact(
             format=ArtifactFormat.ICECHUNK,
             path=str(store_path.resolve()),
             asset_paths=[str(store_path.resolve())],
+            # After the swap, like the thumbnail: the size of the store that is published.
+            size_bytes=stored_bytes(store_path),
             variables=[str(dataset["variable"])],
             request_scope=request_scope,
             coverage=coverage,
@@ -1380,6 +1384,10 @@ def _create_streaming_artifact(
                         store_path,
                         exc_info=True,
                     )
+            if not store_committed and not ingest_completed and rollback_repo is not None:
+                # A forward append that failed part way keeps the periods it committed, so a
+                # retry can resume; the store has grown, so its recorded size must follow.
+                _refresh_recorded_size(store_path)
             if replacement_path is not None:
                 # Failed fetches and validations leave only a disposable partial replacement. A
                 # successful swap has already moved this path away, making cleanup a no-op.
@@ -2127,6 +2135,27 @@ def _upsert_artifact_record(
         raise HTTPException(status_code=404, detail=f"Artifact '{existing.artifact_id}' not found")
 
     return _mutate_records(mutate)
+
+
+def _refresh_recorded_size(store_path: Path) -> None:
+    """Re-measure *store_path* and record it on the newest record for that path, if there is one.
+
+    For a failed append that kept its committed periods. Best-effort: a size is a figure for
+    display, so this logs rather than raising and never masks the failure that led here.
+    """
+    try:
+        path = str(store_path.resolve())
+        size = stored_bytes(store_path)
+
+        def update(records: list[ArtifactRecord]) -> None:
+            matching = [index for index, record in enumerate(records) if record.path == path]
+            if matching:
+                newest = max(matching, key=lambda index: records[index].created_at)
+                records[newest] = records[newest].model_copy(update={"size_bytes": size})
+
+        _mutate_records(update)
+    except Exception:
+        logger.warning("Could not refresh the recorded size of '%s'", store_path, exc_info=True)
 
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
