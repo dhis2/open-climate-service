@@ -448,6 +448,7 @@ def create_feature_artifact(
     bbox: Sequence[float] | None = None,
     primary_geometry: str = DEFAULT_PRIMARY_GEOMETRY,
     provider: str | None = None,
+    version: ArtifactVersion | None = None,
     publish: bool = True,
 ) -> ArtifactRecord:
     """Register one already-written feature collection as a managed dataset.
@@ -510,7 +511,10 @@ def create_feature_artifact(
         # precisely so this record does not have to invent values for them.
         variable=None,
         period_type=None,
-        version=_resolve_artifact_version(template),
+        # A provider reports what it actually fetched, so that wins over the template's
+        # declaration: the two can disagree, and only one of them was true of this extract.
+        # A provider that reports nothing leaves the declared `sync.version` in place.
+        version=version or _resolve_artifact_version(template),
         format=ArtifactFormat.GEOPARQUET,
         path=str(resolved_path),
         asset_paths=[str(resolved_path)],

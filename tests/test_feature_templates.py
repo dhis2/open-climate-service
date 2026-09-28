@@ -15,6 +15,7 @@ import pytest
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.features import providers as feature_providers
+from open_climate_service.features import services as feature_services
 from open_climate_service.features import templates as feature_templates
 
 VALID_TEMPLATE: dict[str, object] = {
@@ -307,3 +308,81 @@ def test_list_datasets_never_includes_a_feature_template() -> None:
     """The raster-only enumeration (the ingest form, /dataset-templates) must not see one."""
     ids = [d["id"] for d in registry_datasets.list_datasets()]
     assert "districts" not in ids
+
+
+# --- a provider may report the release it read (CLIM-893) --------------------------------------
+
+
+def test_a_provider_may_return_the_collection_alone() -> None:
+    """The original single form stays valid: a provider with nothing to report says so."""
+    collection = {"type": "FeatureCollection", "features": []}
+
+    unpacked, version = feature_services._unpack_provider_result(collection, provider_name="dhis2")
+
+    assert unpacked is collection
+    assert version is None
+
+
+def test_a_provider_may_return_the_collection_with_its_version() -> None:
+    collection = {"type": "FeatureCollection", "features": []}
+
+    unpacked, version = feature_services._unpack_provider_result((collection, "2026-09-23.0"), provider_name="overture")
+
+    assert unpacked is collection
+    assert version is not None
+    assert (version.value, version.authority) == ("2026-09-23.0", "overture")
+
+
+def test_the_authority_is_the_registry_name_not_anything_the_provider_said() -> None:
+    """A release identity is the pair; a provider naming its own authority could claim another's."""
+    _unpacked, version = feature_services._unpack_provider_result(
+        ({"type": "FeatureCollection", "features": []}, "R2025A"), provider_name="dhis2"
+    )
+
+    assert version is not None and version.authority == "dhis2"
+
+
+def test_a_reported_version_of_none_records_nothing() -> None:
+    _unpacked, version = feature_services._unpack_provider_result(
+        ({"type": "FeatureCollection", "features": []}, None), provider_name="overture"
+    )
+
+    assert version is None
+
+
+def test_a_non_string_reported_version_is_refused() -> None:
+    with pytest.raises(ValueError, match="a version must be a non-empty string"):
+        feature_services._unpack_provider_result(
+            ({"type": "FeatureCollection", "features": []}, 7), provider_name="overture"
+        )
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [pytest.param("", id="empty"), pytest.param("   ", id="whitespace"), pytest.param(" v1 ", id="padded")],
+)
+def test_a_reported_version_is_not_trimmed_into_validity(reported: str) -> None:
+    """`ArtifactVersion.value` rejects padding rather than trimming it, so 'verbatim' stays true.
+
+    Trimming here would let a provider register a value that the same string could not be
+    *declared* with in a template — two doors to one field disagreeing about what it accepts.
+    """
+    with pytest.raises(ValueError, match="not a usable release identifier"):
+        feature_services._unpack_provider_result(
+            ({"type": "FeatureCollection", "features": []}, reported), provider_name="overture"
+        )
+
+
+def test_a_wrong_sized_tuple_is_refused() -> None:
+    with pytest.raises(ValueError, match="3-tuple"):
+        feature_services._unpack_provider_result(({}, "v", "extra"), provider_name="overture")
+
+
+def test_a_provider_returning_something_that_is_not_a_collection_is_refused() -> None:
+    with pytest.raises(ValueError, match="returned list; it must return either"):
+        feature_services._unpack_provider_result([1, 2], provider_name="overture")
+
+
+def test_a_pair_whose_first_element_is_not_a_collection_is_refused() -> None:
+    with pytest.raises(ValueError, match="first element is list"):
+        feature_services._unpack_provider_result(([], "2026-09-23.0"), provider_name="overture")
