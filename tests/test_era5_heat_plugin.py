@@ -1,11 +1,12 @@
 import asyncio
-from datetime import date, timedelta
 import time
+from datetime import date, timedelta
 
-import pytest
-import xarray as xr
-
-from open_climate_service.plugins.datasets.era5_heat import ERA5HeatDailyUTCIPlugin, ERA5HeatCDSDailyFromHourlyPlugin, ERA5HeatCDSHourlyPlugin
+from open_climate_service.plugins.datasets.era5_heat import (
+    ERA5HeatCDSDailyFromHourlyPlugin,
+    ERA5HeatCDSHourlyPlugin,
+    ERA5HeatDailyUTCIPlugin,
+)
 
 _TEST_BBOX = [28.7, -2.9, 28.8, -2.8]
 
@@ -41,15 +42,15 @@ def test_daily_from_hourly_periods_efficiency():
     start = "2020-01-01"
     end = "2025-12-31"
     days = asyncio.run(daily_plugin.periods(start, end))
-    assert hourly_plugin._cached_cutoff == None
+    assert hourly_plugin._cached_cutoff is None
     t = time.monotonic()
     for day in days:
         hours = asyncio.run(hourly_plugin.periods(start=day, end=day))
         assert len(hours) == 24
         assert hours[0][:10] == day
-        assert hourly_plugin._cached_cutoff != None
+        assert hourly_plugin._cached_cutoff is not None
     duration = time.monotonic() - t
-    max_duration = 10 # seconds
+    max_duration = 10  # seconds
     assert duration < max_duration
 
 
