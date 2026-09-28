@@ -185,22 +185,25 @@ def aggregate_spatial(
     ymax = float(y_coords.max()) + dy / 2
     transform = from_bounds(xmin, ymin, xmax, ymax, width, height)
 
+    from open_climate_service.shared.provenance import observe_spatial_aggregation
+
     geom_dim = target_dimension or "geometry"
     results: list[xr.Dataset] = []
 
-    for geom in geom_shapes:
-        mask = rasterio.features.geometry_mask(
-            [mapping(geom)],
-            out_shape=(height, width),
-            transform=transform,
-            invert=True,
-        )
-        # rasterio builds the mask top-row first (y descending); flip when y is ascending
-        if height > 1 and float(y_coords[1]) > float(y_coords[0]):
-            mask = mask[::-1]
+    with observe_spatial_aggregation():
+        for geom in geom_shapes:
+            mask = rasterio.features.geometry_mask(
+                [mapping(geom)],
+                out_shape=(height, width),
+                transform=transform,
+                invert=True,
+            )
+            # rasterio builds the mask top-row first (y descending); flip when y is ascending
+            if height > 1 and float(y_coords[1]) > float(y_coords[0]):
+                mask = mask[::-1]
 
-        geom_ds = _dataset_reduce_spatial(data, mask, reducer, y_dim, x_dim, context)
-        results.append(geom_ds)
+            geom_ds = _dataset_reduce_spatial(data, mask, reducer, y_dim, x_dim, context)
+            results.append(geom_ds)
 
     combined = xr.concat(results, dim=geom_dim)
     combined[geom_dim] = geom_labels
@@ -261,6 +264,11 @@ def reduce_by_method(data: Any, method: str = "mean") -> float:
     """
     if method not in _REDUCE_METHODS:
         raise ValueError(f"Unknown reduce method '{method}'; expected one of {sorted(_REDUCE_METHODS)}")
+    from open_climate_service.shared.provenance import record_spatial_reduction
+
+    # Counts only inside aggregate_spatial, where it lets a named export check its
+    # declared `aggregation` against what actually ran.
+    record_spatial_reduction(method)
     arr = np.asarray(data, dtype="float64").ravel()
     if arr.size == 0:
         return float("nan")

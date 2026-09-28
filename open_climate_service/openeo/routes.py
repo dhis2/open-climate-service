@@ -122,7 +122,9 @@ def file_formats() -> dict[str, Any]:
             "title": "DHIS2 JSON",
             "description": (
                 "DHIS2 import-ready JSON dataValues envelope for aggregated org-unit results. "
-                "Requires save_result options such as data_element_id, org_unit_field, and period_type."
+                "Pass the save_result option 'export' to render a configured named export, which "
+                "can be delivered to DHIS2; or pass ad-hoc options such as data_element_id, "
+                "org_unit_field, and period_type for a download-only payload."
             ),
             "gis_data_types": ["table", "vector"],
             "parameters": {
@@ -449,9 +451,11 @@ def execute_synchronous(
     # Unwrap save_result envelope to get requested format
     fmt = "ZARR"
     options: dict[str, Any] = {}
+    provenance: dict[str, Any] | None = None
     if isinstance(result, SaveResultEnvelope):
         fmt = result.format
         options = result.options
+        provenance = result.provenance
         result = result.data
 
     # Named exporters expect an eager frame, matching the batch-job path.
@@ -467,7 +471,7 @@ def execute_synchronous(
         from open_climate_service.exports.service import render_named_export
 
         try:
-            plugin, rendered = render_named_export(result, fmt, options)
+            plugin, rendered = render_named_export(result, fmt, options, provenance=provenance)
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Response(content=rendered.content, media_type=plugin.media_type)

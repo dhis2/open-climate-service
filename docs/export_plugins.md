@@ -36,10 +36,14 @@ Pass the prepared aggregate to `save_result`:
 ```
 
 This is a graph node; `aggregate` must be a preceding node in the full graph.
+The built-in `aggregate_to_dhis2_json` workflow wraps this aggregation and
+`save_result` call, taking the export ID as its `export` parameter. See
+[Importing data to DHIS2](importing_to_dhis2.md#automated-delivery-with-a-named-export).
 Named exports accept only the `export` option. Change the configured mapping to
-change its destination or fields; per-request overrides are rejected. Existing
-`DHIS2JSON` calls using `data_element_id`, `org_unit_field`, and `period_type`
-continue to work without a named export.
+change its destination or fields; per-request overrides are rejected. Hand-written
+`DHIS2JSON` graphs using `data_element_id`, `org_unit_field`, and `period_type`
+still render an ad-hoc payload without a named export, but that payload cannot be
+delivered by the server.
 
 Each series mapping selects one value series. `select: {}` requires
 an unambiguous value column. To select a variable from a result with several
@@ -66,9 +70,15 @@ monthly, since they would produce duplicate destination keys. Explicit incompati
 renderer cannot prove that an arbitrary input value was aggregated correctly.
 
 The optional `dataset`, `org_units`, and `connection` references, and the optional
-`aggregation` declaration, describe intended input/delivery configuration. They
-do not trigger any work. Batch exports bind these declarations to a manifest and
-check an observed dataset reference when execution provenance contains one. A
+`aggregation` declaration (`mean`, `sum`, `min`, `max`, or `median`), describe
+intended input/delivery configuration. They do not trigger any work. Synchronous
+and batch renders check them against execution provenance where it contains an
+observation, and batch exports bind them to a manifest. The dataset must match an
+observed source. The aggregation is checked when exactly one `aggregate_spatial`
+ran and it reduced with `reduce_by_method`, as the built-in workflow does. With
+several spatial aggregations or another reducer, the aggregation cannot be
+attributed to the result; it remains an unverified declaration and the manifest
+lists `spatial_aggregation_method` as missing. A
 connection is not required to render or download a payload, but a bound connection
 is required for later server-side delivery. Use
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)
@@ -142,8 +152,8 @@ payload and manifest are both exposed as job result assets. Synchronous renderin
 still returns the payload directly and remains available in read-only mode.
 
 Execution provenance records observed managed artifacts, Icechunk snapshot IDs,
-and hashes of inline spatial features where those inputs pass through native OCS
-processes. The manifest explicitly lists evidence that is unavailable; declarations
+hashes of inline spatial features, and the method of each `aggregate_spatial` call
+where those inputs pass through native OCS processes. The manifest explicitly lists evidence that is unavailable; declarations
 alone do not prove aggregation semantics or per-output lineage.
 
 The delivery-input validator accepts only completed jobs with intact payloads and
