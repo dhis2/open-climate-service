@@ -64,7 +64,7 @@ data_value_set = service.execute(
             "arguments": {
                 "dataset_id": "era5land_temperature_monthly",
                 "temporal_extent": ["2025-01-01", "2025-12-31"],
-                "geometries": {"type": "FeatureCollection", "features": []},
+                "geometries": {"type": "FeatureCollection", "features": [...]},  # your org units
                 "export": "temperature-monthly",  # a named export in the instance configuration
                 "method": "mean",
             },
