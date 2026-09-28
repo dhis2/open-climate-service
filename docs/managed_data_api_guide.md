@@ -399,6 +399,8 @@ slice is entirely missing, leaves the previous image in place rather than deleti
 served thumbnail can be a run or more stale. The STAC collection advertises the `thumbnail`
 asset only when the image exists.
 
+A feature collection gets a thumbnail at the same path, written each time the collection is refreshed.
+
 ## 10. Access published STAC collections
 
 Published Zarr-backed datasets are exposed through `/stac` for discovery.

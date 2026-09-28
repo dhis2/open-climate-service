@@ -22,6 +22,7 @@ from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
 from open_climate_service.publications.services import managed_dataset_id_for
 from open_climate_service.shared.licences import parse_licence
+from open_climate_service.shared.thumbnails import write_feature_thumbnail
 
 
 def refresh_feature_collection(
@@ -156,6 +157,8 @@ def _refresh_feature_collection_locked(
     # Only now, with the record durable and pointing at `written`, can the files it
     # superseded go. A failure here leaves an orphan, not a wrong answer.
     store.prune_superseded_files(dataset_id, keep=written)
+    # Last, and never raising: a collection that cannot be drawn is still registered.
+    write_feature_thumbnail(written, dataset_id)
     return record
 
 
