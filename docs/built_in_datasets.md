@@ -1,8 +1,16 @@
 # Built-in datasets
 
-The Open Climate Service ships with built-in dataset templates covering precipitation, temperature, and population. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
+The Open Climate Service ships with built-in dataset templates covering commonly requested data sources. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
 
 To ingest a built-in dataset for your configured extent, see the [API reference](managed_data_api_guide.md). To add datasets beyond these, see [Adding custom datasets](adding_custom_datasets.md).
+
+---
+
+## ERA5-Land — temperature and precipitation
+
+ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine dataset templates are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
+
+See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 
 ---
 
@@ -50,14 +58,6 @@ That choice keeps every monthly precipitation dataset on the same units, which m
 
 ---
 
-## ERA5-Land — temperature and precipitation
-
-ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine dataset templates are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
-
-See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
-
----
-
 ## WorldPop Global2 — total population (yearly)
 
 | Property               | Value                                                                |
@@ -95,6 +95,27 @@ WorldPop Global2 provides gridded population estimates and projections at 100 m 
 | **Source**             | [WorldPop Global2 age & sex structures](https://hub.worldpop.org/project/categories?id=8) |
 
 Population disaggregated by sex and 5-year age band. Population is the quantity; sex and age are both disaggregation dimensions of it — so WorldPop's ~40 per-(sex, age) GeoTIFFs per country-year are combined into a **single `population` variable** over a `sex` dimension (`female`, `male`) and an ordinal `age_group` dimension (the lower bound of each band: 0, 1, 5, 10, … 90).
+
+---
+
+## Copernicus — elevation (static)
+
+| Property               | Value                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `copdem30_elevation_static`                                                                          |
+| **Variable**           | `elevation`                                                                                          |
+| **Units**              | meters                                                                                               |
+| **Period**             | Yearly                                                                                               |
+| **Spatial coverage**   | Global                                                                                               |
+| **Spatial resolution** | ~30 m                                                                                                |
+| **Record start**       | 2010                                                                                                 |
+| **Record end**         | 2010                                                                                                 |
+| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
+
+Copernicus DEM Global 30m, recording elevation height above sea level. 
+
+**Note**: This dataset is static and non-varying over time, but currently implemented as yearly data for the year 2010
+when the data measurements were made. 
 
 ---
 
