@@ -84,6 +84,13 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     automation_service = get_workflow_automation_service()
     automation_service.start()
     job_service.set_event_consumer(automation_service.consume)
+    # Registered before reconciling, so a job finishing meanwhile is caught by one or the
+    # other; the deterministic delivery key makes being caught by both harmless.
+    openeo_service.set_finished_listener(automation_service.on_job_finished)
+    try:
+        automation_service.reconcile_deliveries()
+    except Exception:
+        logger.exception("Workflow delivery reconciliation failed; continuing startup")
     try:
         automation_service.replay()
     except Exception:
@@ -96,6 +103,7 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         yield
     finally:
         job_service.set_event_consumer(None)
+        openeo_service.set_finished_listener(None)
         scheduler_service.shutdown()
         job_service.shutdown()
         openeo_service.shutdown()

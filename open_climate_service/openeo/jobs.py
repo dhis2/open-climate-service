@@ -181,6 +181,9 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data: dict[str, object] = record.model_dump(mode="json", exclude_none=False)
     data["error_message"] = record.error_message
     data["cancel_requested"] = record.cancel_requested
+    data["trigger_id"] = record.trigger_id
+    data["source_event_id"] = record.source_event_id
+    data["finished_at"] = record.finished_at.isoformat() if record.finished_at is not None else None
     return data
 
 
@@ -196,6 +199,15 @@ class OpenEOJobService:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="openeo-job")
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
+        self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
+
+    def set_finished_listener(self, listener: Callable[[OpenEOJobRecord], None] | None) -> None:
+        """Register the process-local callback run after a job is persisted as FINISHED.
+
+        The callback runs on the job's worker thread. Its failures are logged and never
+        change the finished job's status.
+        """
+        self._finished_listener = listener
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -291,6 +303,8 @@ class OpenEOJobService:
                 {"rel": "self", "href": f"/jobs/{job_id}", "type": "application/json"},
                 {"rel": "results", "href": f"/jobs/{job_id}/results", "type": "application/json"},
             ],
+            trigger_id=trigger_id,
+            source_event_id=source_event_id,
         )
 
         def _create_once(records: list[dict[str, object]]) -> tuple[OpenEOJobRecord, bool]:
@@ -494,12 +508,14 @@ class OpenEOJobService:
                 )
                 return
             output_path = self._persist_result(job_id, result)
-            store_update_job(
+            finished_at = utc_now()
+            finished = store_update_job(
                 job_id,
                 lambda r: r.model_copy(
                     update={
                         "status": OpenEOJobStatus.FINISHED,
-                        "updated": utc_now(),
+                        "updated": finished_at,
+                        "finished_at": finished_at,
                         "usage": {"output_path": output_path} if output_path else {},
                     }
                 ),
@@ -517,6 +533,18 @@ class OpenEOJobService:
                     }
                 ),
             )
+        else:
+            # Outside the try: a listener failure must not turn a finished job into an error.
+            self._notify_finished(finished)
+
+    def _notify_finished(self, record: OpenEOJobRecord) -> None:
+        listener = self._finished_listener
+        if listener is None:
+            return
+        try:
+            listener(record)
+        except Exception:
+            logger.exception("Finished-job listener failed for openEO job %s", record.id)
 
     def _persist_result(self, job_id: str, result: Any) -> str | None:
         import xarray as xr
