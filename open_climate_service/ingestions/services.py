@@ -2133,22 +2133,6 @@ def _upsert_artifact_record(
     return _mutate_records(mutate)
 
 
-def record_store_sizes(sizes: Mapping[str, int]) -> None:
-    """Fill in `size_bytes` on records that have none, from sizes measured by path.
-
-    For records written before sizes were recorded. Only a missing size is filled, never an
-    existing one replaced: a sync that finished while the measurement ran has recorded the newer
-    size itself.
-    """
-
-    def fill(records: list[ArtifactRecord]) -> None:
-        for index, record in enumerate(records):
-            if record.size_bytes is None and record.path is not None and record.path in sizes:
-                records[index] = record.model_copy(update={"size_bytes": sizes[record.path]})
-
-    _mutate_records(fill)
-
-
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
     """Apply a read-modify-write mutation under an exclusive file lock."""
     ensure_store()

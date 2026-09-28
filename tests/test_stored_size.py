@@ -23,6 +23,7 @@ from open_climate_service import config as api_config
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.features import services as feature_services
 from open_climate_service.ingestions import services as ingestion_services
+from open_climate_service.shared import storage_size
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.system import templates as landing
 
@@ -35,8 +36,6 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
     monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
-    monkeypatch.setattr(landing, "_measured_sizes", {})
-    monkeypatch.setattr(landing, "_size_backfill_running", False)
 
 
 def _refresh_collection(collection_id: str = "districts") -> ingestion_services.ArtifactRecord:
@@ -50,16 +49,6 @@ def _refresh_collection(collection_id: str = "districts") -> ingestion_services.
             ],
         },
     )
-
-
-def _forget_sizes() -> None:
-    """Make every stored record look like one written before sizes were recorded."""
-
-    def clear(records: list[Any]) -> None:
-        for index, record in enumerate(records):
-            records[index] = record.model_copy(update={"size_bytes": None})
-
-    ingestion_services._mutate_records(clear)
 
 
 def _no_walking(*_args: object, **_kwargs: object) -> int:
@@ -189,13 +178,13 @@ def test_the_overview_reads_recorded_sizes_and_never_walks_a_store(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = _refresh_collection()
-    monkeypatch.setattr(landing, "stored_bytes", _no_walking)
+    monkeypatch.setattr(storage_size, "stored_bytes", _no_walking)
 
     page = client.get("/", headers={"Accept": "text/html"})
 
     assert page.status_code == 200
     assert landing._format_bytes(record.size_bytes or 0) in page.text
-    assert landing._stored_bytes() == (record.size_bytes, True)
+    assert landing._stored_bytes() == record.size_bytes
 
 
 def test_each_store_is_counted_once_from_its_newest_record(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,37 +197,24 @@ def test_each_store_is_counted_once_from_its_newest_record(monkeypatch: pytest.M
     newer = record("/data/chirps.icechunk", "2026-02-01", 1500)
     other = record("/data/era5.icechunk", "2026-01-15", 200)
     monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=[newer, other, older]))
-    monkeypatch.setattr(landing, "stored_bytes", _no_walking)
+    monkeypatch.setattr(storage_size, "stored_bytes", _no_walking)
 
-    assert landing._stored_bytes() == (1700, True)
+    assert landing._stored_bytes() == 1700
 
 
-def test_records_without_a_size_are_measured_once_in_the_background(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_record_without_a_size_counts_as_nothing_and_does_not_break_the_page(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Records written before sizes were recorded have none; re-ingesting records one."""
     record = _refresh_collection()
-    _forget_sizes()
-    started: list[list[str]] = []
-    monkeypatch.setattr(landing, "_start_size_backfill", lambda paths: started.append(paths))
 
-    assert landing._stored_bytes() == (0, False)
-    assert started == [[record.path]]
+    def clear(records: list[Any]) -> None:
+        for index, stored in enumerate(records):
+            records[index] = stored.model_copy(update={"size_bytes": None})
 
-    landing._backfill_sizes(started[0])
+    ingestion_services._mutate_records(clear)
+    monkeypatch.setattr(storage_size, "stored_bytes", _no_walking)
 
-    stored = [r for r in ingestion_services._load_records() if r.dataset_id == "districts"]
-    assert stored[0].size_bytes == record.size_bytes
-    assert landing._stored_bytes() == (record.size_bytes, True)
-    assert landing._format_stored_size(1500, False) == "1.5 KB+"
-
-
-def test_a_read_only_instance_measures_in_memory_without_rewriting_records(monkeypatch: pytest.MonkeyPatch) -> None:
-    record = _refresh_collection()
-    _forget_sizes()
-    monkeypatch.setattr(api_config, "is_read_only", lambda: True)
-    assert record.path is not None
-
-    landing._backfill_sizes([record.path])
-
-    stored = [r for r in ingestion_services._load_records() if r.dataset_id == "districts"]
-    assert stored[0].size_bytes is None
-    monkeypatch.setattr(landing, "stored_bytes", _no_walking)
-    assert landing._stored_bytes() == (record.size_bytes, True)
+    assert landing._stored_bytes() == 0
+    assert client.get("/", headers={"Accept": "text/html"}).status_code == 200
+    assert record.size_bytes  # the refresh itself did record one

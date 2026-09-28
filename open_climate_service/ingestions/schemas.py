@@ -471,7 +471,7 @@ class ArtifactRecord(BaseModel):
         description=(
             "Bytes on disk at `path` when this record was written, measured once at the end of "
             "the ingest, sync, publish or refresh that wrote it. None on records written before "
-            "sizes were recorded; those are measured once in the background."
+            "sizes were recorded, which count as nothing towards the stored total until re-ingested."
         ),
     )
     variables: list[str] = Field(default_factory=list)

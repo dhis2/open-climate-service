@@ -6,7 +6,6 @@ import json
 import logging
 import math
 import re
-import threading
 from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -21,7 +20,6 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
-from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.time import datetime_to_period_string
 
 from .schemas import Link, RootResponse
@@ -1370,25 +1368,15 @@ def _extent_globe(extent: dict[str, Any] | None) -> dict[str, Any] | None:
     return _globe((xmin, ymin, xmax, ymax))
 
 
-# Sizes measured in the background for records written before sizes were recorded, by path.
-# Kept in memory as well as written back, so a read-only instance, or a failed write, measures
-# each store once per process rather than on every page load.
-_measured_sizes: dict[str, int] = {}
-_size_backfill_lock = threading.Lock()
-_size_backfill_running = False
-
-
-def _stored_bytes() -> tuple[int, bool]:
-    """Total size of every store this instance's artifacts point at, and whether it is complete.
+def _stored_bytes() -> int:
+    """Total size of every store this instance's artifacts point at.
 
     Read from the records, never measured here. A store can be hundreds of thousands of chunk
     files, and walking them on a page load while a heavy job held the GIL took this page from
     seconds to many minutes. Each ingest, sync, openEO publish and feature refresh records the
     size it leaves behind, so the newest record for a path carries that store's current size;
-    distinct paths only, since successive ingestions of a dataset append to one store.
-
-    A path whose records predate recorded sizes is measured once in the background, and the
-    total is reported as incomplete until that finishes.
+    distinct paths only, since successive ingestions of a dataset append to one store. A record
+    without a size (written before sizes were recorded) counts as nothing until re-ingested.
     """
     try:
         from open_climate_service.ingestions.services import list_artifacts
@@ -1401,47 +1389,8 @@ def _stored_bytes() -> tuple[int, bool]:
                 newest[artifact.path] = artifact
     except Exception:
         _log.exception("Unexpected error reading stored data sizes")
-        return 0, True
-    sizes = {
-        path: artifact.size_bytes if artifact.size_bytes is not None else _measured_sizes.get(path)
-        for path, artifact in newest.items()
-    }
-    unmeasured = sorted(path for path, size in sizes.items() if size is None)
-    if unmeasured:
-        _start_size_backfill(unmeasured)
-    return sum(size for size in sizes.values() if size is not None), not unmeasured
-
-
-def _start_size_backfill(paths: list[str]) -> None:
-    """Measure *paths* on a background thread, unless a measurement is already running."""
-    global _size_backfill_running
-    with _size_backfill_lock:
-        if _size_backfill_running:
-            return
-        _size_backfill_running = True
-    threading.Thread(target=_backfill_sizes, args=(paths,), name="ocs-size-backfill", daemon=True).start()
-
-
-def _backfill_sizes(paths: list[str]) -> None:
-    """Measure each path, keep the results, and record them unless the instance is read-only."""
-    global _size_backfill_running
-    try:
-        from open_climate_service.ingestions.services import record_store_sizes
-
-        measured = {path: stored_bytes(path) for path in paths}
-        _measured_sizes.update(measured)
-        if not api_config.is_read_only():
-            record_store_sizes(measured)
-    except Exception:
-        _log.exception("Could not record stored data sizes")
-    finally:
-        with _size_backfill_lock:
-            _size_backfill_running = False
-
-
-def _format_stored_size(total: int, complete: bool) -> str:
-    """The stored size for the overview, marked with a trailing + while some stores are unmeasured."""
-    return _format_bytes(total) if complete else f"{_format_bytes(total)}+"
+        return 0
+    return sum(artifact.size_bytes or 0 for artifact in newest.values())
 
 
 def _format_bytes(total: int) -> str:
@@ -1617,7 +1566,7 @@ def render_landing(version: str, mount: str) -> str:
         extent=extent,
         globe=_extent_globe(extent),
         datasets=_load_datasets(),
-        stored_size=_format_stored_size(*_stored_bytes()),
+        stored_size=_format_bytes(_stored_bytes()),
         sources=catalogue["sources"],
         workflows=catalogue["workflows"],
         # Shown on the overview, so a visitor knows why no page offers ingest or sync.
