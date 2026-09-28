@@ -267,7 +267,7 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(execution, "_open_artifact", lambda _: xr.Dataset({"rain": ("t", [1])}))
     monkeypatch.setattr(execution, "_ensure_crs", lambda data: data)
     monkeypatch.setattr(execution, "_build_process_registry", lambda: {})
-    monkeypatch.setattr(execution, "_augment_with_workflows", lambda registry: registry)
+    monkeypatch.setattr(execution, "_augment_with_workflows", lambda registry, *_: registry)
 
     class Graph:
         def __init__(self: Any, graph: Any):
