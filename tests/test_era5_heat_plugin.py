@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 from datetime import date, timedelta
+from typing import Any
 
 import pytest
 import xarray as xr
@@ -83,18 +84,25 @@ def test_daily_periods():
 
 
 @pytest.fixture
-def daily_utci_data():
-    """Fetches data for a single day of UTCI heat index data"""
+def daily_utci_data_func():
+    """Returns adjustable function to easily fetch data for a single day of UTCI heat index data"""
     # hacky check for TEST_INTEGRATIONS flag for integration tests that should only be run manually
     if not os.getenv("TEST_INTEGRATIONS"):
         pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
 
-    plugin = ERA5HeatDailyUTCIPlugin(temporal_aggregation="mean")
-    ds = plugin.fetch_period(period_id="2023-01-01", bbox=_TEST_BBOX)
-    return ds
+    def func(period_id: str, temporal_aggregation: str):
+        plugin = ERA5HeatDailyUTCIPlugin(temporal_aggregation=temporal_aggregation)
+        ds = plugin.fetch_period(period_id=period_id, bbox=_TEST_BBOX)
+        return ds
+
+    return func
 
 
-def test_heat_dims_and_values(daily_utci_data: xr.Dataset):
+def test_utci_dims_and_values(daily_utci_data_func: Any):
+    # run the data function
+    period_id = "2023-01-01"
+    daily_utci_data = daily_utci_data_func(period_id=period_id, temporal_aggregation="mean")
+
     assert isinstance(daily_utci_data, xr.Dataset)
 
     assert set(("t", "y", "x")).issubset(daily_utci_data.dims)
@@ -102,7 +110,28 @@ def test_heat_dims_and_values(daily_utci_data: xr.Dataset):
     assert daily_utci_data.sizes["x"] > 1
     assert daily_utci_data.sizes["y"] > 1
     assert daily_utci_data.sizes["t"] == 1
-    assert str(daily_utci_data.t.values[0])[:10] == "2023-01-01"  # hardcoded to the date specified in fixture
+    assert str(daily_utci_data.t.values[0])[:10] == period_id
 
     assert "utci" in daily_utci_data.data_vars
     assert daily_utci_data["utci"].size > 0
+
+
+def test_utci_temporal_aggregation(daily_utci_data_func: Any):
+    # run the data function
+    period_id = "2023-01-01"
+    min_data = daily_utci_data_func(
+        period_id=period_id,
+        temporal_aggregation="min",
+    )
+    mean_data = daily_utci_data_func(
+        period_id=period_id,
+        temporal_aggregation="mean",
+    )
+    max_data = daily_utci_data_func(
+        period_id=period_id,
+        temporal_aggregation="max",
+    )
+
+    # ensure stats values are indeed lower or higher than each other
+    assert (min_data.utci < mean_data.utci).all()
+    assert (mean_data.utci < max_data.utci).all()
