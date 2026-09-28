@@ -61,6 +61,7 @@ from open_climate_service.ingestions.sync_engine import SyncConfigurationError, 
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
+from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
     datetime_to_period_string,
@@ -518,6 +519,7 @@ def create_feature_artifact(
         format=ArtifactFormat.GEOPARQUET,
         path=str(resolved_path),
         asset_paths=[str(resolved_path)],
+        size_bytes=stored_bytes(resolved_path),
         variables=[],
         request_scope=ArtifactRequestScope(start=None, end=None, bbox=requested_bbox),
         coverage=_feature_coverage(bounds, stored_crs=stored_crs, dataset_id=dataset_id),
@@ -1308,6 +1310,8 @@ def _create_streaming_artifact(
             format=ArtifactFormat.ICECHUNK,
             path=str(store_path.resolve()),
             asset_paths=[str(store_path.resolve())],
+            # After the swap, like the thumbnail: the size of the store that is published.
+            size_bytes=stored_bytes(store_path),
             variables=[str(dataset["variable"])],
             request_scope=request_scope,
             coverage=coverage,
@@ -2127,6 +2131,22 @@ def _upsert_artifact_record(
         raise HTTPException(status_code=404, detail=f"Artifact '{existing.artifact_id}' not found")
 
     return _mutate_records(mutate)
+
+
+def record_store_sizes(sizes: Mapping[str, int]) -> None:
+    """Fill in `size_bytes` on records that have none, from sizes measured by path.
+
+    For records written before sizes were recorded. Only a missing size is filled, never an
+    existing one replaced: a sync that finished while the measurement ran has recorded the newer
+    size itself.
+    """
+
+    def fill(records: list[ArtifactRecord]) -> None:
+        for index, record in enumerate(records):
+            if record.size_bytes is None and record.path is not None and record.path in sizes:
+                records[index] = record.model_copy(update={"size_bytes": sizes[record.path]})
+
+    _mutate_records(fill)
 
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:

@@ -52,6 +52,7 @@ from open_climate_service.openeo.schemas import (
 )
 from open_climate_service.shared.cf import is_temperature_like
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
+from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
@@ -781,6 +782,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
         format=ArtifactFormat.ICECHUNK,
         path=str(store_path),
         asset_paths=[str(store_path)],
+        size_bytes=stored_bytes(store_path),
         variables=[str(v) for v in ds.data_vars],
         request_scope=ArtifactRequestScope(
             start=coverage.temporal.start,
