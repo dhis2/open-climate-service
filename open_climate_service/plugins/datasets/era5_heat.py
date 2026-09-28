@@ -64,11 +64,12 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
         self._cached_ds: xr.Dataset | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
-        # TODO: Later we should take into account UTC offset hour which may include the previous or next day
+        # NOTE: Does not take into account local UTC offset hour which may include the previous or next day
         cutoff = await asyncio.to_thread(_hourly_availability_cutoff)
         current = parse_period_string_to_datetime(start)
-        limit = min(parse_period_string_to_datetime(end), cutoff)
-        limit = limit.replace(hour=23, minute=59)  # make sure the limit is at the very end of the day
+        last = parse_period_string_to_datetime(end)
+        last = last.replace(hour=23, minute=59)  # make sure user requested end time is at the very end of the day
+        limit = min(last, cutoff)
 
         # logger.info(f'current {current}, limit {limit}, cutoff {cutoff}')
         if current > limit:
