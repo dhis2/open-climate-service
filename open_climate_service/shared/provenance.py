@@ -41,9 +41,9 @@ class ExecutionEvidence:
             missing.append("immutable_source_snapshots")
         if not self.features:
             missing.append("feature_inputs")
-        if self.spatial_aggregations and (len(self.spatial_aggregations) != 1 or self.spatial_aggregations[0] is None):
-            # Without per-output lineage, several spatial aggregations (or an unnamed
-            # reducer) cannot be attributed to the saved result.
+        if len(self.spatial_aggregations) != 1 or self.spatial_aggregations[0] is None:
+            # Only one named spatial aggregation can be attributed to the saved result
+            # without per-output lineage; none, several, or an unnamed reducer cannot.
             missing.append("spatial_aggregation_method")
         # Named feature collection versioning is not implemented in this checkout.
         missing.append("named_feature_collection_versions")
@@ -143,10 +143,10 @@ def record_features(geometries: Any) -> None:
     evidence = _current.get()
     if evidence is None:
         return
-    from open_climate_service.shared.features import validate_feature_ids
+    from open_climate_service.shared.features import validate_dhis2_feature_ids, validate_feature_ids
 
     if evidence.require_feature_ids:
-        validate_feature_ids(geometries)
+        validate_dhis2_feature_ids(geometries)
     if not isinstance(geometries, dict) or geometries.get("type") not in {"Feature", "FeatureCollection"}:
         evidence.features.append({"input_sha256": None, "ids_valid": False, "reason": "no_feature_ids"})
         return

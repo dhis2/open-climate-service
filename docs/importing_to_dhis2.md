@@ -166,7 +166,7 @@ data_value_set = service.execute(
 print(len(data_value_set["dataValues"]), "data values")
 ```
 
-The export fills in `orgUnit`, `period`, `value`, and `dataElement` for every cell — a valid DHIS2 `dataValueSet`, ready to import as-is. Every feature's `id` must be its DHIS2 organisation unit UID; features without a usable `id` are rejected before aggregation starts.
+The export fills in `orgUnit`, `period`, `value`, and `dataElement` for every cell — a valid DHIS2 `dataValueSet`, ready to import as-is. Every feature's `id` must be its DHIS2 organisation unit UID. Features with a missing, duplicate, or non-UID `id` are rejected before aggregation starts.
 
 ## 4. Import into DHIS2
 

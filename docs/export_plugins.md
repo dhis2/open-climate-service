@@ -76,7 +76,7 @@ and batch renders check them against execution provenance where it contains an
 observation, and batch exports bind them to a manifest. The dataset must match an
 observed source. The aggregation is checked when exactly one `aggregate_spatial`
 ran and it reduced with `reduce_by_method`, as the built-in workflow does. With
-several spatial aggregations or another reducer, the aggregation cannot be
+no spatial aggregation, several, or another reducer, the aggregation cannot be
 attributed to the result; it remains an unverified declaration and the manifest
 lists `spatial_aggregation_method` as missing. A
 connection is not required to render or download a payload, but a bound connection
@@ -216,6 +216,7 @@ series:
 
 Replace these example UIDs with target metadata. Wide DataFrames, multi-variable
 xarray aggregates and merged aggregate cubes are supported. Zero is retained and
-missing values are counted separately per series. Direct named DHIS2 graphs check
-original GeoJSON feature IDs before spatial aggregation; the renderer also rejects
-invalid organisation-unit UIDs and duplicate destination keys.
+missing values are counted separately per series. Named DHIS2 graphs, including
+workflow calls, check that original GeoJSON feature IDs are unique DHIS2 UIDs before
+spatial aggregation. The renderer also rejects invalid organisation-unit UIDs and
+duplicate destination keys.

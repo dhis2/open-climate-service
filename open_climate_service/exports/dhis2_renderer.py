@@ -823,7 +823,9 @@ def _response_json(response: Any) -> dict[str, Any]:
 
 
 def _uid(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{10}", value):
+    from open_climate_service.shared.features import is_dhis2_uid
+
+    if not is_dhis2_uid(value):
         raise ValueError(f"{field} must be a DHIS2 UID; supply real feature IDs instead of positional labels")
     return value
 

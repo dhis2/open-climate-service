@@ -10,10 +10,35 @@ feature: two features map onto one org unit, DHIS2 keeps whichever value arrives
 push succeeds with the wrong number in it.
 """
 
+import re
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypeGuard
 
 GEOJSON_FEATURE_TYPES = {"Feature", "FeatureCollection"}
+
+
+_DHIS2_UID = re.compile(r"[A-Za-z][A-Za-z0-9]{10}")
+
+
+def is_dhis2_uid(value: Any) -> TypeGuard[str]:
+    """True for DHIS2 UID syntax: a letter followed by ten letters or digits."""
+    return isinstance(value, str) and _DHIS2_UID.fullmatch(value) is not None
+
+
+def validate_dhis2_feature_ids(geometries: Any) -> list[str]:
+    """Return feature IDs that are also DHIS2 organisation unit UIDs, or raise ValueError.
+
+    Named DHIS2 exports use each feature ID as the orgUnit. Checking the syntax here,
+    before aggregation, fails fast instead of after the full zonal computation.
+    """
+    identifiers = validate_feature_ids(geometries)
+    for index, identifier in enumerate(identifiers):
+        if not is_dhis2_uid(identifier):
+            raise ValueError(
+                f"Feature {index} has feature.id '{identifier}', which is not a DHIS2 organisation unit UID "
+                "(a letter followed by ten letters or digits); a named DHIS2 export uses it as the orgUnit"
+            )
+    return identifiers
 
 
 def validate_feature_ids(geometries: Any, *, id_property: str | None = None) -> list[str]:
