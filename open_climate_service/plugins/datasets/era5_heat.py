@@ -18,6 +18,7 @@ from earthkit.transforms.temporal import daily_reduce
 from ecmwf.datastores import Client as _CdsClient
 
 from open_climate_service.shared.time import (
+    daily_period_ids,
     datetime_to_period_string,
     parse_period_string_to_datetime,
 )
@@ -170,17 +171,11 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
         self._temporal_aggregation = temporal_aggregation
 
     async def periods(self, start: str, end: str) -> list[str]:
-        hour_periods = await super().periods(start=start, end=end)
-        result: list[str] = []
-        for hour_period in hour_periods:
-            hour_obj = parse_period_string_to_datetime(hour_period)
-            day_obj = datetime(year=hour_obj.year, month=hour_obj.month, day=hour_obj.day)
-            day_str = datetime_to_period_string(day_obj, "daily")
-            if day_str not in result:
-                result.append(day_str)
+        cutoff = await asyncio.to_thread(_hourly_availability_cutoff)
+        periods = daily_period_ids(start=start, end=end, cutoff=cutoff)
 
         # logger.info(f'day periods {result}')
-        return result
+        return periods
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
         """Fetches xarray dataset for a single day snapshot, aggregated from relevant hourly snapshots.

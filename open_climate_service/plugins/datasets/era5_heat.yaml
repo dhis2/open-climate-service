@@ -10,7 +10,7 @@
     spatial:
       bbox: [-180, -90, 180, 90]
     temporal:
-      begin: "1939"
+      begin: "1940-01-01"
       resolution: P1D
   ingestion:
     plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
