@@ -23,7 +23,7 @@ def _with_ingestability(dataset: dict[str, Any]) -> dict[str, Any]:
     return {**dataset, "itemType": "coverage", "ingestable": datasets.is_ingestable(dataset)}
 
 
-def _feature_template_view(template: dict[str, Any]) -> dict[str, Any]:
+def _feature_template_view(template: dict[str, Any], providers: dict[str, Any] | None = None) -> dict[str, Any]:
     """A feature collection template, marked as one, with whether its provider can fetch it.
 
     `itemType` tells the two kinds apart as it does on `GET /datasets`. For a feature template
@@ -32,7 +32,7 @@ def _feature_template_view(template: dict[str, Any]) -> dict[str, Any]:
     """
     from open_climate_service.features.services import is_refreshable
 
-    return {**template, "itemType": "feature", "ingestable": is_refreshable(template)}
+    return {**template, "itemType": "feature", "ingestable": is_refreshable(template, providers)}
 
 
 @router.get(
@@ -53,7 +53,8 @@ def list_dataset_templates(request: Request, response: Response) -> list[dict[st
     Raster templates come first, then feature collection templates, each marked with `itemType`
     (`coverage` or `feature`), as datasets are on `GET /datasets`.
     """
-    from open_climate_service.features import templates as feature_templates
+    from open_climate_service.features import providers as feature_providers
+    from open_climate_service.features.services import usable_feature_templates
     from open_climate_service.system.templates import prefers_html, render_data_sources_page
 
     # Two representations share this URL, so a cache keyed on the URL alone would serve one
@@ -65,7 +66,8 @@ def list_dataset_templates(request: Request, response: Response) -> list[dict[st
         page.headers["Vary"] = "Accept"
         return page
     rasters = [_with_ingestability(dataset) for dataset in datasets.list_datasets()]
-    return rasters + [_feature_template_view(template) for template in feature_templates.list_feature_templates()]
+    providers = feature_providers.load_feature_providers()
+    return rasters + [_feature_template_view(template, providers) for template in usable_feature_templates()]
 
 
 def _get_dataset_or_404(dataset_id: str) -> dict[str, Any]:

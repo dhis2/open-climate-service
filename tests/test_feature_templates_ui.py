@@ -59,9 +59,8 @@ def _feature_instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (configs / "demo.yaml").write_text(TEMPLATES, encoding="utf-8")
     monkeypatch.setattr(feature_templates, "CONFIGS_DIR", configs)
     feature_templates.reset_feature_template_caches()
-    monkeypatch.setattr(
-        feature_providers, "get_feature_provider", lambda name: _fake_provider if name == "fake" else None
-    )
+    # `get_feature_provider` goes through `load_feature_providers`, so this covers both.
+    monkeypatch.setattr(feature_providers, "load_feature_providers", lambda: {"fake": _fake_provider})
     monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
     artifacts_dir = tmp_path / "artifacts"
@@ -177,3 +176,49 @@ def test_the_page_stream_refuses_an_unknown_template_as_json(client: TestClient)
 
     assert response.status_code == 404
     assert "not found" in response.json()["error"]
+
+
+# --- review follow-ups ---------------------------------------------------------------------
+
+
+def test_the_overview_counts_fetchable_feature_templates_among_dataset_templates(client: TestClient) -> None:
+    import re
+
+    fetchable = sum(1 for t in client.get("/dataset-templates").json() if t["ingestable"])
+    page = client.get("/", headers=HTML).text
+    shown = re.search(r'<span class="value">(\d+)</span>\s*<span class="label">Dataset templates</span>', page)
+
+    assert shown is not None
+    assert int(shown.group(1)) == fetchable
+
+
+def test_an_id_declared_in_both_registries_is_listed_once_and_cannot_be_fetched_as_features(
+    client: TestClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    raster_id = next(t["id"] for t in client.get("/dataset-templates").json() if t["itemType"] == "coverage")
+    (tmp_path / "feature_templates" / "clash.yaml").write_text(
+        f"- id: {raster_id}\n  name: Clash\n  id_property: code\n  provider: fake\n", encoding="utf-8"
+    )
+    feature_templates.reset_feature_template_caches()
+
+    listed = [t for t in client.get("/dataset-templates").json() if t["id"] == raster_id]
+
+    assert [t["itemType"] for t in listed] == ["coverage"]
+    assert any(raster_id in record.getMessage() for record in caplog.records)
+    assert client.post(f"/features/{raster_id}/refresh").status_code == 409
+
+
+def test_a_listing_loads_the_provider_registry_once(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def counting() -> dict[str, Any]:
+        calls.append(1)
+        return {"fake": _fake_provider}
+
+    monkeypatch.setattr(feature_providers, "load_feature_providers", counting)
+
+    client.get("/dataset-templates")
+    assert len(calls) == 1
+    calls.clear()
+    client.get("/dataset-templates", headers=HTML)
+    assert len(calls) == 1

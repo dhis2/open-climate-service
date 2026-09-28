@@ -761,10 +761,11 @@ def _feature_source_view(template: dict[str, Any]) -> dict[str, Any]:
 def _load_feature_templates() -> list[dict[str, Any]]:
     """Feature collection templates whose provider this instance has, so they can be fetched."""
     try:
-        from open_climate_service.features import templates as feature_templates
-        from open_climate_service.features.services import is_refreshable
+        from open_climate_service.features import providers as feature_providers
+        from open_climate_service.features.services import is_refreshable, usable_feature_templates
 
-        return [t for t in feature_templates.list_feature_templates() if is_refreshable(t)]
+        providers = feature_providers.load_feature_providers()
+        return [t for t in usable_feature_templates() if is_refreshable(t, providers)]
     except Exception:
         _log.exception("Unexpected error loading feature collection templates")
         return []
@@ -1601,7 +1602,7 @@ def render_workflows_page(mount: str) -> str:
 
     HTML only: the machine-readable list stays at `GET /process_graphs`.
     """
-    catalogue = _landing_catalogue(_load_templates(), _load_workflows(), _load_feature_templates())
+    catalogue = _landing_catalogue(_load_templates(), _load_workflows())
     return get_template("workflows_page.html").render(
         version=app_version,
         mount=mount,
@@ -1704,7 +1705,7 @@ def render_landing(version: str, mount: str) -> str:
     """
     extent = _load_extent()
     templates = _load_templates()
-    catalogue = _landing_catalogue(templates, _load_workflows())
+    catalogue = _landing_catalogue(templates, _load_workflows(), _load_feature_templates())
     return get_template("landing_page.html").render(
         version=version,
         mount=mount,
