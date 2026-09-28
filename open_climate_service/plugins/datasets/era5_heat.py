@@ -62,10 +62,13 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
         self._cached_month: tuple[int, int] | None = None
         self._cached_bbox: tuple[float, float, float, float] | None = None
         self._cached_ds: xr.Dataset | None = None
+        self._cached_cutoff: datetime | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         # NOTE: Does not take into account local UTC offset hour which may include the previous or next day
-        cutoff = await asyncio.to_thread(_hourly_availability_cutoff)
+        if self._cached_cutoff is None:
+            self._cached_cutoff = await asyncio.to_thread(_hourly_availability_cutoff)
+        cutoff = self._cached_cutoff
         current = parse_period_string_to_datetime(start)
         last = parse_period_string_to_datetime(end)
         last = last.replace(hour=23, minute=59)  # make sure user requested end time is at the very end of the day
@@ -199,7 +202,7 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
         daily_ds = daily_reduce(
             hourly_ds,
             how=self._temporal_aggregation,
-            time_shift={"hours": 0},  # TODO: Later should support UTC offset
+            time_shift={"hours": 0},  # TODO: Later should support local UTC offset
             remove_partial_periods=False,
         )
         # logger.info(f'daily_ds {daily_ds}')
