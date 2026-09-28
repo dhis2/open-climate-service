@@ -221,5 +221,5 @@ def _cds_end_datetime(collection: str) -> datetime:
 
 
 def _hourly_availability_cutoff() -> datetime:
-    """Return the latest hour for which CDS ERA5-Land hourly data are published."""
+    """Return the latest hour for which the CDS hourly collection data are published."""
     return _cds_end_datetime(_CDS_HOURLY_COLLECTION)
