@@ -142,7 +142,7 @@ server = [
     "apscheduler>=3.11,<4",
     # The Overture feature provider (CLIM-893). Pure Python over pyarrow, which is already a
     # dependency, so this adds a client rather than a stack.
-    "overturemaps>=0.14",
+    "overturemaps>=0.17",
     # ISO 3166 alpha-3 to alpha-2, to match an instance's declared country_code against
     # Overture's own country column. The register, and nothing else, at about 40 KB — pycountry
     # answers the same question but carries ~21 MB of translations this has no use for.
