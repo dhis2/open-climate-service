@@ -1384,6 +1384,10 @@ def _create_streaming_artifact(
                         store_path,
                         exc_info=True,
                     )
+            if not store_committed and not ingest_completed and rollback_repo is not None:
+                # A forward append that failed part way keeps the periods it committed, so a
+                # retry can resume; the store has grown, so its recorded size must follow.
+                _refresh_recorded_size(store_path)
             if replacement_path is not None:
                 # Failed fetches and validations leave only a disposable partial replacement. A
                 # successful swap has already moved this path away, making cleanup a no-op.
@@ -2131,6 +2135,27 @@ def _upsert_artifact_record(
         raise HTTPException(status_code=404, detail=f"Artifact '{existing.artifact_id}' not found")
 
     return _mutate_records(mutate)
+
+
+def _refresh_recorded_size(store_path: Path) -> None:
+    """Re-measure *store_path* and record it on the newest record for that path, if there is one.
+
+    For a failed append that kept its committed periods. Best-effort: a size is a figure for
+    display, so this logs rather than raising and never masks the failure that led here.
+    """
+    try:
+        path = str(store_path.resolve())
+        size = stored_bytes(store_path)
+
+        def update(records: list[ArtifactRecord]) -> None:
+            matching = [index for index, record in enumerate(records) if record.path == path]
+            if matching:
+                newest = max(matching, key=lambda index: records[index].created_at)
+                records[newest] = records[newest].model_copy(update={"size_bytes": size})
+
+        _mutate_records(update)
+    except Exception:
+        logger.warning("Could not refresh the recorded size of '%s'", store_path, exc_info=True)
 
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:

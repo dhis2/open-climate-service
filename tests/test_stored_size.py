@@ -171,6 +171,82 @@ def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
     assert records[0].size_bytes == stored_bytes(records[0].path) > 0
 
 
+def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A forward append that fails part way keeps its committed periods so a retry can resume.
+
+    The store has grown, so the newest record must carry the new size rather than the size the
+    last successful sync left, which would otherwise stay stale until a retry succeeds.
+    """
+    import icechunk
+
+    store_path = tmp_path / "growing.icechunk"
+    dataset: dict[str, object] = {
+        "id": "growing",
+        "name": "Growing dataset",
+        "variable": "precip",
+        "period_type": "daily",
+        "ingestion": {"plugin": "example.Plugin", "params": {}},
+    }
+
+    def cube(start: str, days: int) -> xr.Dataset:
+        return xr.Dataset(
+            {"precip": (("t", "y", "x"), np.random.default_rng(0).random((days, 2, 2)).astype("float32"))},
+            coords={"t": pd.date_range(start, periods=days, freq="D"), "y": [1.5, 0.5], "x": [10.5, 11.5]},
+        )
+
+    def first_sync(**_kwargs: object) -> object:
+        downloader.write_to_icechunk_store(cube("2026-01-01", 3), store_path, commit_message="test")
+        return SimpleNamespace(periods_written=3)
+
+    def failing_sync(**_kwargs: object) -> object:
+        # Commit two more days, as the orchestrator does period by period, then fail.
+        repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
+        session = repo.writable_session("main")
+        cube("2026-01-04", 2).to_zarr(session.store, append_dim="t", zarr_format=3, consolidated=False)
+        session.commit("append two days")
+        raise RuntimeError("source failed on the third new day")
+
+    class _Plugin:
+        time_dim = "t"
+
+        async def periods(self, start: str, end: str) -> list[str]:
+            return [day.strftime("%Y-%m-%d") for day in pd.date_range(start, end, freq="D")]
+
+    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params: _Plugin())
+    monkeypatch.setattr(ingestion_services.downloader, "get_icechunk_path", lambda _: store_path)
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_data_coverage_for_paths",
+        lambda dataset_arg, **_: {
+            "coverage": {
+                "temporal": {"start": "2026-01-01", "end": "2026-01-03"},
+                "spatial": {"xmin": 10.0, "ymin": 0.0, "xmax": 12.0, "ymax": 2.0},
+            }
+        },
+    )
+    arguments: dict[str, Any] = {
+        "dataset": dataset,
+        "bbox": [10.0, 0.0, 12.0, 2.0],
+        "country_code": None,
+        "publish": False,
+    }
+
+    monkeypatch.setattr(ingestion_services, "run_streaming_ingest_sync", first_sync)
+    ingestion_services.create_artifact(start="2026-01-01", end="2026-01-03", overwrite=True, **arguments)
+    before = [r for r in ingestion_services._load_records() if r.dataset_id == "growing"]
+    assert len(before) == 1 and before[0].size_bytes == stored_bytes(store_path)
+
+    monkeypatch.setattr(ingestion_services, "run_streaming_ingest_sync", failing_sync)
+    with pytest.raises(RuntimeError, match="source failed"):
+        ingestion_services.create_artifact(start="2026-01-01", end="2026-01-06", overwrite=False, **arguments)
+
+    after = [r for r in ingestion_services._load_records() if r.dataset_id == "growing"]
+    assert stored_bytes(store_path) > (before[0].size_bytes or 0)
+    assert max(after, key=lambda r: r.created_at).size_bytes == stored_bytes(store_path)
+
+
 # --- read by the overview page ---------------------------------------------------------------
 
 
