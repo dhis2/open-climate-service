@@ -160,8 +160,61 @@ def open_zarr_dataset(zarr_path: str) -> xr.Dataset:
     return ds
 
 
+READ_CHUNK_TARGET_BYTES = 16 * 2**20
+"""Rough size of one dask chunk when a store's own chunks are smaller.
+
+A daily store holds one day per stored chunk (460 KB for seNorge), so reading with those as dask
+chunks creates hundreds of thousands of tasks for a multi-year computation, and dask overhead
+caps it at a few cores. Merging stored chunks along time up to this size halved a one-year
+monthly mean on seNorge daily temperature (4.6 s to 2.3 s) and made a ten-year point series
+faster too (2.5 s to 1.6 s), while a single-slice read cost the same. See CLIM-1230.
+"""
+
+
+def _read_time_chunk(ds: xr.Dataset, t_dim: str) -> int | None:
+    """Periods per dask chunk: whole stored chunks along time, adding up to about the target size.
+
+    Only time is merged. The stored spatial chunks are kept, because merging them as well made a
+    point time series read whole grids for one pixel, eight times slower. Returns None when the
+    stored chunk shape is unknown or already reaches the target.
+    """
+    per_step = 0.0
+    step_multiple = 1
+    for da in ds.data_vars.values():
+        if t_dim not in da.dims:
+            continue
+        # Sized from the chunks xarray gives dask in space, which are a sharded array's inner
+        # chunks; the time step stays whole shards, so no shard is split between two tasks.
+        chunks = da.encoding.get("chunks")
+        if not chunks or len(chunks) != da.ndim:
+            continue
+        shards = da.encoding.get("shards")
+        axis = da.dims.index(t_dim)
+        bytes_per_step = int(np.prod(chunks)) * da.dtype.itemsize / int(chunks[axis])
+        if bytes_per_step > per_step:
+            per_step = bytes_per_step
+            whole = shards if shards and len(shards) == da.ndim else chunks
+            step_multiple = int(whole[axis])
+    if not per_step:
+        return None
+    steps = int(READ_CHUNK_TARGET_BYTES // per_step) // step_multiple * step_multiple
+    if steps <= step_multiple:
+        # The stored chunks already reach the target; merging would only make them larger.
+        return None
+    return min(steps, int(ds.sizes[t_dim]))
+
+
+def _open_zarr_group(store: Any, group: str | None, *, chunks: Any) -> xr.Dataset:
+    """``xr.open_zarr`` on one group; ``chunks`` is typed Any because the stub allows only a string."""
+    return xr.open_zarr(store, group=group, zarr_format=3, chunks=chunks)  # type: ignore[no-any-return]
+
+
 def open_icechunk_dataset(store_path: str | Path) -> xr.Dataset:
-    """Open an Icechunk-backed dataset through a readonly repository session."""
+    """Open an Icechunk-backed dataset through a readonly repository session.
+
+    Dask chunks follow the stored chunks in space and merge them along time up to
+    ``READ_CHUNK_TARGET_BYTES``, so computations are sized for dask rather than for storage.
+    """
     import icechunk
 
     path = Path(store_path)
@@ -170,23 +223,32 @@ def open_icechunk_dataset(store_path: str | Path) -> xr.Dataset:
     storage = icechunk.local_filesystem_storage(str(path))
     repo = icechunk.Repository.open(storage)
     session = repo.readonly_session("main")
-    ds: xr.Dataset = xr.open_zarr(session.store, zarr_format=3)
-    if not ds.data_vars:
+    # Opened without dask first: it finds where the data lives (the root, or a pyramid's level
+    # 0) and the stored chunk shape, before the dask chunks are chosen.
+    group: str | None = None
+    probe = _open_zarr_group(session.store, None, chunks=None)
+    if not probe.data_vars:
+        probe.close()
         try:
-            level0: xr.Dataset = xr.open_zarr(session.store, group="0", zarr_format=3)
+            probe = _open_zarr_group(session.store, "0", chunks=None)
         except Exception as exc:
-            ds.close()
             raise ValueError(
                 f"Icechunk store at {path!r} has no data variables at the root "
                 "and base pyramid level '0' could not be opened"
             ) from exc
-        ds.close()
-        ds = level0
+        group = "0"
     try:
-        t_dim = get_time_dim(ds)
-        ds = ds.sortby(t_dim)
+        t_dim: str | None = get_time_dim(probe)
     except ValueError:
-        pass
+        t_dim = None
+    time_chunk = _read_time_chunk(probe, t_dim) if t_dim is not None else None
+    probe.close()
+    if time_chunk is not None and t_dim is not None:
+        ds = _open_zarr_group(session.store, group, chunks={t_dim: time_chunk})
+    else:
+        ds = _open_zarr_group(session.store, group, chunks="auto")
+    if t_dim is not None:
+        ds = ds.sortby(t_dim)
     from open_climate_service.shared.provenance import record_snapshot
 
     record_snapshot(str(path), session.snapshot_id)
