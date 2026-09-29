@@ -132,7 +132,7 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
         with tempfile.TemporaryDirectory(delete=True) as tmpdir:
             # download zipfile
             zip_path = Path(tmpdir) / "tempzip.zip"
-            remote.download(zip_path)
+            remote.download(str(zip_path))
 
             # extract all files to same folder
             with zipfile.ZipFile(zip_path) as archive:
@@ -150,7 +150,7 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
         ds = ds.rio.write_crs("EPSG:4326")
 
         # Normalize xarray dims
-        ds = normalize_period(ds, variable=self.variable, bbox=bbox)
+        ds = normalize_period(ds, variable=self.variable, bbox=list(bbox))
 
         # Convert Kelvin to Celsius
         # TODO: This should be correct for utci and mrt, but prob not if we support other vars...
@@ -199,7 +199,7 @@ class ERA5HeatCDSDailyFromHourlyPlugin(ERA5HeatCDSHourlyPlugin):
             remove_partial_periods=False,
         )
 
-        return daily_ds
+        return cast(xr.Dataset, daily_ds)
 
 
 class ERA5HeatDailyUTCIPlugin(ERA5HeatCDSDailyFromHourlyPlugin):
