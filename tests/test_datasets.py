@@ -44,6 +44,7 @@ class _TransactionRepo:
         self.created: list[tuple[str, str]] = []
         self.reset: list[tuple[str, str]] = []
         self.deleted: list[str] = []
+        self.calls: list[str] = []
 
     def lookup_branch(self, branch: str) -> str:
         assert branch == "main"
@@ -54,9 +55,15 @@ class _TransactionRepo:
 
     def reset_branch(self, branch: str, snapshot: str) -> None:
         self.reset.append((branch, snapshot))
+        self.calls.append("reset")
 
     def delete_branch(self, branch: str) -> None:
         self.deleted.append(branch)
+        self.calls.append("delete")
+
+    def garbage_collect(self, older_than: object) -> object:
+        self.calls.append("collect")
+        return type("Summary", (), {"bytes_deleted": 0, "snapshots_deleted": 0})()
 
 
 @pytest.fixture(autouse=True)
@@ -1289,6 +1296,9 @@ def test_create_artifact_rolls_back_append_when_pyramid_rebuild_fails(
 
     assert transaction_repo.reset == [("main", "before-ingest")]
     assert transaction_repo.deleted == [transaction_repo.created[0][0]]
+    # The attempt's commits are unreachable after the reset, and are collected once the
+    # rollback branch no longer pins them.
+    assert transaction_repo.calls == ["reset", "delete", "collect"]
     assert stored_records == []
 
 

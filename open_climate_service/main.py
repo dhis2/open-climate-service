@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from open_climate_service import config as api_config
 from open_climate_service.automation.service import get_workflow_automation_service
 from open_climate_service.data_registry import routes as dataset_template_routes
 from open_climate_service.exports import routes as exports_routes
@@ -77,6 +78,15 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     from open_climate_service.plugins_diagnostics import log_plugin_loading
 
     log_plugin_loading()
+    if not api_config.is_read_only():
+        # Before any job is recovered, so no pyramid rebuild can be in progress. A read-only
+        # instance may share its data directory with a writing one, so it leaves them alone.
+        from open_climate_service.ingestions.services import remove_leftover_rebuilds
+
+        try:
+            remove_leftover_rebuilds()
+        except Exception:
+            logger.exception("Could not remove leftover pyramid rebuilds; continuing startup")
     job_service = get_job_service()
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()

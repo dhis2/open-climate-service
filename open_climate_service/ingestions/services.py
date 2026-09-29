@@ -1365,7 +1365,8 @@ def _create_streaming_artifact(
                 and rollback_snapshot is not None
             ):
                 try:
-                    if not store_committed and ingest_completed:
+                    rolled_back = not store_committed and ingest_completed
+                    if rolled_back:
                         rollback_repo.reset_branch("main", rollback_snapshot)
                     try:
                         rollback_repo.delete_branch(rollback_branch)
@@ -1375,6 +1376,10 @@ def _create_streaming_artifact(
                         # an absent cleanup ref must not mask the original failure.
                         if "ref not found" not in str(exc).lower():
                             raise
+                    if rolled_back:
+                        # The reset left every period this attempt committed unreachable.
+                        # Still under the store lock, so nothing is mid-write.
+                        collect_unreachable_objects(rollback_repo, store_path)
                 except Exception as exc:
                     if not store_committed:
                         rollback_error = exc
@@ -1432,6 +1437,11 @@ def recover_interrupted_swap(target: Path) -> bool:
     An interrupted rollback also leaves its rejected replacement at ``.failed``.
     Remove that copy only after the original store has been restored.
 
+    A pyramid rebuild killed part way leaves its partial copy at ``.rebuild``, which nothing
+    reads and which can be most of the store's size; it is removed here too. A rollback branch
+    left by a killed ingest means that attempt's commits were never cleaned up, so the objects
+    no branch reaches are then collected.
+
     Returns True when a recovery was performed.
     """
     retired = _retired_path(target)
@@ -1441,6 +1451,8 @@ def recover_interrupted_swap(target: Path) -> bool:
         retired.rename(target)
         recovered = True
         logger.warning("Recovered '%s' from '%s' after an interrupted swap", target.name, retired.name)
+    if _remove_rebuild_leftover(target):
+        recovered = True
     # A rollback interrupted before or after restoring the retired store leaves
     # its rejected replacement here. Delete it only once a usable target exists.
     if target.exists() and failed.exists():
@@ -1457,11 +1469,70 @@ def recover_interrupted_swap(target: Path) -> bool:
             if stale_branches:
                 recovered = True
                 logger.warning("Removed %d stale ingest rollback branch(es) from '%s'", len(stale_branches), target)
+                collect_unreachable_objects(repo, target)
         except Exception:
             # Swap recovery must remain usable for older or partially damaged
             # repositories whose branch metadata cannot be inspected.
             logger.warning("Could not clean stale ingest rollback branches from '%s'", target, exc_info=True)
     return recovered
+
+
+def _remove_rebuild_leftover(target: Path) -> bool:
+    """Remove the partial copy a killed pyramid rebuild left at ``<store>.rebuild``.
+
+    Safe whenever no rebuild of this store is running: the build writes there and swaps it in
+    within one locked ingest, and nothing ever reads it back. Returns True when one was removed.
+    """
+    leftover = target.with_name(f"{target.name}.rebuild")
+    if not leftover.exists():
+        return False
+    try:
+        _remove_store_path(leftover)
+    except OSError:
+        logger.warning("Could not remove leftover pyramid rebuild '%s'", leftover, exc_info=True)
+        return False
+    logger.warning("Removed leftover pyramid rebuild '%s' from an interrupted build", leftover.name)
+    return True
+
+
+def remove_leftover_rebuilds() -> int:
+    """Remove every ``*.icechunk.rebuild`` left in the store directory; returns how many.
+
+    Run at startup, before any job is recovered, so no rebuild can be in progress. Recovery
+    at the start of each ingest also removes one, but a dataset that is never synced again
+    would otherwise keep a partial copy of its whole store on disk indefinitely.
+    """
+    directory = Path(downloader.DOWNLOAD_DIR)
+    if not directory.is_dir():
+        return 0
+    return sum(_remove_rebuild_leftover(path.with_suffix("")) for path in directory.glob("*.icechunk.rebuild"))
+
+
+def collect_unreachable_objects(repo: Any, store_path: Path) -> None:
+    """Delete the snapshots, manifests and chunks that no branch or tag reaches.
+
+    A rolled-back ingest resets ``main`` to where it was, so every period the attempt
+    committed becomes unreachable, and Icechunk keeps it until collected: on the Norway
+    instance a daily store held 44 GB of such data, two thirds of its size. Only unreachable
+    objects are removed, so every version any branch or tag can reach is kept.
+
+    Must be called with the store's write lock held: the cutoff is now, so an uncommitted
+    write in progress would be collected. Never raises; a failure leaves the objects for the
+    next collection and must not mask the ingest's own outcome.
+    """
+    try:
+        summary = repo.garbage_collect(datetime.now(UTC))
+    except Exception:
+        logger.warning("Could not collect unreachable objects in '%s'", store_path, exc_info=True)
+        return
+    freed = int(getattr(summary, "bytes_deleted", 0) or 0)
+    if freed:
+        logger.info(
+            "Collected %.1f MB of unreachable data from '%s' (%d snapshots)",
+            freed / 1e6,
+            store_path.name,
+            int(getattr(summary, "snapshots_deleted", 0) or 0),
+        )
 
 
 def _swap_store(staging: Path, target: Path, *, retain_previous: bool = False) -> None:

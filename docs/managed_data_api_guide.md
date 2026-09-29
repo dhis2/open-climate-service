@@ -710,6 +710,13 @@ failure and preserves the recovery branch and snapshot; inspect the reported sto
 paths before retrying. Snapshot reset is skipped if the original repository could
 not be restored.
 
+A rolled-back append leaves the periods it committed unreachable, and Icechunk keeps them
+until collected. Open Climate Service collects them right after the rollback, and when the
+next ingest finds a rollback branch left by a killed one; only data that no branch or tag
+reaches is removed, so every version still reachable is kept. A pyramid rebuild killed part
+way leaves a partial copy at `<store>.rebuild`, which is removed at startup (on a writable
+instance) and by the next ingest of that store.
+
 Where these timestamps come from:
 
 - `current_start` and `current_end` come from the latest stored artifact coverage
