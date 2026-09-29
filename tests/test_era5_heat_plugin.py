@@ -13,7 +13,7 @@ from open_climate_service.plugins.datasets.era5_heat import (
     ERA5HeatDailyUTCIPlugin,
 )
 
-_TEST_BBOX = [28., -3., 29., -2.]
+_TEST_BBOX = [28.0, -3.0, 29.0, -2.0]
 
 
 def test_hourly_periods(monkeypatch: pytest.MonkeyPatch):
