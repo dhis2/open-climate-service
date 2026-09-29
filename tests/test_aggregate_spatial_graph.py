@@ -92,3 +92,66 @@ def test_continuous_template_keeps_the_weighted_mean(dataset: dict[str, Any]) ->
 def test_point_is_interpolated_through_the_graph(dataset: dict[str, Any]) -> None:
     envelope = _run({"type": "Point", "coordinates": [0.5, 0.5]}, "mean")
     assert float(envelope.data["v"].sel(geometry="z").item()) == pytest.approx(35.0)
+
+
+def _run_with(geometry: dict, reducer_graph: dict) -> Any:
+    graph = {
+        "load": {"process_id": "load_collection", "arguments": {"id": "cube"}},
+        "zonal": {
+            "process_id": "aggregate_spatial",
+            "arguments": {
+                "data": {"from_node": "load"},
+                "geometries": {
+                    "type": "FeatureCollection",
+                    "features": [{"type": "Feature", "id": "z", "geometry": geometry}],
+                },
+                "reducer": {"process_graph": reducer_graph},
+            },
+        },
+        "save": {
+            "process_id": "save_result",
+            "arguments": {"data": {"from_node": "zonal"}, "format": "JSON"},
+            "result": True,
+        },
+    }
+    return execution.run_process_graph({"process_graph": graph})
+
+
+_DATA = {"from_parameter": "data"}
+_SUB_CELL = _box(0.1, 0.1, 0.2, 0.2)
+_WHOLE = _box(-0.5, -0.5, 1.5, 1.5)
+
+
+def test_openeo_mean_is_weighted(dataset: dict[str, Any]) -> None:
+    graph = {"m": {"process_id": "mean", "arguments": {"data": _DATA}, "result": True}}
+    envelope = _run_with(_SUB_CELL, graph)
+    assert float(envelope.data["v"].sel(geometry="z").item()) == 10.0
+    assert envelope.provenance["spatial_aggregations"] == ["mean"]
+
+
+def test_a_named_reduction_followed_by_more_work_runs_as_given(dataset: dict[str, Any]) -> None:
+    """reduce_by_method(mean) times 2 is not a mean; the multiplication must not be skipped."""
+    graph = {
+        "m": {"process_id": "reduce_by_method", "arguments": {"data": _DATA, "method": "mean"}},
+        "x": {"process_id": "multiply", "arguments": {"x": {"from_node": "m"}, "y": 2}, "result": True},
+    }
+    whole = _run_with(_WHOLE, graph)
+    assert float(whole.data["v"].sel(geometry="z").item()) == 70.0
+    # Pixel-centre, as the specification has it: a sub-cell zone captures no centre.
+    assert np.isnan(float(_run_with(_SUB_CELL, graph).data["v"].sel(geometry="z").item()))
+    assert whole.provenance["spatial_aggregations"] == [None]
+
+
+def test_a_statistic_capped_by_another_step_runs_as_given(dataset: dict[str, Any]) -> None:
+    graph = {
+        "m": {"process_id": "mean", "arguments": {"data": _DATA}},
+        "c": {"process_id": "clip", "arguments": {"x": {"from_node": "m"}, "min": 0, "max": 10}, "result": True},
+    }
+    envelope = _run_with(_WHOLE, graph)
+    assert float(envelope.data["v"].sel(geometry="z").item()) == 10.0  # the mean 35, capped
+
+
+def test_mean_counting_missing_values_is_not_weighted(dataset: dict[str, Any]) -> None:
+    graph = {"m": {"process_id": "mean", "arguments": {"data": _DATA, "ignore_nodata": False}, "result": True}}
+    envelope = _run_with(_SUB_CELL, graph)
+    assert np.isnan(float(envelope.data["v"].sel(geometry="z").item()))

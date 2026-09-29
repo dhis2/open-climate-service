@@ -19,9 +19,8 @@ from open_climate_service.plugins.processes.aggregate_spatial import (
 )
 from open_climate_service.shared.vectors import RESAMPLING_ATTR
 
-
-def _mean(data: np.ndarray) -> float:
-    return float(np.mean(data))
+# A plain numpy statistic, which the weighted path recognises by identity.
+_mean = np.mean
 
 
 def _named(method: str) -> Any:
@@ -215,10 +214,15 @@ def test_named_reducers_are_weighted(method: str, expected: float) -> None:
     assert float(out["v"].isel(geometry=0)) == pytest.approx(expected)
 
 
-def test_builtin_style_reducers_are_recognised_by_their_values() -> None:
-    """A reducer that is not reduce_by_method (e.g. openEO's own `sum`) is still weighted."""
-    out = aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 0.75, 0.5), lambda data: float(np.sum(data)))
+def test_numpy_statistics_are_recognised() -> None:
+    out = aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 0.75, 0.5), np.sum)
     assert float(out["v"].isel(geometry=0)) == pytest.approx(0.25)
+
+
+def test_a_reducer_is_not_recognised_by_its_values() -> None:
+    """A function that happens to compute a sum is still run as given, over pixel centres."""
+    out = aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 0.75, 0.5), lambda data: float(np.sum(data)))
+    assert float(out["v"].isel(geometry=0)) == 0.0  # only cell (0, 0) has its centre inside
 
 
 def test_missing_cells_are_left_out_of_the_weights() -> None:
@@ -364,3 +368,78 @@ def test_fractions_over_points_are_refused() -> None:
 def test_unknown_method_is_refused_for_polygons_too() -> None:
     with pytest.raises(ValueError, match="method 'bilinaer' is not supported"):
         aggregate_spatial(_grid(y_ascending=True), _box(0, 0, 1, 1), _mean, method="bilinaer")
+
+
+# ---------------------------------------------------------------------------
+# Review regressions
+# ---------------------------------------------------------------------------
+
+
+def test_median_of_equal_weights_is_the_midpoint_like_numpy() -> None:
+    """Two whole cells of 0 and 1: np.median gives 0.5, and so does the weighted median."""
+    out = aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 1.5, 0.5), _named("median"))
+    assert float(out["v"].isel(geometry=0)) == pytest.approx(0.5)
+
+
+def _two_class_bands() -> xr.Dataset:
+    a = _categorical(np.array([[10, 10], [20, 20]])).rename("a")
+    b = _categorical(np.array([[20, 30], [20, 30]])).rename("b")
+    return xr.merge([a, b], combine_attrs="drop_conflicts")
+
+
+def test_fractions_share_one_class_axis_with_zero_for_absent_classes() -> None:
+    out = aggregate_spatial(_two_class_bands(), _box(-0.5, -0.5, 1.5, 1.5), _named("fractions"))
+    assert list(out[FRACTIONS_DIM].values) == [10.0, 20.0, 30.0]
+    np.testing.assert_allclose(out["a"].isel(geometry=0).values, [0.5, 0.5, 0.0])
+    np.testing.assert_allclose(out["b"].isel(geometry=0).values, [0.0, 0.5, 0.5])
+
+
+def test_fractions_of_a_zone_with_only_missing_cells_are_nan() -> None:
+    da = _categorical(np.array([[np.nan, 20], [20, 30]]))
+    fc = _features(("missing", _box(-0.5, -0.5, 0.5, 0.5)), ("whole", _box(-0.5, -0.5, 1.5, 1.5)))
+    out = aggregate_spatial(da, fc, _named("fractions"))
+    assert np.isnan(out["lc"].sel(geometry="missing").values).all()
+    np.testing.assert_allclose(out["lc"].sel(geometry="whole").values, [2 / 3, 1 / 3])
+
+
+def test_fractions_with_no_valid_cell_anywhere_return_an_empty_class_axis() -> None:
+    da = _categorical(np.full((2, 2), np.nan))
+    out = aggregate_spatial(da, _box(-0.5, -0.5, 1.5, 1.5), _named("fractions"))
+    assert out["lc"].sizes[FRACTIONS_DIM] == 0
+
+
+def test_fractions_refuse_continuous_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.plugins.processes import aggregate_spatial as module
+
+    monkeypatch.setattr(module, "MAX_FRACTION_CLASSES", 10)
+    with pytest.raises(ValueError, match="16 distinct values.*not continuous data"):
+        aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 3.5, 3.5), _named("fractions"))
+
+
+def test_cubic_on_a_grid_too_small_is_a_clear_error() -> None:
+    da = _categorical(np.array([[10, 20], [20, 30]]), resampling="mean")
+    with pytest.raises(ValueError, match="cubic interpolation needs at least 4 cells"):
+        aggregate_spatial(da, _point(0.5, 0.5), _mean, method="cubic")
+
+
+def test_cubic_on_a_large_enough_grid_interpolates() -> None:
+    out = aggregate_spatial(_grid(y_ascending=True), _point(1.5, 1.5), _mean, method="cubic")
+    assert float(out["v"].isel(geometry=0)) == pytest.approx(16.5)
+
+
+def test_standalone_majority_leaves_missing_values_out() -> None:
+    assert reduce_by_method(np.array([np.nan, np.nan, 1.0]), method="majority") == 1.0
+    assert np.isnan(reduce_by_method(np.array([np.nan]), method="majority"))
+
+
+def test_categorical_is_decided_per_variable() -> None:
+    """Land cover beside temperature: the codes take the majority, the temperature its mean."""
+    temperature = _grid(y_ascending=True).isel(x=slice(0, 2), y=slice(0, 2)).rename("temp")
+    land_cover = _categorical(np.array([[10, 20], [20, 90]]))
+    cube = xr.merge([temperature, land_cover], combine_attrs="drop_conflicts")
+    polygon = aggregate_spatial(cube, _box(-0.5, -0.5, 1.5, 1.5), _named("mean"))
+    assert float(polygon["temp"].isel(geometry=0)) == pytest.approx(5.5)
+    assert float(polygon["lc"].isel(geometry=0)) == 20.0
+    point = aggregate_spatial(cube, _point(0.6, 0.9), _named("mean"))
+    assert float(point["temp"].isel(geometry=0)) == pytest.approx(9.6)  # bilinear
+    assert float(point["lc"].isel(geometry=0)) == 90.0  # nearest cell

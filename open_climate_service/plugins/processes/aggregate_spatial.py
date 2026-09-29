@@ -11,16 +11,16 @@ Semantics deliberately diverge from the openEO specification (CLIM-785):
   ``ingestion.resampling`` of ``mode``, ``max`` or ``nearest`` aggregates polygons by area-weighted majority and
   samples points from the nearest cell.
 
-The weighted path applies to the reducers it recognises (mean, sum, min, max, median, and the
-categorical majority and fractions). Any other reducer is an arbitrary process graph that
-cannot be weighted, so it falls back to the specification's pixel-centre selection.
+The weighted path applies to reducers that are exactly one known statistic (mean, sum, min,
+max, median, and the categorical majority and fractions), recognised by the structure of their
+graph. Any other reducer is an arbitrary process graph that cannot be weighted, so it falls back
+to the specification's pixel-centre selection and runs as given.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Hashable, Sequence
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -124,7 +124,20 @@ def _make_reducer_caller(reducer: Callable, context: Any) -> Callable[[np.ndarra
     signature once so context-aware reducers receive it without breaking the
     common array-only reducers (mean, median, ...).
     """
+    import functools
     import inspect
+
+    if isinstance(reducer, functools.partial) and getattr(reducer.func, "__name__", "") == "node_callable":
+        # An openEO callback, called the way openeo-processes-dask calls one: the values
+        # positionally, named `data` for the graph, so every node can reference the parameter.
+        # Passing `data=` as a keyword instead reaches the graph's result node, which in a
+        # composite reducer (`mean` then `multiply`) is not a process that takes `data`.
+        def _call_graph(pixels: np.ndarray) -> float:
+            if not pixels.size:
+                return float("nan")
+            return float(reducer(pixels, positional_parameters={"data": 0}, named_parameters={"context": context}))
+
+        return _call_graph
 
     pass_context = False
     if context is not None:
@@ -142,46 +155,80 @@ def _make_reducer_caller(reducer: Callable, context: Any) -> Callable[[np.ndarra
     return _call
 
 
-_probe: ContextVar[list[str] | None] = ContextVar("aggregate_spatial_reducer_probe", default=None)
+# openEO processes the weighted path computes when a reducer graph is exactly one of them.
+_GRAPH_STATISTICS = frozenset({"mean", "sum", "min", "max", "median"})
 
-# Two arrays whose mean, sum, min, max and median are pairwise distinct, so a reducer that
-# matches one statistic on both is that statistic.
-_FINGERPRINT_INPUTS = (np.array([1.0, 2.0, 4.0, 8.0]), np.array([0.5, 3.0, 7.0]))
-_FINGERPRINTS: dict[str, Callable[[np.ndarray], float]] = {
-    "mean": lambda a: float(np.mean(a)),
-    "sum": lambda a: float(np.sum(a)),
-    "min": lambda a: float(np.min(a)),
-    "max": lambda a: float(np.max(a)),
-    "median": lambda a: float(np.median(a)),
+# The same statistics as plain Python reducers, recognised by identity (NaN is dropped before a
+# reducer runs, so the nan-variants mean the same thing here).
+_NUMPY_STATISTICS: dict[Any, str] = {
+    np.mean: "mean",
+    np.nanmean: "mean",
+    np.sum: "sum",
+    np.nansum: "sum",
+    np.min: "min",
+    np.nanmin: "min",
+    np.max: "max",
+    np.nanmax: "max",
+    np.median: "median",
+    np.nanmedian: "median",
 }
 
 
-def _identify_reducer(reducer: Callable, context: Any) -> str | None:
-    """Name the statistic *reducer* computes, or None when it is not one the weighted path knows.
+def _identify_reducer(reducer: Callable) -> str | None:
+    """Name the statistic *reducer* is, or None when the weighted path cannot stand in for it.
 
-    An openEO reducer arrives as an opaque callable over a process graph, so it is identified
-    by calling it. ``reduce_by_method`` names itself through the probe; any other reducer is
-    matched on two fixed inputs against the statistics above. A reducer that fails, or matches
-    none, is treated as unknown and takes the pixel-centre fallback.
+    Identified by structure, never by calling it: a graph that computes a named statistic and
+    then does anything more (``mean`` times 2, the smaller of ``mean`` and 10) is not that
+    statistic, and would silently lose the rest of its work if it were treated as one. So a
+    reducer counts only when it is exactly one known step applied to the ``data`` parameter:
+
+    * an openEO graph with a single node, ``mean``/``sum``/``min``/``max``/``median`` (without
+      ``ignore_nodata: false``, which changes how missing values count) or ``reduce_by_method``
+      with a literal method;
+    * ``reduce_by_method`` bound to a method with ``functools.partial``, or a numpy statistic.
+
+    Everything else takes the pixel-centre fallback, which runs the reducer as given.
     """
-    call = _make_reducer_caller(reducer, context)
-    named: list[str] = []
-    token = _probe.set(named)
-    try:
-        results = [call(values) for values in _FINGERPRINT_INPUTS]
-    except Exception:
-        results = None
-    finally:
-        _probe.reset(token)
-    # One entry per probe call; a reducer that named two different methods is a composite.
-    if len(set(named)) == 1:
-        return named[0]
-    if named or results is None:
+    import functools
+    import inspect
+
+    known = _NUMPY_STATISTICS.get(reducer) if _hashable(reducer) else None
+    if known is not None:
+        return known
+    if not isinstance(reducer, functools.partial):
         return None
-    for name, statistic in _FINGERPRINTS.items():
-        if all(np.isclose(result, statistic(values)) for result, values in zip(results, _FINGERPRINT_INPUTS)):
-            return name
+    if reducer.func is reduce_by_method:
+        method = reducer.keywords.get("method", "mean")
+        if reducer.args or set(reducer.keywords) - {"method"} or method not in _WEIGHTED_METHODS:
+            return None
+        return str(method)
+    # An openEO callback: `partial(node_callable, parent_callables=[...])` from
+    # openeo-pg-parser-networkx, whose closure holds the node it runs.
+    if getattr(reducer.func, "__name__", "") != "node_callable" or reducer.keywords.get("parent_callables"):
+        return None
+    try:
+        node = inspect.getclosurevars(reducer.func).nonlocals["node_with_data"]
+        process_id = node["process_id"]
+        arguments = dict(node["resolved_kwargs"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if getattr(arguments.pop("data", None), "from_parameter", None) != "data":
+        return None
+    if process_id == "reduce_by_method":
+        method = arguments.pop("method", "mean")
+        return method if not arguments and isinstance(method, str) and method in _WEIGHTED_METHODS else None
+    if process_id in _GRAPH_STATISTICS:
+        ignore_nodata = arguments.pop("ignore_nodata", True)
+        return str(process_id) if ignore_nodata is True and not arguments else None
     return None
+
+
+def _hashable(value: Any) -> bool:
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +354,11 @@ def _weighted(values: np.ndarray, weights: np.ndarray, method: str) -> np.ndarra
 
 
 def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> np.ndarray:
-    """The smallest value whose cumulative weight reaches *q* of the zone's total."""
+    """The value at which cumulative weight reaches *q* of the zone's total.
+
+    When the cumulative weight lands exactly on *q*, the midpoint of that value and the next is
+    taken, so equal weights give what ``np.median`` gives: two whole cells of 0 and 10 are 5.
+    """
     flat_v = values.reshape(-1, values.shape[-1])
     flat_w = weights.reshape(-1, weights.shape[-1])
     out = np.full(flat_v.shape[0], np.nan)
@@ -316,8 +367,14 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> np.
         if not keep.any():
             continue
         order = np.argsort(v[keep])
+        ordered = v[keep][order]
         cumulative = np.cumsum(w[keep][order])
-        out[i] = v[keep][order][np.searchsorted(cumulative, q * cumulative[-1])]
+        target = q * cumulative[-1]
+        idx = int(np.searchsorted(cumulative, target))
+        if idx + 1 < ordered.size and np.isclose(cumulative[idx], target):
+            out[i] = (ordered[idx] + ordered[idx + 1]) / 2
+        else:
+            out[i] = ordered[min(idx, ordered.size - 1)]
     return out.reshape(values.shape[:-1])
 
 
@@ -335,14 +392,44 @@ def _weighted_majority(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
     return out.reshape(values.shape[:-1])
 
 
+MAX_FRACTION_CLASSES = 256
+"""Most distinct values ``fractions`` will return shares for.
+
+Land-cover schemes have tens of classes. A continuous layer has as many values as cells, which
+would make the output as large as the input; that is refused rather than computed.
+"""
+
+
 def _weighted_fractions(values: np.ndarray, weights: np.ndarray, classes: np.ndarray) -> np.ndarray:
-    """Share of each zone's valid area in each class, as (…, class)."""
-    valid = ~np.isnan(values)
-    w = np.where(valid, weights, 0.0)
-    total = w.sum(axis=-1, keepdims=True)
-    per_class = np.stack([np.where(values == c, w, 0.0).sum(axis=-1) for c in classes], axis=-1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return np.asarray(per_class / total, dtype="float64")
+    """Share of each zone's valid area in each class, as (…, class).
+
+    One pass over the cells: each is binned by its class index, so the work does not grow
+    with the number of classes. A zone whose covered cells are all missing is NaN in every class.
+    """
+    shape = values.shape[:-1]
+    flat_v = values.reshape(-1, values.shape[-1])
+    flat_w = weights.reshape(-1, weights.shape[-1])
+    out = np.full((flat_v.shape[0], classes.size), np.nan)
+    for i, (v, w) in enumerate(zip(flat_v, flat_w)):
+        valid = ~np.isnan(v) & (w > 0)
+        total = w[valid].sum()
+        if not classes.size or total <= 0:
+            continue
+        index = np.searchsorted(classes, v[valid])
+        out[i] = np.bincount(index, weights=w[valid], minlength=classes.size) / total
+    return out.reshape(*shape, classes.size)
+
+
+def _fraction_classes(arrays: Sequence[np.ndarray]) -> np.ndarray:
+    """The class axis shared by every variable, so each variable's shares line up."""
+    found = [np.unique(a[~np.isnan(a)]) for a in arrays if a.size]
+    classes = np.unique(np.concatenate(found)) if found else np.array([], dtype="float64")
+    if classes.size > MAX_FRACTION_CLASSES:
+        raise ValueError(
+            f"aggregate_spatial: fractions found {classes.size} distinct values in the zones, more than "
+            f"{MAX_FRACTION_CLASSES}; fractions are for class codes, not continuous data"
+        )
+    return classes
 
 
 # ---------------------------------------------------------------------------
@@ -350,11 +437,19 @@ def _weighted_fractions(values: np.ndarray, weights: np.ndarray, classes: np.nda
 # ---------------------------------------------------------------------------
 
 
-def _is_categorical(data: xr.Dataset) -> bool:
-    """True when the cube's dataset declares a categorical ``ingestion.resampling``."""
-    declared = {str(data[v].attrs.get(RESAMPLING_ATTR, "")) for v in data.data_vars}
-    declared.add(str(data.attrs.get(RESAMPLING_ATTR, "")))
-    return bool(declared & _CATEGORICAL_RESAMPLING)
+def _categorical_variables(data: xr.Dataset) -> set[str]:
+    """The variables whose dataset declares a categorical ``ingestion.resampling``.
+
+    Decided per variable, from the marker ``load_collection`` sets on the variable itself, so a
+    cube merging land cover with temperature averages the temperature and takes the majority of
+    the land cover. A cube-level attribute is not consulted: merging copies one variable's
+    attributes up to the cube, which would mark every variable as categorical.
+    """
+    return {
+        str(name)
+        for name, da in data.data_vars.items()
+        if str(da.attrs.get(RESAMPLING_ATTR, "")) in _CATEGORICAL_RESAMPLING
+    }
 
 
 def _point_method(requested: str | None, categorical: bool) -> str:
@@ -404,26 +499,40 @@ def _crop(data: xr.Dataset, grid: _Grid, zones: list[_Zone]) -> tuple[xr.Dataset
     return data.isel({grid.y_dim: slice(r0, r1 + 1), grid.x_dim: slice(c0, c1 + 1)}), r0, c0
 
 
-def _weighted_polygons(data: xr.Dataset, grid: _Grid, zones: list[_Zone], method: str) -> dict[str, _VarResult]:
-    """Per variable: an array (zone, …other dims) and its dims and coords."""
+def _weighted_polygons(
+    data: xr.Dataset, grid: _Grid, zones: list[_Zone], methods: dict[str, str]
+) -> dict[str, _VarResult]:
+    """Per variable, reduced by its own method: an array (zone, …other dims) and its dims and coords."""
     window, r0, c0 = _crop(data, grid, zones)
-    out: dict[str, _VarResult] = {}
+    arrays: dict[str, np.ndarray] = {}
     for name in data.data_vars:
         vname = str(name)
         da = window[vname]
         other = [d for d in da.dims if d not in {grid.y_dim, grid.x_dim}]
-        arr = np.asarray(da.transpose(*other, grid.y_dim, grid.x_dim).values, dtype="float64")
-        coords = {d: da.coords[d].values for d in other if d in da.coords}
-        classes = np.array([])
-        if method == "fractions":
-            picked = [arr[..., z.rows - r0, z.cols - c0] for z in zones if z.rows.size]
-            found = np.concatenate([p.ravel() for p in picked]) if picked else np.array([])
-            classes = np.unique(found[~np.isnan(found)])
+        arrays[vname] = np.asarray(da.transpose(*other, grid.y_dim, grid.x_dim).values, dtype="float64")
+    # One class axis for every variable reduced to fractions, found only in covered cells.
+    classes = _fraction_classes(
+        [
+            arrays[v][..., z.rows - r0, z.cols - c0]
+            for v, m in methods.items()
+            if m == "fractions"
+            for z in zones
+            if z.rows.size
+        ]
+    )
+    out: dict[str, _VarResult] = {}
+    for name in data.data_vars:
+        vname = str(name)
+        method = methods[vname]
+        da = window[vname]
+        arr = arrays[vname]
+        other = [d for d in da.dims if d not in {grid.y_dim, grid.x_dim}]
+        coords: dict[Hashable, Any] = {d: da.coords[d].values for d in other if d in da.coords}
+        extra = (classes.size,) if method == "fractions" else ()
         rows = []
         for zone in zones:
-            shape = arr.shape[:-2]
             if not zone.rows.size:
-                rows.append(np.full(shape + ((classes.size,) if method == "fractions" else ()), np.nan))
+                rows.append(np.full(arr.shape[:-2] + extra, np.nan))
                 continue
             values = arr[..., zone.rows - r0, zone.cols - c0]
             weights = np.broadcast_to(zone.weights, values.shape)
@@ -431,7 +540,7 @@ def _weighted_polygons(data: xr.Dataset, grid: _Grid, zones: list[_Zone], method
                 rows.append(_weighted_fractions(values, weights, classes))
             else:
                 rows.append(_weighted(values, weights, method))
-        dims = list(other)
+        dims: list[Hashable] = list(other)
         if method == "fractions":
             dims.append(FRACTIONS_DIM)
             coords[FRACTIONS_DIM] = classes
@@ -486,23 +595,39 @@ def _pixel_centre_polygons(
 
 
 def _sampled_points(
-    data: xr.Dataset, grid: _Grid, points: Sequence[Any], method: str, reducer: Callable | None, context: Any
+    data: xr.Dataset,
+    grid: _Grid,
+    points: Sequence[Any],
+    methods: dict[str, str],
+    reducer: Callable | None,
+    context: Any,
 ) -> dict[str, _VarResult]:
-    """Per variable: the sampled value at each point, passed through *reducer* when one is unknown."""
-    sampled = _sample_points(data, grid, points, method)
+    """Per variable, sampled by its own method; passed through *reducer* when that is unknown."""
+    if "cubic" in methods.values() and (grid.width < 4 or grid.height < 4):
+        raise ValueError(
+            f"aggregate_spatial: cubic interpolation needs at least 4 cells along each axis; this grid "
+            f"is {grid.width} x {grid.height}, so use 'bilinear' or 'near'"
+        )
+    sampled = xr.merge(
+        [
+            _sample_points(data[[v for v, m in methods.items() if m == method]], grid, points, method)
+            for method in sorted(set(methods.values()))
+        ],
+        compat="override",
+    )
     reduce = _make_reducer_caller(reducer, context) if reducer is not None else None
     out: dict[str, _VarResult] = {}
     for name in data.data_vars:
         vname = str(name)
         da = sampled[vname]
-        other = [d for d in da.dims if d != "__point__"]
+        other: list[Hashable] = [d for d in da.dims if d != "__point__"]
         arr = np.asarray(da.transpose("__point__", *other).values, dtype="float64")
         if reduce is not None:
             # An unknown reducer sees the one sampled value, as it would see a zone's pixels.
             flat = arr.reshape(arr.shape[0], -1)
             reduced = [[reduce(np.array([v])) if not np.isnan(v) else np.nan for v in row] for row in flat]
             arr = np.asarray(reduced, dtype="float64").reshape(arr.shape)
-        coords = {d: da.coords[d].values for d in other if d in da.coords}
+        coords: dict[Hashable, Any] = {d: da.coords[d].values for d in other if d in da.coords}
         out[vname] = (arr, other, coords)
     return out
 
@@ -561,9 +686,8 @@ def aggregate_spatial(
         raise ValueError("aggregate_spatial: geometries contains no shapes")
 
     if isinstance(data, xr.DataArray):
-        attrs = dict(data.attrs)
+        # The variable keeps the DataArray's attributes, including the categorical marker.
         data = data.to_dataset(name=data.name or "data")
-        data.attrs.update(attrs)
 
     x_dim = _find_dim(data, ["x", "longitude", "lon"])
     y_dim = _find_dim(data, ["y", "latitude", "lat"])
@@ -571,17 +695,22 @@ def aggregate_spatial(
         raise ValueError(f"aggregate_spatial: cannot identify x/y dimensions in {list(data.dims)}")
     grid = _Grid.of(data, x_dim, y_dim)
 
-    categorical = _is_categorical(data)
-    named = _identify_reducer(reducer, context)
-    effective = named
-    if categorical and named in _CATEGORICAL_REPLACED:
-        logger.warning(
-            "aggregate_spatial: '%s' requested over categorical data; using the area-weighted "
-            "majority class instead of averaging class codes",
-            named,
-        )
-        effective = "majority"
-    if effective is None:
+    categorical = _categorical_variables(data)
+    named = _identify_reducer(reducer)
+    variables = [str(v) for v in data.data_vars]
+    # Per variable: a categorical one takes the majority where the reducer would average codes.
+    effective: dict[str, str] = {}
+    if named is not None:
+        effective = {v: "majority" if v in categorical and named in _CATEGORICAL_REPLACED else named for v in variables}
+        replaced = sorted(v for v in variables if effective[v] != named)
+        if replaced:
+            logger.warning(
+                "aggregate_spatial: '%s' requested over categorical data (%s); using the area-weighted "
+                "majority class instead of averaging class codes",
+                named,
+                ", ".join(replaced),
+            )
+    else:
         logger.info(
             "aggregate_spatial: reducer is not one the area-weighted path recognises; polygons "
             "use pixel-centre selection"
@@ -589,29 +718,36 @@ def aggregate_spatial(
 
     polygon_idx = [i for i, g in enumerate(geom_shapes) if g.geom_type in _POLYGON_TYPES]
     point_idx = [i for i, g in enumerate(geom_shapes) if g.geom_type in _POINT_TYPES]
-    if point_idx and effective == "fractions":
+    if point_idx and named == "fractions":
         raise ValueError("aggregate_spatial: fractions apply to polygons; a point has one class, not a share")
 
-    from open_climate_service.shared.provenance import observe_spatial_aggregation, record_spatial_reduction
+    from open_climate_service.shared.provenance import (
+        observe_spatial_aggregation,
+        record_spatial_reduction,
+        unattributed_spatial_reduction,
+    )
 
     parts: list[tuple[list[int], dict[str, _VarResult]]] = []
     with observe_spatial_aggregation():
-        if effective is not None:
-            # The reducer is not called on this path, so the method is recorded here.
-            record_spatial_reduction(effective)
+        # The reducer is not called on the weighted path, so what ran is recorded here. Two
+        # different methods (a merged categorical and continuous cube) record as unattributable.
+        for used in sorted(set(effective.values())):
+            record_spatial_reduction(used)
         if polygon_idx:
             polygons = [geom_shapes[i] for i in polygon_idx]
-            if effective in _WEIGHTED_METHODS:
-                values = _weighted_polygons(data, grid, _polygon_zones(grid, polygons), str(effective))
+            if effective:
+                values = _weighted_polygons(data, grid, _polygon_zones(grid, polygons), effective)
             else:
-                values = _pixel_centre_polygons(data, grid, polygons, reducer, context)
+                with unattributed_spatial_reduction():
+                    values = _pixel_centre_polygons(data, grid, polygons, reducer, context)
             parts.append((polygon_idx, values))
         if point_idx:
             points = [geom_shapes[i] for i in point_idx]
-            point_method = _point_method(method, categorical or effective == "majority")
-            values = _sampled_points(
-                data, grid, points, point_method, None if effective in _WEIGHTED_METHODS else reducer, context
-            )
+            point_methods = {
+                v: _point_method(method, v in categorical or effective.get(v) == "majority") for v in variables
+            }
+            with unattributed_spatial_reduction():
+                values = _sampled_points(data, grid, points, point_methods, None if effective else reducer, context)
             parts.append((point_idx, values))
 
     geom_dim = target_dimension or "geometry"
@@ -655,7 +791,11 @@ _REDUCE_METHODS: dict[str, Callable[..., Any]] = {
 
 
 def _majority(arr: np.ndarray) -> float:
-    classes, counts = np.unique(arr, return_counts=True)
+    """The most frequent value, leaving missing cells out as the weighted path does."""
+    valid = arr[~np.isnan(arr)]
+    if not valid.size:
+        return float("nan")
+    classes, counts = np.unique(valid, return_counts=True)
     return float(classes[np.argmax(counts)])
 
 
@@ -684,10 +824,6 @@ def reduce_by_method(data: Any, method: str = "mean") -> float:
         raise ValueError(
             f"Unknown reduce method '{method}'; expected one of {sorted([*_REDUCE_METHODS, 'majority', 'fractions'])}"
         )
-    probing = _probe.get()
-    if probing is not None:
-        probing.append(method)
-        return float("nan")
     if method == "fractions":
         raise ValueError(
             "reduce_by_method: 'fractions' produces one value per class, so it only works in aggregate_spatial"

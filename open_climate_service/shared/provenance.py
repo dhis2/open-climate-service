@@ -138,6 +138,21 @@ def record_spatial_reduction(method: str) -> None:
         methods.add(method)
 
 
+@contextmanager
+def unattributed_spatial_reduction() -> Generator[None]:
+    """Run a reducer whose result is not the named reductions it calls.
+
+    Inside an aggregate_spatial call, a graph such as ``reduce_by_method(mean)`` times 2 records
+    ``mean`` as it runs, though what it returns is not a mean. Its steps are ignored here, so the
+    call records no method rather than a wrong one.
+    """
+    token = _spatial_methods.set(None)
+    try:
+        yield
+    finally:
+        _spatial_methods.reset(token)
+
+
 def record_features(geometries: Any) -> None:
     """Fingerprint actual inline feature inputs before positional labels are assigned."""
     evidence = _current.get()
