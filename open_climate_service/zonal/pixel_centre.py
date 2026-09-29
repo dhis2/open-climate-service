@@ -29,7 +29,9 @@ def pixel_centre_polygons(
     reduce = make_reducer_caller(reducer, context)
     keep_nodata = is_graph_callback(reducer)
     out: dict[str, VarResult] = {}
-    masks = []
+    # The selected cells' flat indices rather than a full-grid mask per polygon: a mask is
+    # 1.9 MB on Norway's grid, so a thousand zones would hold 1.9 GB before any data is read.
+    masks: list[np.ndarray] = []
     for geom in polygons:
         mask = rasterio.features.geometry_mask(
             [mapping(geom)], out_shape=(grid.height, grid.width), transform=transform, invert=True
@@ -39,7 +41,7 @@ def pixel_centre_polygons(
             mask = mask[::-1]
         if not grid.x_ascending:
             mask = mask[:, ::-1]
-        masks.append(mask.ravel())
+        masks.append(np.flatnonzero(mask))
     for name in data.data_vars:
         vname = str(name)
         da = data[vname]
@@ -50,8 +52,8 @@ def pixel_centre_polygons(
         for axis, block in blocks(da, other, grid):
             concat_axis = axis or 0
             flat = block.reshape((-1, grid.height * grid.width))
-            for mask, mask_pieces in zip(masks, pieces, strict=True):
-                selected = (pixels[mask] for pixels in flat)
+            for cells, mask_pieces in zip(masks, pieces, strict=True):
+                selected = (pixels[cells] for pixels in flat)
                 reduced = [reduce(v if keep_nodata else v[~np.isnan(v)]) for v in selected]
                 mask_pieces.append(np.asarray(reduced, dtype="float64").reshape(block.shape[:-2]))
         rows = [np.concatenate(p, axis=concat_axis) if other else p[0] for p in pieces]

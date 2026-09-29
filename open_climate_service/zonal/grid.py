@@ -9,7 +9,8 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
-# Coverage below this is floating-point residue at a polygon edge, not a covered cell.
+# Coverage below this share of a zone's largest is floating-point residue at its edge, not a
+# covered cell.
 _MIN_COVERAGE = 1e-9
 
 VarResult = tuple[np.ndarray, list[Hashable], dict[Hashable, Any]]
@@ -23,6 +24,21 @@ def find_dim(data: xr.Dataset | xr.DataArray, candidates: list[str]) -> str | No
         if c in dims:
             return c
     return None
+
+
+def _declared_resolution(data: xr.Dataset) -> tuple[float, float]:
+    """The cell size the cube's geotransform declares, for an axis one cell long.
+
+    Coordinates cannot give a cell size from a single value, so a cube sliced to one cell
+    falls back on the transform it carries; without one, a cell of 1 unit is assumed.
+    """
+    try:
+        import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # registers .rio
+
+        x_res, y_res = data.rio.resolution()
+        return float(abs(x_res)), float(abs(y_res))
+    except Exception:
+        return 1.0, 1.0
 
 
 @dataclass(frozen=True)
@@ -44,8 +60,9 @@ class Grid:
     def of(cls, data: xr.Dataset, x_dim: str, y_dim: str) -> Grid:
         x = data[x_dim].values.astype(float)
         y = data[y_dim].values.astype(float)
-        dx = float(abs(x[1] - x[0])) if x.size > 1 else 1.0
-        dy = float(abs(y[1] - y[0])) if y.size > 1 else 1.0
+        declared = _declared_resolution(data)
+        dx = float(abs(x[1] - x[0])) if x.size > 1 else declared[0]
+        dy = float(abs(y[1] - y[0])) if y.size > 1 else declared[1]
         return cls(
             x_dim=x_dim,
             y_dim=y_dim,
@@ -101,7 +118,9 @@ def polygon_zones(grid: Grid, polygons: Sequence[Any]) -> list[Zone]:
     for cell_ids, coverage in zip(table["cell_id"], table["coverage"], strict=True):
         cell_ids = np.asarray(cell_ids, dtype=np.int64)
         weights = np.asarray(coverage, dtype="float64")
-        keep = weights > _MIN_COVERAGE
+        # Relative to the zone's own largest coverage, so a zone far smaller than its one cell
+        # keeps that cell, while rounding residue beside fully covered cells still goes.
+        keep = weights > _MIN_COVERAGE * (weights.max() if weights.size else 0.0)
         rows, cols = grid.array_indices(cell_ids[keep])
         zones.append(Zone(rows=rows, cols=cols, weights=weights[keep]))
     return zones

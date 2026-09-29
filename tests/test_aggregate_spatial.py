@@ -548,6 +548,50 @@ def test_the_result_keeps_the_supplied_lon_lat_shapes() -> None:
     assert (minx, miny, maxx, maxy) == pytest.approx((10.70, 59.88, 10.80, 59.93))
 
 
+def test_shapes_supplied_in_the_cube_crs_are_carried_out_in_wgs84() -> None:
+    """The vector writers tag `geometry_wkt` as WGS 84, so projected input is converted back."""
+    from shapely import wkt
+
+    from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
+
+    out = aggregate_spatial(_utm_cube(), _box(256_000, 6_641_000, 258_000, 6_643_000), _mean)
+    minx, miny, maxx, maxy = wkt.loads(str(out[GEOMETRY_WKT_COORD].values[0])).bounds
+    assert 10.0 < minx < maxx < 11.0 and 59.0 < miny < maxy < 60.0
+
+
+def test_a_cube_sliced_to_one_cell_keeps_its_cell_size() -> None:
+    """One coordinate gives no cell size, so the declared transform does: 1 km, not 1 m."""
+    # OCS stores carry the GDAL GeoTransform on spatial_ref, which survives the slice.
+    one = _utm_cube().rio.write_transform().isel(x=slice(0, 1), y=slice(0, 1))
+    point = {"type": "Point", "coordinates": [255_700.0, 6_660_300.0]}  # 200 m from the centre
+    out = aggregate_spatial(one, point, _mean)
+    assert float(out["tg"].isel(geometry=0)) == 2.0
+
+
+def test_a_zone_far_smaller_than_its_cell_keeps_that_cell() -> None:
+    """A 1e-10 share of one cell is the zone's whole coverage, not rounding residue."""
+    tiny = _box(0.1, 0.1, 0.1 + 1e-5, 0.1 + 1e-5)
+    out = aggregate_spatial(_grid(y_ascending=True), tiny, _mean)
+    assert float(out["v"].isel(geometry=0)) == 0.0
+
+
+@pytest.mark.parametrize(("method", "value"), [("min", np.inf), ("max", -np.inf)])
+def test_an_infinite_min_or_max_is_a_value(method: str, value: float) -> None:
+    from open_climate_service.zonal.weighting import weighted_statistic
+
+    out = weighted_statistic(np.array([[value, value]]), np.ones((1, 2)), method)
+    assert out.tolist() == [value]
+
+
+def test_the_pixel_centre_fallback_gives_each_of_many_zones_its_own_cells() -> None:
+    """Zones are kept as cell indices, not full-grid masks; each still selects its own cell."""
+    fc = _features(*((str(i), _box(i % 3 - 0.4, i // 3 - 0.4, i % 3 + 0.4, i // 3 + 0.4)) for i in range(9)))
+    out = aggregate_spatial(_grid(y_ascending=True), fc, lambda data: float(np.sum(data)) * 1.0)
+    cube = _grid(y_ascending=True)
+    expected = [float(cube.sel(x=i % 3, y=i // 3)) for i in range(9)]
+    np.testing.assert_allclose(out["v"].values, expected)
+
+
 def test_weighted_median_over_many_rows_matches_numpy_for_equal_weights() -> None:
     """Every row of a block is reduced at once; each must still get its own median."""
     from open_climate_service.zonal.weighting import weighted_statistic

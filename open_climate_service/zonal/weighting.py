@@ -25,6 +25,8 @@ def weighted_statistic(values: np.ndarray, weights: np.ndarray, method: str) -> 
     valid = ~np.isnan(values)
     w = np.where(valid, weights, 0.0)
     total = w.sum(axis=-1)
+    # Whether the zone has any value at all; an infinite min or max is still a value.
+    has_value = (w > 0).any(axis=-1)
     filled = np.where(valid, values, 0.0)
     with np.errstate(invalid="ignore", divide="ignore"):
         if method == "mean":
@@ -34,10 +36,10 @@ def weighted_statistic(values: np.ndarray, weights: np.ndarray, method: str) -> 
             out = np.where(total > 0, out, np.nan)
         elif method == "min":
             out = np.where(valid, values, np.inf).min(axis=-1, initial=np.inf)
-            out = np.where(np.isfinite(out), out, np.nan)
+            out = np.where(has_value, out, np.nan)
         elif method == "max":
             out = np.where(valid, values, -np.inf).max(axis=-1, initial=-np.inf)
-            out = np.where(np.isfinite(out), out, np.nan)
+            out = np.where(has_value, out, np.nan)
         elif method == "median":
             out = _weighted_quantile(values, w, 0.5)
         elif method == "majority":

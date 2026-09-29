@@ -54,8 +54,11 @@ def _require_supported_geometry_types(geoms: list[Any], labels: list[str]) -> No
             )
 
 
-def to_cube_crs(geoms: list[Any], data: xr.Dataset) -> list[Any]:
-    """Reproject GeoJSON geometries into the cube's CRS when the cube is projected.
+def to_cube_crs(geoms: list[Any], data: xr.Dataset) -> tuple[list[Any], list[Any]]:
+    """The geometries in the cube's CRS, and the same geometries in WGS 84.
+
+    The first set is what is aggregated; the second is what the result carries, since the
+    vector writers read it as WGS 84.
 
     GeoJSON coordinates are WGS 84 by definition (RFC 7946), and ``load_features`` always
     returns them that way, but a cube keeps its native grid: seNorge over Norway is UTM 33 in
@@ -74,10 +77,10 @@ def to_cube_crs(geoms: list[Any], data: xr.Dataset) -> list[Any]:
     except Exception:
         cube_crs = None
     if cube_crs is None:
-        return geoms
+        return geoms, geoms
     crs = CRS.from_user_input(cube_crs.to_wkt())
     if crs.is_geographic:
-        return geoms
+        return geoms, geoms
     bounds = np.array([g.bounds for g in geoms if not g.is_empty])
     if not bounds.size or not (
         (bounds[:, [0, 2]] >= -180).all()
@@ -85,6 +88,8 @@ def to_cube_crs(geoms: list[Any], data: xr.Dataset) -> list[Any]:
         and (bounds[:, [1, 3]] >= -90).all()
         and (bounds[:, [1, 3]] <= 90).all()
     ):
-        return geoms
+        # Already in the cube's CRS: aggregated as given, carried out in WGS 84.
+        to_wgs84 = Transformer.from_crs(crs, "EPSG:4326", always_xy=True).transform
+        return geoms, [transform(to_wgs84, g) for g in geoms]
     to_cube = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform
-    return [transform(to_cube, g) for g in geoms]
+    return [transform(to_cube, g) for g in geoms], geoms

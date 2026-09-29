@@ -108,8 +108,7 @@ def aggregate_spatial(
     grid = Grid.of(data, x_dim, y_dim)
     # Computed in the cube's CRS; the result keeps the shapes as supplied, which the vector
     # writers read as the request's GeoJSON (WGS 84).
-    supplied_shapes = geom_shapes
-    geom_shapes = to_cube_crs(geom_shapes, data)
+    geom_shapes, wgs84_shapes = to_cube_crs(geom_shapes, data)
 
     categorical = categorical_variables(data)
     named = identify_reducer(reducer)
@@ -177,7 +176,7 @@ def aggregate_spatial(
     # the labels on `geom_dim`: the label is the feature id, which the DHIS2 and CHAP exports key
     # their location column on. WKT strings, because a string coordinate is inert on every path
     # the cube can take, where an object-dtype one makes `to_zarr` fail. See CLIM-836.
-    return combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in supplied_shapes])})
+    return combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in wgs84_shapes])})
 
 
 def _assemble(

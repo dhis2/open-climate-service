@@ -95,4 +95,4 @@ Aggregating to polygons needs no alignment between datasets: each is aggregated 
 
 Supply geometries as GeoJSON longitude and latitude (RFC 7946), whatever the cube's CRS. When the cube declares a projected CRS, such as seNorge's UTM 33, they are reprojected into it before aggregating. They are left as given when the cube declares no CRS or a geographic one, and when any coordinate falls outside longitude and latitude ranges, which is taken to mean they are already in the cube's CRS. Supplying projected coordinates that happen to fall within those ranges is not detected, so send WGS 84.
 
-The result carries the geometries as supplied, not the reprojected ones, so vector outputs stay in WGS 84.
+The result carries the geometries in WGS 84, as supplied or converted back from the cube's CRS, so vector outputs are always WGS 84.
