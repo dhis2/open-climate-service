@@ -525,3 +525,56 @@ def test_open_icechunk_dataset_step_cap_keeps_whole_shards(tmp_path: Path, monke
         assert _dask_chunks(result) == (6, 8, 8)
     finally:
         result.close()
+
+
+def _two_variable_store(path: Path, shards: tuple[int, int]) -> None:
+    """Two daily variables whose time shards differ, as a merged store might have."""
+    days = 24
+    coords = {"t": pd.date_range("2020-01-01", periods=days, freq="D"), "y": np.arange(16.0), "x": np.arange(16.0)}
+    ds = xr.Dataset(
+        {
+            "a": (["t", "y", "x"], np.zeros((days, 16, 16), dtype="float32")),
+            "b": (["t", "y", "x"], np.ones((days, 16, 16), dtype="float32")),
+        },
+        coords=coords,
+    )
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(path)))
+    session = repo.writable_session("main")
+    encoding = {
+        "a": {"chunks": (1, 8, 8), "shards": (shards[0], 16, 16)},
+        "b": {"chunks": (1, 8, 8), "shards": (shards[1], 16, 16)},
+    }
+    ds.to_zarr(session.store, mode="w", zarr_format=3, encoding=encoding)
+    session.commit("seed")
+
+
+def test_open_icechunk_dataset_keeps_every_variables_shards_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shards of 2 and 3 days: the one time chunk is a multiple of both, 6."""
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 10 * 256)
+    _two_variable_store(tmp_path / "merged.icechunk", shards=(2, 3))
+    result = open_icechunk_dataset(tmp_path / "merged.icechunk")
+    try:
+        for name in ("a", "b"):
+            chunks = result[name].chunks
+            assert chunks is not None and chunks[0][0] == 6
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_keeps_stored_chunks_when_no_common_multiple_fits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 10 * 256)
+    _two_variable_store(tmp_path / "merged.icechunk", shards=(4, 3))  # common multiple 12 > 10 steps
+    result = open_icechunk_dataset(tmp_path / "merged.icechunk")
+    try:
+        chunks = result["a"].chunks
+        assert chunks is not None and chunks[0][0] == 1
+    finally:
+        result.close()

@@ -186,10 +186,16 @@ def _read_time_chunk(ds: xr.Dataset, t_dim: str) -> int | None:
     Only time is merged. The stored spatial chunks are kept, because merging them as well made a
     point time series read whole grids for one pixel, eight times slower. At most
     ``READ_CHUNK_MAX_STEPS`` steps, so a small grid still splits into enough tasks to parallelise.
-    Returns None when the stored chunk shape is unknown or already reaches the target.
+    One time chunk applies to every variable, so it is a whole number of stored time steps for
+    each of them (the least common multiple of their shards, or chunks when unsharded), and it is
+    sized by the variable with the largest chunks. Returns None, keeping the stored chunks, when
+    the chunk shape is unknown, already reaches the target, or no common multiple fits the limits.
     """
+    import math
+
     per_step = 0.0
     step_multiple = 1
+    stored_steps = 1
     for da in ds.data_vars.values():
         if t_dim not in da.dims:
             continue
@@ -200,16 +206,16 @@ def _read_time_chunk(ds: xr.Dataset, t_dim: str) -> int | None:
             continue
         shards = da.encoding.get("shards")
         axis = da.dims.index(t_dim)
-        bytes_per_step = int(np.prod(chunks)) * da.dtype.itemsize / int(chunks[axis])
-        if bytes_per_step > per_step:
-            per_step = bytes_per_step
-            whole = shards if shards and len(shards) == da.ndim else chunks
-            step_multiple = int(whole[axis])
+        whole = shards if shards and len(shards) == da.ndim else chunks
+        step_multiple = math.lcm(step_multiple, int(whole[axis]))
+        stored_steps = max(stored_steps, int(chunks[axis]))
+        per_step = max(per_step, int(np.prod(chunks)) * da.dtype.itemsize / int(chunks[axis]))
     if not per_step:
         return None
     steps = min(int(READ_CHUNK_TARGET_BYTES // per_step), READ_CHUNK_MAX_STEPS) // step_multiple * step_multiple
-    if steps <= step_multiple:
-        # The stored chunks already reach the target; merging would only make them larger.
+    if steps <= stored_steps:
+        # Zero when no common multiple fits under the limits, where any merge would split some
+        # variable's shards; otherwise the stored chunks already reach the target.
         return None
     return min(steps, int(ds.sizes[t_dim]))
 
