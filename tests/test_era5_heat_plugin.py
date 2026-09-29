@@ -8,8 +8,8 @@ import pytest
 import xarray as xr
 
 from open_climate_service.plugins.datasets.era5_heat import (
-    ERA5HeatCDSDailyFromHourlyPlugin,
-    ERA5HeatCDSHourlyPlugin,
+    ERA5HeatZarrDailyFromHourlyPlugin,
+    ERA5HeatZarrHourlyPlugin,
     ERA5HeatDailyUTCIPlugin,
 )
 
@@ -17,7 +17,7 @@ _TEST_BBOX = [28.0, -3.0, 29.0, -2.0]
 
 
 def test_hourly_periods(monkeypatch: pytest.MonkeyPatch):
-    plugin = ERA5HeatCDSHourlyPlugin(variable="utci")
+    plugin = ERA5HeatZarrHourlyPlugin(variable="utci")
 
     # monkeypatch the cutoff to avoid hitting CDS servers
     fake_cutoff = datetime(2025, 1, 1, tzinfo=timezone.utc)
@@ -94,8 +94,8 @@ def test_daily_from_hourly_periods_efficiency():
     if os.getenv("TEST_INTEGRATIONS") != "1":
         pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
 
-    hourly_plugin = ERA5HeatCDSHourlyPlugin(variable="utci")
-    daily_plugin = ERA5HeatCDSDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
+    hourly_plugin = ERA5HeatZarrHourlyPlugin(variable="utci")
+    daily_plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
 
     # test that calling hourly periods for many days (5 years worth) finishes in reasonable time
     start = "2020-01-01"
