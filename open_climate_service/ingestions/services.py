@@ -1508,20 +1508,27 @@ def remove_leftover_rebuilds() -> int:
     return sum(_remove_rebuild_leftover(path.with_suffix("")) for path in directory.glob("*.icechunk.rebuild"))
 
 
+# Unreachable objects younger than this are kept. Readers take no store lock, and one that
+# opened ``main`` while an ingest was committing sits on a snapshot the rollback makes
+# unreachable; Icechunk keeps every snapshot newer than the cutoff, and all it references,
+# so a reader is safe for this long after the commit it opened.
+_GC_RETENTION = timedelta(hours=1)
+
+
 def collect_unreachable_objects(repo: Any, store_path: Path) -> None:
     """Delete the snapshots, manifests and chunks that no branch or tag reaches.
 
     A rolled-back ingest resets ``main`` to where it was, so every period the attempt
     committed becomes unreachable, and Icechunk keeps it until collected: on the Norway
     instance a daily store held 44 GB of such data, two thirds of its size. Only unreachable
-    objects are removed, so every version any branch or tag can reach is kept.
+    objects are removed, so every version any branch or tag can reach is kept, and so is
+    anything committed within :data:`_GC_RETENTION`, which the next collection frees.
 
-    Must be called with the store's write lock held: the cutoff is now, so an uncommitted
-    write in progress would be collected. Never raises; a failure leaves the objects for the
+    Call with the store's write lock held. Never raises; a failure leaves the objects for the
     next collection and must not mask the ingest's own outcome.
     """
     try:
-        summary = repo.garbage_collect(datetime.now(UTC))
+        summary = repo.garbage_collect(datetime.now(UTC) - _GC_RETENTION)
     except Exception:
         logger.warning("Could not collect unreachable objects in '%s'", store_path, exc_info=True)
         return

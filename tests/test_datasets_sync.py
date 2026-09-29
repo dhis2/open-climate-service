@@ -1,5 +1,5 @@
 import os
-from datetime import UTC, date, datetime, tzinfo
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -2144,7 +2144,40 @@ def _rolled_back_store(target: Path) -> Any:
     return repo
 
 
-def test_collecting_unreachable_objects_frees_a_rolled_back_attempt(tmp_path: Path) -> None:
+@pytest.fixture
+def collect_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Collect with no retention, so objects committed moments ago are eligible."""
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(services, "_GC_RETENTION", timedelta(0))
+
+
+def test_collection_keeps_the_snapshot_a_reader_opened_during_the_attempt(tmp_path: Path) -> None:
+    """Readers take no lock: one that opened `main` mid-attempt keeps reading after the collection."""
+    import numpy as np
+    import xarray as xr
+
+    from open_climate_service.ingestions.services import collect_unreachable_objects
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    target = tmp_path / "ds.icechunk"
+    repo = open_or_create_repo(target)
+    _commit_days(repo, range(0, 3), "seed")
+    before = repo.lookup_branch("main")
+    for day in range(3, 6):
+        _commit_days(repo, range(day, day + 1), f"append {day}")
+    reader = xr.open_zarr(repo.readonly_session("main").store, zarr_format=3)
+    repo.reset_branch("main", before)
+
+    collect_unreachable_objects(repo, target)
+
+    assert reader.sizes["t"] == 6
+    np.testing.assert_array_equal(
+        reader["tg"].isel(t=3).values, np.random.default_rng(3).random((1, 64, 64), dtype="float32")[0]
+    )
+
+
+def test_collecting_unreachable_objects_frees_a_rolled_back_attempt(tmp_path: Path, collect_immediately: None) -> None:
     import numpy as np
     import xarray as xr
 
@@ -2163,7 +2196,7 @@ def test_collecting_unreachable_objects_frees_a_rolled_back_attempt(tmp_path: Pa
     np.testing.assert_array_equal(kept["tg"].values, np.random.default_rng(0).random((3, 64, 64), dtype="float32"))
 
 
-def test_collection_keeps_what_a_branch_still_reaches(tmp_path: Path) -> None:
+def test_collection_keeps_what_a_branch_still_reaches(tmp_path: Path, collect_immediately: None) -> None:
     """Only unreachable data goes: commits another branch points at survive the reset."""
     from open_climate_service.ingestions.services import collect_unreachable_objects
     from open_climate_service.streaming.store import open_or_create_repo
@@ -2183,7 +2216,7 @@ def test_collection_keeps_what_a_branch_still_reaches(tmp_path: Path) -> None:
     assert _chunk_files(target) == files
 
 
-def test_recovery_collects_what_a_killed_ingest_left_unreachable(tmp_path: Path) -> None:
+def test_recovery_collects_what_a_killed_ingest_left_unreachable(tmp_path: Path, collect_immediately: None) -> None:
     """A killed ingest leaves its rollback branch; recovery removes it and collects what it pinned."""
     from open_climate_service.ingestions.services import recover_interrupted_swap
 
