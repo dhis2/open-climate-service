@@ -20,7 +20,7 @@ to the specification's pixel-centre selection and runs as given.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Hashable, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -499,25 +499,56 @@ def _crop(data: xr.Dataset, grid: _Grid, zones: list[_Zone]) -> tuple[xr.Dataset
     return data.isel({grid.y_dim: slice(r0, r1 + 1), grid.x_dim: slice(c0, c1 + 1)}), r0, c0
 
 
+READ_BLOCK_BYTES = 512 * 2**20
+"""Most bytes of one variable read into memory at once, as float64.
+
+A cube is reduced block by block along its largest non-spatial dimension, so memory stays
+bounded however long the series is: 30 years of seNorge daily temperature over Norway is about
+160 GB as float64, and was measured at 39 GiB peak for 5 years before blocking.
+"""
+
+
+def _blocks(da: xr.DataArray, other: list[Hashable], grid: _Grid) -> Iterator[tuple[int | None, np.ndarray]]:
+    """Yield *da* as float64 (…other, y, x) pieces along its largest non-spatial dimension.
+
+    Each piece is paired with the position of that dimension in *other*, or None when there is
+    no non-spatial dimension and the whole array is one piece.
+    """
+    ordered = da.transpose(*other, grid.y_dim, grid.x_dim)
+    if not other:
+        yield None, np.asarray(ordered.values, dtype="float64")
+        return
+    axis = max(range(len(other)), key=lambda i: int(ordered.sizes[other[i]]))
+    dim = other[axis]
+    per_step = 8 * int(np.prod([int(ordered.sizes[d]) for d in ordered.dims if d != dim]))
+    step = max(1, READ_BLOCK_BYTES // max(per_step, 1))
+    for start in range(0, int(ordered.sizes[dim]), step):
+        yield axis, np.asarray(ordered.isel({dim: slice(start, start + step)}).values, dtype="float64")
+
+
 def _weighted_polygons(
     data: xr.Dataset, grid: _Grid, zones: list[_Zone], methods: dict[str, str]
 ) -> dict[str, _VarResult]:
-    """Per variable, reduced by its own method: an array (zone, …other dims) and its dims and coords."""
+    """Per variable, reduced by its own method: an array (zone, …other dims) and its dims and coords.
+
+    Read and reduced a block at a time (``READ_BLOCK_BYTES``), so memory does not grow with
+    the length of the series.
+    """
     window, r0, c0 = _crop(data, grid, zones)
-    arrays: dict[str, np.ndarray] = {}
-    for name in data.data_vars:
-        vname = str(name)
-        da = window[vname]
-        other = [d for d in da.dims if d not in {grid.y_dim, grid.x_dim}]
-        arrays[vname] = np.asarray(da.transpose(*other, grid.y_dim, grid.x_dim).values, dtype="float64")
-    # One class axis for every variable reduced to fractions, found only in covered cells.
+    covered = [z for z in zones if z.rows.size]
+
+    def other_dims(vname: str) -> list[Hashable]:
+        return [d for d in window[vname].dims if d not in {grid.y_dim, grid.x_dim}]
+
+    # One class axis for every variable reduced to fractions, found only in covered cells. It
+    # must be known before any block is reduced, so fractions take one extra pass over the data.
     classes = _fraction_classes(
         [
-            arrays[v][..., z.rows - r0, z.cols - c0]
+            np.unique(block[..., z.rows - r0, z.cols - c0])
             for v, m in methods.items()
             if m == "fractions"
-            for z in zones
-            if z.rows.size
+            for _axis, block in _blocks(window[v], other_dims(v), grid)
+            for z in covered
         ]
     )
     out: dict[str, _VarResult] = {}
@@ -525,21 +556,24 @@ def _weighted_polygons(
         vname = str(name)
         method = methods[vname]
         da = window[vname]
-        arr = arrays[vname]
-        other = [d for d in da.dims if d not in {grid.y_dim, grid.x_dim}]
+        other = other_dims(vname)
+        pieces: list[list[np.ndarray]] = [[] for _ in zones]
+        concat_axis = 0
+        for axis, block in _blocks(da, other, grid):
+            concat_axis = axis or 0
+            for zone, zone_pieces in zip(zones, pieces, strict=True):
+                if not zone.rows.size:
+                    extra = (classes.size,) if method == "fractions" else ()
+                    zone_pieces.append(np.full(block.shape[:-2] + extra, np.nan))
+                    continue
+                values = block[..., zone.rows - r0, zone.cols - c0]
+                weights = np.broadcast_to(zone.weights, values.shape)
+                if method == "fractions":
+                    zone_pieces.append(_weighted_fractions(values, weights, classes))
+                else:
+                    zone_pieces.append(_weighted(values, weights, method))
+        rows = [np.concatenate(p, axis=concat_axis) if other else p[0] for p in pieces]
         coords: dict[Hashable, Any] = {d: da.coords[d].values for d in other if d in da.coords}
-        extra = (classes.size,) if method == "fractions" else ()
-        rows = []
-        for zone in zones:
-            if not zone.rows.size:
-                rows.append(np.full(arr.shape[:-2] + extra, np.nan))
-                continue
-            values = arr[..., zone.rows - r0, zone.cols - c0]
-            weights = np.broadcast_to(zone.weights, values.shape)
-            if method == "fractions":
-                rows.append(_weighted_fractions(values, weights, classes))
-            else:
-                rows.append(_weighted(values, weights, method))
         dims: list[Hashable] = list(other)
         if method == "fractions":
             dims.append(FRACTIONS_DIM)
@@ -576,20 +610,19 @@ def _pixel_centre_polygons(
     for name in data.data_vars:
         vname = str(name)
         da = data[vname]
-        other = [d for d in da.dims if d not in {grid.y_dim, grid.x_dim}]
-        arr = da.transpose(*other, grid.y_dim, grid.x_dim).values
-        flat = arr.reshape((-1, grid.height * grid.width))
-        shape = arr.shape[:-2]
-        rows = []
-        for mask in masks:
-            reduced = []
-            for pixels in flat:
-                selected = pixels[mask]
-                if np.issubdtype(selected.dtype, np.floating):
-                    selected = selected[~np.isnan(selected)]
-                reduced.append(reduce(selected))
-            rows.append(np.asarray(reduced, dtype="float64").reshape(shape))
-        coords = {d: da.coords[d].values for d in other if d in da.coords}
+        other: list[Hashable] = [d for d in da.dims if d not in {grid.y_dim, grid.x_dim}]
+        pieces: list[list[np.ndarray]] = [[] for _ in masks]
+        concat_axis = 0
+        # A block at a time, as on the weighted path, so memory does not grow with the series.
+        for axis, block in _blocks(da, other, grid):
+            concat_axis = axis or 0
+            flat = block.reshape((-1, grid.height * grid.width))
+            for mask, mask_pieces in zip(masks, pieces, strict=True):
+                reduced = [reduce(pixels[mask][~np.isnan(pixels[mask])]) for pixels in flat]
+                mask_pieces.append(np.asarray(reduced, dtype="float64").reshape(block.shape[:-2]))
+        rows = [np.concatenate(p, axis=concat_axis) if other else p[0] for p in pieces]
+        shape = tuple(int(da.sizes[d]) for d in other)
+        coords: dict[Hashable, Any] = {d: da.coords[d].values for d in other if d in da.coords}
         out[vname] = (np.stack(rows) if rows else np.empty((0, *shape)), other, coords)
     return out
 

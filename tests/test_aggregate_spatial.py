@@ -443,3 +443,33 @@ def test_categorical_is_decided_per_variable() -> None:
     point = aggregate_spatial(cube, _point(0.6, 0.9), _named("mean"))
     assert float(point["temp"].isel(geometry=0)) == pytest.approx(9.6)  # bilinear
     assert float(point["lc"].isel(geometry=0)) == 90.0  # nearest cell
+
+
+# ---------------------------------------------------------------------------
+# Reading in blocks
+# ---------------------------------------------------------------------------
+
+
+def _series(days: int = 7) -> xr.DataArray:
+    base = _grid(y_ascending=True)
+    return xr.concat([base + 100 * i for i in range(days)], dim="t").assign_coords(t=np.arange(days))
+
+
+@pytest.mark.parametrize(
+    ("cube", "reducer"),
+    [
+        (_series(), _named("mean")),
+        (_series(), _named("median")),
+        (_series(), lambda data: float(np.max(data) - np.min(data))),  # pixel-centre fallback
+        (xr.concat([_categorical(np.array([[10, 20], [20, 30]]))] * 5, dim="t"), _named("fractions")),
+    ],
+)
+def test_blocked_reads_give_the_same_result(monkeypatch: pytest.MonkeyPatch, cube: xr.DataArray, reducer: Any) -> None:
+    """One time step per block gives exactly what one block for the whole series gives."""
+    from open_climate_service.plugins.processes import aggregate_spatial as module
+
+    fc = _features(("a", _box(-0.4, -0.4, 1.4, 1.4)), ("b", _box(0.5, 0.5, 1.2, 1.2)))
+    whole = aggregate_spatial(cube, fc, reducer)
+    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 1)
+    blocked = aggregate_spatial(cube, fc, reducer)
+    xr.testing.assert_allclose(whole, blocked)
