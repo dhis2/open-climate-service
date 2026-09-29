@@ -499,3 +499,29 @@ def test_uniform_chunks_leaves_a_legal_trailing_remainder_alone() -> None:
     reversed_ds = ds.isel(y=slice(None, None, -1))
     assert reversed_ds["v"].chunks == ((5, 10, 10), (8,)), "precondition: leading short chunk"
     assert downloader._uniform_chunks(reversed_ds)["v"].chunks == ((10, 10, 5), (8,))
+
+
+def test_open_icechunk_dataset_caps_the_steps_for_a_small_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tiny grid would fit years in one chunk by size; the step cap keeps it parallel."""
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_MAX_STEPS", 7)
+    # 256-byte chunks against the default 16 MiB target: bytes alone would allow every day
+    _daily_store(tmp_path / "small.icechunk", days=20)
+    result = open_icechunk_dataset(tmp_path / "small.icechunk")
+    try:
+        assert _dask_chunks(result) == (7, 8, 8)
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_step_cap_keeps_whole_shards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_MAX_STEPS", 7)
+    _daily_store(tmp_path / "sharded.icechunk", encoding={"chunks": (1, 8, 8), "shards": (2, 16, 16)})
+    result = open_icechunk_dataset(tmp_path / "sharded.icechunk")
+    try:
+        assert _dask_chunks(result) == (6, 8, 8)
+    finally:
+        result.close()

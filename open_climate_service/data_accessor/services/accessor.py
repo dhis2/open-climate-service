@@ -170,13 +170,23 @@ monthly mean on seNorge daily temperature (4.6 s to 2.3 s) and made a ten-year p
 faster too (2.5 s to 1.6 s), while a single-slice read cost the same. See CLIM-1230.
 """
 
+READ_CHUNK_MAX_STEPS = 366
+"""Most time steps in one dask chunk, whatever their size.
+
+The byte target alone would put years of a small grid in one chunk: at 10 KB a day (ERA5-Land
+over a small country), 16 MiB is about 1,600 days, so a ten-year computation would be three
+tasks and use three cores however many the machine has. A year per chunk keeps enough tasks to
+spread across a large server.
+"""
+
 
 def _read_time_chunk(ds: xr.Dataset, t_dim: str) -> int | None:
     """Periods per dask chunk: whole stored chunks along time, adding up to about the target size.
 
     Only time is merged. The stored spatial chunks are kept, because merging them as well made a
-    point time series read whole grids for one pixel, eight times slower. Returns None when the
-    stored chunk shape is unknown or already reaches the target.
+    point time series read whole grids for one pixel, eight times slower. At most
+    ``READ_CHUNK_MAX_STEPS`` steps, so a small grid still splits into enough tasks to parallelise.
+    Returns None when the stored chunk shape is unknown or already reaches the target.
     """
     per_step = 0.0
     step_multiple = 1
@@ -197,7 +207,7 @@ def _read_time_chunk(ds: xr.Dataset, t_dim: str) -> int | None:
             step_multiple = int(whole[axis])
     if not per_step:
         return None
-    steps = int(READ_CHUNK_TARGET_BYTES // per_step) // step_multiple * step_multiple
+    steps = min(int(READ_CHUNK_TARGET_BYTES // per_step), READ_CHUNK_MAX_STEPS) // step_multiple * step_multiple
     if steps <= step_multiple:
         # The stored chunks already reach the target; merging would only make them larger.
         return None
