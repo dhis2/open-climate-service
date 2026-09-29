@@ -98,4 +98,4 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
-    range: [0, 50]
+    range: [-50, 50]
