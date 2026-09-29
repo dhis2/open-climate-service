@@ -157,18 +157,55 @@ def test_mode_levels_are_resampled_from_native_on_append(pyramid_sync: dict[str,
     _assert_same_store(synced, _rebuild(state, tmp_path, "2026-01-04"))
 
 
-def test_a_changed_resampling_method_rebuilds(pyramid_sync: dict[str, Any], tmp_path: Path) -> None:
-    """Levels reduced with one method must not be extended with another."""
+@pytest.mark.parametrize(("before", "after"), [(None, "max"), ("mode", "max"), ("max", "mode")])
+def test_a_changed_resampling_method_rebuilds(
+    pyramid_sync: dict[str, Any], tmp_path: Path, before: str | None, after: str
+) -> None:
+    """Levels reduced with one method must not be extended with another.
+
+    `mode` builds pass `max` to topozarr as a placeholder, so the two are told apart only
+    because the build records the method it actually used.
+    """
     state = pyramid_sync
+    state["plugin"] = _GridPlugin(categorical=True)
+    if before is not None:
+        state["dataset"]["ingestion"]["resampling"] = before
     _ingest(state, "2026-01-03")
     synced = state["store"]
+    recorded = _root(synced).attrs["multiscales"]
+    assert recorded["resampling_method"] == (before or "mean")
 
-    state["dataset"]["ingestion"]["resampling"] = "max"
+    state["dataset"]["ingestion"]["resampling"] = after
     state["plugin"].available += ["2026-01-04"]
     _ingest(state, "2026-01-04")
 
     assert state["rebuilds"] == 2
     _assert_same_store(synced, _rebuild(state, tmp_path, "2026-01-04"))
+
+
+def test_a_climatology_appends_along_its_own_time_dim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Publication renames time aliases to `t`, but a climatology keeps `dayofyear`."""
+    monkeypatch.setattr(downloader, "_PYRAMID_PIXEL_THRESHOLD", 64 * 64)
+    monkeypatch.setattr(downloader, "_PYRAMID_TARGET_TILE_SIZE", 24)
+    rng = np.random.default_rng(0)
+    full = xr.Dataset(
+        {"tg": (("dayofyear", "y", "x"), rng.normal(size=(4, NY, NX)).astype("float32"))},
+        coords={"dayofyear": [1, 2, 3, 4], "y": np.linspace(4.0, 2.0, NY), "x": np.linspace(1.0, 3.0, NX)},
+    )
+    synced, rebuilt = tmp_path / "synced.icechunk", tmp_path / "rebuilt.icechunk"
+    downloader.write_to_icechunk_store(full.isel(dayofyear=slice(0, 3)), synced, crs="EPSG:4326")
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(synced)))
+    session = repo.writable_session("main")
+    full.isel(dayofyear=slice(3, 4)).to_zarr(session.store, group="0", append_dim="dayofyear", zarr_format=3)
+    session.commit("day 4")
+
+    assert downloader.append_pyramid_levels(synced) == 1
+
+    downloader.write_to_icechunk_store(full, rebuilt, crs="EPSG:4326")
+    a, b = _root(synced), _root(rebuilt)
+    for level in sorted(b.group_keys()):
+        assert np.array_equal(a[level]["tg"][...], b[level]["tg"][...], equal_nan=True), level
+        assert np.array_equal(a[level]["dayofyear"][...], b[level]["dayofyear"][...]), level
 
 
 def test_a_sync_with_nothing_new_leaves_the_store_alone(pyramid_sync: dict[str, Any]) -> None:

@@ -212,6 +212,30 @@ def _overwrite_native_resampled_levels(
                 _write_native_resampled(native, target, window, x_dim, y_dim, lvl, method)
 
 
+def _record_resampling_method(store: Any, method: str) -> None:
+    """Replace topozarr's placeholder method in the multiscales metadata with the one used.
+
+    A ``mode`` build passes ``max`` to topozarr, which records ``max``. Left that way, a
+    reader would take the levels for maxima, and a template changed between ``mode`` and
+    ``max`` would look unchanged to ``append_pyramid_levels``.
+    """
+    root = zarr.open_group(store, mode="a")
+    multiscales = root.attrs.get("multiscales")
+    if not isinstance(multiscales, dict):
+        return
+    multiscales = dict(multiscales)
+    multiscales["resampling_method"] = method
+    layout = multiscales.get("layout")
+    if isinstance(layout, list):
+        multiscales["layout"] = [
+            {**entry, "resampling_method": method}
+            if isinstance(entry, dict) and "resampling_method" in entry
+            else entry
+            for entry in layout
+        ]
+    root.attrs["multiscales"] = multiscales
+
+
 def _native_batches(da: xr.DataArray, t_dim: str | None, start: int = 0) -> list[dict[str, slice]]:
     """Slices of *da* along its leading non-spatial dim, sized to the pyramid region budget."""
     if t_dim is None:
@@ -276,7 +300,7 @@ def append_pyramid_levels(
     store_path: Path,
     *,
     pyramid_method: str = "mean",
-    t_dim: str = "t",
+    t_dim: str | None = None,
     x_dim: str = "x",
     y_dim: str = "y",
 ) -> int | None:
@@ -289,6 +313,9 @@ def append_pyramid_levels(
     ``write_to_icechunk_store`` computes them (topozarr's kernel from the level above, or a
     resample from native for ``mode``) and committed in one commit, so the store matches a
     full rebuild.
+
+    ``t_dim`` defaults to the leading dim of level 0's data variables: publication renames
+    time aliases to ``t``, but a climatology keeps its own (``dayofyear``).
 
     Returns the number of periods appended, 0 when the levels are already current, or None
     when the store is not a pyramid that level 0 has simply grown past. The caller rebuilds
@@ -311,7 +338,7 @@ def append_pyramid_levels(
     if not attributes_declare_multiscales(root_attrs):
         return None
     multiscales: Any = root_attrs["multiscales"]
-    if multiscales.get("resampling_method") != composable_method:
+    if multiscales.get("resampling_method") != method:
         # The template's method changed since the pyramid was built. Levels reduced one way
         # must not be extended another, so the rebuild redoes them all.
         return None
@@ -320,6 +347,15 @@ def append_pyramid_levels(
         return None
     groups = [cast(zarr.Group, root[name]) for name in level_names]
     base = groups[0]
+    if t_dim is None:
+        leading = {
+            _dimension_names(arr)[0]
+            for _, arr in base.arrays()
+            if {x_dim, y_dim} <= set(_dimension_names(arr)) and len(_dimension_names(arr)) > 2
+        }
+        if len(leading) != 1:
+            return None
+        t_dim = leading.pop()
     if t_dim not in base:
         return None
     base_t = np.asarray(cast(zarr.Array, base[t_dim])[:])
@@ -643,6 +679,7 @@ def write_to_icechunk_store(
             # masks aren't averaged (topozarr wrote them composably above; replace in place).
             logger.info("Resampling pyramid levels of '%s' from native (%s)", store_path.name, pyramid_method)
             _overwrite_native_resampled_levels(session.store, ds, x_dim, y_dim, levels, pyramid_method)
+            _record_resampling_method(session.store, pyramid_method)
 
         # topozarr demotes spatial_ref from coordinate to data variable in the pyramid.
         # Patch the root and each level group: add CRS to multiscales datasets entries so
