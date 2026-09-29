@@ -162,7 +162,9 @@ def _get_cdsapi_key() -> str:
                     if cdsapi_key:
                         return cdsapi_key
 
-        raise SystemError("Unable to retrieve CDS API key, please verify that ~/.ecmwfdatastoresrc has the correct format")
+        raise SystemError(
+            "Unable to retrieve CDS API key, please verify that ~/.ecmwfdatastoresrc has the correct format"
+        )
 
     raise SystemError("Missing credentials file: ~/.ecmwfdatastoresrc")
 
