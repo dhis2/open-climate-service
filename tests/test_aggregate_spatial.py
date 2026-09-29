@@ -10,14 +10,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.processes.aggregate_spatial import (
-    FRACTIONS_DIM,
-    _make_reducer_caller,
-    _parse_geometries,
-    aggregate_spatial,
-    reduce_by_method,
-)
+from open_climate_service.plugins.processes.aggregate_spatial import aggregate_spatial, reduce_by_method
 from open_climate_service.shared.vectors import RESAMPLING_ATTR
+from open_climate_service.zonal.categorical import FRACTIONS_DIM
+from open_climate_service.zonal.geometries import parse_geometries
+from open_climate_service.zonal.reducers import make_reducer_caller
 
 # A plain numpy statistic, which the weighted path recognises by identity.
 _mean = np.mean
@@ -59,7 +56,7 @@ def _categorical(values: np.ndarray, resampling: str = "mode") -> xr.DataArray:
 
 
 # ---------------------------------------------------------------------------
-# _parse_geometries
+# parse_geometries
 # ---------------------------------------------------------------------------
 
 
@@ -71,20 +68,20 @@ def test_parse_geometries_feature_collection_uses_ids() -> None:
             {"type": "Feature", "geometry": _box(0, 0, 1, 1)},
         ],
     }
-    geoms, labels = _parse_geometries(fc)
+    geoms, labels = parse_geometries(fc)
     assert len(geoms) == 2
     assert labels == ["a", "1"]  # explicit id, then positional fallback
 
 
 def test_parse_geometries_single_feature_and_geometry() -> None:
-    _, labels_feat = _parse_geometries({"type": "Feature", "id": "x", "geometry": _box(0, 0, 1, 1)})
+    _, labels_feat = parse_geometries({"type": "Feature", "id": "x", "geometry": _box(0, 0, 1, 1)})
     assert labels_feat == ["x"]
-    _, labels_geom = _parse_geometries(_box(0, 0, 1, 1))
+    _, labels_geom = parse_geometries(_box(0, 0, 1, 1))
     assert labels_geom == ["0"]
 
 
 def test_parse_geometries_accepts_points_among_polygons() -> None:
-    geoms, labels = _parse_geometries(_features(("district-1", _box(0, 0, 1, 1)), ("facility-1", _point(0.5, 0.5))))
+    geoms, labels = parse_geometries(_features(("district-1", _box(0, 0, 1, 1)), ("facility-1", _point(0.5, 0.5))))
     assert labels == ["district-1", "facility-1"]
     assert [g.geom_type for g in geoms] == ["Polygon", "Point"]
 
@@ -92,7 +89,7 @@ def test_parse_geometries_accepts_points_among_polygons() -> None:
 def test_parse_geometries_rejects_a_line_by_name() -> None:
     line = {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}
     with pytest.raises(ValueError, match="geometry 'road' is a LineString"):
-        _parse_geometries(_features(("district-1", _box(0, 0, 1, 1)), ("road", line)))
+        parse_geometries(_features(("district-1", _box(0, 0, 1, 1)), ("road", line)))
 
 
 def test_parse_geometries_accepts_a_multipolygon() -> None:
@@ -100,18 +97,18 @@ def test_parse_geometries_accepts_a_multipolygon() -> None:
         "type": "MultiPolygon",
         "coordinates": [_box(0, 0, 1, 1)["coordinates"], _box(2, 2, 3, 3)["coordinates"]],
     }
-    geoms, labels = _parse_geometries({"type": "Feature", "id": "m", "geometry": multi})
+    geoms, labels = parse_geometries({"type": "Feature", "id": "m", "geometry": multi})
     assert labels == ["m"]
     assert geoms[0].geom_type == "MultiPolygon"
 
 
 # ---------------------------------------------------------------------------
-# _make_reducer_caller
+# make_reducer_caller
 # ---------------------------------------------------------------------------
 
 
 def test_reducer_caller_returns_nan_for_empty() -> None:
-    call = _make_reducer_caller(lambda data: _mean(data), None)
+    call = make_reducer_caller(lambda data: _mean(data), None)
     assert np.isnan(call(np.array([])))
 
 
@@ -119,13 +116,13 @@ def test_reducer_caller_forwards_context_when_supported() -> None:
     def reducer(data: np.ndarray, context: dict) -> float:
         return float(np.mean(data)) + context["offset"]
 
-    call = _make_reducer_caller(reducer, {"offset": 100.0})
+    call = make_reducer_caller(reducer, {"offset": 100.0})
     assert call(np.array([1.0, 3.0])) == 102.0
 
 
 def test_reducer_caller_skips_context_for_plain_reducer() -> None:
     # A reducer that only accepts data must not receive context.
-    call = _make_reducer_caller(lambda data: _mean(data), {"offset": 100.0})
+    call = make_reducer_caller(lambda data: _mean(data), {"offset": 100.0})
     assert call(np.array([1.0, 3.0])) == 2.0
 
 
@@ -409,28 +406,27 @@ def test_fractions_with_no_valid_cell_anywhere_return_an_empty_class_axis() -> N
 
 
 def test_fractions_refuse_continuous_data(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.processes import aggregate_spatial as module
+    from open_climate_service.zonal import categorical
 
-    monkeypatch.setattr(module, "MAX_FRACTION_CLASSES", 10)
+    monkeypatch.setattr(categorical, "MAX_FRACTION_CLASSES", 10)
     with pytest.raises(ValueError, match="more than 10 distinct values.*not continuous data"):
         aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 3.5, 3.5), _named("fractions"))
 
 
 def test_fractions_refuse_continuous_data_before_reading_the_whole_series(monkeypatch: pytest.MonkeyPatch) -> None:
     """Class discovery stops at the block that passes the limit, not after collecting every block."""
-    from open_climate_service.plugins.processes import aggregate_spatial as module
+    from open_climate_service.zonal import categorical, grid, weighting
 
     read: list[int] = []
-    blocks = module._blocks
 
     def counting(*args: Any) -> Any:
-        for item in blocks(*args):
+        for item in grid.blocks(*args):
             read.append(1)
             yield item
 
-    monkeypatch.setattr(module, "_blocks", counting)
-    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 1)  # one time step per block
-    monkeypatch.setattr(module, "MAX_FRACTION_CLASSES", 10)
+    monkeypatch.setattr(weighting, "blocks", counting)
+    monkeypatch.setattr(grid, "READ_BLOCK_BYTES", 1)  # one time step per block
+    monkeypatch.setattr(categorical, "MAX_FRACTION_CLASSES", 10)
     values = np.arange(20 * 16, dtype="float64").reshape(20, 4, 4)
     da = xr.DataArray(
         values, dims=("t", "y", "x"), coords={"t": np.arange(20), "y": np.arange(4.0), "x": np.arange(4.0)}
@@ -496,11 +492,11 @@ def _series(days: int = 7) -> xr.DataArray:
 )
 def test_blocked_reads_give_the_same_result(monkeypatch: pytest.MonkeyPatch, cube: xr.DataArray, reducer: Any) -> None:
     """One time step per block gives exactly what one block for the whole series gives."""
-    from open_climate_service.plugins.processes import aggregate_spatial as module
+    from open_climate_service.zonal import grid
 
     fc = _features(("a", _box(-0.4, -0.4, 1.4, 1.4)), ("b", _box(0.5, 0.5, 1.2, 1.2)))
     whole = aggregate_spatial(cube, fc, reducer)
-    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 1)
+    monkeypatch.setattr(grid, "READ_BLOCK_BYTES", 1)
     blocked = aggregate_spatial(cube, fc, reducer)
     xr.testing.assert_allclose(whole, blocked)
 

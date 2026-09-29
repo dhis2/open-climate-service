@@ -23,6 +23,7 @@ open_climate_service/
   data_registry/    # dataset template YAML loading
   ingestions/       # artifact lifecycle: create, list, sync, publish
   features/         # feature collection store, GeoParquet reader, GET /features
+  zonal/            # zonal statistics behind aggregate_spatial (weighting, points, reducers)
   publications/     # STAC publication metadata
   extents/          # spatial extent config
   shared/           # dhis2 adapter, time utils

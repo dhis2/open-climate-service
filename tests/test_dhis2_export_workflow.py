@@ -255,8 +255,8 @@ def test_workflow_rejects_non_uid_feature_ids_before_aggregating(
     def must_not_run(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("zonal aggregation ran before feature IDs were validated")
 
-    monkeypatch.setattr(module, "_weighted_polygons", must_not_run)
-    monkeypatch.setattr(module, "_pixel_centre_polygons", must_not_run)
+    monkeypatch.setattr(module, "weighted_polygons", must_not_run)
+    monkeypatch.setattr(module, "pixel_centre_polygons", must_not_run)
     record = _run(instance, "agg-job", _process(_geometries(first_id=bad_id)))
     assert record.status == OpenEOJobStatus.ERROR
     assert record.error_message is not None
