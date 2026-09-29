@@ -45,7 +45,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
 
     async def periods(self, start: str, end: str) -> list[str]:
         # NOTE: Does not take into account local UTC offset hour which may include the previous or next day
-        
+
         cutoff = self._fetch_cutoff()
         current = parse_period_string_to_datetime(start)
         last = parse_period_string_to_datetime(end)
@@ -54,7 +54,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
 
         if current > limit:
             return []
-        
+
         result: list[str] = []
         while current <= limit:
             result.append(datetime_to_period_string(current, "hourly"))
@@ -76,7 +76,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
 
         return ds
 
-    def _fetch_ds(self, bbox: list[float]):
+    def _fetch_ds(self, bbox: list[float]) -> xr.Dataset:
         if self._cached_ds is None:
             # Get data
             ds = _open_cds_zarr(_CDS_ZARR_URL)
@@ -95,7 +95,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
 
         return self._cached_ds
 
-    def _fetch_cutoff(self):
+    def _fetch_cutoff(self) -> datetime:
         if self._cached_cutoff is None:
             self._cached_cutoff = _hourly_availability_cutoff()
         return self._cached_cutoff
@@ -153,9 +153,7 @@ class ERA5HeatDailyUTCIPlugin(ERA5HeatZarrDailyFromHourlyPlugin):
 # Helpers
 
 
-def _get_cdsapi_key():
-    cdsapi_key = None
-
+def _get_cdsapi_key() -> str:
     if os.path.exists(os.path.expanduser("~/.cdsapirc")):
         with open(os.path.expanduser("~/.cdsapirc"), "r") as f:
             for line in f:
@@ -163,21 +161,16 @@ def _get_cdsapi_key():
                     cdsapi_key = line.split(":")[1].strip()
                     if cdsapi_key:
                         return cdsapi_key
-        if cdsapi_key is None:
-            raise SystemError("Unable to retrieve CDS API key, please verify that ~/.cdsapirc has the correct format")
 
-    else:
-        raise SystemError("Missing credentials file: ~/.cdsapirc")
+        raise SystemError("Unable to retrieve CDS API key, please verify that ~/.cdsapirc has the correct format")
+
+    raise SystemError("Missing credentials file: ~/.cdsapirc")
 
 
 def _open_cds_zarr(url: str) -> xr.Dataset:
     cdsapi_key = _get_cdsapi_key()
-    ds = xr.open_zarr(
-        url,
-        consolidated=True,
-        storage_options = {
-            "headers": {"Authorization": f"Bearer {cdsapi_key}"}
-        }
+    ds: xr.Dataset = xr.open_zarr(
+        url, consolidated=True, storage_options={"headers": {"Authorization": f"Bearer {cdsapi_key}"}}
     )
     return ds
 
@@ -188,4 +181,4 @@ def _hourly_availability_cutoff() -> datetime:
     last_hour = ds.time.values[-1].astype("datetime64[us]").tolist()
     last_hour = last_hour.replace(tzinfo=timezone.utc)
 
-    return last_hour
+    return cast(datetime, last_hour)

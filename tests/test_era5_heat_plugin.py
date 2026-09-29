@@ -8,9 +8,9 @@ import pytest
 import xarray as xr
 
 from open_climate_service.plugins.datasets.era5_heat import (
+    ERA5HeatDailyUTCIPlugin,
     ERA5HeatZarrDailyFromHourlyPlugin,
     ERA5HeatZarrHourlyPlugin,
-    ERA5HeatDailyUTCIPlugin,
 )
 
 _TEST_BBOX = [28.0, -3.0, 29.0, -2.0]
