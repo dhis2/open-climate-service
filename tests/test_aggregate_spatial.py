@@ -546,3 +546,30 @@ def test_the_result_keeps_the_supplied_lon_lat_shapes() -> None:
     out = aggregate_spatial(_utm_cube(), oslo, _mean)
     minx, miny, maxx, maxy = wkt.loads(str(out[GEOMETRY_WKT_COORD].values[0])).bounds
     assert (minx, miny, maxx, maxy) == pytest.approx((10.70, 59.88, 10.80, 59.93))
+
+
+def test_weighted_median_over_many_rows_matches_numpy_for_equal_weights() -> None:
+    """Every row of a block is reduced at once; each must still get its own median."""
+    from open_climate_service.zonal.weighting import weighted_statistic
+
+    rng = np.random.default_rng(0)
+    values = rng.normal(size=(50, 7))
+    values[rng.random(values.shape) < 0.2] = np.nan
+    values[3] = np.nan  # a row with no valid cell
+    out = weighted_statistic(values, np.ones_like(values), "median")
+    expected = [np.median(row[~np.isnan(row)]) if (~np.isnan(row)).any() else np.nan for row in values]
+    np.testing.assert_allclose(out, expected, equal_nan=True)
+
+
+def test_weighted_majority_is_the_same_row_by_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The vectorised path and the row-by-row one it falls back to for many classes agree."""
+    from open_climate_service.zonal import categorical
+
+    rng = np.random.default_rng(1)
+    values = rng.integers(0, 5, size=(40, 9)).astype("float64")
+    values[rng.random(values.shape) < 0.2] = np.nan
+    weights = np.broadcast_to(rng.choice([0.0, 0.5, 1.0], size=9), values.shape)
+    vectorised = categorical.weighted_majority(values, np.where(np.isnan(values), 0.0, weights))
+    monkeypatch.setattr(categorical, "_MAJORITY_TABLE_CELLS", 1)
+    row_by_row = categorical.weighted_majority(values, np.where(np.isnan(values), 0.0, weights))
+    np.testing.assert_array_equal(vectorised, row_by_row)

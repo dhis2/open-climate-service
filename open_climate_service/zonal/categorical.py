@@ -22,11 +22,32 @@ FRACTIONS_DIM = "class"
 """Dimension a ``fractions`` aggregation adds: one entry per class value found in the zones."""
 
 
+# Most row-by-class totals the vectorised majority builds at once (8 bytes each).
+_MAJORITY_TABLE_CELLS = 2**24
+
+
 def weighted_majority(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
-    """The class covering the most area; ties go to the smallest class value."""
+    """The class covering the most area; ties go to the smallest class value.
+
+    Every row at once, binned by class across the rows, while the row-by-class table stays
+    small (class codes are few). Past that, row by row.
+    """
     flat_v = values.reshape(-1, values.shape[-1])
     flat_w = weights.reshape(-1, weights.shape[-1])
     out = np.full(flat_v.shape[0], np.nan)
+    keep_all = flat_w > 0
+    classes = np.unique(flat_v[keep_all])
+    n_rows = flat_v.shape[0]
+    if not classes.size:
+        return out.reshape(values.shape[:-1])
+    if n_rows * classes.size <= _MAJORITY_TABLE_CELLS:
+        index = np.searchsorted(classes, np.where(keep_all, flat_v, classes[0]))
+        row_of = np.broadcast_to(np.arange(n_rows)[:, None], flat_v.shape)
+        totals = np.bincount(
+            (row_of * classes.size + index)[keep_all], weights=flat_w[keep_all], minlength=n_rows * classes.size
+        ).reshape(n_rows, classes.size)
+        best = classes[np.argmax(totals, axis=-1)]
+        return np.where(keep_all.any(axis=-1), best, np.nan).reshape(values.shape[:-1])
     for i, (v, w) in enumerate(zip(flat_v, flat_w)):
         keep = w > 0
         if not keep.any():

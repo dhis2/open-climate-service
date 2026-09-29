@@ -53,23 +53,30 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> np.
     When the cumulative weight lands exactly on *q*, the midpoint of that value and the next is
     taken, so equal weights give what ``np.median`` gives: two whole cells of 0 and 10 are 5.
     Exactly means within rounding error; covered areas of 0.500001 and 0.499999 are not a tie.
+
+    Computed for every row at once: one sort along the cell axis, so 30 daily years over a
+    zone cost about what the mean does rather than a Python step per day.
     """
     flat_v = values.reshape(-1, values.shape[-1])
     flat_w = weights.reshape(-1, weights.shape[-1])
+    keep = flat_w > 0
+    # Cells left out sort last and weigh nothing, so each row's kept cells lead in order.
+    order = np.argsort(np.where(keep, flat_v, np.inf), axis=-1, kind="stable")
+    ordered = np.take_along_axis(flat_v, order, axis=-1)
+    cumulative = np.cumsum(np.take_along_axis(np.where(keep, flat_w, 0.0), order, axis=-1), axis=-1)
+    n_kept = keep.sum(axis=-1)
+    target = q * cumulative[:, -1:] if cumulative.shape[-1] else np.zeros((flat_v.shape[0], 1))
+    # The first cell whose cumulative weight reaches the target, as searchsorted finds it.
+    idx = np.minimum((cumulative < target).sum(axis=-1), np.maximum(n_kept - 1, 0))
+    rows = np.arange(flat_v.shape[0])
     out = np.full(flat_v.shape[0], np.nan)
-    for i, (v, w) in enumerate(zip(flat_v, flat_w)):
-        keep = w > 0
-        if not keep.any():
-            continue
-        order = np.argsort(v[keep])
-        ordered = v[keep][order]
-        cumulative = np.cumsum(w[keep][order])
-        target = q * cumulative[-1]
-        idx = int(np.searchsorted(cumulative, target))
-        if idx + 1 < ordered.size and np.isclose(cumulative[idx], target, rtol=1e-9, atol=0.0):
-            out[i] = (ordered[idx] + ordered[idx + 1]) / 2
-        else:
-            out[i] = ordered[min(idx, ordered.size - 1)]
+    if not cumulative.shape[-1]:
+        return out.reshape(values.shape[:-1])
+    at = ordered[rows, idx]
+    following = ordered[rows, np.minimum(idx + 1, ordered.shape[-1] - 1)]
+    tie = (idx + 1 < n_kept) & np.isclose(cumulative[rows, idx], target[:, 0], rtol=1e-9, atol=0.0)
+    out = np.where(tie, (at + following) / 2, at)
+    out = np.where(n_kept > 0, out, np.nan)
     return out.reshape(values.shape[:-1])
 
 
