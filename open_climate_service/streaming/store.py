@@ -218,10 +218,13 @@ def _stored_grid_geometry(root: Any, spec: GridSpec) -> dict[str, Any] | None:
 
     Returns None for a store whose coordinates aren't readable yet — the first-write path
     calls this before any data exists, and a 1-cell axis has no derivable cell size.
+
+    A pyramid store keeps its coordinates in level ``0``, not at the root.
     """
+    group = root if spec.x_dim in root or "0" not in root else root["0"]
     try:
-        x_centres = root[spec.x_dim][:]
-        y_centres = root[spec.y_dim][:]
+        x_centres = group[spec.x_dim][:]
+        y_centres = group[spec.y_dim][:]
     except (KeyError, TypeError):
         return None
     return grid_geometry(x_centres, y_centres)
