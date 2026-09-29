@@ -412,8 +412,38 @@ def test_fractions_refuse_continuous_data(monkeypatch: pytest.MonkeyPatch) -> No
     from open_climate_service.plugins.processes import aggregate_spatial as module
 
     monkeypatch.setattr(module, "MAX_FRACTION_CLASSES", 10)
-    with pytest.raises(ValueError, match="16 distinct values.*not continuous data"):
+    with pytest.raises(ValueError, match="more than 10 distinct values.*not continuous data"):
         aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 3.5, 3.5), _named("fractions"))
+
+
+def test_fractions_refuse_continuous_data_before_reading_the_whole_series(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Class discovery stops at the block that passes the limit, not after collecting every block."""
+    from open_climate_service.plugins.processes import aggregate_spatial as module
+
+    read: list[int] = []
+    blocks = module._blocks
+
+    def counting(*args: Any) -> Any:
+        for item in blocks(*args):
+            read.append(1)
+            yield item
+
+    monkeypatch.setattr(module, "_blocks", counting)
+    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 1)  # one time step per block
+    monkeypatch.setattr(module, "MAX_FRACTION_CLASSES", 10)
+    values = np.arange(20 * 16, dtype="float64").reshape(20, 4, 4)
+    da = xr.DataArray(
+        values, dims=("t", "y", "x"), coords={"t": np.arange(20), "y": np.arange(4.0), "x": np.arange(4.0)}
+    )
+    with pytest.raises(ValueError, match="not continuous data"):
+        aggregate_spatial(da.rename("v"), _box(-0.5, -0.5, 3.5, 3.5), _named("fractions"))
+    assert len(read) == 1
+
+
+def test_median_of_nearly_equal_weights_is_the_heavier_value() -> None:
+    """Covered areas of 1 and 0.999996 are not a tie: the median is the more-covered cell's value."""
+    out = aggregate_spatial(_grid(y_ascending=True), _box(-0.5, -0.5, 1.499996, 0.5), _named("median"))
+    assert float(out["v"].isel(geometry=0)) == 0.0
 
 
 def test_cubic_on_a_grid_too_small_is_a_clear_error() -> None:

@@ -92,6 +92,8 @@ def test_continuous_template_keeps_the_weighted_mean(dataset: dict[str, Any]) ->
 def test_point_is_interpolated_through_the_graph(dataset: dict[str, Any]) -> None:
     envelope = _run({"type": "Point", "coordinates": [0.5, 0.5]}, "mean")
     assert float(envelope.data["v"].sel(geometry="z").item()) == pytest.approx(35.0)
+    # Sampled, not reduced: an export declaring `mean` must not accept it as one.
+    assert envelope.provenance["spatial_aggregations"] == [None]
 
 
 def _run_with(geometry: dict, reducer_graph: dict) -> Any:
@@ -155,3 +157,29 @@ def test_mean_counting_missing_values_is_not_weighted(dataset: dict[str, Any]) -
     graph = {"m": {"process_id": "mean", "arguments": {"data": _DATA, "ignore_nodata": False}, "result": True}}
     envelope = _run_with(_SUB_CELL, graph)
     assert np.isnan(float(envelope.data["v"].sel(geometry="z").item()))
+
+
+def _with_missing_cell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cube with its 90 cell missing, so a whole-grid zone mixes valid and missing cells."""
+    cube = _cube()
+    cube["v"][0, 1, 1] = np.nan
+    monkeypatch.setattr(execution, "_open_artifact", lambda _a: cube)
+
+
+def test_mean_counting_missing_values_propagates_a_missing_cell(
+    dataset: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_missing_cell(monkeypatch)
+    graph = {"m": {"process_id": "mean", "arguments": {"data": _DATA, "ignore_nodata": False}, "result": True}}
+    assert np.isnan(float(_run_with(_WHOLE, graph).data["v"].sel(geometry="z").item()))
+
+
+def test_a_graph_ignoring_missing_values_still_skips_them(
+    dataset: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_missing_cell(monkeypatch)
+    graph = {
+        "m": {"process_id": "mean", "arguments": {"data": _DATA}},
+        "x": {"process_id": "multiply", "arguments": {"x": {"from_node": "m"}, "y": 2}, "result": True},
+    }
+    assert float(_run_with(_WHOLE, graph).data["v"].sel(geometry="z").item()) == pytest.approx(2 * 50 / 3)

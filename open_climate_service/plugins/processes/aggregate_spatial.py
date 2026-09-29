@@ -20,7 +20,7 @@ to the specification's pixel-centre selection and runs as given.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Hashable, Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -153,6 +153,13 @@ def _find_dim(data: xr.Dataset | xr.DataArray, candidates: list[str]) -> str | N
     return None
 
 
+def _is_graph_callback(reducer: Callable) -> bool:
+    """Whether *reducer* is an openEO callback graph rather than a plain Python function."""
+    import functools
+
+    return isinstance(reducer, functools.partial) and getattr(reducer.func, "__name__", "") == "node_callable"
+
+
 def _make_reducer_caller(reducer: Callable, context: Any) -> Callable[[np.ndarray], float]:
     """Return a function that applies the reducer, forwarding ``context`` when supported.
 
@@ -160,10 +167,9 @@ def _make_reducer_caller(reducer: Callable, context: Any) -> Callable[[np.ndarra
     signature once so context-aware reducers receive it without breaking the
     common array-only reducers (mean, median, ...).
     """
-    import functools
     import inspect
 
-    if isinstance(reducer, functools.partial) and getattr(reducer.func, "__name__", "") == "node_callable":
+    if _is_graph_callback(reducer):
         # An openEO callback, called the way openeo-processes-dask calls one: the values
         # positionally, named `data` for the graph, so every node can reference the parameter.
         # Passing `data=` as a keyword instead reaches the graph's result node, which in a
@@ -394,6 +400,7 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> np.
 
     When the cumulative weight lands exactly on *q*, the midpoint of that value and the next is
     taken, so equal weights give what ``np.median`` gives: two whole cells of 0 and 10 are 5.
+    Exactly means within rounding error; covered areas of 0.500001 and 0.499999 are not a tie.
     """
     flat_v = values.reshape(-1, values.shape[-1])
     flat_w = weights.reshape(-1, weights.shape[-1])
@@ -407,7 +414,7 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> np.
         cumulative = np.cumsum(w[keep][order])
         target = q * cumulative[-1]
         idx = int(np.searchsorted(cumulative, target))
-        if idx + 1 < ordered.size and np.isclose(cumulative[idx], target):
+        if idx + 1 < ordered.size and np.isclose(cumulative[idx], target, rtol=1e-9, atol=0.0):
             out[i] = (ordered[idx] + ordered[idx + 1]) / 2
         else:
             out[i] = ordered[min(idx, ordered.size - 1)]
@@ -456,15 +463,20 @@ def _weighted_fractions(values: np.ndarray, weights: np.ndarray, classes: np.nda
     return out.reshape(*shape, classes.size)
 
 
-def _fraction_classes(arrays: Sequence[np.ndarray]) -> np.ndarray:
-    """The class axis shared by every variable, so each variable's shares line up."""
-    found = [np.unique(a[~np.isnan(a)]) for a in arrays if a.size]
-    classes = np.unique(np.concatenate(found)) if found else np.array([], dtype="float64")
-    if classes.size > MAX_FRACTION_CLASSES:
-        raise ValueError(
-            f"aggregate_spatial: fractions found {classes.size} distinct values in the zones, more than "
-            f"{MAX_FRACTION_CLASSES}; fractions are for class codes, not continuous data"
-        )
+def _fraction_classes(arrays: Iterable[np.ndarray]) -> np.ndarray:
+    """The class axis shared by every variable, so each variable's shares line up.
+
+    Merged one array at a time and refused as soon as it passes the limit, so a continuous
+    layer fails after one block rather than after every block's values have been collected.
+    """
+    classes = np.array([], dtype="float64")
+    for a in arrays:
+        classes = np.union1d(classes, a[~np.isnan(a)])
+        if classes.size > MAX_FRACTION_CLASSES:
+            raise ValueError(
+                f"aggregate_spatial: fractions found more than {MAX_FRACTION_CLASSES} distinct values in "
+                "the zones; fractions are for class codes, not continuous data"
+            )
     return classes
 
 
@@ -579,13 +591,11 @@ def _weighted_polygons(
     # One class axis for every variable reduced to fractions, found only in covered cells. It
     # must be known before any block is reduced, so fractions take one extra pass over the data.
     classes = _fraction_classes(
-        [
-            np.unique(block[..., z.rows - r0, z.cols - c0])
-            for v, m in methods.items()
-            if m == "fractions"
-            for _axis, block in _blocks(window[v], other_dims(v), grid)
-            for z in covered
-        ]
+        block[..., z.rows - r0, z.cols - c0]
+        for v, m in methods.items()
+        if m == "fractions"
+        for _axis, block in _blocks(window[v], other_dims(v), grid)
+        for z in covered
     )
     out: dict[str, _VarResult] = {}
     for name in data.data_vars:
@@ -624,6 +634,8 @@ def _pixel_centre_polygons(
     """The openEO specification's rule, for reducers the weighted path does not know.
 
     A cell counts when its centre lies inside the polygon; the reducer runs on those values.
+    An openEO graph gets the missing ones too, as the specification passes them, so its own
+    ``ignore_nodata`` decides; a plain Python reducer gets only the valid ones.
     """
     import rasterio.features
     from rasterio.transform import from_bounds
@@ -631,6 +643,7 @@ def _pixel_centre_polygons(
 
     transform = from_bounds(grid.xmin, grid.ymin, grid.xmax, grid.ymax, grid.width, grid.height)
     reduce = _make_reducer_caller(reducer, context)
+    keep_nodata = _is_graph_callback(reducer)
     out: dict[str, _VarResult] = {}
     masks = []
     for geom in polygons:
@@ -654,7 +667,8 @@ def _pixel_centre_polygons(
             concat_axis = axis or 0
             flat = block.reshape((-1, grid.height * grid.width))
             for mask, mask_pieces in zip(masks, pieces, strict=True):
-                reduced = [reduce(pixels[mask][~np.isnan(pixels[mask])]) for pixels in flat]
+                selected = (pixels[mask] for pixels in flat)
+                reduced = [reduce(v if keep_nodata else v[~np.isnan(v)]) for v in selected]
                 mask_pieces.append(np.asarray(reduced, dtype="float64").reshape(block.shape[:-2]))
         rows = [np.concatenate(p, axis=concat_axis) if other else p[0] for p in pieces]
         shape = tuple(int(da.sizes[d]) for d in other)
@@ -803,9 +817,11 @@ def aggregate_spatial(
     parts: list[tuple[list[int], dict[str, _VarResult]]] = []
     with observe_spatial_aggregation():
         # The reducer is not called on the weighted path, so what ran is recorded here. Two
-        # different methods (a merged categorical and continuous cube) record as unattributable.
-        for used in sorted(set(effective.values())):
-            record_spatial_reduction(used)
+        # different methods (a merged categorical and continuous cube) record as unattributable,
+        # and so does any point: a sampled value is not the named reduction.
+        if not point_idx:
+            for used in sorted(set(effective.values())):
+                record_spatial_reduction(used)
         if polygon_idx:
             polygons = [geom_shapes[i] for i in polygon_idx]
             if effective:

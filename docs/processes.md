@@ -91,4 +91,8 @@ Area weighting changes numbers that were already delivered. Most means move by h
 
 Aggregating to polygons needs no alignment between datasets: each is aggregated on its own grid, and the polygons are the common reference. Aligning datasets to one grid is needed only for pixel-level analysis across datasets, such as a feature stack for a spatial model. It belongs in the process graph (`resample_cube_spatial` to a target cube), or, for a known national grid, at ingest time so the cost is paid once.
 
-Geometries must be in the cube's CRS; reprojection inside the process is CLIM-892.
+### Geometries are GeoJSON, in WGS 84
+
+Supply geometries as GeoJSON longitude and latitude (RFC 7946), whatever the cube's CRS. When the cube declares a projected CRS, such as seNorge's UTM 33, they are reprojected into it before aggregating. They are left as given when the cube declares no CRS or a geographic one, and when any coordinate falls outside longitude and latitude ranges, which is taken to mean they are already in the cube's CRS. Supplying projected coordinates that happen to fall within those ranges is not detected, so send WGS 84.
+
+The result carries the geometries as supplied, not the reprojected ones, so vector outputs stay in WGS 84.
