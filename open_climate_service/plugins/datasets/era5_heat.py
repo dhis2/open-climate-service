@@ -74,6 +74,11 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
         timestamp = np.datetime64(dt.replace(tzinfo=None), "h").astype("datetime64[ns]")
         ds = ds.sel(t=timestamp)
 
+        # NOTE: Usually .fetch_period() should call .load() before returning.
+        # However, doing that for every hour results in a significant slowdown,
+        # and we don't except this Hourly class to be used directly
+        # so it's okay that we don't call .load().
+
         return ds
 
     def _fetch_ds(self, bbox: list[float]) -> xr.Dataset:
@@ -131,6 +136,9 @@ class ERA5HeatZarrDailyFromHourlyPlugin(ERA5HeatZarrHourlyPlugin):
             [super().fetch_period(period_id=hour_period, bbox=bbox) for hour_period in hour_periods],
             dim="t",
         )
+
+        # load into memory for efficiency
+        hourly_ds = hourly_ds.load()
 
         # aggregate to daily
         daily_ds = daily_reduce(
