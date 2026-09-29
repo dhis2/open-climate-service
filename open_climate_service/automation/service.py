@@ -82,7 +82,8 @@ def _load_delivery_activations() -> dict[str, dict[str, str]]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # ValueError covers invalid JSON and non-UTF-8 bytes (UnicodeDecodeError).
         logger.warning("Could not read delivery activation file %s; deliveries restart from now", path)
         return {}
     if not isinstance(payload, dict):
@@ -94,7 +95,15 @@ def _load_delivery_activations() -> dict[str, dict[str, str]]:
         if isinstance(key, str)
         and isinstance(value, dict)
         and all(isinstance(value.get(field), str) for field in fields)
+        and _parse_time(value["activated_at"]) is not None
     }
+
+
+def _parse_time(value: str) -> datetime | None:
+    try:
+        return _as_utc(datetime.fromisoformat(value))
+    except ValueError:
+        return None
 
 
 def _save_delivery_activations(activations: dict[str, dict[str, str]]) -> None:
@@ -159,9 +168,8 @@ def _delivery_steps(config: AutomationConfig, activations: dict[str, dict[str, s
             or activation["mode"] != _delivery_mode(trigger.deliver.dry_run)
         ):
             continue
-        try:
-            activated_at = _as_utc(datetime.fromisoformat(activation["activated_at"]))
-        except ValueError:
+        activated_at = _parse_time(activation["activated_at"])
+        if activated_at is None:
             continue
         steps[trigger.id] = _DeliveryStep(trigger.deliver, activated_at)
     return steps
@@ -192,12 +200,17 @@ def _validate_deliveries(config: AutomationConfig) -> None:
     deliveries = [(trigger, trigger.deliver) for trigger in config.workflow_triggers if trigger.deliver is not None]
     if not deliveries:
         return
+    from open_climate_service.exports.service import resolve_named_export
+
     definitions = api_config.get_config().get("exports", [])
-    exports = {
-        definition.get("id"): definition
-        for definition in (definitions if isinstance(definitions, list) else [])
-        if isinstance(definition, dict)
-    }
+    exports: dict[Any, dict[str, Any]] = {}
+    duplicates: set[Any] = set()
+    for definition in definitions if isinstance(definitions, list) else []:
+        if isinstance(definition, dict):
+            identifier = definition.get("id")
+            if identifier in exports:
+                duplicates.add(identifier)
+            exports[identifier] = definition
     for trigger, delivery in deliveries:
         export_id = delivery.export
         prefix = f"Workflow trigger {trigger.id!r} delivers export {export_id!r}"
@@ -206,6 +219,8 @@ def _validate_deliveries(config: AutomationConfig) -> None:
         definition = exports.get(export_id)
         if definition is None:
             raise ValueError(f"{prefix}, which is not configured under exports")
+        if export_id in duplicates:
+            raise ValueError(f"{prefix}, which is configured more than once under exports")
         if definition.get("plugin") != "dhis2":
             raise ValueError(f"{prefix}, whose plugin is {definition.get('plugin')!r}; only dhis2 exports deliver")
         connection = definition.get("connection")
@@ -217,6 +232,12 @@ def _validate_deliveries(config: AutomationConfig) -> None:
             raise ValueError(
                 f"{prefix}, whose connection {connection.strip()!r} is not configured under dhis2_connections"
             ) from None
+        # The same resolution delivery performs, so a mapping that every delivery would
+        # reject (or any other invalid export configuration) fails here instead.
+        try:
+            resolve_named_export("DHIS2JSON", {"export": export_id})
+        except ValueError as exc:
+            raise ValueError(f"{prefix}, which is invalid: {exc}") from None
 
 
 def _load_activations() -> dict[str, str]:
@@ -226,7 +247,8 @@ def _load_activations() -> dict[str, str]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # ValueError covers invalid JSON and non-UTF-8 bytes (UnicodeDecodeError).
         logger.warning("Could not read automation activation file %s; triggers will not replay history", path)
         return {}
     if not isinstance(payload, dict):
@@ -533,9 +555,22 @@ class WorkflowAutomationService:
                     continue
                 self._submit_safely(trigger, event, service)
 
+    def delivery_due_for(self, record: OpenEOJobRecord) -> dict[str, str] | None:
+        """Return the delivery a job finishing now owes, to be stored with its FINISHED state.
+
+        Called while the job is being marked finished, so the obligation is recorded in the
+        same write. A job finishing while its trigger has no active delivery step (``deliver``
+        absent, an older boundary, or a read-only instance) records nothing and is never
+        delivered later, even if the same step is configured again.
+        """
+        step = self._active_step(record)
+        if step is None:
+            return None
+        return {"export": step.delivery.export, "mode": _delivery_mode(step.delivery.dry_run)}
+
     def on_job_finished(self, record: OpenEOJobRecord) -> None:
         """Submit the delivery for a triggered job that just finished, when its trigger asks."""
-        step = self._delivery_step(record)
+        step = self._due_step(record)
         if step is not None:
             self._deliver_safely(str(record.trigger_id), step.delivery, record)
 
@@ -550,18 +585,32 @@ class WorkflowAutomationService:
         if not self._delivery_steps or api_config.is_read_only():
             return
         for record in store_list_jobs():
-            step = self._delivery_step(record)
-            if step is None or _lists_delivery(record, step.delivery.export):
-                continue
-            self._deliver_safely(str(record.trigger_id), step.delivery, record)
+            step = self._due_step(record)
+            if step is not None:
+                self._deliver_safely(str(record.trigger_id), step.delivery, record)
 
-    def _delivery_step(self, record: OpenEOJobRecord) -> _DeliveryStep | None:
-        """Return the delivery a finished triggered job is eligible for, or None."""
+    def _active_step(self, record: OpenEOJobRecord) -> _DeliveryStep | None:
+        """Return the step configured for a finished triggered job's trigger, or None."""
         # Steps exist only after start() validated and stamped them on a writable instance.
         if record.status != OpenEOJobStatus.FINISHED or record.trigger_id is None or api_config.is_read_only():
             return None
         step = self._delivery_steps.get(record.trigger_id)
         if step is None or not _finished_after(record, step.activated_at):
+            return None
+        return step
+
+    def _due_step(self, record: OpenEOJobRecord) -> _DeliveryStep | None:
+        """Return the step a finished job still owes, or None.
+
+        The job must have recorded this exact export and mode when it finished, and must not
+        already list a delivery for the export. The second check covers a re-run: its delivery
+        links survive, so a job delivered as a dry run is not imported live after the switch.
+        """
+        step = self._active_step(record)
+        if step is None:
+            return None
+        expected = {"export": step.delivery.export, "mode": _delivery_mode(step.delivery.dry_run)}
+        if record.delivery_due != expected or _lists_delivery(record, step.delivery.export):
             return None
         return step
 

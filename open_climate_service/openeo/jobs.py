@@ -184,6 +184,7 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data["trigger_id"] = record.trigger_id
     data["source_event_id"] = record.source_event_id
     data["finished_at"] = record.finished_at.isoformat() if record.finished_at is not None else None
+    data["delivery_due"] = record.delivery_due
     return data
 
 
@@ -200,6 +201,15 @@ class OpenEOJobService:
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
         self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
+        self._delivery_due: Callable[[OpenEOJobRecord], dict[str, str] | None] | None = None
+
+    def set_delivery_due_provider(self, provider: Callable[[OpenEOJobRecord], dict[str, str] | None] | None) -> None:
+        """Register the callback that says which delivery a job owes as it finishes.
+
+        It is called inside the store mutation that marks the job FINISHED, so its answer is
+        persisted atomically with that state. It must be a fast, in-memory lookup.
+        """
+        self._delivery_due = provider
 
     def set_finished_listener(self, listener: Callable[[OpenEOJobRecord], None] | None) -> None:
         """Register the process-local callback run after a job is persisted as FINISHED.
@@ -419,25 +429,23 @@ class OpenEOJobService:
             future = self._futures.get(job_id)
             cancelled_before_start = future is not None and future.cancel()
 
-        if cancelled_before_start:
-            # future.cancel() returned True — the job was still queued in the thread
-            # pool and will never start.  Transition the store atomically: only if the
-            # status is still QUEUED (guards against the edge case where the worker
-            # already set it to RUNNING before we got the lock).
-            def _mark_canceled_if_queued(r: OpenEOJobRecord) -> OpenEOJobRecord:
-                if r.status == OpenEOJobStatus.QUEUED:
-                    return r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()})
-                # Race lost — worker already started; fall back to cooperative cancellation.
-                return r.model_copy(update={"cancel_requested": True, "updated": utc_now()})
+        def _cancel(r: OpenEOJobRecord) -> OpenEOJobRecord:
+            # Re-checked inside the store mutation: the worker may have finished the job since
+            # the read above. Whichever mutation lands first decides. If cancellation does,
+            # the worker's own finishing mutation sees the flag and records CANCELED; if
+            # completion does, this refuses, so a finished job never gains a late flag after
+            # its delivery may already have been submitted.
+            if r.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+                raise HTTPException(status_code=400, detail="Job is not running or queued")
+            if cancelled_before_start and r.status == OpenEOJobStatus.QUEUED:
+                # future.cancel() returned True: the job was still queued in the thread pool
+                # and will never start.
+                return r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()})
+            # Running (or the worker already claimed it): cooperative cancellation; the worker
+            # checks this flag in the same mutation that would mark the job FINISHED.
+            return r.model_copy(update={"cancel_requested": True, "updated": utc_now()})
 
-            store_update_job(job_id, _mark_canceled_if_queued)
-        else:
-            # Job is running (or no future registered yet) — set flag for cooperative
-            # cancellation; the worker checks this before marking FINISHED.
-            store_update_job(
-                job_id,
-                lambda r: r.model_copy(update={"cancel_requested": True, "updated": utc_now()}),
-            )
+        store_update_job(job_id, _cancel)
 
     def get_results(self, job_id: str) -> OpenEOJobResults:
         """Return result asset links for a finished job."""
@@ -508,18 +516,7 @@ class OpenEOJobService:
                 )
                 return
             output_path = self._persist_result(job_id, result)
-            finished_at = utc_now()
-            finished = store_update_job(
-                job_id,
-                lambda r: r.model_copy(
-                    update={
-                        "status": OpenEOJobStatus.FINISHED,
-                        "updated": finished_at,
-                        "finished_at": finished_at,
-                        "usage": {"output_path": output_path} if output_path else {},
-                    }
-                ),
-            )
+            finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
         except Exception as job_exc:
             logger.exception("openEO job %s failed", job_id)
             error_msg = f"{type(job_exc).__name__}: {job_exc}"
@@ -535,7 +532,33 @@ class OpenEOJobService:
             )
         else:
             # Outside the try: a listener failure must not turn a finished job into an error.
-            self._notify_finished(finished)
+            if finished.status == OpenEOJobStatus.FINISHED:
+                self._notify_finished(finished)
+
+    def _finish(self, record: OpenEOJobRecord, output_path: str | None) -> OpenEOJobRecord:
+        """Mark a job FINISHED, or CANCELED if cancellation arrived while its result was saved.
+
+        Runs inside the store mutation, so a cancel request cannot land between this check
+        and the write.
+        """
+        now = utc_now()
+        if record.cancel_requested:
+            return record.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": now})
+        usage: dict[str, Any] = {"output_path": output_path} if output_path else {}
+        deliveries = (record.usage or {}).get("deliveries")
+        if isinstance(deliveries, list) and deliveries:
+            # A re-run keeps its delivery links, so an automated delivery is not repeated.
+            usage["deliveries"] = deliveries
+        finished = record.model_copy(
+            update={"status": OpenEOJobStatus.FINISHED, "updated": now, "finished_at": now, "usage": usage}
+        )
+        due: dict[str, str] | None = None
+        if self._delivery_due is not None:
+            try:
+                due = self._delivery_due(finished)
+            except Exception:
+                logger.exception("Delivery lookup failed for openEO job %s; it will not be delivered", record.id)
+        return finished.model_copy(update={"delivery_due": due})
 
     def _notify_finished(self, record: OpenEOJobRecord) -> None:
         listener = self._finished_listener

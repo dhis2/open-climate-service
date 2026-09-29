@@ -81,6 +81,8 @@ class OpenEOJobRecord(BaseModel):
     # When the job last reached FINISHED. `updated` moves on every later mutation, so it
     # cannot tell whether a job finished before a delivery activation boundary.
     finished_at: datetime | None = Field(default=None, exclude=True)
+    # The delivery this job owed when it finished ({"export", "mode"}), written with FINISHED.
+    delivery_due: dict[str, str] | None = Field(default=None, exclude=True)
 
 
 class OpenEOJobCreate(BaseModel):

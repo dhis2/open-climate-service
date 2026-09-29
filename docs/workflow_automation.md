@@ -132,19 +132,23 @@ Jobs that finished earlier are never imported live, whether or not their dry run
 
 Each finished job is delivered at most once per export and mode. The idempotency key is
 `auto:{job_id}:{export}:{dry-run|live}`, so replaying an event or restarting OCS creates no
-second delivery. At startup OCS submits any delivery missed because the process stopped
-after a job finished. Re-running a delivered job by hand does not deliver it again; submit
-the new result through `POST /exports/{export_id}` instead.
+second delivery. A job records the delivery it owes in the same write that marks it finished.
+At startup OCS submits any recorded delivery missed because the process stopped after a job
+finished. A job keeps its delivery links when re-run by hand, so a delivered job is not
+delivered again, even after switching to live; submit the new result through
+`POST /exports/{export_id}` instead.
 
 Adding `deliver` to an existing trigger does not deliver its history. The delivery step has
 its own activation time, and only jobs that finish after it are delivered. Changing
 `deliver.export` or `deliver.dry_run`, or removing `deliver` and adding it back, starts a new
-activation.
-`replay_existing` applies to workflow submission only, never to delivery.
+activation. A job that finishes while its trigger has no active delivery step, for example
+while `deliver` is absent or the instance is read-only, owes nothing and is never delivered
+later. `replay_existing` applies to workflow submission only, never to delivery.
 
-Startup fails, naming the trigger, when `deliver.export` is not a configured export, its
-plugin is not `dhis2`, it has no `connection`, or that connection is not configured. A
-read-only instance refuses triggers with `deliver`, because delivery writes to DHIS2.
+Startup fails, naming the trigger, when `deliver.export` is not a configured export, is
+configured more than once, its plugin is not `dhis2`, it has no `connection`, that connection
+is not configured, or its mapping is invalid. A read-only instance refuses triggers with
+`deliver`, because delivery writes to DHIS2.
 
 Delivery needs the optional `dhis2-client` package and the connection's token in the
 server environment. See

@@ -138,6 +138,9 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 def _service(instance: dict[str, Any], deliver: TriggerDelivery | None, *, listen: bool = True) -> Any:
     service = WorkflowAutomationService(config_loader=lambda: _automation(deliver), openeo_service=instance["openeo"])
     service.start()
+    # `listen=False` models a process killed after the FINISHED write (which records the
+    # delivery owed) and before the listener could submit it.
+    instance["openeo"].set_delivery_due_provider(service.delivery_due_for)
     instance["openeo"].set_finished_listener(service.on_job_finished if listen else None)
     return service
 
@@ -462,3 +465,132 @@ def test_trigger_fields_survive_persistence(instance: dict[str, Any]) -> None:
     assert (stored.trigger_id, stored.source_event_id, stored.finished_at) == (_TRIGGER, "event-1", finished)
     # Internal fields stay out of openEO API responses.
     assert "trigger_id" not in stored.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda settings: settings["exports"].append(dict(settings["exports"][0])), "configured more than once"),
+        (lambda settings: settings["exports"][0].update(series=[]), "which is invalid"),
+    ],
+)
+def test_export_that_delivery_would_reject_fails_startup(instance: dict[str, Any], change: Any, message: str) -> None:
+    change(instance["settings"])
+    service = WorkflowAutomationService(
+        config_loader=lambda: _automation(TriggerDelivery(export=_EXPORT)), openeo_service=instance["openeo"]
+    )
+    with pytest.raises(ValueError, match=message):
+        service.start()
+
+
+def test_cancel_arriving_while_the_result_is_saved_wins(
+    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    openeo = instance["openeo"]
+    original = openeo._persist_result
+
+    def cancel_during_save(job_id: str, result: Any) -> Any:
+        openeo_jobs.store_update_job(job_id, lambda r: r.model_copy(update={"cancel_requested": True}))
+        return original(job_id, result)
+
+    monkeypatch.setattr(openeo, "_persist_result", cancel_during_save)
+    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    job_id = _triggered_job_id(service)
+
+    record = _await_openeo(job_id)
+    assert record.status == OpenEOJobStatus.CANCELED
+    service.reconcile_deliveries()
+    assert _deliveries() == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"\xff\xfe not utf-8",
+        b'{"rain-to-districts": {"export": "rain-monthly", "mode": "dry-run", "activated_at": "yesterday"}}',
+    ],
+)
+def test_corrupt_boundary_is_restamped(instance: dict[str, Any], content: bytes) -> None:
+    path = automation_module._delivery_activation_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+    _service(instance, TriggerDelivery(export=_EXPORT))
+
+    stored = automation_module._load_delivery_activations()[_TRIGGER]
+    assert automation_module._parse_time(stored["activated_at"]) is not None
+
+
+def test_job_finishing_while_delivery_is_off_is_never_delivered(
+    instance: dict[str, Any], sent: list[dict[str, Any]]
+) -> None:
+    _service(instance, TriggerDelivery(export=_EXPORT))  # boundary stamped
+    # A read-only start without `deliver` cannot clear the boundary, but a job finishing
+    # then records that it owes nothing.
+    instance["settings"]["read_only"] = True
+    offline = _service(instance, None)
+    instance["settings"]["read_only"] = False  # consume() itself refuses read-only instances
+    job_id = _triggered_job_id(offline)
+    record = _await_openeo(job_id)
+    assert record.status == OpenEOJobStatus.FINISHED
+    assert record.delivery_due is None
+
+    _service(instance, TriggerDelivery(export=_EXPORT)).reconcile_deliveries()
+    assert _deliveries() == []
+
+
+def test_rerun_after_switching_to_live_is_not_imported(instance: dict[str, Any], sent: list[dict[str, Any]]) -> None:
+    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT, dry_run=True)))
+    _await_openeo(job_id)
+    [dry] = _await_deliveries(1)
+
+    _service(instance, TriggerDelivery(export=_EXPORT, dry_run=False))
+    instance["openeo"].start_job(job_id)  # a manual re-run
+    rerun = _await_openeo(job_id)
+
+    assert rerun.status == OpenEOJobStatus.FINISHED
+    assert [link["delivery_job_id"] for link in (rerun.usage or {})["deliveries"]] == [dry.job_id]
+    assert len(_deliveries()) == 1
+    assert sent == [{"target": "hmis", "dry_run": True}]
+
+
+def test_cancel_losing_the_race_to_completion_is_refused(
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+
+    openeo = instance["openeo"]
+    finished = utc_now()
+    openeo_jobs.store_create_job(
+        OpenEOJobRecord(
+            id="raced",
+            status=OpenEOJobStatus.FINISHED,
+            created=finished,
+            trigger_id=_TRIGGER,
+            finished_at=finished,
+            delivery_due={"export": _EXPORT, "mode": "dry-run"},
+        )
+    )
+    # The cancel request read the job while it was still running; the worker finished it
+    # before the cancel request's own store write.
+    stale = openeo_jobs.store_get_job("raced").model_copy(update={"status": OpenEOJobStatus.RUNNING})  # type: ignore[union-attr]
+    monkeypatch.setattr(openeo, "get_job_or_404", lambda job_id: stale)
+
+    with pytest.raises(HTTPException) as error:
+        openeo.cancel_job("raced")
+
+    assert error.value.status_code == 400
+    stored = openeo_jobs.store_get_job("raced")
+    assert stored is not None
+    assert stored.status == OpenEOJobStatus.FINISHED
+    assert stored.cancel_requested is False
+
+
+def test_cancel_winning_the_race_is_recorded_for_the_worker(instance: dict[str, Any]) -> None:
+    openeo = instance["openeo"]
+    openeo_jobs.store_create_job(OpenEOJobRecord(id="running", status=OpenEOJobStatus.RUNNING, created=utc_now()))
+    openeo.cancel_job("running")
+    stored = openeo_jobs.store_get_job("running")
+    assert stored is not None and stored.cancel_requested is True
+    # The worker's finishing mutation then records CANCELED, not FINISHED.
+    assert openeo._finish(stored, None).status == OpenEOJobStatus.CANCELED
