@@ -17,6 +17,7 @@ from open_climate_service.jobs.models import (
     JobCancelledError,
     JobError,
     JobEvent,
+    JobEventDraft,
     JobExecutionResult,
     JobLink,
     JobListResponse,
@@ -41,6 +42,13 @@ def _job_links(job_id: str, href_base: str = "/jobs") -> list[JobLink]:
     if not base:
         base = "/jobs"
     return [JobLink(href=f"{base}/{job_id}", rel="self", title="Job detail")]
+
+
+def _persisted_events(job_id: str, drafts: list[JobEventDraft], time: Any) -> list[JobEvent]:
+    """Assign each event its durable identity: the job id and its position in the job."""
+    return [
+        JobEvent(event_id=f"{job_id}:{index}", time=time, **draft.model_dump()) for index, draft in enumerate(drafts)
+    ]
 
 
 def _catalog_links() -> list[JobLink]:
@@ -174,6 +182,50 @@ class JobService:
             job_href_base=job_href_base,
             job_id=job_id,
         )
+
+    def record_completed_job(
+        self,
+        *,
+        label: str,
+        request: dict[str, Any],
+        result: Any,
+        events: list[JobEventDraft],
+        job_href_base: str = "/jobs",
+    ) -> JobRecord:
+        """Persist work that already ran outside the queue as a successful job, with its events.
+
+        Events are durable only on a job record: that is what startup replay reads. A caller
+        that did its work synchronously, such as an HTTP request that ingested inline, records
+        it here so its events reach automation exactly like a queued job's. The record is
+        created in its terminal state and is never executed or recovered.
+        """
+        job_id = str(uuid4())
+        now = utc_now()
+        record = JobRecord(
+            job_id=job_id,
+            process_id=label,
+            status=JobStatus.SUCCESSFUL,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+            attempt=1,
+            executor_kind="inline",
+            request={key: value for key, value in request.items() if key != "__fn_path__"},
+            progress=JobProgress(message="Completed"),
+            result=result,
+            events=_persisted_events(job_id, events, now),
+            links=_job_links(job_id, href_base=job_href_base),
+        )
+        created = store.create_job_record(record)
+        self._consume_events(created)
+        return created
+
+    def _consume_events(self, record: JobRecord) -> None:
+        if record.events and self._event_consumer is not None:
+            try:
+                self._event_consumer(record.events)
+            except Exception:
+                logger.exception("Failed to consume events for completed job %s", record.job_id)
 
     def _create_and_enqueue(
         self,
@@ -357,14 +409,7 @@ class JobService:
                 completed_at = utc_now()
                 if isinstance(execution_result, JobExecutionResult):
                     result = execution_result.result
-                    events = [
-                        JobEvent(
-                            event_id=f"{job_id}:{index}",
-                            time=completed_at,
-                            **event.model_dump(),
-                        )
-                        for index, event in enumerate(execution_result.events)
-                    ]
+                    events = _persisted_events(job_id, execution_result.events, completed_at)
                 else:
                     result = execution_result
                     events = []
@@ -385,11 +430,7 @@ class JobService:
                         }
                     ),
                 )
-                if completed.events and self._event_consumer is not None:
-                    try:
-                        self._event_consumer(completed.events)
-                    except Exception:
-                        logger.exception("Failed to consume events for completed job %s", job_id)
+                self._consume_events(completed)
                 return
             except JobCancelledError as exc:
                 cancelled_result = exc.result

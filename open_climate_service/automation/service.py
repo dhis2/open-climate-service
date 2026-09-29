@@ -26,6 +26,7 @@ _EVENT_VALUES = {
     "$event.artifact_id": "artifact_id",
     "$event.action": "action",
     "$event.previous_end": "previous_end",
+    "$event.current_start": "current_start",
     "$event.current_end": "current_end",
 }
 

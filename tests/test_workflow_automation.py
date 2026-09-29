@@ -28,6 +28,7 @@ def _event(dataset_id: str = "chirps") -> JobEvent:
             "artifact_id": "artifact-2",
             "action": "append",
             "previous_end": "2026-08-17",
+            "current_start": "2026-01-01",
             "current_end": "2026-08-18",
         },
     )
@@ -67,9 +68,30 @@ def test_trigger_ids_must_be_unique() -> None:
 
 def test_event_references_are_resolved_recursively() -> None:
     assert _resolve_event_values(
-        {"source": "$event.dataset_id", "range": ["$event.previous_end", "$event.current_end"]},
+        {
+            "source": "$event.dataset_id",
+            "coverage": ["$event.current_start", "$event.current_end"],
+            "update": ["$event.previous_end", "$event.current_end"],
+        },
         _event(),
-    ) == {"source": "chirps", "range": ["2026-08-17", "2026-08-18"]}
+    ) == {
+        "source": "chirps",
+        "coverage": ["2026-01-01", "2026-08-18"],
+        "update": ["2026-08-17", "2026-08-18"],
+    }
+
+
+def test_event_reference_distinguishes_missing_null_and_empty_values() -> None:
+    event = _event()
+    without_start = event.model_copy(
+        update={"data": {key: value for key, value in event.data.items() if key != "current_start"}}
+    )
+    null_start = event.model_copy(update={"data": {**event.data, "current_start": None}})
+    empty_start = event.model_copy(update={"data": {**event.data, "current_start": ""}})
+
+    assert _resolve_event_values("$event.current_start", without_start) is None
+    assert _resolve_event_values("$event.current_start", null_start) is None
+    assert _resolve_event_values("$event.current_start", empty_start) == ""
 
 
 def test_matching_update_submits_and_starts_workflow_once() -> None:

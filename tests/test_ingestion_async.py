@@ -346,6 +346,7 @@ def test_execute_sync_returns_dataset_updated_after_completed_change(
         "artifact_id": "artifact-2",
         "action": action.value,
         "previous_end": "2026-01-02",
+        "current_start": "2026-01-01",
         "current_end": "2026-01-03",
     }
 

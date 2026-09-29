@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 DATASET_UPDATED_EVENT_TYPE = "dataset.updated"
-"""Event type persisted when a sync actually appends or rematerializes a dataset."""
+"""Event type persisted when an ingestion or sync changes a managed dataset."""
 
 
 class JobCancelledError(Exception):

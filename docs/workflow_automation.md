@@ -1,8 +1,8 @@
 # Dataset-update workflow automation
 
-An OCS instance can run an existing openEO workflow after a successful dataset sync changes
-stored data. This is event-driven: it does not guess that a sync has finished by scheduling a
-second cron expression.
+An OCS instance can run an existing openEO workflow when a successful ingestion or sync operation
+changes stored data. This is event-driven: it does not guess that an operation has finished by
+scheduling a second cron expression.
 
 ## Configure a trigger
 
@@ -30,9 +30,20 @@ exact event references can be used at any nesting level:
 
 - `$event.dataset_id`
 - `$event.artifact_id`
-- `$event.action`
-- `$event.previous_end`
-- `$event.current_end`
+- `$event.action`: `ingest` for an ingestion, or the sync planner's `append` or `rematerialize`
+- `$event.previous_end`: the coverage end before the update, or `null` when the whole store is new
+  or rewritten
+- `$event.current_start`: the coverage start after the update
+- `$event.current_end`: the coverage end after the update
+
+After an initial ingestion, `previous_end` is JSON/YAML `null`, because no periods were stored
+before. A temporal interval of `[$event.previous_end, $event.current_end]` is therefore open at
+the start and reads through `current_end` from the dataset's earliest available period. An
+ingestion that rewrites the whole store, including `overwrite`, also uses `null` because every
+period was rewritten. After an append, `previous_end` is the old coverage boundary, so that
+interval includes the boundary and the newly appended periods. A workflow that always needs an
+explicit, non-null start can use `$event.current_start`, the start of the complete coverage after
+the update.
 
 The workflow definition remains reusable and deployment-independent. Operational bindings such
 as output dataset IDs, geometries, and DHIS2 identifiers remain in instance configuration.
@@ -76,9 +87,16 @@ A malformed reference or an id that no template declares fails at startup, like 
 
 ## Delivery behavior
 
-A workflow is considered only after the native sync job has successfully persisted a
-`dataset.updated` event. Failed and no-op syncs do not trigger workflows. Manual and scheduled
-syncs use the same path.
+A workflow is considered only after a successful ingestion or sync has persisted a
+`dataset.updated` event. Failed, cancelled and no-op runs do not trigger workflows, and neither
+does re-ingesting a dataset that is already current. Ingestion and sync, whether queued,
+scheduled, run inline, or started from the admin pages, all use the same path. Work run inline
+is recorded as a completed job under `/ingestions/jobs`, because that record is what makes
+its event durable.
+
+An ingestion job notes in its checkpoint that it is about to change stored data, before
+fetching anything. If OCS stops after the data is committed but before the job completes,
+the recovered job finds the data current and still emits the event it owed, exactly once.
 
 Each event and trigger pair produces a deterministic openEO job ID. OCS replays persisted events
 at startup, but an already created, queued, running, or completed job is not duplicated. If OCS
