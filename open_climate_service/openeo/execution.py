@@ -22,6 +22,7 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat
+from open_climate_service.shared.vectors import RESAMPLING_ATTR
 
 logger = logging.getLogger(__name__)
 
@@ -525,16 +526,33 @@ def _load_collection_impl(
                 ),
             )
 
+    resampling = _declared_resampling(id)
     if len(available_vars) == 1:
-        return ds[available_vars[0]]
+        cube = ds[available_vars[0]]
+        cube.attrs[RESAMPLING_ATTR] = resampling
+        return cube
 
     # Multi-band: stack variables on a new "bands" dimension
     import pandas as pd
 
-    return xr.concat(
+    cube = xr.concat(
         [ds[b] for b in available_vars],
         dim=pd.Index(available_vars, name="bands"),
     )
+    cube.attrs[RESAMPLING_ATTR] = resampling
+    return cube
+
+
+def _declared_resampling(dataset_id: str) -> str:
+    """The dataset's ``ingestion.resampling``, so aggregate_spatial knows categorical data.
+
+    Carried as a cube attribute. It survives as far as aggregate_spatial when that is the next
+    step; an operation that drops attributes on the way leaves the continuous default.
+    """
+    from open_climate_service.data_manager.services.downloader import resampling_method_from_template
+    from open_climate_service.data_registry.services.datasets import get_dataset
+
+    return resampling_method_from_template(get_dataset(dataset_id))
 
 
 class SaveResultEnvelope:

@@ -95,8 +95,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 raise ValueError(f"{field} must be a non-empty field name")
         if mapping.get("org_unit_field", "geometry") == mapping.get("period_field", "t"):
             raise ValueError("Organisation unit and period fields must be distinct")
-        if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max", "median"):
-            raise ValueError("aggregation must be mean, sum, min, max, or median; it declares upstream computation")
+        declared_aggregations = ("mean", "sum", "min", "max", "median", "majority")
+        if "aggregation" in mapping and mapping["aggregation"] not in declared_aggregations:
+            raise ValueError(
+                "aggregation must be mean, sum, min, max, median, or majority; it declares upstream computation"
+            )
         # Default combo UIDs belong to target metadata, which pure rendering does
         # not fetch. Avoid treating an omitted combo as distinct from an explicit
         # one when several series target the same data element.

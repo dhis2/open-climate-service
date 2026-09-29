@@ -20,8 +20,8 @@
     },
     {
       "name": "method",
-      "description": "Spatial aggregation method applied to the pixels within each org unit: mean (default), min, max, sum, or median.",
-      "schema": { "type": "string", "enum": ["mean", "min", "max", "sum", "median"] },
+      "description": "Spatial aggregation method applied to the pixels within each org unit, weighted by the area of each pixel the org unit covers: mean (default), min, max, sum, median, or majority (for categorical data; a categorical dataset uses it in place of mean, median or sum).",
+      "schema": { "type": "string", "enum": ["mean", "min", "max", "sum", "median", "majority"] },
       "default": "mean"
     },
     {
