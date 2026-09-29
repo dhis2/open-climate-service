@@ -154,17 +154,17 @@ class ERA5HeatDailyUTCIPlugin(ERA5HeatZarrDailyFromHourlyPlugin):
 
 
 def _get_cdsapi_key() -> str:
-    if os.path.exists(os.path.expanduser("~/.cdsapirc")):
-        with open(os.path.expanduser("~/.cdsapirc"), "r") as f:
+    if os.path.exists(os.path.expanduser("~/.ecmwfdatastoresrc")):
+        with open(os.path.expanduser("~/.ecmwfdatastoresrc"), "r") as f:
             for line in f:
                 if line.startswith("key:"):
                     cdsapi_key = line.split(":")[1].strip()
                     if cdsapi_key:
                         return cdsapi_key
 
-        raise SystemError("Unable to retrieve CDS API key, please verify that ~/.cdsapirc has the correct format")
+        raise SystemError("Unable to retrieve CDS API key, please verify that ~/.ecmwfdatastoresrc has the correct format")
 
-    raise SystemError("Missing credentials file: ~/.cdsapirc")
+    raise SystemError("Missing credentials file: ~/.ecmwfdatastoresrc")
 
 
 def _open_cds_zarr(url: str) -> xr.Dataset:
