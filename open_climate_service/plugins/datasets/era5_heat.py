@@ -110,7 +110,7 @@ class ERA5HeatCDSHourlyPlugin(BaseDatasetPlugin):
 
         # Cap to availability cutoff so we don't request future days from CDS
         if self._cached_cutoff is None:
-            self._cached_cutoff = await asyncio.to_thread(_hourly_availability_cutoff)
+            self._cached_cutoff = _hourly_availability_cutoff()
         cutoff = self._cached_cutoff
         if cutoff.year == year and cutoff.month == month:
             last_day = min(last_day, cutoff.day)
