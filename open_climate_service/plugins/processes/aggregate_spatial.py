@@ -104,6 +104,42 @@ def _require_supported_geometry_types(geoms: list[Any], labels: list[str]) -> No
             )
 
 
+def _to_cube_crs(geoms: list[Any], data: xr.Dataset) -> list[Any]:
+    """Reproject GeoJSON geometries into the cube's CRS when the cube is projected.
+
+    GeoJSON coordinates are WGS 84 by definition (RFC 7946), and ``load_features`` always
+    returns them that way, but a cube keeps its native grid: seNorge over Norway is UTM 33 in
+    metres. Without this every Norwegian kommune fell outside the grid and a job finished with
+    nothing but NaN. Geometries whose coordinates are not all within longitude and latitude
+    ranges are taken as already being in the cube's CRS and left alone, as is a cube that
+    declares no CRS or a geographic one.
+    """
+    from pyproj import CRS, Transformer
+    from shapely.ops import transform
+
+    try:
+        import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # registers .rio
+
+        cube_crs = data.rio.crs
+    except Exception:
+        cube_crs = None
+    if cube_crs is None:
+        return geoms
+    crs = CRS.from_user_input(cube_crs.to_wkt())
+    if crs.is_geographic:
+        return geoms
+    bounds = np.array([g.bounds for g in geoms if not g.is_empty])
+    if not bounds.size or not (
+        (bounds[:, [0, 2]] >= -180).all()
+        and (bounds[:, [0, 2]] <= 180).all()
+        and (bounds[:, [1, 3]] >= -90).all()
+        and (bounds[:, [1, 3]] <= 90).all()
+    ):
+        return geoms
+    to_cube = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform
+    return [transform(to_cube, g) for g in geoms]
+
+
 # ---------------------------------------------------------------------------
 # Reducers
 # ---------------------------------------------------------------------------
@@ -727,6 +763,10 @@ def aggregate_spatial(
     if x_dim is None or y_dim is None:
         raise ValueError(f"aggregate_spatial: cannot identify x/y dimensions in {list(data.dims)}")
     grid = _Grid.of(data, x_dim, y_dim)
+    # Computed in the cube's CRS; the result keeps the shapes as supplied, which the vector
+    # writers read as the request's GeoJSON (WGS 84).
+    supplied_shapes = geom_shapes
+    geom_shapes = _to_cube_crs(geom_shapes, data)
 
     categorical = _categorical_variables(data)
     named = _identify_reducer(reducer)
@@ -792,7 +832,7 @@ def aggregate_spatial(
     # the labels on `geom_dim`: the label is the feature id, which the DHIS2 and CHAP exports key
     # their location column on. WKT strings, because a string coordinate is inert on every path
     # the cube can take, where an object-dtype one makes `to_zarr` fail. See CLIM-836.
-    return combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in geom_shapes])})
+    return combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in supplied_shapes])})
 
 
 def _assemble(

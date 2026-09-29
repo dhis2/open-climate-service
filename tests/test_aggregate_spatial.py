@@ -473,3 +473,48 @@ def test_blocked_reads_give_the_same_result(monkeypatch: pytest.MonkeyPatch, cub
     monkeypatch.setattr(module, "READ_BLOCK_BYTES", 1)
     blocked = aggregate_spatial(cube, fc, reducer)
     xr.testing.assert_allclose(whole, blocked)
+
+
+# ---------------------------------------------------------------------------
+# Coordinate reference systems
+# ---------------------------------------------------------------------------
+
+
+def _utm_cube() -> xr.DataArray:
+    """A 1 km UTM 33N grid over Oslo, values 1 (south-west of 262 km E / 6650 km N) and 2."""
+    import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+    x = np.arange(255_500.0, 270_000.0, 1_000.0)
+    y = np.arange(6_660_500.0, 6_640_000.0, -1_000.0)
+    values = np.where((x[None, :] < 262_000) & (y[:, None] < 6_650_000), 1.0, 2.0)
+    da = xr.DataArray(values, dims=("y", "x"), coords={"y": y, "x": x}, name="tg")
+    return da.rio.write_crs("EPSG:32633")
+
+
+def test_lon_lat_geometries_are_reprojected_into_a_projected_cube() -> None:
+    """GeoJSON is WGS 84; a UTM cube must still find the zone, as load_features hands it over."""
+    oslo = _box(10.70, 59.88, 10.80, 59.93)  # lon/lat, inside the grid once reprojected
+    out = aggregate_spatial(_utm_cube(), oslo, _mean)
+    assert not np.isnan(float(out["tg"].isel(geometry=0)))
+
+
+def test_geometries_already_in_the_cube_crs_are_left_alone() -> None:
+    out = aggregate_spatial(_utm_cube(), _box(256_000, 6_641_000, 258_000, 6_643_000), _mean)
+    assert float(out["tg"].isel(geometry=0)) == 1.0
+
+
+def test_a_cube_without_a_crs_takes_geometries_as_given() -> None:
+    out = aggregate_spatial(_grid(y_ascending=True), _box(-0.4, -0.4, 1.4, 1.4), _mean)
+    assert float(out["v"].isel(geometry=0)) == pytest.approx(5.5)
+
+
+def test_the_result_keeps_the_supplied_lon_lat_shapes() -> None:
+    """The vector writers read `geometry_wkt` as the request's GeoJSON, so it stays WGS 84."""
+    from shapely import wkt
+
+    from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
+
+    oslo = _box(10.70, 59.88, 10.80, 59.93)
+    out = aggregate_spatial(_utm_cube(), oslo, _mean)
+    minx, miny, maxx, maxy = wkt.loads(str(out[GEOMETRY_WKT_COORD].values[0])).bounds
+    assert (minx, miny, maxx, maxy) == pytest.approx((10.70, 59.88, 10.80, 59.93))
