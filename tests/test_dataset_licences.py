@@ -143,6 +143,7 @@ def test_every_builtin_licence_parses(path: str) -> None:
 _REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
     "chirps3.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
     "era5_land.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "era5_heat.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
 }
 
