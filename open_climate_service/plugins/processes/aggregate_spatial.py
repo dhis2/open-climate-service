@@ -8,8 +8,8 @@ Semantics deliberately diverge from the openEO specification (CLIM-785):
 * **Points are interpolated.** A point samples the surface at its location (bilinear by
   default) rather than taking whichever cell contains it.
 * **Categorical data is never averaged.** A cube whose dataset declares
-  ``ingestion.resampling`` of ``mode``, ``max`` or ``nearest`` aggregates polygons by area-weighted majority and
-  samples points from the nearest cell.
+  ``ingestion.resampling: mode`` aggregates polygons by area-weighted majority and samples
+  points from the nearest cell.
 
 The weighted path applies to reducers that are exactly one known statistic (mean, sum, min,
 max, median, and the categorical majority and fractions), recognised by the structure of their

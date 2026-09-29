@@ -15,6 +15,6 @@ RESAMPLING_ATTR = "ocs:resampling"
 """Cube attribute carrying the source dataset's ``ingestion.resampling``.
 
 Set by ``load_collection`` and read by ``aggregate_spatial``, which aggregates a categorical
-cube (``mode`` or ``max``) by majority rather than by mean. Here for the same reason as
+cube (``mode``) by majority rather than by mean. Here for the same reason as
 ``GEOMETRY_WKT_COORD``: the writer and the reader may not import each other.
 """

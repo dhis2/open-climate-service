@@ -118,6 +118,26 @@ def test_aggregate_to_org_units_chap_csv() -> None:
 
 
 # OU_A covers pixels with t=0 values [0, 1, 5, 6] -> mean 3, sum 12, min 0, max 6.
+# Inside the cell centred on (2, 2), whose t=0 value is 6, but not over its centre: the
+# pixel-centre rule selects no cell here, so only an area-weighted aggregation returns a value.
+_SUB_CELL = {"type": "Feature", "id": "OU_SMALL", "geometry": _box(1.6, 1.6, 1.9, 1.9)}
+
+
+@pytest.mark.parametrize("workflow", ["aggregate_to_dhis2_json", "aggregate_to_chap_csv"])
+def test_workflows_aggregate_area_weighted(workflow: str) -> None:
+    overlay = _overlay_with_mock_dataset()
+    options = {"export": "rain-monthly"} if workflow == "aggregate_to_dhis2_json" else {"period_type": "month"}
+    envelope = overlay[workflow].implementation(
+        dataset_id="my_dataset",
+        temporal_extent=["2025-01-01", "2025-02-28"],
+        geometries={"type": "FeatureCollection", "features": [_SUB_CELL]},
+        **options,
+    )
+    frame = envelope.data.to_dataframe().reset_index()
+    jan = frame[frame["t"] == np.datetime64("2025-01-01")]["tp"]
+    assert jan.tolist() == [6.0]
+
+
 @pytest.mark.parametrize(("method", "expected"), [("mean", 3.0), ("sum", 12.0), ("min", 0.0), ("max", 6.0)])
 def test_method_selects_reducer(method: str, expected: float) -> None:
     overlay = _overlay_with_mock_dataset()

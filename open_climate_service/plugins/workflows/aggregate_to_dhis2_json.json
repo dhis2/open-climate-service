@@ -43,7 +43,8 @@
           "min",
           "max",
           "sum",
-          "median", "majority"
+          "median",
+          "majority"
         ]
       },
       "default": "mean"

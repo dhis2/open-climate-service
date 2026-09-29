@@ -285,10 +285,12 @@ def test_fractions_give_each_class_its_share_of_the_zone() -> None:
     np.testing.assert_allclose(out["lc"].sel(geometry="corner").values, [1.0, 0.0, 0.0])
 
 
-def test_max_over_a_presence_mask_is_kept() -> None:
-    da = _categorical(np.array([[0, 1], [0, 0]]), resampling="max")
-    out = aggregate_spatial(da, _box(-0.5, -0.5, 1.5, 1.5), _named("max"))
-    assert float(out["lc"].isel(geometry=0)) == 1.0
+@pytest.mark.parametrize("resampling", ["max", "nearest"])
+def test_only_mode_marks_data_as_categorical(resampling: str) -> None:
+    """A presence mask declared `max` averages to the share present, not a majority of 0."""
+    da = _categorical(np.array([[0, 1], [0, 0]]), resampling=resampling)
+    out = aggregate_spatial(da, _box(-0.5, -0.5, 1.5, 1.5), _named("mean"))
+    assert float(out["lc"].isel(geometry=0)) == pytest.approx(0.25)
 
 
 def test_fractions_standalone_are_refused() -> None:

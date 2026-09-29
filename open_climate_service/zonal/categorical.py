@@ -9,7 +9,10 @@ import xarray as xr
 
 from open_climate_service.shared.vectors import RESAMPLING_ATTR
 
-CATEGORICAL_RESAMPLING = frozenset({"mode", "max", "nearest"})
+# Only `mode` says the values are class codes. `max` and `nearest` are pyramid choices that
+# continuous data makes too (a presence mask, an unsmoothed elevation), and a presence mask's
+# area-weighted mean is the share of the zone present, which a majority would reduce to 0 or 1.
+CATEGORICAL_RESAMPLING = frozenset({"mode"})
 
 # Numeric reducers averaging class codes would be meaningless; on categorical data they become
 # a majority. min and max keep their meaning (max over a presence mask is "any present").

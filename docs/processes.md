@@ -64,7 +64,7 @@ The weighted path applies when the reducer is exactly one of the statistics abov
 
 ### Categorical data is never averaged
 
-Each variable's dataset declares categorical data through `ingestion.resampling` (see [Pyramid resampling](adding_custom_datasets.md#pyramid-resampling)): `mode` for class codes such as land cover, `max` for presence masks, or `nearest`. For such a dataset:
+A dataset declares class codes, such as land cover, with `ingestion.resampling: mode` (see [Pyramid resampling](adding_custom_datasets.md#pyramid-resampling)). `max` and `nearest` are not taken as categorical: a presence mask declared `max` aggregates by area-weighted mean, which is the share of the zone where it is present. For a `mode` dataset:
 
 - `mean`, `median` and `sum` become the **area-weighted majority** class, with a warning, since an average of class codes names no class. `min` and `max` keep their meaning.
 - `reduce_by_method` with `method: "majority"` asks for the majority directly.
