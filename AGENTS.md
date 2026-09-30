@@ -20,7 +20,7 @@ Key concepts:
 open_climate_service/
   data_manager/     # download and zarr build (downloader.py)
   data_accessor/    # open zarr / netcdf for read (accessor.py)
-  data_registry/    # dataset template YAML loading
+  data_registry/    # raster dataset template loading
   ingestions/       # artifact lifecycle: create, list, sync, publish
   features/         # feature collection store, GeoParquet reader, GET /features
   publications/     # STAC publication metadata
@@ -46,17 +46,15 @@ The `.env` file is required for `make run`. Copy `.env.example` if it exists.
 
 ## Dataset templates
 
-Each YAML file in `plugins/rasters/` holds raster dataset templates, one per data source. The `ingestion` block controls download and zarr build behaviour:
+Each YAML file in `plugins/rasters/` holds raster dataset templates, one per data source. The `ingestion` block names the streaming plugin class, a `BaseDatasetPlugin` subclass implementing `periods()` and `fetch_period()`:
 
 ```yaml
 ingestion:
-  function: dhis2eo.data.worldpop.pop_total.yearly.download
-  default_params: {} # passed to the download function
+  plugin: open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin
+  params: {} # passed to the plugin
 ```
 
 `build_dataset_zarr` in `data_manager/downloader.py` builds a multiscale Zarr pyramid when the spatial dimensions exceed 2048×2048 pixels; otherwise it writes a flat chunked zarr with chunk sizes derived from the dataset's temporal resolution.
-
-The ingestion interface is being redesigned as a plugin protocol (see GitHub issue #64) — the `ingestion.function` convention will be replaced by a three-method async plugin (`probe`, `periods`, `fetch_period`).
 
 ## Active design work
 

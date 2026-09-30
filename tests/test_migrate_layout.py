@@ -24,6 +24,7 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         {"artifact_id": "a", "path": "downloads/chirps.icechunk", "asset_paths": ["downloads/chirps.icechunk"]},
         {"artifact_id": "b", "path": str(data / "features" / "districts.abc.parquet"), "asset_paths": []},
         {"artifact_id": "c", "path": "/mnt/elsewhere/downloads/era5.icechunk", "asset_paths": []},
+        {"artifact_id": "d", "path": "/app/data/downloads/chirps.icechunk", "asset_paths": []},
     ]
     (data / "artifacts" / "records.json").write_text(json.dumps(records, indent=2) + "\n")
 
@@ -77,6 +78,7 @@ def test_moves_data_and_plugins_and_rewrites_what_names_them(instance: Path) -> 
     assert records[0]["asset_paths"] == ["rasters/chirps.icechunk"]
     assert records[1]["path"] == str(data / "vectors" / "districts.abc.parquet")
     assert records[2]["path"] == "/mnt/elsewhere/downloads/era5.icechunk", "a store outside the data dir is left alone"
+    assert records[3]["path"] == "rasters/chirps.icechunk", "a store recorded under a container's mount is ours"
 
     assert sorted(p.name for p in plugins.iterdir()) == ["processes", "rasters", "vectors"]
     process = (plugins / "processes" / "indices.py").read_text()
@@ -138,3 +140,17 @@ def test_the_service_reads_the_migrated_instance(instance: Path) -> None:
     assert api_config.get_download_root() == instance / "data" / "rasters"
     assert "chelsa" in {t["id"] for t in registry.list_datasets()}
     assert "regions" in {t["id"] for t in feature_templates.list_feature_templates()}
+
+
+def test_a_data_dir_reached_through_a_symlink_is_migrated(instance: Path) -> None:
+    link = instance / "link"
+    link.symlink_to(instance / "data")
+    index = instance / "data" / "artifacts" / "records.json"
+    index.write_text(json.dumps([{"artifact_id": "a", "path": str(link / "downloads" / "chirps.icechunk")}]) + "\n")
+    (instance / "climate-service.yaml").write_text(f"data_dir: {link}\nplugins_dir: ./plugins\n")
+    api_config._cache = None
+
+    assert migrate_layout.main([]) == 0
+
+    [record] = json.loads(index.read_text())
+    assert Path(record["path"]) == (instance / "data" / "rasters" / "chirps.icechunk").resolve()

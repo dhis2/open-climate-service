@@ -10,7 +10,7 @@ The platform has four first-class concepts. Understanding the distinction betwee
 
 ### Data source
 
-A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint: raster templates in `rasters/`, vector templates in `vectors/`. Built-ins live in `open_climate_service/plugins/rasters/` and `open_climate_service/plugins/vectors/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` and `{plugins_dir}/vectors/`, where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
+A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint: raster templates in `rasters/`, vector templates in `vectors/`. Built-ins live in `open_climate_service/plugins/rasters/` and `open_climate_service/plugins/vectors/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` and `{plugins_dir}/vectors/`, where `plugins_dir` is set in `climate-service.yaml`. A data source has no state — it describes what _could_ be ingested, not what _has been_ ingested.
 
 A raster dataset template defines:
 

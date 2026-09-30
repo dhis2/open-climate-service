@@ -778,7 +778,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             pass
         template = _reg.get_dataset(dataset_id)
     if template is None:
-        raise ValueError(f"Auto-registered data source for '{dataset_id}' could not be reloaded")
+        raise ValueError(f"Auto-registered dataset template for '{dataset_id}' could not be reloaded")
 
     # Prefer an explicit option, then the registered template's display name, and
     # only fall back to the raw id so published collections read as e.g.
@@ -1050,7 +1050,7 @@ def _reject_incompatible_template_units(ds: Any, variable: str, cf_attrs: dict[s
         return
     if declared_unit.dimensionality != produced_unit.dimensionality:
         raise ValueError(
-            f"data source declares units '{declared or 'dimensionless'}' but the result carries "
+            f"dataset template declares units '{declared or 'dimensionless'}' but the result carries "
             f"'{produced}', which measures a different quantity "
             f"({declared_unit.dimensionality or 'dimensionless'} vs "
             f"{produced_unit.dimensionality or 'dimensionless'}). Publishing would relabel the values "
@@ -1058,7 +1058,7 @@ def _reject_incompatible_template_units(ds: Any, variable: str, cf_attrs: dict[s
             "anomaly is a percentage, not the observed variable's unit)."
         )
     raise ValueError(
-        f"data source declares units '{declared or 'dimensionless'}' but the result carries "
+        f"dataset template declares units '{declared or 'dimensionless'}' but the result carries "
         f"'{produced}'. They measure the same quantity on different scales, so publishing would "
         "relabel the values without converting them. Convert the result in the process graph, or use "
         "a template declaring the units the process produces."

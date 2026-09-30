@@ -279,7 +279,7 @@ def refreshable_feature_template_or_error(collection_id: str) -> dict[str, Any]:
     if collection_id in _raster_template_ids():
         raise HTTPException(
             status_code=409,
-            detail=f"'{collection_id}' is declared as both a raster and vector data source; rename one of them",
+            detail=f"'{collection_id}' is declared as both a raster and a vector data source; rename one of them",
         )
     if not is_refreshable(template):
         raise HTTPException(
@@ -321,7 +321,7 @@ def refresh_feature_collection_from_provider(
     """
     template = feature_templates.get_feature_template(collection_id)
     if template is None:
-        raise ValueError(f"Unknown feature collection data source '{collection_id}'")
+        raise ValueError(f"Unknown data source '{collection_id}'")
     provider_name = template.get("provider")
     if not isinstance(provider_name, str):
         raise ValueError(f"Data source '{collection_id}' does not declare a provider")

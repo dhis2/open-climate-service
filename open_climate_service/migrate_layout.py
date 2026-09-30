@@ -71,14 +71,24 @@ def _migrated_path(raw: str, root: Path) -> str:
         if parts and parts[0] in mapping:
             return PurePosixPath(mapping[parts[0]], *parts[1:]).as_posix()
         return raw
+    candidate = Path(raw)
     try:
-        relative = Path(raw).relative_to(root)
+        # Resolved, as root is, so a data directory reached through a symlink still matches.
+        relative = candidate.resolve(strict=False).relative_to(root)
     except ValueError:
-        return raw  # a store deliberately kept outside the data directory
-    parts = relative.parts
-    if parts and parts[0] in mapping:
-        return str(root.joinpath(mapping[parts[0]], *parts[1:]))
-    return raw
+        pass
+    else:
+        parts = relative.parts
+        if parts and parts[0] in mapping:
+            return str(root.joinpath(mapping[parts[0]], *parts[1:]))
+        return raw
+    # Recorded under another mount, such as a container's /app/data: the store is ours when
+    # the same suffix exists under this data root, as store-path rebasing would find it.
+    parts = candidate.parts
+    for index in range(1, len(parts) - 1):
+        if parts[index] in mapping and root.joinpath(*parts[index:]).exists():
+            return PurePosixPath(mapping[parts[index]], *parts[index + 1 :]).as_posix()
+    return raw  # a store deliberately kept outside the data directory
 
 
 def _plan_records(data_root: Path, plan: Plan) -> None:

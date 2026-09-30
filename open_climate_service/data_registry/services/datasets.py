@@ -309,7 +309,7 @@ def _load_entry_point_datasets() -> list[tuple[str, dict[str, Any]]]:
 def _parse_entry_point_datasets() -> list[tuple[str, dict[str, Any]]]:
     """Read and validate dataset templates contributed by installed plugin packages (#118).
 
-    A plugin's ``datasets/*.yaml`` templates are loaded here; the package's Python —
+    A plugin's ``rasters/*.yaml`` templates are loaded here; the package's Python —
     the ``ingestion.plugin`` class — is importable by dotted path because the package
     is installed, so no ``sys.path`` handling is needed.
 

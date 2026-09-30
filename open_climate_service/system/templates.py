@@ -769,7 +769,7 @@ def _load_feature_templates() -> list[dict[str, Any]]:
 
 
 def render_data_sources_page(mount: str) -> str:
-    """Render the list of dataset templates this instance can fetch from.
+    """Render the list of data sources this instance can fetch from.
 
     The HTML arm of `GET /data-sources`, which answers JSON to everything but a browser.
     A narrower view than the JSON: only what can be fetched, because that is what the page
@@ -1520,7 +1520,7 @@ def _landing_catalogue(
     workflows: list[Any],
     feature_templates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Split templates between the Dataset templates and Workflows areas by what can be ingested.
+    """Split templates between the Data sources and Workflows areas by what can be ingested.
 
     A template is fetched or produced, never both (registration refuses `produced_by` beside
     `ingestion.plugin`), so each appears in exactly one area. A non-ingestable template whose
