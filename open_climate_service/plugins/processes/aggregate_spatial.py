@@ -1,275 +1,205 @@
-"""aggregate_spatial — zonal statistics plugin process."""
+import json
+from typing import Any
 
-from __future__ import annotations
-
-from typing import Any, Callable
-
-import numpy as np
+import geopandas as gpd
 import xarray as xr
+from exactextract import exact_extract, writer
+from exactextract.feature import JSONFeature
 
 from open_climate_service.process import process
-from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
-
-_SUPPORTED_GEOMETRY_TYPES = frozenset({"Polygon", "MultiPolygon"})
-
-
-def _parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
-    """Extract Shapely geometries and stable string labels from GeoJSON input.
-
-    Labels use the feature ``id`` when present, otherwise a sequential integer.
-    """
-    from shapely.geometry import shape
-
-    from open_climate_service.shared.provenance import record_features
-
-    record_features(geometries)
-
-    if isinstance(geometries, dict):
-        gtype = geometries.get("type", "")
-        if gtype == "FeatureCollection":
-            features = geometries.get("features", [])
-            geoms = [shape(f["geometry"]) for f in features]
-            labels = [str(f.get("id", i)) for i, f in enumerate(features)]
-        elif gtype == "Feature":
-            geoms, labels = [shape(geometries["geometry"])], [str(geometries.get("id", 0))]
-        else:
-            geoms, labels = [shape(geometries)], ["0"]
-    else:
-        geoms = [shape(g) if isinstance(g, dict) else g for g in geometries]
-        labels = [str(i) for i in range(len(geoms))]
-    _require_supported_geometry_types(geoms, labels)
-    return geoms, labels
-
-
-def _require_supported_geometry_types(geoms: list[Any], labels: list[str]) -> None:
-    """Refuse a geometry type this process has no defined behaviour for yet.
-
-    Feeding a Point through the polygon-rasterization path below still "works" in the sense
-    that it doesn't raise: `rasterio.features.geometry_mask` marks whichever single pixel
-    geometrically contains it, or produces an all-False mask (silently NaN) if it falls on a
-    pixel boundary or just outside the grid. That is an incidental side effect of the
-    implementation, not a decided sampling rule, and it would change silently whenever a real
-    one is decided -- refusing outright is safer than a result that looks real. Point sampling
-    semantics (nearest pixel, a buffer, or an explicit refusal) are being decided in CLIM-785;
-    org-unit hierarchies with facility-level (point) geometry hit this today (CLIM-1009).
-    """
-    for geom, label in zip(geoms, labels, strict=True):
-        if geom.geom_type not in _SUPPORTED_GEOMETRY_TYPES:
-            raise ValueError(
-                f"aggregate_spatial: geometry '{label}' is a {geom.geom_type}, which is not "
-                "supported; only Polygon and MultiPolygon are (point sampling semantics are "
-                "being decided in CLIM-785)"
-            )
-
-
-def _find_dim(data: xr.Dataset | xr.DataArray, candidates: list[str]) -> str | None:
-    dims = data.dims if isinstance(data, xr.DataArray) else set(data.dims)
-    for c in candidates:
-        if c in dims:
-            return c
-    return None
-
-
-def _make_reducer_caller(reducer: Callable, context: Any) -> Callable[[np.ndarray], float]:
-    """Return a function that applies the reducer, forwarding ``context`` when supported.
-
-    openEO reducers may or may not accept a ``context`` keyword; we inspect the
-    signature once so context-aware reducers receive it without breaking the
-    common array-only reducers (mean, median, ...).
-    """
-    import inspect
-
-    pass_context = False
-    if context is not None:
-        try:
-            params = inspect.signature(reducer).parameters
-            pass_context = "context" in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-        except (TypeError, ValueError):
-            pass_context = False
-
-    def _call(pixels: np.ndarray) -> float:
-        if not pixels.size:
-            return float("nan")
-        return float(reducer(data=pixels, context=context) if pass_context else reducer(data=pixels))
-
-    return _call
-
-
-def _dataset_reduce_spatial(
-    ds: xr.Dataset,
-    mask: np.ndarray,
-    reducer: Callable,
-    y_dim: str,
-    x_dim: str,
-    context: Any = None,
-) -> xr.Dataset:
-    """Apply spatial mask and reducer to each variable in a Dataset.
-
-    Reduces only over the spatial dimensions while preserving any other dimensions
-    (e.g. time or ``merge_cubes``' synthetic ``__cubes__`` dimension).
-
-    Pixels are selected by boolean-indexing the raw arrays with ``mask`` directly
-    rather than materialising ``ds.where(mask)`` — the latter allocates a full
-    NaN-filled copy of the cube just to throw most of it away.
-    """
-    reduce = _make_reducer_caller(reducer, context)
-
-    def _drop_nan(pixels: np.ndarray) -> np.ndarray:
-        # Only floating arrays can carry NaN; np.isnan raises on integer dtypes.
-        return pixels[~np.isnan(pixels)] if np.issubdtype(pixels.dtype, np.floating) else pixels
-
-    mask_flat = mask.ravel()
-    result_vars: dict[str, Any] = {}
-    for var in ds.data_vars:
-        vname = str(var)
-        da = ds[vname]
-        remaining_dims = [d for d in da.dims if d not in {y_dim, x_dim}]
-        arr = da.transpose(*remaining_dims, y_dim, x_dim).values
-        arr = arr.reshape((-1, mask_flat.size))
-        reduced = [reduce(_drop_nan(pixels[mask_flat])) for pixels in arr]
-        if remaining_dims:
-            coords = {d: da.coords[d].values for d in remaining_dims if d in da.coords}
-            shape = tuple(int(da.sizes[d]) for d in remaining_dims)
-            result_vars[vname] = xr.DataArray(np.array(reduced).reshape(shape), coords=coords, dims=remaining_dims)
-        else:
-            result_vars[vname] = xr.DataArray(reduced[0])
-    return xr.Dataset(result_vars)
 
 
 @process(
-    summary="Aggregate spatial data within geometries",
+    summary="Aggregate spatial raster data to vector geometries using exact pixel-polygon overlap",
     parameters={
         "data": {"description": "A raster data cube."},
-        "geometries": {"description": "GeoJSON FeatureCollection, Feature, or geometry."},
+        "geometries": {"description": "GeoJSON FeatureCollection, Feature, or geometry (polygons or points)."},
         "reducer": {"description": "A reducer to apply on the pixel values."},
-        "target_dimension": {"description": "Name for the new geometry dimension (default: 'geometry')."},
         "context": {"description": "Optional context passed to the reducer."},
     },
 )
 def aggregate_spatial(
     data: Any,
     geometries: Any,
-    reducer: Callable,
-    target_dimension: str | None = None,
+    reducer: str,
     context: Any = None,
 ) -> xr.Dataset:
-    """Aggregate raster values within each polygon using the supplied reducer."""
-    import rasterio.features
-    from rasterio.transform import from_bounds
-    from shapely.geometry import mapping
+    """Aggregate raster values to each input geometry."""
 
-    geom_shapes, geom_labels = _parse_geometries(geometries)
-    if not geom_shapes:
-        raise ValueError("aggregate_spatial: geometries contains no shapes")
-
-    # Promote DataArray to Dataset so we can handle both uniformly
+    # Ensure correct input data format
     if isinstance(data, xr.DataArray):
-        name = data.name or "data"
-        data = data.to_dataset(name=name)
+        # The variable keeps the DataArray's attributes.
+        data = data.to_dataset(name=data.name or "data")
+    assert isinstance(data, xr.Dataset)
 
-    x_dim = _find_dim(data, ["x", "longitude", "lon"])
-    y_dim = _find_dim(data, ["y", "latitude", "lat"])
-    if x_dim is None or y_dim is None:
-        raise ValueError(f"aggregate_spatial: cannot identify x/y dimensions in {list(data.dims)}")
+    # Convert geometries to geopandas
+    if isinstance(geometries, dict):
+        geometries = json.dumps(geometries)
+    if isinstance(geometries, str):
+        gdf = gpd.read_file(geometries)  # parses geojson string into GeoDataFrame
+    else:
+        raise TypeError(f"Unsupported type for geometries: {geometries}")
 
-    x_coords = data[x_dim].values.astype(float)
-    y_coords = data[y_dim].values.astype(float)
-    height = len(y_coords)
-    width = len(x_coords)
+    # Compute aggregations using exact extract
+    agg = exact_extract(
+        data,
+        gdf,
+        [reducer],
+        #include_geom=False,
+        #include_cols=['id'],
+        output=XArrayWriter(),
+        strategy='raster-sequential',
+    )
 
-    dx = float(abs(x_coords[1] - x_coords[0])) if width > 1 else 1.0
-    dy = float(abs(y_coords[1] - y_coords[0])) if height > 1 else 1.0
-    xmin = float(x_coords.min()) - dx / 2
-    xmax = float(x_coords.max()) + dx / 2
-    ymin = float(y_coords.min()) - dy / 2
-    ymax = float(y_coords.max()) + dy / 2
-    transform = from_bounds(xmin, ymin, xmax, ymax, width, height)
+    # HACK: Add geopandas wkt to geometry dim (not supported by xarray writer yet)
+    shapes = gdf.geometry.iloc[agg.feature.to_numpy() - 1].to_numpy()
+    geoms = [shp.wkt for shp in shapes]
+    agg = agg.assign_coords(
+        geometry=("feature", geoms)
+    )
 
-    from open_climate_service.shared.provenance import observe_spatial_aggregation
-
-    geom_dim = target_dimension or "geometry"
-    results: list[xr.Dataset] = []
-
-    with observe_spatial_aggregation():
-        for geom in geom_shapes:
-            mask = rasterio.features.geometry_mask(
-                [mapping(geom)],
-                out_shape=(height, width),
-                transform=transform,
-                invert=True,
+    # Post-process: For raster cubes with a time (t) dimension,
+    # map "band" index from aggregation results to the "t" values from raster cube
+    if "t" in data and "band" in agg:
+        time_values = data.t.values
+        agg = (
+            agg.assign_coords(
+                time=("band", time_values)
             )
-            # rasterio builds the mask top-row first (y descending); flip when y is ascending
-            if height > 1 and float(y_coords[1]) > float(y_coords[0]):
-                mask = mask[::-1]
+            .swap_dims({"band": "time"})
+            .drop_vars("band")
+        )
 
-            geom_ds = _dataset_reduce_spatial(data, mask, reducer, y_dim, x_dim, context)
-            results.append(geom_ds)
-
-    combined = xr.concat(results, dim=geom_dim)
-    combined[geom_dim] = geom_labels
-    # Carry the shapes as well as the labels, so the result is a vector datacube rather than a
-    # table that has forgotten where it came from — `save_result(format="GeoParquet")` writes
-    # them straight out, and a consumer can map the result without joining back to a boundary
-    # file. See CLIM-836.
-    #
-    # A companion coordinate rather than replacing the labels on `geom_dim`: the label is the
-    # feature id, and the DHIS2 and CHAP exports key their location column on it
-    # (`location_field` defaults to "geometry"). Putting shapes there would break both.
-    #
-    # WKT strings rather than shapely objects, which is what openEO's vector datacube model uses
-    # (xvec puts shapely geometries in an object-dtype coordinate with a CRS-carrying
-    # GeometryIndex). This process does not build an xvec cube in the first place — the geometry
-    # dimension carries string feature ids, because that is the label the exports need — so the
-    # carrier is chosen for robustness instead: a string coordinate is inert on every path the
-    # cube can take, whereas an object-dtype one makes `to_zarr` fail outright, and the drop that
-    # currently prevents that lives in a single place in the job writer.
-    #
-    # xvec's own encodings are not a better option here: `encode_wkb` round-trips through Zarr as
-    # null-terminated bytes and comes back truncated, and `encode_cf` restructures the cube into
-    # several CF geometry variables — right for an archival file, wrong for a carrier that only
-    # has to survive as far as the vector writer.
-    # Cost worth knowing: numpy stores this as fixed-width unicode (`<U{longest}`) at 4 bytes per
-    # character, sized by the *longest* WKT, and it is attached on every aggregation regardless of
-    # the output format. For simple boundaries that is nothing; for detailed ones it is roughly
-    # 4 x longest-WKT x n_features. Hex-encoded WKB in a bytes array would be ~4x smaller and is
-    # still null-free, so still Zarr-safe -- worth doing if a real boundary set makes this hurt.
-    combined = combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in geom_shapes])})
-    return combined
+    return agg
 
 
-_REDUCE_METHODS: dict[str, Callable[..., Any]] = {
-    "mean": np.mean,
-    "sum": np.sum,
-    "min": np.min,
-    "max": np.max,
-    "median": np.median,
-}
-
-
-@process(
-    summary="Reduce pixel values by a named method",
-    parameters={
-        "data": {"description": "The array of values to reduce."},
-        "method": {"description": "Reduction method: mean (default), sum, min, max or median."},
-    },
-)
-def reduce_by_method(data: Any, method: str = "mean") -> float:
-    """Reduce an array of values by a named method.
-
-    A spec-compliant alternative to parameterising a reducer's ``process_id``: workflows
-    pass ``method`` as an ordinary string argument (mean/sum/min/max/median) while
-    ``process_id`` stays the literal ``"reduce_by_method"``, so standard openEO tooling
-    can validate the graph. Used as the reducer in the ``aggregate_*`` workflows, where
-    it receives the (already NaN-dropped, 1-D) pixel values within each geometry.
+class XArrayWriter(writer.Writer):
     """
-    if method not in _REDUCE_METHODS:
-        raise ValueError(f"Unknown reduce method '{method}'; expected one of {sorted(_REDUCE_METHODS)}")
-    from open_climate_service.shared.provenance import record_spatial_reduction
+    Writer that returns an :py:class:`xarray.Dataset`, with one or more data variables
+    for each of the computed statistics. 
+    Returned dimensions depend on the structure of the input raster: ``(feature)`` for single variable and single band 
+    raster, ``(feature, band)`` for single variable and multi band raster, 
+    ``(feature, var)`` for multi variable and single band raster, and ``(feature, var, band)``
+    for multi variable and multi band raster. 
+    If the input raster has multiple dimensions (e.g. time x level), band numbering follows 
+    the same logic as other Writers, bands are enumerated in C-order (last dimension varies 
+    fastest), matching the order returned by ``rasterio.count``.
+    """
 
-    # Counts only inside aggregate_spatial, where it lets a named export check its
-    # declared `aggregation` against what actually ran.
-    record_spatial_reduction(method)
-    arr = np.asarray(data, dtype="float64").ravel()
-    if arr.size == 0:
-        return float("nan")
-    return float(_REDUCE_METHODS[method](arr))
+    def __init__(self):
+        super().__init__()
+
+        self.ops = []
+        self.extra_cols = {}
+        self.records = []
+        self.feature_count = 0
+
+    def add_operation(self, op):
+        self.ops.append(op)
+
+    def add_column(self, col_name):
+        self.extra_cols[col_name] = []
+
+    def write(self, feature):
+        f = JSONFeature()
+        feature.copy_to(f)
+        props = f.feature["properties"]
+
+        # get feature index
+        self.feature_count += 1
+        feature_index = int(self.feature_count)
+
+        # add any extra column values
+        for col in self.extra_cols:
+            if col == 'id' and 'id' in f.feature:
+                value = f.feature["id"]
+            else:
+                value = props[col]
+            self.extra_cols[col].append(value)
+
+        # all we have is a list of operations corresponding to properties per feature
+        # each operation/property name encodes dimensions: statistic, band, and variable
+        # and its data value and dimension values should be added as a dict to .records
+        for op in self.ops:
+            # extract misc dims from operation property name
+            # possible operation property templates:
+            # - statistics: mean, sum, etc
+            # - bands and statistics: band_1_mean, band_1_sum, etc
+            # - variables and statistics: var1_mean, var1_sum, etc
+            # - variables and bands and statistics: var1_band_1_mean, var1_band_1_sum, etc
+            prop = op.name
+            value = props.get(prop, None)  # sometimes statistic is missing from props
+            row = {"feature": feature_index, "value": value}
+            
+            # if prop starts with band_, then that should be used to split into band and stat
+            if prop.startswith('band_'):
+                parts = prop.split('_')
+                band = parts[1]
+                stat = '_'.join(parts[2:])
+                row['band'] = int(band)
+                row['stat'] = stat
+
+            # if prop contains _band_ then that should be used to split into varname, band and stat
+            elif '_band_' in prop:
+                varname, band_plus_stat = prop.split('_band_')
+                parts = band_plus_stat.split('_')
+                band = parts[0]
+                stat = '_'.join(parts[1:])
+                row['var'] = varname
+                row['band'] = int(band)
+                row['stat'] = stat
+
+            # prop should be stat and optionally varname
+            else:
+                # search for first string instance of stat
+                stat_pos = prop.find(op.stat)
+                if stat_pos == -1:
+                    raise ValueError(f'Unable to parse {op.stat} statistic from field name {prop}')
+                
+                # extract full stat name starting at first string instance
+                # eg stat may include additional parts based on kwargs, eg quantile_25
+                stat = prop[stat_pos:]
+                row['stat'] = stat
+
+                # if stat starts in middle of string, then first part is varname
+                if stat_pos > 0:
+                    varname = prop[:stat_pos].strip('_')
+                    row['var'] = varname
+
+            self.records.append(row)
+
+    def features(self):
+        # make pandas df from dict records
+        import pandas as pd
+        df = pd.DataFrame(self.records)
+        
+        # get which xarray dims to keep
+        dim_cols = [c for c in df.columns if c not in ("value", "stat")]
+
+        # pivot stat into columns
+        df = df.pivot_table(
+            index=dim_cols,
+            columns="stat",
+            values="value",
+            dropna=False,
+        )
+
+        # drop var from index if only one unique value
+        if "var" in df.index.names and df.index.get_level_values("var").nunique() == 1:
+            df = df.droplevel("var")
+
+        # convert to xarray
+        ds = df.to_xarray()
+
+        # assign extra columns as coords
+        # all extra columns are based on the feature dimension
+        if self.extra_cols:
+            col_dim = 'feature'
+            coords = {
+                col: (col_dim, col_values)
+                for col, col_values
+                in self.extra_cols.items()
+            }
+            ds = ds.assign_coords(**coords)
+
+        return ds
