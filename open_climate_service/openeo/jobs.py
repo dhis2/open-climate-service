@@ -51,6 +51,7 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobUpdate,
 )
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
@@ -189,6 +190,11 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     return data
 
 
+def _cancel_requested(job_id: str) -> bool:
+    record = store_get_job(job_id)
+    return bool(record and record.cancel_requested)
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -203,6 +209,7 @@ class OpenEOJobService:
         self._lock = threading.Lock()
         self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
         self._delivery_due: Callable[[OpenEOJobRecord], dict[str, str] | None] | None = None
+        self._stopping = threading.Event()
 
     def set_delivery_due_provider(self, provider: Callable[[OpenEOJobRecord], dict[str, str] | None] | None) -> None:
         """Register the callback that says which delivery a job owes as it finishes.
@@ -221,6 +228,7 @@ class OpenEOJobService:
         self._finished_listener = listener
 
     def shutdown(self) -> None:
+        self._stopping.set()
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     def recover_pending_jobs(self) -> None:
@@ -482,8 +490,19 @@ class OpenEOJobService:
             self._futures[job_id] = future
 
     def _run_job(self, job_id: str) -> None:
+        # The same slots as native jobs, so ingests and openEO jobs share one limit. A job
+        # waits QUEUED; one cancelled meanwhile is recorded by `_execute`, and one still
+        # waiting at shutdown stays QUEUED for the next start to re-enqueue.
+        slots = get_job_slots()
         try:
-            self._execute(job_id)
+            if not slots.acquire(should_stop=lambda: self._stopping.is_set() or _cancel_requested(job_id)):
+                if not self._stopping.is_set():
+                    self._execute(job_id)
+                return
+            try:
+                self._execute(job_id)
+            finally:
+                slots.release()
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)

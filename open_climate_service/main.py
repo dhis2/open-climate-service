@@ -75,8 +75,11 @@ def _append_vary_value(response: Response, value: str) -> None:
 async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
     from open_climate_service.plugins_diagnostics import log_plugin_loading
+    from open_climate_service.shared.compute import install_shared_dask_pool
 
     log_plugin_loading()
+    # Before any job is recovered, so no computation starts a dask pool of its own.
+    install_shared_dask_pool()
     job_service = get_job_service()
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()

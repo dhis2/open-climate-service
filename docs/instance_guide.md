@@ -259,6 +259,27 @@ For containerised deployment, the core open-climate-service repository ships a `
 and a `compose.yml` that can serve as a starting point for packaging an instance. A
 dedicated instance Docker guide is planned.
 
+### Compute limits
+
+Background jobs share the machine with the web server, so OCS bounds how much of it they
+take. The defaults suit a dedicated server; lower them on a machine that does other work.
+
+| Setting | Default | Bounds |
+| --- | --- | --- |
+| `DASK_NUM_WORKERS` | cores - 1 | Threads for all dask computation in the process, shared by every job and request |
+| `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` | 3 | Ingestion, sync, feature refresh and openEO batch jobs running at once, together |
+| `TOKIO_WORKER_THREADS` | cores | Worker threads of Icechunk's storage runtime |
+
+A job beyond the limit waits queued (`accepted` for ingestion jobs, with the message
+"Waiting for a free job slot"; `queued` for openEO jobs) and starts when another finishes.
+Synchronous requests such as `POST /result` are not counted as jobs, but their computation
+uses the same dask threads.
+
+Icechunk also starts short-lived I/O threads while it reads and writes files. Their number
+follows the amount of concurrent reading, so `DASK_NUM_WORKERS` is what bounds them.
+`TOKIO_WORKER_THREADS` is read once, when the process starts: set it in `.env` or the
+environment, not at runtime.
+
 ### Read-only instances
 
 For an instance that should be browsable but not changeable — a public demo, a shared

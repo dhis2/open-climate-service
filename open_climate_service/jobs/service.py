@@ -25,6 +25,7 @@ from open_climate_service.jobs.models import (
     JobRecord,
     JobStatus,
 )
+from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.dynamic_import import get_dynamic_function
 from open_climate_service.shared.time import utc_now
 
@@ -130,6 +131,7 @@ class JobService:
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
         self._event_consumer: Callable[[list[JobEvent]], None] | None = None
+        self._stopping = threading.Event()
 
     def set_event_consumer(self, consumer: Callable[[list[JobEvent]], None] | None) -> None:
         """Register the process-local consumer for newly persisted domain events."""
@@ -137,6 +139,7 @@ class JobService:
 
     def shutdown(self) -> None:
         """Stop the executor without waiting for outstanding work."""
+        self._stopping.set()
         self._executor.shutdown()
 
     def list_jobs(self) -> JobListResponse:
@@ -390,104 +393,129 @@ class JobService:
                 )
                 return
 
-            started = store.mutate_job_record(
+            slots = get_job_slots()
+            if not slots.acquire(
+                should_stop=lambda: self._stopping.is_set() or self._cancel_requested(job_id),
+                on_wait=lambda: self._report_waiting_for_slot(job_id),
+            ):
+                if self._stopping.is_set():
+                    return  # still accepted, so the next start recovers it
+                continue  # cancelled while waiting; the check above records it
+            try:
+                started = store.mutate_job_record(
+                    job_id,
+                    lambda current: current.model_copy(
+                        update={
+                            "status": JobStatus.RUNNING,
+                            "started_at": current.started_at or utc_now(),
+                            "finished_at": None,
+                            "attempt": current.attempt + 1,
+                            "retry_after": None,
+                            "error": None,
+                        }
+                    ),
+                )
+                retry_after = self._run_attempt(job_id, started)
+            finally:
+                slots.release()
+            if retry_after is None:
+                return
+            self._sleep_for_retry(job_id, retry_after)
+
+    def _cancel_requested(self, job_id: str) -> bool:
+        record = store.get_job_record(job_id)
+        return bool(record and record.cancel_requested)
+
+    def _report_waiting_for_slot(self, job_id: str) -> None:
+        store.mutate_job_record(
+            job_id,
+            lambda current: current.model_copy(update={"progress": JobProgress(message="Waiting for a free job slot")}),
+        )
+
+    def _run_attempt(self, job_id: str, started: JobRecord) -> int | None:
+        """Run one attempt of a started job: the retry delay if it should run again, else None."""
+        try:
+            execution_result = self._invoke_process(started)
+            completed_at = utc_now()
+            if isinstance(execution_result, JobExecutionResult):
+                result = execution_result.result
+                events = _persisted_events(job_id, execution_result.events, completed_at)
+            else:
+                result = execution_result
+                events = []
+            completed = store.mutate_job_record(
                 job_id,
                 lambda current: current.model_copy(
                     update={
-                        "status": JobStatus.RUNNING,
-                        "started_at": current.started_at or utc_now(),
-                        "finished_at": None,
-                        "attempt": current.attempt + 1,
-                        "retry_after": None,
-                        "error": None,
+                        "status": JobStatus.SUCCESSFUL,
+                        "finished_at": completed_at,
+                        "result": result,
+                        "events": events,
+                        "progress": JobProgress(
+                            done=current.progress.done,
+                            total=current.progress.total,
+                            percent=current.progress.percent,
+                            message="Completed",
+                        ),
                     }
                 ),
             )
-
-            try:
-                execution_result = self._invoke_process(started)
-                completed_at = utc_now()
-                if isinstance(execution_result, JobExecutionResult):
-                    result = execution_result.result
-                    events = _persisted_events(job_id, execution_result.events, completed_at)
-                else:
-                    result = execution_result
-                    events = []
-                completed = store.mutate_job_record(
-                    job_id,
-                    lambda current: current.model_copy(
-                        update={
-                            "status": JobStatus.SUCCESSFUL,
-                            "finished_at": completed_at,
-                            "result": result,
-                            "events": events,
-                            "progress": JobProgress(
-                                done=current.progress.done,
-                                total=current.progress.total,
-                                percent=current.progress.percent,
-                                message="Completed",
-                            ),
-                        }
-                    ),
-                )
-                self._consume_events(completed)
-                return
-            except JobCancelledError as exc:
-                cancelled_result = exc.result
-                store.mutate_job_record(
-                    job_id,
-                    lambda current: current.model_copy(
-                        update={
-                            "status": JobStatus.CANCELLED,
-                            "finished_at": utc_now(),
-                            "result": cancelled_result,
-                            "progress": JobProgress(
-                                done=current.progress.done,
-                                total=current.progress.total,
-                                percent=current.progress.percent,
-                                message="Cancelled",
-                            ),
-                        }
-                    ),
-                )
-                return
-            except Exception as exc:
-                logger.exception("Job %s failed", job_id)
-                error = JobError(type=type(exc).__name__, message=str(exc))
-                if started.attempt < started.max_attempts:
-                    retry_after = _retry_delay_seconds(started.attempt)
-                    store.mutate_job_record(
-                        job_id,
-                        lambda latest: latest.model_copy(
-                            update={
-                                "status": JobStatus.RETRYING,
-                                "retry_after": retry_after,
-                                "error": error,
-                                "progress": JobProgress(message="Retry scheduled"),
-                            }
+            self._consume_events(completed)
+            return None
+        except JobCancelledError as exc:
+            cancelled_result = exc.result
+            store.mutate_job_record(
+                job_id,
+                lambda current: current.model_copy(
+                    update={
+                        "status": JobStatus.CANCELLED,
+                        "finished_at": utc_now(),
+                        "result": cancelled_result,
+                        "progress": JobProgress(
+                            done=current.progress.done,
+                            total=current.progress.total,
+                            percent=current.progress.percent,
+                            message="Cancelled",
                         ),
-                    )
-                    if not self._sleep_for_retry(job_id, retry_after):
-                        continue
-                    continue
-
+                    }
+                ),
+            )
+            return None
+        except Exception as exc:
+            logger.exception("Job %s failed", job_id)
+            error = JobError(type=type(exc).__name__, message=str(exc))
+            if started.attempt < started.max_attempts:
+                retry_after = _retry_delay_seconds(started.attempt)
                 store.mutate_job_record(
                     job_id,
                     lambda latest: latest.model_copy(
                         update={
-                            "status": JobStatus.FAILED,
-                            "finished_at": utc_now(),
+                            "status": JobStatus.RETRYING,
+                            "retry_after": retry_after,
                             "error": error,
-                            "progress": JobProgress(
-                                done=latest.progress.done,
-                                total=latest.progress.total,
-                                percent=latest.progress.percent,
-                                message="Failed",
-                            ),
+                            "progress": JobProgress(message="Retry scheduled"),
                         }
                     ),
                 )
-                return
+                return retry_after
+
+            store.mutate_job_record(
+                job_id,
+                lambda latest: latest.model_copy(
+                    update={
+                        "status": JobStatus.FAILED,
+                        "finished_at": utc_now(),
+                        "error": error,
+                        "progress": JobProgress(
+                            done=latest.progress.done,
+                            total=latest.progress.total,
+                            percent=latest.progress.percent,
+                            message="Failed",
+                        ),
+                    }
+                ),
+            )
+            return None
 
     def _invoke_process(self, record: JobRecord) -> Any:
         fn_path = record.request.get("__fn_path__")
