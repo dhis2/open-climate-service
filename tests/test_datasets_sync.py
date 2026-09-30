@@ -1,5 +1,7 @@
-from datetime import UTC, date, datetime, tzinfo
+import os
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -2097,3 +2099,258 @@ def test_recovery_does_not_publish_a_rejected_store_without_original(tmp_path: P
         recover_interrupted_swap(target)
     assert failed.exists()
     assert not target.exists()
+
+
+def _commit_days(repo: Any, days: range, message: str) -> None:
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    ds = xr.Dataset(
+        {"tg": (("t", "y", "x"), np.random.default_rng(days.start).random((len(days), 64, 64), dtype="float32"))},
+        coords={
+            "t": pd.date_range("2020-01-01", periods=400)[days.start : days.stop],
+            "y": np.arange(64.0),
+            "x": np.arange(64.0),
+        },
+    )
+    session = repo.writable_session("main")
+    if days.start == 0:
+        ds.to_zarr(session.store, mode="w", zarr_format=3, encoding={"tg": {"chunks": (1, 64, 64)}})
+    else:
+        ds.to_zarr(session.store, mode="a", append_dim="t", zarr_format=3)
+    session.commit(message)
+
+
+def _chunk_files(target: Path) -> int:
+    return sum(len(files) for _, _, files in os.walk(target / "chunks"))
+
+
+def _rolled_back_store(target: Path) -> Any:
+    """A store whose `main` was reset past a committed attempt, as a failed ingest leaves it.
+
+    Chunks are 16 KB of random values, too large to compress below the size Icechunk inlines
+    into manifests, so each is a file.
+    """
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    repo = open_or_create_repo(target)
+    _commit_days(repo, range(0, 3), "seed")
+    before = repo.lookup_branch("main")
+    repo.create_branch("ocs-ingest-rollback-attempt", before)
+    for day in range(3, 13):
+        _commit_days(repo, range(day, day + 1), f"append {day}")
+    repo.reset_branch("main", before)
+    return repo
+
+
+@pytest.fixture
+def collect_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Collect with no retention, so objects committed moments ago are eligible."""
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(services, "_GC_RETENTION", timedelta(0))
+
+
+def test_collection_keeps_the_snapshot_a_reader_opened_during_the_attempt(tmp_path: Path) -> None:
+    """Readers take no lock: one that opened `main` mid-attempt keeps reading after the collection."""
+    import numpy as np
+    import xarray as xr
+
+    from open_climate_service.ingestions.services import collect_unreachable_objects
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    target = tmp_path / "ds.icechunk"
+    repo = open_or_create_repo(target)
+    _commit_days(repo, range(0, 3), "seed")
+    before = repo.lookup_branch("main")
+    for day in range(3, 6):
+        _commit_days(repo, range(day, day + 1), f"append {day}")
+    reader = xr.open_zarr(repo.readonly_session("main").store, zarr_format=3)
+    repo.reset_branch("main", before)
+
+    collect_unreachable_objects(repo, target)
+
+    assert reader.sizes["t"] == 6
+    np.testing.assert_array_equal(
+        reader["tg"].isel(t=3).values, np.random.default_rng(3).random((1, 64, 64), dtype="float32")[0]
+    )
+
+
+def test_collecting_unreachable_objects_frees_a_rolled_back_attempt(tmp_path: Path, collect_immediately: None) -> None:
+    import numpy as np
+    import xarray as xr
+
+    from open_climate_service.ingestions.services import collect_unreachable_objects
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    repo.delete_branch("ocs-ingest-rollback-attempt")
+    before = _chunk_files(target)
+
+    collect_unreachable_objects(repo, target)
+
+    assert _chunk_files(target) == before - 10  # the ten rolled-back days
+    kept = xr.open_zarr(repo.readonly_session("main").store, zarr_format=3)
+    assert kept.sizes["t"] == 3
+    np.testing.assert_array_equal(kept["tg"].values, np.random.default_rng(0).random((3, 64, 64), dtype="float32"))
+
+
+def test_collection_keeps_what_a_branch_still_reaches(tmp_path: Path, collect_immediately: None) -> None:
+    """Only unreachable data goes: commits another branch points at survive the reset."""
+    from open_climate_service.ingestions.services import collect_unreachable_objects
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    target = tmp_path / "ds.icechunk"
+    repo = open_or_create_repo(target)
+    _commit_days(repo, range(0, 3), "seed")
+    before = repo.lookup_branch("main")
+    for day in range(3, 6):
+        _commit_days(repo, range(day, day + 1), f"append {day}")
+    repo.create_branch("kept", repo.lookup_branch("main"))
+    repo.reset_branch("main", before)
+    files = _chunk_files(target)
+
+    collect_unreachable_objects(repo, target)
+
+    assert _chunk_files(target) == files
+
+
+def test_recovery_collects_what_a_killed_ingest_left_unreachable(tmp_path: Path, collect_immediately: None) -> None:
+    """A killed ingest leaves its rollback branch; recovery removes it and collects what it pinned."""
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    before = _chunk_files(target)
+
+    assert recover_interrupted_swap(target) is True
+    assert repo.list_branches() == {"main"}
+    assert _chunk_files(target) == before - 10
+
+
+@pytest.fixture
+def short_retention(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> float:
+    """A real retention window, one second long, so a test can wait it out."""
+    from open_climate_service.data_manager.services import downloader
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(services, "_GC_RETENTION", timedelta(seconds=1))
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
+    return 1.1
+
+
+def test_a_collection_left_pending_frees_the_attempt_once_due(tmp_path: Path, short_retention: float) -> None:
+    """The collection right after a rollback keeps the attempt's recent commits; the pending one frees them.
+
+    Without it a final failed attempt would keep its data forever: collection otherwise runs
+    only after another rollback.
+    """
+    import time
+
+    from open_climate_service.ingestions import services
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    repo.delete_branch("ocs-ingest-rollback-attempt")
+    before = _chunk_files(target)
+
+    services.collect_unreachable_objects(repo, target)
+    services._mark_collection_pending(target)
+    assert _chunk_files(target) == before, "precondition: the window keeps the fresh commits"
+    assert services.collect_pending_garbage_everywhere() == 0, "not due yet"
+
+    time.sleep(short_retention)
+    assert services.collect_pending_garbage_everywhere() == 1
+    assert _chunk_files(target) == before - 10
+    assert not (tmp_path / "ds.icechunk.gc-pending").exists()
+
+
+def test_the_next_ingest_runs_a_pending_collection(tmp_path: Path, short_retention: float) -> None:
+    import time
+
+    from open_climate_service.ingestions import services
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    repo.delete_branch("ocs-ingest-rollback-attempt")
+    before = _chunk_files(target)
+    services._mark_collection_pending(target)
+    time.sleep(short_retention)
+
+    services.recover_interrupted_swap(target)  # first thing every ingest does, under the lock
+
+    assert _chunk_files(target) == before - 10
+    assert not (tmp_path / "ds.icechunk.gc-pending").exists()
+
+
+def test_the_sweep_skips_a_store_an_ingest_holds(tmp_path: Path, short_retention: float) -> None:
+    import time
+
+    from open_climate_service.ingestions import services
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    repo.delete_branch("ocs-ingest-rollback-attempt")
+    services._mark_collection_pending(target)
+    time.sleep(short_retention)
+    lock = services._acquire_store_lock(target)
+    assert lock.acquire(blocking=False)
+    try:
+        assert services.collect_pending_garbage_everywhere() == 0
+    finally:
+        lock.release()
+    assert (tmp_path / "ds.icechunk.gc-pending").exists(), "left for the next sweep"
+
+
+def test_recovery_removes_a_leftover_pyramid_rebuild(tmp_path: Path) -> None:
+    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    target = tmp_path / "ds.icechunk"
+    open_or_create_repo(target)
+    leftover = tmp_path / "ds.icechunk.rebuild"
+    (leftover / "chunks").mkdir(parents=True)
+    (leftover / "chunks" / "partial").write_bytes(b"x" * 1024)
+
+    assert recover_interrupted_swap(target) is True
+    assert not leftover.exists()
+    assert target.exists()
+
+
+def test_startup_sweep_removes_every_leftover_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.data_manager.services import downloader
+    from open_climate_service.ingestions.services import remove_leftover_rebuilds
+
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
+    for name in ("a", "b"):
+        (tmp_path / f"{name}.icechunk").mkdir()
+        (tmp_path / f"{name}.icechunk.rebuild").mkdir()
+    (tmp_path / "keep.icechunk").mkdir()
+
+    assert remove_leftover_rebuilds() == 2
+    assert sorted(p.name for p in tmp_path.glob("*.icechunk")) == ["a.icechunk", "b.icechunk", "keep.icechunk"]
+    assert list(tmp_path.glob("*.icechunk.rebuild")) == []
+
+
+def test_startup_sweep_skips_rebuild_for_store_another_writer_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.data_manager.services import downloader
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
+    target = tmp_path / "active.icechunk"
+    target.mkdir()
+    leftover = tmp_path / "active.icechunk.rebuild"
+    leftover.mkdir()
+    lock = services._acquire_store_lock(target)
+    assert lock.acquire(blocking=False)
+    try:
+        assert services.remove_leftover_rebuilds() == 0
+        assert leftover.exists()
+    finally:
+        lock.release()
+
+    assert services.remove_leftover_rebuilds() == 1
+    assert not leftover.exists()

@@ -1,5 +1,6 @@
 """Open Climate Service -- Climate and earth observation data API for DHIS2."""
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -10,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
 
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from open_climate_service import config as api_config
 from open_climate_service.automation.service import get_workflow_automation_service
 from open_climate_service.data_registry import routes as dataset_template_routes
 from open_climate_service.exports import routes as exports_routes
@@ -71,12 +73,47 @@ def _append_vary_value(response: Response, value: str) -> None:
         response.headers["Vary"] = ", ".join([*values, value])
 
 
+# How often a writable instance runs the store collections rollbacks left pending. They come
+# due an hour after the rollback, so this frees them within about 75 minutes.
+_MAINTENANCE_INTERVAL_S = 15 * 60
+
+
+async def _collect_pending_garbage_periodically() -> None:
+    """Run due store collections in a worker thread, for as long as the app runs."""
+    from open_climate_service.ingestions.services import collect_pending_garbage_everywhere
+
+    while True:
+        await asyncio.sleep(_MAINTENANCE_INTERVAL_S)
+        try:
+            await asyncio.to_thread(collect_pending_garbage_everywhere)
+        except Exception:
+            logger.exception("Pending store collections failed; retrying at the next interval")
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
     from open_climate_service.plugins_diagnostics import log_plugin_loading
 
     log_plugin_loading()
+    maintenance: asyncio.Task[None] | None = None
+    if not api_config.is_read_only():
+        # Before any job is recovered, so no pyramid rebuild can be in progress. A read-only
+        # instance may share its data directory with a writing one, so it leaves them alone.
+        from open_climate_service.ingestions.services import (
+            collect_pending_garbage_everywhere,
+            remove_leftover_rebuilds,
+        )
+
+        try:
+            remove_leftover_rebuilds()
+        except Exception:
+            logger.exception("Could not remove leftover pyramid rebuilds; continuing startup")
+        try:
+            collect_pending_garbage_everywhere()
+        except Exception:
+            logger.exception("Could not run pending store collections; continuing startup")
+        maintenance = asyncio.create_task(_collect_pending_garbage_periodically())
     job_service = get_job_service()
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()
@@ -105,6 +142,8 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     try:
         yield
     finally:
+        if maintenance is not None:
+            maintenance.cancel()
         job_service.set_event_consumer(None)
         # The listener goes first: a delivery a job records from here on is reconciled at the
         # next start. The delivery provider is deliberately left in place. The executor does
