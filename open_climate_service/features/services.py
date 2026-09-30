@@ -275,17 +275,17 @@ def refreshable_feature_template_or_error(collection_id: str) -> dict[str, Any]:
     """
     template = feature_templates.get_feature_template(collection_id)
     if template is None:
-        raise HTTPException(status_code=404, detail=f"Feature collection template '{collection_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Data source '{collection_id}' not found")
     if collection_id in _raster_template_ids():
         raise HTTPException(
             status_code=409,
-            detail=f"'{collection_id}' is declared as both a dataset template and a feature collection template; "
+            detail=f"'{collection_id}' is declared as both a raster and a feature collection data source; "
             "rename one of them",
         )
     if not is_refreshable(template):
         raise HTTPException(
             status_code=400,
-            detail=f"Feature collection template '{collection_id}' names no provider this instance has",
+            detail=f"Data source '{collection_id}' names no provider this instance has",
         )
     return template
 
@@ -322,13 +322,13 @@ def refresh_feature_collection_from_provider(
     """
     template = feature_templates.get_feature_template(collection_id)
     if template is None:
-        raise ValueError(f"Unknown feature collection template '{collection_id}'")
+        raise ValueError(f"Unknown feature collection data source '{collection_id}'")
     provider_name = template.get("provider")
     if not isinstance(provider_name, str):
-        raise ValueError(f"Feature collection template '{collection_id}' does not declare a provider")
+        raise ValueError(f"Data source '{collection_id}' does not declare a provider")
     provider = feature_providers.get_feature_provider(provider_name)
     if provider is None:
-        raise ValueError(f"Feature collection template '{collection_id}' declares unknown provider '{provider_name}'")
+        raise ValueError(f"Data source '{collection_id}' declares unknown provider '{provider_name}'")
     return _refresh_feature_collection_from_provider(
         template=template,
         provider_name=provider_name,

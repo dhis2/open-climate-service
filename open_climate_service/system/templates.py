@@ -1222,9 +1222,10 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
 
 _API_GROUP_NOTES = {
     "Datasets": "What this instance holds, and the metadata for each dataset.",
-    "Dataset templates": "What this instance can ingest, and whether each template is ingestable.",
-    "Ingestions": "Fetch a dataset template into this instance, and follow the job it starts.",
+    "Data sources": "What this instance can ingest, and whether each data source is ingestable.",
+    "Ingestions": "Ingest from a data source into this instance, and follow the job it starts.",
     "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
+    "Features": "Feature collections as GeoParquet, and refreshing one from its data source.",
     "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
     "Icechunk": "The same stores for the Icechunk SDK, with version history.",
     "STAC": "Catalogue metadata for discovery, one collection per published dataset.",

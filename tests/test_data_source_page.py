@@ -334,6 +334,24 @@ def test_the_trailing_slash_form_redirects_to_the_canonical_path(client: TestCli
     assert client.get(f"{collection}/").status_code == 200, "and it still resolves when followed"
 
 
+@pytest.mark.parametrize("path", ["/dataset-templates", "/dataset-templates/chirps3_precipitation_daily"])
+def test_the_old_dataset_templates_paths_are_gone(client: TestClient, path: str) -> None:
+    """Renamed to /data-sources outright (CLIM-1133): no alias, and no redirect to follow."""
+    for headers in ({}, {"Accept": BROWSER_ACCEPT}):
+        response = client.get(path, headers=headers, follow_redirects=False)
+
+        assert response.status_code == 404, (path, headers)
+
+
+def test_every_api_group_has_a_note() -> None:
+    """The /api page explains each group by its OpenAPI tag, so a renamed tag needs its note renamed."""
+    from open_climate_service.main import app
+
+    tags = {tag for item in app.openapi()["paths"].values() for op in item.values() for tag in op.get("tags", [])}
+
+    assert set(landing._API_GROUP_NOTES) == tags
+
+
 def test_an_unknown_template_is_a_404(client: TestClient) -> None:
     assert client.get("/data-sources/does_not_exist").status_code == 404
     unknown = client.get("/data-sources/does_not_exist", headers={"Accept": BROWSER_ACCEPT})

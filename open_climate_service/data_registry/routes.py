@@ -43,15 +43,15 @@ def _feature_template_view(template: dict[str, Any], providers: dict[str, Any] |
 def list_data_sources(request: Request, response: Response) -> list[dict[str, Any]] | HTMLResponse:
     """Return the available data sources from the registry.
 
-    JSON by default, as it has always been. A browser gets the page the rail links to: only a
-    client ranking `text/html` above JSON, with `?f=html` and `?f=json` deciding outright.
+    JSON by default. A browser gets the page the rail links to: only a client ranking
+    `text/html` above JSON, with `?f=html` and `?f=json` deciding outright.
 
     The page is a narrower view than the JSON: it lists what this instance can *fetch*, while
-    the JSON lists every template and flags `ingestable`. A template produced by a workflow is
-    shown under Workflows instead, where the thing that makes it can be seen beside it.
+    the JSON lists every data source and flags `ingestable`. A data source produced by a
+    workflow is shown under Workflows instead, where the thing that makes it can be seen beside it.
 
-    Raster templates come first, then feature collection templates, each marked with `itemType`
-    (`coverage` or `feature`), as datasets are on `GET /datasets`.
+    Raster data sources come first, then feature collection data sources, each marked with
+    `itemType` (`coverage` or `feature`), as datasets are on `GET /datasets`.
     """
     from open_climate_service.features import providers as feature_providers
     from open_climate_service.features.services import usable_feature_templates
@@ -86,7 +86,7 @@ def _get_dataset_or_404(dataset_id: str) -> dict[str, Any]:
 def get_data_source(dataset_id: str, request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
     """Get a single data source by ID with derived coverage metadata.
 
-    JSON by default. A browser gets the page, where the template can also be ingested;
+    JSON by default. A browser gets the page, where the data source can also be ingested;
     `?f=html` and `?f=json` choose explicitly.
     """
     # Note: have to import inside function to avoid circular import
