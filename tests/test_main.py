@@ -24,6 +24,12 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         def recover_pending_jobs(self) -> None:
             calls.append("openeo-recover")
 
+        def set_finished_listener(self, listener: object) -> None:
+            calls.append("finished-listener-set" if listener is not None else "finished-listener-cleared")
+
+        def set_delivery_due_provider(self, provider: object) -> None:
+            calls.append("delivery-due-set" if provider is not None else "delivery-due-cleared")
+
         def shutdown(self) -> None:
             calls.append("openeo-shutdown")
 
@@ -33,6 +39,15 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
 
         def start(self) -> None:
             calls.append("automation-start")
+
+        def on_job_finished(self, record: object) -> None:
+            pass
+
+        def delivery_due_for(self, record: object) -> None:
+            return None
+
+        def reconcile_deliveries(self) -> None:
+            calls.append("automation-reconcile")
 
         def replay(self) -> None:
             calls.append("automation-replay")
@@ -52,21 +67,28 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
     async with main._lifespan(FastAPI()):
         assert calls == [
             "recover",
-            "openeo-recover",
             "automation-start",
             "consumer-set",
+            "delivery-due-set",
+            "finished-listener-set",
+            "openeo-recover",
+            "automation-reconcile",
             "automation-replay",
             "scheduler-start",
         ]
 
     assert calls == [
         "recover",
-        "openeo-recover",
         "automation-start",
         "consumer-set",
+        "delivery-due-set",
+        "finished-listener-set",
+        "openeo-recover",
+        "automation-reconcile",
         "automation-replay",
         "scheduler-start",
         "consumer-unset",
+        "finished-listener-cleared",
         "scheduler-shutdown",
         "shutdown",
         "openeo-shutdown",

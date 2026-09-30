@@ -82,9 +82,57 @@ from open_climate_service.streaming.store import (
 logger = logging.getLogger(__name__)
 MutationResult = TypeVar("MutationResult")
 
+
 # Per-store threading locks prevent two concurrent ingest/sync runs from writing
 # to the same Icechunk store simultaneously (which causes MVCC commit conflicts).
-_store_locks: dict[str, threading.Lock] = {}
+class StoreWriteLock:
+    """Exclusive writer lock for one Icechunk store, across threads and across processes.
+
+    The thread lock alone was invisible to a second OCS process: an overlapping restart, an
+    auto-reload, or a second worker could run a write against the same store at the same
+    time, and Icechunk then rejected one of them with a commit conflict. The file lock beside
+    the store makes the second writer refuse up front instead. The operating system releases
+    it when the holding process exits, so a crash never leaves a store locked.
+    """
+
+    def __init__(self, store_path: Path) -> None:
+        self._thread_lock = threading.Lock()
+        self._lock_path = store_path.with_name(f"{store_path.name}.lock")
+        self._handle: Any | None = None
+
+    def acquire(self, blocking: bool = True) -> bool:
+        """Take the lock; with ``blocking=False`` return False at once when another writer holds it."""
+        if not self._thread_lock.acquire(blocking=blocking):
+            return False
+        try:
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(self._lock_path, "a+", encoding="utf-8")  # noqa: SIM115 -- held until release()
+            try:
+                flags = portalocker.LOCK_EX if blocking else portalocker.LOCK_EX | portalocker.LOCK_NB
+                portalocker.lock(handle, flags)
+            except portalocker.exceptions.LockException:
+                handle.close()
+                self._thread_lock.release()
+                return False
+        except BaseException:
+            self._thread_lock.release()
+            raise
+        self._handle = handle
+        return True
+
+    def release(self) -> None:
+        handle, self._handle = self._handle, None
+        try:
+            if handle is not None:
+                try:
+                    portalocker.unlock(handle)
+                finally:
+                    handle.close()
+        finally:
+            self._thread_lock.release()
+
+
+_store_locks: dict[str, StoreWriteLock] = {}
 _store_locks_mutex = threading.Lock()
 
 # Consolidated zarr metadata cache: (store_path, snapshot_id) → metadata dict.
@@ -122,12 +170,16 @@ class _StoreNormalizationResult:
     swapped: bool = False
 
 
-def _acquire_store_lock(store_path: Path) -> threading.Lock:
-    """Return the exclusive lock for store_path, creating it if needed."""
+def _acquire_store_lock(store_path: Path) -> StoreWriteLock:
+    """Return the exclusive writer lock for store_path, creating it if needed.
+
+    Every writer of a managed Icechunk store must hold this lock, whichever path it takes:
+    ingestion, sync, or an openEO job publishing a managed dataset.
+    """
     key = str(store_path.resolve())
     with _store_locks_mutex:
         if key not in _store_locks:
-            _store_locks[key] = threading.Lock()
+            _store_locks[key] = StoreWriteLock(Path(key))
         return _store_locks[key]
 
 
@@ -367,8 +419,14 @@ def create_artifact(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, object]], None] | None = None,
     periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
 ) -> ArtifactRecord:
     """Materialize one managed dataset artifact and persist its metadata.
+
+    ``on_update_planned`` is called once the plan is known and before anything is fetched,
+    only when the ingestion will change stored data. It receives the coverage end the data
+    had before this update, or None when every period is new or rewritten. An up-to-date
+    dataset returns its existing artifact without calling it.
 
     Source dataset materialization is plugin-backed and always writes an
     Icechunk store. Sync requests may still pass `download_start` and
@@ -428,6 +486,7 @@ def create_artifact(
         is_cancel_requested=is_cancel_requested,
         save_cursor=save_cursor,
         periods=periods,
+        on_update_planned=on_update_planned,
     )
 
 
@@ -1106,6 +1165,24 @@ def _plan_streaming_materialization(
     )
 
 
+def _previous_coverage_end(dataset: dict[str, object], plan: _StreamingMaterializationPlan) -> str | None:
+    """The coverage end stored data had before an update, or None when all of it is new.
+
+    Only a forward append keeps earlier periods as they were. A new store has none, and a
+    rematerialization rewrites every period, so both report None: everything up to the new
+    end changed.
+    """
+    if plan.action != SyncAction.APPEND or not plan.has_committed_periods:
+        return None
+    try:
+        existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return None
+    return existing.coverage.temporal.end
+
+
 def _create_streaming_artifact(
     *,
     dataset: dict[str, object],
@@ -1121,6 +1198,7 @@ def _create_streaming_artifact(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, object]], None] | None = None,
     periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
 ) -> ArtifactRecord:
     """Create or update one plugin-backed Icechunk artifact.
 
@@ -1143,7 +1221,6 @@ def _create_streaming_artifact(
     if country_code is not None:
         params["country_code"] = country_code
 
-    plugin = _load_streaming_plugin(plugin_path, params=params)
     store_path = downloader.get_icechunk_path(dataset)
 
     lock = _acquire_store_lock(store_path)
@@ -1152,6 +1229,7 @@ def _create_streaming_artifact(
             status_code=409,
             detail=f"An ingest or sync is already running for dataset '{dataset['id']}'. Wait for it to finish.",
         )
+    plugin: IngestionPlugin | None = None
     replacement_path: Path | None = None
     rollback_repo: Any | None = None
     rollback_branch: str | None = None
@@ -1161,6 +1239,7 @@ def _create_streaming_artifact(
     plugin_handed_to_orchestrator = False
     ingest_completed = False
     try:
+        plugin = _load_streaming_plugin(plugin_path, params=params)
         # First thing under the lock, before anything looks at the store. A swap killed between
         # its two renames leaves the published path missing and the data at `.retired`; ingest
         # would read that as a brand-new store and write only the requested delta into a fresh
@@ -1201,6 +1280,8 @@ def _create_streaming_artifact(
                     temporal.start,
                     temporal.end,
                 )
+        if plan.action != SyncAction.NO_OP and on_update_planned is not None:
+            on_update_planned(_previous_coverage_end(dataset, plan))
         materialization_scope = request_scope.model_copy(update={"start": plan.start, "end": plan.end})
 
         ingest_path = store_path
@@ -1353,7 +1434,7 @@ def _create_streaming_artifact(
                     published_swap_pending = False
                 except Exception:
                     logger.warning("Could not clean up retired store '%s'", store_path, exc_info=True)
-            if not plugin_handed_to_orchestrator:
+            if not plugin_handed_to_orchestrator and plugin is not None:
                 try:
                     close_ingestion_plugin(plugin)
                 except Exception:
@@ -1691,12 +1772,27 @@ def _maybe_build_pyramid(
     attrs on every commit. We detect that case and skip the read-rewrite entirely, avoiding
     the write amplification of re-emitting the whole store on every sync.
 
+    A temporal append to a pyramid store only needs the coarser levels extended to the
+    periods level 0 has gained, which ``append_pyramid_levels`` does in place. Anything else
+    (a first ingest, a replacement, a changed resampling method) rebuilds.
+
     Returns whether normalization completed and whether it swapped the store.
     Errors remain logged and swallowed so a brand-new plain flat artifact can
     still be registered; callers updating an existing store use the result to
     roll back instead.
     """
     from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
+
+    try:
+        appended = downloader.append_pyramid_levels(
+            store_path, pyramid_method=downloader.resampling_method_from_template(dataset)
+        )
+    except Exception:
+        # One commit, so a failure leaves the store as the ingest committed it.
+        logger.warning("Could not append to the pyramid levels of '%s'; rebuilding", store_path.name, exc_info=True)
+        appended = None
+    if appended is not None:
+        return _StoreNormalizationResult(completed=True)
 
     try:
         ds = open_icechunk_dataset(store_path)
