@@ -64,9 +64,10 @@ def _plan_rename(parent: Path, old: str, new: str, plan: Plan) -> None:
 def _migrated_path(raw: str, root: Path) -> str:
     """The same store path with its first folder renamed, relative or absolute under root."""
     mapping = dict(DATA_RENAMES)
-    candidate = PurePosixPath(raw)
-    if not candidate.is_absolute():
-        parts = candidate.parts
+    # Absolute is decided by the native path, so a Windows record (`C:\\data\\downloads\\...`)
+    # is recognised on Windows; relative records are always written with forward slashes.
+    if not Path(raw).is_absolute():
+        parts = PurePosixPath(raw).parts
         if parts and parts[0] in mapping:
             return PurePosixPath(mapping[parts[0]], *parts[1:]).as_posix()
         return raw
@@ -101,15 +102,19 @@ def _plan_records(data_root: Path, plan: Plan) -> None:
         plan.records = (index, records)
 
 
-# `plugin: datasets.module.Class` in a template, and `from datasets.x import y` /
-# `import datasets.x` in a plugin module. Nothing else is touched: the words are common.
-_YAML_PLUGIN = re.compile(r"^(\s*plugin:\s*['\"]?)(datasets|features)\.", re.MULTILINE)
-_PY_IMPORT = re.compile(r"^(\s*(?:from|import)\s+)(datasets|features)(\.|\s+import\b)", re.MULTILINE)
+# The old folder as the first component of a dotted path, or after the built-in package:
+# `plugin: datasets.x.Class` or `plugin: open_climate_service.plugins.datasets.x.Class` in a
+# dataset template, and `from datasets.x import y`, `from datasets import x`, `import datasets`,
+# `import datasets as d` (and the same with the built-in prefix) in a plugin module. Nothing
+# else is touched: the words are common.
+_PREFIX = r"((?:open_climate_service\.plugins\.)?)"
+_YAML_PLUGIN = re.compile(r"^(\s*plugin:\s*['\"]?)" + _PREFIX + r"(datasets|features)(?=\.)", re.MULTILINE)
+_PY_IMPORT = re.compile(r"^(\s*(?:from|import)\s+)" + _PREFIX + r"(datasets|features)(?=[.\s,]|$)", re.MULTILINE)
 
 
 def _rewritten(text: str, pattern: re.Pattern[str]) -> str:
     mapping = dict(PLUGIN_RENAMES)
-    return pattern.sub(lambda m: f"{m.group(1)}{mapping[m.group(2)]}{m.group(3) if m.lastindex == 3 else '.'}", text)
+    return pattern.sub(lambda m: f"{m.group(1)}{m.group(2)}{mapping[m.group(3)]}", text)
 
 
 def _plan_plugin_files(plugins_root: Path, plan: Plan) -> None:

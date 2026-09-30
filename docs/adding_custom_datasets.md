@@ -151,7 +151,7 @@ from the dimension's metadata, so there's nothing extra to configure.
     kind: temporal
     execution: append
   ingestion:
-    plugin: datasets.enacts.ENACTSRainfallPlugin
+    plugin: rasters.enacts.ENACTSRainfallPlugin
   units: mm
   resolution: 4 km x 4 km
   source: ENACTS
@@ -267,7 +267,7 @@ the revision so sync can see it:
       value: R2025A # the source's own identifier, not a period
       authority: mypopulation # whose scheme names it — an identifier, not a label
   ingestion:
-    plugin: datasets.my_population.MyPopulationPlugin
+    plugin: rasters.my_population.MyPopulationPlugin
     params:
       revision: R2025A
 ```
@@ -326,7 +326,7 @@ A forecast's periods lie in the _future_, which changes what an ingestion reques
   sync:
     kind: temporal # still temporal: re-running fetches a fresher forecast
   ingestion:
-    plugin: datasets.my_forecast.MyForecastPlugin
+    plugin: rasters.my_forecast.MyForecastPlugin
     params:
       max_lead_days: 7
 ```
@@ -433,7 +433,7 @@ plugins_dir: ./plugins/
 
 All `*.yaml` files in `plugins_dir/rasters/` are loaded and merged with the built-in templates. Custom templates are additive — the built-ins remain available unless you deliberately override one by using the same `id`.
 
-Since `plugins_dir` is added to `sys.path`, the plugin class at `datasets.enacts.ENACTSRainfallPlugin` is importable without installing a package.
+Since `plugins_dir` is added to `sys.path`, the plugin class at `rasters.enacts.ENACTSRainfallPlugin` is importable without installing a package.
 
 ## Step 4: Ingest and publish
 

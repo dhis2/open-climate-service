@@ -34,7 +34,20 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  ingestion:\n    plugin: datasets.chelsa.ChelsaPlugin\n    params: {}\n"
     )
     (plugins / "datasets" / "chelsa.py").write_text(
-        "from datasets.helpers import clip\nimport datasets.helpers\n\ndatasets = ['not an import']\n"
+        "from datasets.helpers import clip\n"
+        "import datasets.helpers\n"
+        "import datasets\n"
+        "import datasets as d\n"
+        "from datasets import helpers\n"
+        "from open_climate_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin\n"
+        "import datasets_extra\n"
+        "\n"
+        "datasets = ['not an import']\n"
+    )
+    (plugins / "datasets" / "chirps_override.yaml").write_text(
+        "- id: chirps_override\n  name: CHIRPS override\n  variable: precip\n  period_type: daily\n"
+        "  sync:\n    kind: static\n"
+        "  ingestion:\n    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin\n"
     )
     (plugins / "features").mkdir()
     (plugins / "features" / "regions.yaml").write_text("- id: regions\n  name: Regions\n  id_property: id\n")
@@ -66,6 +79,13 @@ def test_moves_data_and_plugins_and_rewrites_what_names_them(instance: Path) -> 
     module = (plugins / "rasters" / "chelsa.py").read_text()
     assert "from rasters.helpers import clip" in module
     assert "import rasters.helpers" in module
+    assert "\nimport rasters\n" in module
+    assert "import rasters as d" in module
+    assert "from rasters import helpers" in module
+    assert "from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin" in module
+    assert "import datasets_extra" in module, "a module that only starts with the word is left alone"
+    override = (plugins / "rasters" / "chirps_override.yaml").read_text()
+    assert "plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin" in override
     assert "datasets = ['not an import']" in module, "only imports are rewritten"
 
 
