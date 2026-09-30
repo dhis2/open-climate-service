@@ -136,6 +136,21 @@ def test_store_held_by_another_process_is_refused_before_any_work(ingestion: dic
     assert artifact.coverage.temporal.end == "2026-01-06"
 
 
+def test_store_contention_is_refused_before_plugin_is_created(
+    ingestion: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_path: Path = ingestion["store_path"]
+    other = _OtherProcessLock(store_path.with_name(f"{store_path.name}.lock"))
+    created: list[bool] = []
+    monkeypatch.setattr(services, "_load_streaming_plugin", lambda *args, **kwargs: created.append(True))
+    try:
+        with pytest.raises(HTTPException, match="already running"):
+            _create(ingestion)
+    finally:
+        other.release()
+    assert created == []
+
+
 def test_publishing_a_managed_dataset_waits_for_the_store_writer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -398,6 +413,8 @@ def test_worker_losing_the_lease_handoff_still_gets_the_job_taken_over(
     jobs: Any, ingestion: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Recovery here released the lease; another process won it before this worker started."""
+    import time
+
     from open_climate_service.data_registry.services import datasets as registry_datasets
     from open_climate_service.extents import services as extent_services
     from open_climate_service.jobs import service as job_service_module
@@ -423,10 +440,15 @@ def test_worker_losing_the_lease_handoff_still_gets_the_job_taken_over(
     lease = job_service_module._lease_path("handed-off")
     other = _OtherProcessLock(lease.with_suffix(lease.suffix + ".lock"))
 
-    # No recovery call: the worker itself loses the lease, twice, as repeated enqueues would.
-    jobs._run_job("handed-off")
-    jobs._run_job("handed-off")
+    # Run through the executor so the losing worker remains in `_futures` until
+    # `_run_job` returns. Starting the watcher before removing that future used to
+    # let takeover recover the job while its replacement enqueue was still refused.
+    jobs._enqueue_job("handed-off")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and jobs._watched != {"handed-off"}:
+        time.sleep(0.01)
     assert jobs._watched == {"handed-off"}
+    assert "handed-off" not in jobs._futures
     assert jobs.get_job_or_404("handed-off").status == JobStatus.ACCEPTED
 
     # The other process exits without running the job.

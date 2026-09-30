@@ -113,10 +113,11 @@ shared domain services and may call them directly while the HTTP server is stopp
 
 Every writer of a managed Icechunk store (ingestion, sync, and openEO jobs publishing a
 managed dataset) holds a writer lock: a lock file beside the store, which also excludes
-writers in other processes. An ingestion or sync request encountering an active writer is
-refused with `409` before source data is fetched or written. An openEO job that reaches
-managed-dataset publication while the lock is held fails before writing the target store,
-with an error explaining that another writer is active.
+writers in other processes. A synchronous ingestion or sync request encountering an active
+writer is refused with `409` before source data is fetched or written. An asynchronous request
+has already returned `202` by that point, so its job fails with the same explanation instead.
+An openEO job that reaches managed-dataset publication while the lock is held fails before
+writing the target store, with an error explaining that another writer is active.
 
 A native job also runs in at most one process at a time. If a process that is still shutting
 down is executing a job, startup recovery in the new process leaves that job alone instead of

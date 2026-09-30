@@ -1195,7 +1195,6 @@ def _create_streaming_artifact(
     if country_code is not None:
         params["country_code"] = country_code
 
-    plugin = _load_streaming_plugin(plugin_path, params=params)
     store_path = downloader.get_icechunk_path(dataset)
 
     lock = _acquire_store_lock(store_path)
@@ -1204,6 +1203,7 @@ def _create_streaming_artifact(
             status_code=409,
             detail=f"An ingest or sync is already running for dataset '{dataset['id']}'. Wait for it to finish.",
         )
+    plugin: IngestionPlugin | None = None
     replacement_path: Path | None = None
     rollback_repo: Any | None = None
     rollback_branch: str | None = None
@@ -1213,6 +1213,7 @@ def _create_streaming_artifact(
     plugin_handed_to_orchestrator = False
     ingest_completed = False
     try:
+        plugin = _load_streaming_plugin(plugin_path, params=params)
         # First thing under the lock, before anything looks at the store. A swap killed between
         # its two renames leaves the published path missing and the data at `.retired`; ingest
         # would read that as a brand-new store and write only the requested delta into a fresh
@@ -1405,7 +1406,7 @@ def _create_streaming_artifact(
                     published_swap_pending = False
                 except Exception:
                     logger.warning("Could not clean up retired store '%s'", store_path, exc_info=True)
-            if not plugin_handed_to_orchestrator:
+            if not plugin_handed_to_orchestrator and plugin is not None:
                 try:
                     close_ingestion_plugin(plugin)
                 except Exception:

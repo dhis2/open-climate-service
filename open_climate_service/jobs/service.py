@@ -406,6 +406,7 @@ class JobService:
         return True
 
     def _run_job(self, job_id: str) -> None:
+        watch_for_takeover = False
         try:
             with _execution_lease(job_id) as won:
                 if not won:
@@ -415,17 +416,22 @@ class JobService:
                     # process is not doing, but watch it: if that process exits without
                     # finishing, nothing else would ever pick the job up.
                     logger.warning("Job %s is executing in another process; watching for takeover", job_id)
-                    self._watch_for_takeover(job_id)
-                    return
-                # Re-read under the lease: another process may have finished the job between
-                # this one queueing it and winning the lease. A terminal job never runs again.
-                current = store.get_job_record(job_id)
-                if current is None or current.status not in _PENDING_STATUSES:
-                    return
-                self._execute_job(job_id)
+                    watch_for_takeover = True
+                else:
+                    # Re-read under the lease: another process may have finished the job between
+                    # this one queueing it and winning the lease. A terminal job never runs again.
+                    current = store.get_job_record(job_id)
+                    if current is None or current.status not in _PENDING_STATUSES:
+                        return
+                    self._execute_job(job_id)
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)
+        if watch_for_takeover:
+            # Start watching only after this worker is no longer registered as active.
+            # Otherwise the watcher can recover the job before this future finishes,
+            # have its enqueue rejected, and leave the job with no worker or watcher.
+            self._watch_for_takeover(job_id)
 
     def _execute_job(self, job_id: str) -> None:
         while True:
