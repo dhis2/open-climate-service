@@ -805,48 +805,61 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
     store_path = downloader.DOWNLOAD_DIR / f"{dataset_id}.icechunk"
     store_path.parent.mkdir(parents=True, exist_ok=True)
 
-    downloader.write_to_icechunk_store(
-        _strip_non_serializable_attrs(ds),
-        store_path,
-        x_dim,
-        y_dim,
-        t_dim,
-        crs=crs,
-        pyramid_method=downloader.resampling_method_from_template(template),
-        commit_message=f"Published from openEO job: {dataset_id}",
-    )
+    # The same writer lock as ingestion and sync. Publishing into a store while one of those
+    # writes it would make one of them fail with an Icechunk commit conflict.
+    store_lock = ingestion_services._acquire_store_lock(store_path)
+    if not store_lock.acquire(blocking=False):
+        raise RuntimeError(
+            f"Managed dataset '{dataset_id}' is being written by an ingestion, sync, or another job; "
+            "run this job again once that finishes"
+        )
+    try:
+        downloader.write_to_icechunk_store(
+            _strip_non_serializable_attrs(ds),
+            store_path,
+            x_dim,
+            y_dim,
+            t_dim,
+            crs=crs,
+            pyramid_method=downloader.resampling_method_from_template(template),
+            commit_message=f"Published from openEO job: {dataset_id}",
+        )
 
-    # A derived product is a published dataset and appears in the same lists, so it gets a
-    # thumbnail on the same terms. One write, so this is already the once-per-run render the
-    # streaming path has to arrange deliberately. Never raises.
-    write_dataset_thumbnail(
-        store_path,
-        {**template, "id": dataset_id, "variable": variable},
-    )
+        # A derived product is a published dataset and appears in the same lists, so it gets a
+        # thumbnail on the same terms. One write, so this is already the once-per-run render the
+        # streaming path has to arrange deliberately. Never raises.
+        write_dataset_thumbnail(
+            store_path,
+            {**template, "id": dataset_id, "variable": variable},
+        )
 
-    record = ArtifactRecord(
-        artifact_id=str(uuid.uuid4()),
-        dataset_id=dataset_id,
-        dataset_name=dataset_name,
-        variable=variable,
-        period_type=period_type,
-        format=ArtifactFormat.ICECHUNK,
-        path=str(store_path),
-        asset_paths=[str(store_path)],
-        size_bytes=stored_bytes(store_path),
-        variables=[str(v) for v in ds.data_vars],
-        request_scope=ArtifactRequestScope(
-            start=coverage.temporal.start,
-            end=coverage.temporal.end,
-        ),
-        coverage=coverage,
-        created_at=datetime.now(UTC),
-        publication=ArtifactPublication(),
-    )
-    _publish_raw = options.get("publish", True)
-    if not isinstance(_publish_raw, bool):
-        raise ValueError(f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}")
-    ingestion_services.register_artifact_record(record, publish=_publish_raw)
+        record = ArtifactRecord(
+            artifact_id=str(uuid.uuid4()),
+            dataset_id=dataset_id,
+            dataset_name=dataset_name,
+            variable=variable,
+            period_type=period_type,
+            format=ArtifactFormat.ICECHUNK,
+            path=str(store_path),
+            asset_paths=[str(store_path)],
+            size_bytes=stored_bytes(store_path),
+            variables=[str(v) for v in ds.data_vars],
+            request_scope=ArtifactRequestScope(
+                start=coverage.temporal.start,
+                end=coverage.temporal.end,
+            ),
+            coverage=coverage,
+            created_at=datetime.now(UTC),
+            publication=ArtifactPublication(),
+        )
+        _publish_raw = options.get("publish", True)
+        if not isinstance(_publish_raw, bool):
+            raise ValueError(
+                f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}"
+            )
+        ingestion_services.register_artifact_record(record, publish=_publish_raw)
+    finally:
+        store_lock.release()
 
 
 def _recover_temporal_from_attrs(ds: Any) -> tuple[str | None, str | None]:
