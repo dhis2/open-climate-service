@@ -1299,6 +1299,8 @@ def test_create_artifact_rolls_back_append_when_pyramid_rebuild_fails(
     # The attempt's commits are unreachable after the reset, and are collected once the
     # rollback branch no longer pins them.
     assert transaction_repo.calls == ["reset", "delete", "collect"]
+    # The retention window kept the attempt's recent commits, so a later collection is pending.
+    assert store_path.with_name(f"{store_path.name}.gc-pending").exists()
     assert stored_records == []
 
 

@@ -2229,6 +2229,80 @@ def test_recovery_collects_what_a_killed_ingest_left_unreachable(tmp_path: Path,
     assert _chunk_files(target) == before - 10
 
 
+@pytest.fixture
+def short_retention(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> float:
+    """A real retention window, one second long, so a test can wait it out."""
+    from open_climate_service.data_manager.services import downloader
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(services, "_GC_RETENTION", timedelta(seconds=1))
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
+    return 1.1
+
+
+def test_a_collection_left_pending_frees_the_attempt_once_due(tmp_path: Path, short_retention: float) -> None:
+    """The collection right after a rollback keeps the attempt's recent commits; the pending one frees them.
+
+    Without it a final failed attempt would keep its data forever: collection otherwise runs
+    only after another rollback.
+    """
+    import time
+
+    from open_climate_service.ingestions import services
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    repo.delete_branch("ocs-ingest-rollback-attempt")
+    before = _chunk_files(target)
+
+    services.collect_unreachable_objects(repo, target)
+    services._mark_collection_pending(target)
+    assert _chunk_files(target) == before, "precondition: the window keeps the fresh commits"
+    assert services.collect_pending_garbage_everywhere() == 0, "not due yet"
+
+    time.sleep(short_retention)
+    assert services.collect_pending_garbage_everywhere() == 1
+    assert _chunk_files(target) == before - 10
+    assert not (tmp_path / "ds.icechunk.gc-pending").exists()
+
+
+def test_the_next_ingest_runs_a_pending_collection(tmp_path: Path, short_retention: float) -> None:
+    import time
+
+    from open_climate_service.ingestions import services
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    repo.delete_branch("ocs-ingest-rollback-attempt")
+    before = _chunk_files(target)
+    services._mark_collection_pending(target)
+    time.sleep(short_retention)
+
+    services.recover_interrupted_swap(target)  # first thing every ingest does, under the lock
+
+    assert _chunk_files(target) == before - 10
+    assert not (tmp_path / "ds.icechunk.gc-pending").exists()
+
+
+def test_the_sweep_skips_a_store_an_ingest_holds(tmp_path: Path, short_retention: float) -> None:
+    import time
+
+    from open_climate_service.ingestions import services
+
+    target = tmp_path / "ds.icechunk"
+    repo = _rolled_back_store(target)
+    repo.delete_branch("ocs-ingest-rollback-attempt")
+    services._mark_collection_pending(target)
+    time.sleep(short_retention)
+    lock = services._acquire_store_lock(target)
+    assert lock.acquire(blocking=False)
+    try:
+        assert services.collect_pending_garbage_everywhere() == 0
+    finally:
+        lock.release()
+    assert (tmp_path / "ds.icechunk.gc-pending").exists(), "left for the next sweep"
+
+
 def test_recovery_removes_a_leftover_pyramid_rebuild(tmp_path: Path) -> None:
     from open_climate_service.ingestions.services import recover_interrupted_swap
     from open_climate_service.streaming.store import open_or_create_repo
