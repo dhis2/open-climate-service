@@ -367,8 +367,14 @@ def create_artifact(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, object]], None] | None = None,
     periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
 ) -> ArtifactRecord:
     """Materialize one managed dataset artifact and persist its metadata.
+
+    ``on_update_planned`` is called once the plan is known and before anything is fetched,
+    only when the ingestion will change stored data. It receives the coverage end the data
+    had before this update, or None when every period is new or rewritten. An up-to-date
+    dataset returns its existing artifact without calling it.
 
     Source dataset materialization is plugin-backed and always writes an
     Icechunk store. Sync requests may still pass `download_start` and
@@ -428,6 +434,7 @@ def create_artifact(
         is_cancel_requested=is_cancel_requested,
         save_cursor=save_cursor,
         periods=periods,
+        on_update_planned=on_update_planned,
     )
 
 
@@ -1106,6 +1113,24 @@ def _plan_streaming_materialization(
     )
 
 
+def _previous_coverage_end(dataset: dict[str, object], plan: _StreamingMaterializationPlan) -> str | None:
+    """The coverage end stored data had before an update, or None when all of it is new.
+
+    Only a forward append keeps earlier periods as they were. A new store has none, and a
+    rematerialization rewrites every period, so both report None: everything up to the new
+    end changed.
+    """
+    if plan.action != SyncAction.APPEND or not plan.has_committed_periods:
+        return None
+    try:
+        existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return None
+    return existing.coverage.temporal.end
+
+
 def _create_streaming_artifact(
     *,
     dataset: dict[str, object],
@@ -1121,6 +1146,7 @@ def _create_streaming_artifact(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, object]], None] | None = None,
     periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
 ) -> ArtifactRecord:
     """Create or update one plugin-backed Icechunk artifact.
 
@@ -1201,6 +1227,8 @@ def _create_streaming_artifact(
                     temporal.start,
                     temporal.end,
                 )
+        if plan.action != SyncAction.NO_OP and on_update_planned is not None:
+            on_update_planned(_previous_coverage_end(dataset, plan))
         materialization_scope = request_scope.model_copy(update={"start": plan.start, "end": plan.end})
 
         ingest_path = store_path
