@@ -2,14 +2,14 @@
 
 This guide explains how to add a new dataset source to your Open Climate Service instance — for example a national meteorological service, a regional satellite product, or a custom model output.
 
-The built-in data sources (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `climate-service.yaml` at a plugins directory.
+The built-in dataset templates (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `climate-service.yaml` at a plugins directory.
 
 ## Overview
 
 Adding a custom dataset involves two things:
 
 1. **A streaming plugin** — a Python class that enumerates periods and fetches one period at a time as an `xarray.Dataset`.
-2. **A dataset definition** — a YAML file that describes the dataset and tells the API which plugin class to use.
+2. **A dataset template** — a YAML file that describes the dataset and tells the API which plugin class to use.
 
 Place both in your `plugins/datasets/` directory:
 
@@ -138,7 +138,7 @@ with a regular numeric `step`, e.g. `dayofyear`), and a **dropdown** for a categ
 irregularly-spaced one (e.g. `sex`, or the irregular age bands). The control type follows
 from the dimension's metadata, so there's nothing extra to configure.
 
-## Step 2: Create a dataset definition
+## Step 2: Create a dataset template
 
 ```yaml
 # plugins/datasets/enacts_rainfall.yaml

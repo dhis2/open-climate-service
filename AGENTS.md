@@ -8,7 +8,7 @@ The Open Climate Service is a FastAPI-based REST API that downloads, processes, 
 
 Key concepts:
 
-- **Data sources** — upstream datasets this instance can fetch, each described by a **dataset definition**: a YAML entry in `plugins/datasets/` (variable, period type, download function). These are blueprints, listed at `GET /data-sources` and on the Data sources page. The code still calls them dataset templates (`data_registry/`, `template` variables).
+- **Data sources** — upstream datasets this instance can fetch, each described by a **dataset template**: a YAML entry in `plugins/datasets/` (variable, period type, download function). These are blueprints; the data sources are listed at `GET /data-sources` and on the Data sources page.
 - **Artifacts / managed datasets** — ingested instances of a template for a specific spatial extent and time range. Exposed under `/datasets` and `/zarr/{dataset_id}`.
 - **Extent** — a single named spatial bounding box configured at instance setup time (`id`, `bbox`, optional `country_code`). Exposed at `GET /extent`.
 - **GeoZarr stores** — datasets are stored as chunked Zarr v3 archives with GeoZarr spatial attributes. Flat stores for small extents; multiscale pyramids for large ones. Served chunk-by-chunk over HTTP with no specialised server middleware.
@@ -43,9 +43,9 @@ make start    # docker compose up --build
 
 The `.env` file is required for `make run`. Copy `.env.example` if it exists.
 
-## Data sources
+## Dataset templates
 
-Each YAML file in `plugins/datasets/` holds dataset definitions, one per data source. The `ingestion` block controls download and zarr build behaviour:
+Each YAML file in `plugins/datasets/` holds dataset templates, one per data source. The `ingestion` block controls download and zarr build behaviour:
 
 ```yaml
 ingestion:

@@ -15,7 +15,7 @@ It is intended to answer:
 
 The main branch now centers on one narrow vertical slice:
 
-1. define data sources in the Open Climate Service registry
+1. define dataset templates in the Open Climate Service registry
 2. define configured extents for the Open Climate Service instance
 3. ingest data into a managed dataset for one data source plus one extent
 4. publish that managed dataset as a STAC collection under `/stac`
@@ -152,7 +152,7 @@ Current STAC details:
 
 - the Zarr asset href is `/zarr/{dataset_id}` — the store root — for flat and pyramided stores alike. A pyramided root has no data variables of its own: it carries `multiscales` (with the levels under `0/`, `1/`, …) plus the time coordinate and `spatial_ref`, and its media type gains `profile=multiscales`, which is how a client knows to resolve a level rather than expecting arrays at the root. Python readers do that descent for you via `open_icechunk_dataset` / `open_zarr_dataset`, which always land on level 0
 - temporal extents are normalized to RFC 3339 in both STAC and Datacube temporal extent fields
-- STAC collection `license` publishes the data source's declared licence — an SPDX
+- STAC collection `license` publishes the dataset template's declared licence — an SPDX
   identifier, or `other` for a licence that has none, with a `rel: license` link and
   `providers` for attribution (CLIM-946). An undeclared licence warns at template load
   and publishes `other`.

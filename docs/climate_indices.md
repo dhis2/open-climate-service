@@ -182,7 +182,7 @@ The registered processes therefore enforce units on the way in. A cube in a comp
 
 So the call above needs no change on a `degC` store: `era5land_temperature_daily` and `era5land_dewpoint_daily` are both converted to `K` on the way in, and the answer is correct without a manual conversion step.
 
-If a cube is rejected for missing units, the fix is to declare `units` on the variable in its data source — that value is what gets CF-stamped at ingest.
+If a cube is rejected for missing units, the fix is to declare `units` on the variable in its dataset template — that value is what gets CF-stamped at ingest.
 
 ---
 

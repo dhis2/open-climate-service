@@ -27,7 +27,7 @@ osc_example_plugin/
   datasets/
     __init__.py
     example.py           # your BaseDatasetPlugin subclass
-    example.yaml         # dataset definitions
+    example.yaml         # dataset templates
   processes/             # optional: @process-decorated callables
     __init__.py
     my_process.py
@@ -69,7 +69,7 @@ instance decides which OCS revision to run:
 dependencies = ["open-climate-service"]
 ```
 
-The `ingestion.plugin` in a data source uses the class's **full dotted path** (not a
+The `ingestion.plugin` in a dataset template uses the class's **full dotted path** (not a
 `plugins_dir`-relative one), since the package is installed on `PYTHONPATH`:
 
 ```yaml
@@ -98,7 +98,7 @@ Templates are merged in increasing order of precedence, per extension point:
 
 **built-in → installed plugins → instance `plugins_dir`**
 
-So `plugins_dir` always wins on an id conflict — an operator can drop a dataset definition into their local
+So `plugins_dir` always wins on an id conflict — an operator can drop a dataset template into their local
 `plugins/datasets/` to override an installed plugin's dataset. Overrides are logged at load time.
 
 ## Naming convention

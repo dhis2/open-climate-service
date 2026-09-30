@@ -16,12 +16,12 @@ is shared across instances without any `plugins_dir` wiring — see [Installable
 
 ## Datasets
 
-Each data source is described by a dataset definition, a YAML entry that describes an upstream dataset. Built-ins live in the package (`open_climate_service/plugins/datasets/`). Custom ones are loaded from `plugins_dir/datasets/`.
+Each data source is described by a dataset template, a YAML entry that describes an upstream dataset. Built-ins live in the package (`open_climate_service/plugins/datasets/`). Custom ones are loaded from `plugins_dir/datasets/`.
 
 ```
 plugins/
 └── datasets/
-    ├── enacts_rainfall.yaml    # dataset definition
+    ├── enacts_rainfall.yaml    # dataset template
     └── enacts.py               # streaming plugin class
 ```
 
@@ -91,7 +91,7 @@ This is also why the two libraries are surfaced differently. xclim's indicators 
 
 ### Units are part of the contract
 
-Processes that wrap unit-sensitive physics should validate their inputs rather than trust them. Stored variables are CF-stamped from the `units` field of their data source, and those units are whatever the dataset declares — ERA5-Land temperature, for example, is converted to `degC` at ingest, while ECMWF library functions expect kelvin. Passing one for the other raises no error and produces a plausible, wrong number.
+Processes that wrap unit-sensitive physics should validate their inputs rather than trust them. Stored variables are CF-stamped from the `units` field of their dataset template, and those units are whatever the dataset declares — ERA5-Land temperature, for example, is converted to `degC` at ingest, while ECMWF library functions expect kelvin. Passing one for the other raises no error and produces a plausible, wrong number.
 
 The auto-registered earthkit-meteo processes handle this for you: each reads the unit its upstream function documents, converts a compatible cube (`degC` → `K`, `hPa` → `Pa`), and refuses a cube whose units are missing or incompatible. The check does not trust upstream docstrings to be well-formed: a parameter documented as taking a cube but carrying no unit the adapter can enforce is *refused registration* rather than quietly advertised as a plain number, and a small override table supplies units for known upstream documentation defects. If you write a process with the same sensitivity, do the same — and make sure your data sources declare `units`, since that is what makes the check possible.
 
