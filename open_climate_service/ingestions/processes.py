@@ -79,18 +79,18 @@ def ingest_dataset(
     cursor = load_cursor() if load_cursor is not None else None
     earlier = cursor.get(_UPDATE_MARKER) if isinstance(cursor, dict) else None
     # An earlier attempt's marker wins: it saw the coverage before any of this job's commits.
-    state: dict[str, dict[str, Any] | None] = {"marker": earlier if isinstance(earlier, dict) else None}
+    marker = earlier if isinstance(earlier, dict) else None
 
     def planned(previous_end: str | None) -> None:
-        if state["marker"] is None:
-            state["marker"] = {"previous_end": previous_end}
+        nonlocal marker
+        if marker is None:
+            marker = {"previous_end": previous_end}
             if save_cursor is not None:
-                save_cursor({**(cursor or {}), _UPDATE_MARKER: state["marker"]})
+                save_cursor({**(cursor or {}), _UPDATE_MARKER: marker})
 
     def save(checkpoint: dict[str, Any]) -> None:
         # The streaming ingest replaces the whole cursor on each commit; keep the marker.
         if save_cursor is not None:
-            marker = state["marker"]
             save_cursor({**checkpoint, _UPDATE_MARKER: marker} if marker is not None else checkpoint)
 
     artifact = services.create_artifact(
@@ -106,7 +106,6 @@ def ingest_dataset(
         save_cursor=save if save_cursor is not None else None,
         on_update_planned=planned,
     )
-    marker = state["marker"]
     if marker is None:
         return artifact, []
     temporal = artifact.coverage.temporal
