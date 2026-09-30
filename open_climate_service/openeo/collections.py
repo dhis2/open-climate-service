@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.shared.urls import absolute_base
 from open_climate_service.stac import services as stac_services
 
@@ -55,9 +56,21 @@ def _rewrite_collection_links(collection: dict[str, Any], request: Request) -> d
     return {**collection, "links": rewritten}
 
 
+def _eligible_artifacts_by_dataset() -> dict[str, Any]:
+    """Return the datasets openEO advertises: published raster datacubes.
+
+    openEO answers this for itself rather than reading STAC's set. The two agree today and
+    stop agreeing as soon as a non-raster artifact can be published: such a dataset is a
+    STAC collection, but `load_collection` cannot consume it, and the cube-dimension
+    normaliser below assumes a datacube — so listing one would offer clients something they
+    cannot load.
+    """
+    return ingestion_services.latest_published_raster_artifacts_by_dataset()
+
+
 def list_collections(request: Request) -> dict[str, Any]:
     """Return the openEO /collections response (openEO + STAC compatible)."""
-    eligible = stac_services._eligible_artifacts_by_dataset()
+    eligible = _eligible_artifacts_by_dataset()
     collections = []
     for dataset_id in eligible:
         try:
@@ -85,6 +98,11 @@ def list_collections(request: Request) -> dict[str, Any]:
 
 def get_collection(dataset_id: str, request: Request) -> dict[str, Any]:
     """Return one openEO/STAC collection."""
+    # Gate the detail route on openEO's own set too. Without this it inherits STAC's gate
+    # through build_collection, so /collections/{id} would keep serving anything STAC
+    # serves even once the listing above stops advertising it.
+    if dataset_id not in _eligible_artifacts_by_dataset():
+        raise HTTPException(status_code=404, detail=f"Collection '{dataset_id}' not found")
     collection = stac_services.build_collection(dataset_id, request)
     collection = _rewrite_collection_links(collection, request)
     return _normalize_cube_dimensions(collection)

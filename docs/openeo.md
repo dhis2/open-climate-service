@@ -68,7 +68,7 @@ Process graphs are composable operations. The openEO Python client builds them l
 
 ```python
 cube = conn.load_collection(
-    "worldpop_population_global2_R2025A_100m",
+    "worldpop_population_global2_100m",
     spatial_extent={"west": -13.3, "south": 7.0, "east": -10.3, "north": 10.0},
     temporal_extent=["2015-01-01", "2021-01-01"],
     bands=["pop_total"],
@@ -104,7 +104,7 @@ curl -s -X POST http://127.0.0.1:9000/result \
         "load": {
           "process_id": "load_collection",
           "arguments": {
-            "id": "worldpop_population_global2_R2025A_100m",
+            "id": "worldpop_population_global2_100m",
             "temporal_extent": ["2020-01-01", "2021-01-01"],
             "spatial_extent": {"west": -13.3, "south": 7.0, "east": -10.3, "north": 10.0}
           }
@@ -248,7 +248,7 @@ curl -s -X PUT http://127.0.0.1:9000/process_graphs/pop_millions \
       "load": {
         "process_id": "load_collection",
         "arguments": {
-          "id": "worldpop_population_global2_R2025A_100m",
+          "id": "worldpop_population_global2_100m",
           "temporal_extent": {"from_parameter": "temporal_extent"}
         }
       },

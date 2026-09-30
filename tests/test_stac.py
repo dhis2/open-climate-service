@@ -263,9 +263,10 @@ def test_stac_collection_compatibility_route_builds_collection(
 def test_collections_logs_skipped_dataset_failures(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str, str]] = []
 
+    # openEO's own gate, not STAC's: since CLIM-1066 the listing no longer reads STAC's set.
     monkeypatch.setattr(
-        stac_services,
-        "_eligible_artifacts_by_dataset",
+        ingestion_services,
+        "latest_published_raster_artifacts_by_dataset",
         lambda: {"broken_dataset": _artifact(artifact_id="a1", dataset_id="broken_dataset")},
     )
 
@@ -410,6 +411,123 @@ def test_collection_returns_404_for_unknown_dataset(client: TestClient, monkeypa
     response = client.get("/collections/unknown-dataset")
 
     assert response.status_code == 404
+
+
+def test_a_newer_unpublished_artifact_does_not_hide_the_published_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Publication is filtered before recency, so an unpublished ingest cannot hide a dataset.
+
+    Ingesting with `publish: false` over an already-published dataset used to drop it from
+    both catalogues, because the newest record was selected first and only then tested.
+    """
+    published = _artifact(artifact_id="a1", created_at=datetime(2026, 1, 9, tzinfo=UTC))
+    newer_unpublished = _artifact(
+        artifact_id="a2",
+        status=PublicationStatus.UNPUBLISHED,
+        created_at=datetime(2026, 1, 10, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        ingestion_services,
+        "list_artifacts",
+        lambda: SimpleNamespace(items=[published, newer_unpublished]),
+    )
+
+    gate = ingestion_services.latest_published_raster_artifacts_by_dataset()
+
+    assert list(gate) == ["chirps3_precipitation_daily"]
+    assert gate["chirps3_precipitation_daily"].artifact_id == "a1"
+
+
+def test_raster_gate_admits_every_loadable_store_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate follows what a reader can open, not one storage format.
+
+    `_open_artifact` opens Icechunk and plain Zarr; NETCDF has no datacube reader and is
+    offered as a download instead, so it stays out of both catalogues.
+    """
+    zarr = _artifact(
+        artifact_id="a1",
+        dataset_id="legacy_zarr",
+        managed_dataset_id="legacy_zarr",
+        format=ArtifactFormat.ZARR,
+    )
+    netcdf = _artifact(
+        artifact_id="a2",
+        dataset_id="legacy_netcdf",
+        managed_dataset_id="legacy_netcdf",
+        format=ArtifactFormat.NETCDF,
+    )
+    monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=[zarr, netcdf]))
+
+    assert list(ingestion_services.latest_published_raster_artifacts_by_dataset()) == ["legacy_zarr"]
+    assert list(ingestion_services.stac_eligible_artifacts_by_dataset()) == ["legacy_zarr"]
+    assert ArtifactFormat.NETCDF not in ingestion_services.LOADABLE_RASTER_FORMATS
+
+
+def test_stac_and_openeo_gates_agree_on_rasters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The split gates still agree on every published, loadable raster."""
+    published = _artifact(artifact_id="a1")
+    unpublished = _artifact(
+        artifact_id="a2",
+        dataset_id="era5_land_t2m",
+        managed_dataset_id="era5_land_t2m",
+        status=PublicationStatus.UNPUBLISHED,
+    )
+    non_raster = _artifact(
+        artifact_id="a3",
+        dataset_id="legacy_netcdf",
+        managed_dataset_id="legacy_netcdf",
+        format=ArtifactFormat.NETCDF,
+    )
+    monkeypatch.setattr(
+        ingestion_services,
+        "list_artifacts",
+        lambda: SimpleNamespace(items=[published, unpublished, non_raster]),
+    )
+
+    stac_gate = ingestion_services.stac_eligible_artifacts_by_dataset()
+    raster_gate = ingestion_services.latest_published_raster_artifacts_by_dataset()
+
+    assert stac_gate == raster_gate
+    assert list(raster_gate) == ["chirps3_precipitation_daily"]
+
+
+def test_openeo_listing_does_not_follow_the_stac_gate(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """openEO advertises its own set, so a STAC-only dataset never reaches /collections.
+
+    Simulates the divergence CLIM-1069 introduces: a feature collection belongs in STAC but
+    cannot be loaded as a datacube. Before the split, openEO read STAC's set directly and
+    would have listed it.
+    """
+    raster = _artifact(artifact_id="a1")
+    stac_only = _artifact(
+        artifact_id="a2",
+        dataset_id="districts",
+        managed_dataset_id="districts",
+        dataset_name="District boundaries",
+    )
+    monkeypatch.setattr(
+        ingestion_services,
+        "stac_eligible_artifacts_by_dataset",
+        lambda: {"chirps3_precipitation_daily": raster, "districts": stac_only},
+    )
+    monkeypatch.setattr(
+        ingestion_services,
+        "latest_published_raster_artifacts_by_dataset",
+        lambda: {"chirps3_precipitation_daily": raster},
+    )
+    monkeypatch.setattr(stac_services, "_build_collection_with_xstac", lambda **_: _minimal_xstac_payload())
+    monkeypatch.setattr(stac_services.registry_datasets, "get_dataset", lambda _: {"period_type": "daily"})
+    monkeypatch.setattr(stac_services, "_zarr_asset_metadata", lambda _: {})
+    monkeypatch.setattr(stac_services, "_zarr_open_kwargs", lambda _: {})
+
+    openeo_listing = client.get("/collections")
+    stac_catalog = client.get("/stac/catalog.json")
+    openeo_detail = client.get("/collections/districts")
+    stac_detail = client.get("/stac/collections/districts")
+
+    assert [c["id"] for c in openeo_listing.json()["collections"]] == ["chirps3_precipitation_daily"]
+    assert any(link["href"].endswith("/stac/collections/districts") for link in stac_catalog.json()["links"])
+    assert openeo_detail.status_code == 404
+    assert stac_detail.status_code == 200
 
 
 def test_collections_prefers_latest_artifact_per_managed_dataset(

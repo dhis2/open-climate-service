@@ -303,3 +303,75 @@ def test_absolute_anomaly_publishes_with_the_observed_unit_end_to_end(managed_in
 
     assert _published_units("chirps3_precipitation_daily_anomaly") == "mm/d"
     assert float(ds["tp"].isel(t=0, y=0, x=0)) == pytest.approx(2.0)
+
+
+# -- `units` in the save_result options is a declaration, not an escape hatch (CLIM-918) ------
+
+
+def test_save_result_units_does_not_rescue_a_preregistered_mismatch(managed_instance: Path) -> None:
+    """The error used to advise passing `units` in the save_result options. Following that
+    advice changes nothing here: with a pre-registered template the option is never read, so
+    the publish fails identically. Driven through `_write_managed_zarr` rather than the guard,
+    because it is the option plumbing — not the comparison — that makes the advice empty."""
+    registry.write_dataset_template(
+        {
+            "id": "preregistered_declared_mm",
+            "name": "Precipitation anomaly",
+            "short_name": "Anomaly",
+            "variable": "tp",
+            "units": "mm/d",
+            "period_type": "daily",
+            "sync": {"kind": "static"},
+            "display": {"colormap": "rdbu_r", "range": [-20.0, 20.0]},
+        }
+    )
+
+    options: dict[str, Any] = {
+        "dataset_id": "preregistered_declared_mm",
+        "variable": "tp",
+        "source_dataset_id": "chirps3_precipitation_daily",
+        "units": "%",  # the recovery the old message suggested
+    }
+    with pytest.raises(ValueError, match="measures a different quantity"):
+        jobs._write_managed_zarr(_cube("%"), options)
+
+
+def test_save_result_units_can_only_cause_the_refusal_not_avoid_it(managed_instance: Path) -> None:
+    """On the auto-derived path the option *is* read — as the declared unit, so it is checked
+    like any other declaration. Declaring `mm/d` over a result carrying `%` is refused, while
+    omitting the option lets the produced unit through. So the option never rescues a publish
+    in either direction, which is why the message no longer offers it."""
+    refused: dict[str, Any] = {
+        "dataset_id": "auto_declared_mm",
+        "variable": "tp",
+        "source_dataset_id": "chirps3_precipitation_daily",
+        "units": "mm/d",
+    }
+    with pytest.raises(ValueError, match="measures a different quantity"):
+        jobs._write_managed_zarr(_cube("%"), refused)
+
+    jobs._write_managed_zarr(
+        _cube("%"),
+        {
+            "dataset_id": "auto_no_units_option",
+            "variable": "tp",
+            "source_dataset_id": "chirps3_precipitation_daily",
+        },
+    )
+    assert _published_units("auto_no_units_option") == "%"
+
+
+@pytest.mark.parametrize(
+    ("declared", "produced"),
+    [("mm/d", "%"), ("mm/d", "m/d")],  # different quantity, then same quantity different scale
+)
+def test_neither_refusal_offers_the_save_result_units_option(declared: str, produced: str) -> None:
+    """Both messages must stop advertising a recovery that does not exist. Asserted on the
+    text because the advice *is* the defect — a reader who follows it gets the same error."""
+    with pytest.raises(ValueError) as exc_info:
+        jobs._reject_incompatible_template_units(_cube(produced), "tp", {"units": declared})
+
+    message = str(exc_info.value)
+    assert "save_result" not in message
+    # ...and each still names a recovery that works.
+    assert "template" in message

@@ -351,17 +351,19 @@ def _resolve_workflow_parameters(node: Any, params: dict[str, Any]) -> Any:
     return node
 
 
-def _augment_with_workflows(base_registry: Any) -> Any:
+def _augment_with_workflows(base_registry: Any, workflow_records: list[Any] | None = None) -> Any:
     """Return a registry overlay that adds currently stored workflows to the base registry.
 
-    Workflows are loaded fresh on every call so that PUT /process_graphs changes take
-    effect without restarting the server. Returns the base registry unchanged when none exist.
+    Workflows are loaded fresh on every call, unless the caller passes the records it
+    already loaded, so that PUT /process_graphs changes take effect without restarting
+    the server. Returns the base registry unchanged when none exist.
     """
     from openeo_pg_parser_networkx.process_registry import Process
 
     from open_climate_service.openeo import workflows as workflow_store
 
-    workflow_records = workflow_store.list_workflows().processes
+    if workflow_records is None:
+        workflow_records = workflow_store.list_workflows().processes
     if not workflow_records:
         return base_registry
 
@@ -584,14 +586,29 @@ def _get_published_artifact(collection_id: str) -> Any:
 
 
 def _eligible_artifacts() -> dict[str, Any]:
-    return ingestion_services.latest_published_zarr_artifacts_by_dataset()
+    # The raster gate, not the STAC one: this resolves what load_collection will open as a
+    # datacube, which is a narrower question than what the catalogue describes.
+    return ingestion_services.latest_published_raster_artifacts_by_dataset()
 
 
 def _open_artifact(artifact: Any) -> xr.Dataset:
+    # Only reached for a record the raster gate admitted, so the formats here and
+    # LOADABLE_RASTER_FORMATS describe the same set from the two sides. Enumerated rather than
+    # defaulted to open_zarr_dataset: since GEOPARQUET exists, an unexpected format falling
+    # through here would try to open a feature collection as a Zarr store and fail somewhere
+    # deep in the reader, reported as a corrupt store rather than as the wrong kind of dataset.
     path = _artifact_store_path(artifact)
     if artifact.format == ArtifactFormat.ICECHUNK:
         return open_icechunk_dataset(path)
-    return open_zarr_dataset(path)
+    if artifact.format == ArtifactFormat.ZARR:
+        return open_zarr_dataset(path)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Collection '{artifact.dataset_id}' is stored as {artifact.format} and cannot be "
+            "loaded as a raster datacube"
+        ),
+    )
 
 
 def _ensure_crs(ds: xr.Dataset) -> xr.Dataset:
@@ -744,12 +761,16 @@ def run_process_graph(
     if not isinstance(process_graph, dict):
         raise HTTPException(status_code=422, detail="process.process_graph must be an object")
 
-    registry = _augment_with_workflows(_build_process_registry())
+    from open_climate_service.openeo import workflows as workflow_store
+
+    workflow_records = workflow_store.list_workflows().processes
+    registry = _augment_with_workflows(_build_process_registry(), workflow_records)
+    workflow_graphs = {wf.id: dict(wf.process_graph) for wf in workflow_records if wf.process_graph}
     try:
         graph = OpenEOProcessGraph(process_graph)
         from open_climate_service.shared.provenance import capture_execution
 
-        with capture_execution(process) as evidence:
+        with capture_execution(process, workflow_graphs) as evidence:
             result = graph.to_callable(registry)()
             if isinstance(result, SaveResultEnvelope):
                 result.provenance = evidence.describe()

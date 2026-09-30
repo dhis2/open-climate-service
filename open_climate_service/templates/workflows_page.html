@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Workflows · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <h2 id="workflows-title" tabindex="-1">Workflows</h2>
+        <p class="lead">Processing chains that turn data into new datasets and exports.</p>
+        {% if workflows %}
+        <div class="collection view-tiles">
+          {% for w in workflows %}
+          <article class="panel item clickable">
+            <div class="body">
+              <h3><a class="item-link" href="{{ mount }}/workflows/{{ w.record.id }}">{{ w.title }}</a></h3>
+              {% if w.record.summary %}<p class="description clamp">{{ w.record.summary }}</p>{% endif %}
+              <div class="meta">
+                {% for kind, label in w.results %}<span class="chip{% if kind == 'publish' %} chip-output{% endif %}">{{ label }}</span>{% endfor %}
+                {% if w.outputs %}<span class="chip">{{ w.outputs | length }} dataset{{ "s" if w.outputs | length != 1 }}</span>{% endif %}
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="note">No workflows are registered.</p>
+        {% endif %}
+        {% if unattributed_outputs %}
+        <article class="panel workflow">
+          <h3>Other workflow outputs</h3>
+          <p class="note">Datasets produced by a workflow that is not registered on this instance.</p>
+          <div class="outputs">
+          <ul>
+            {% for o in unattributed_outputs %}
+            <li><span>{{ o.name }}</span></li>
+            {% endfor %}
+          </ul>
+          </div>
+        </article>
+        {% endif %}
+
+      </main>
+    </div>
+<script>
+{{ list_script | safe }}
+</script>
+  </body>
+</html>

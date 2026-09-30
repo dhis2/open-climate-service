@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Processes · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <h2 id="processes-title" tabindex="-1">Processes</h2>
+        <p class="lead">
+          The building blocks this instance can run inside workflows and openEO process graphs.
+        </p>
+        {% if processes %}
+        <div data-list data-page-size="24" data-views="processes">
+          <div class="toolbar">
+            <label
+              >Search
+              <input type="search" data-filter-text placeholder="Name or description" />
+            </label>
+            <label
+              >Origin
+              <select data-filter-field="origin">
+                <option value="" selected>All</option>
+                <option value="!core">All except openEO core</option>
+                {% for key, label in process_origins.items() %}
+                <option value="{{ key }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <div class="view-switch" role="group" aria-label="Layout">
+              <button type="button" data-view-button="tiles" aria-pressed="true">Tiles</button>
+              <button type="button" data-view-button="list" aria-pressed="false">List</button>
+            </div>
+            <span class="status" data-status aria-live="polite"></span>
+          </div>
+          <div class="collection view-tiles" data-view-target>
+            {% for p in processes %}
+            <article
+              class="panel item clickable"
+              data-item
+              data-origin="{{ p.origin }}"
+              data-search="{{ [p.id, p.summary] | join(' ') | lower }}"
+            >
+              <div class="body">
+                <h3><a class="item-link" href="{{ mount }}/processes/{{ p.id }}"><code>{{ p.id }}</code></a></h3>
+                {% if p.summary %}<p class="description clamp">{{ p.summary }}</p>{% endif %}
+                <div class="meta">
+                  <span class="chip{% if p.origin == 'ocs' %} chip-output{% endif %}">{{ p.origin_label }}</span>
+                  {% for category in p.categories %}<span class="chip">{{ category }}</span>{% endfor %}
+                </div>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          <p class="note" data-empty hidden>No processes match.</p>
+          <div class="pager" data-pager>
+            <button type="button" data-prev>Previous</button>
+            <button type="button" data-next>Next</button>
+          </div>
+        </div>
+        {% else %}
+        <p class="note">No processes could be loaded.</p>
+        {% endif %}
+
+      </main>
+    </div>
+<script>
+{{ list_script | safe }}
+</script>
+  </body>
+</html>

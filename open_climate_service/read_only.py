@@ -7,8 +7,10 @@ expressed as **paths**, not HTTP methods, because method is the wrong axis here:
   It is the instance's compute path and stays open. It cannot publish a dataset — the
   synchronous handler rejects ZARR output outright (``openeo/routes.py``), so the only
   route that writes to the managed store is the batch-job path, which read-only closes.
-- ``GET /manage`` is an admin console behind a GET. Filtering by method would leave it
-  fully browsable with buttons that fail, which reads as broken rather than locked.
+- ``/manage`` holds the ingest and sync streams the template and dataset pages post to.
+  It is closed as a whole tree, every method included, so nothing under it can be added
+  later and be missed by a method filter. The pages themselves stay open and simply leave
+  their forms out on a read-only instance.
 
 Batch jobs are closed entirely rather than merely made unwritable. There is no request
 identity — ``/me`` reports ``anonymous`` for every caller — so the job namespace is shared:
@@ -38,7 +40,7 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Mutating paths that remain open. Matched exactly (after stripping a trailing slash).
 _ALLOWED_WRITE_PATHS = frozenset({"/result"})
 
-# Path trees closed to every method, including GET: the admin console, batch
+# Path trees closed to every method, including GET: the ingest and sync streams, batch
 # jobs, and operator export delivery. Delivery exposes server-held credentials
 # to an operation with external effects, so reports and dry runs are closed too.
 _CLOSED_PREFIXES = ("/manage", "/jobs", "/exports")

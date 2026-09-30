@@ -73,10 +73,61 @@ def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
     return ResolvedExport(export_id, plugin, deepcopy(mapping), references)
 
 
-def render_named_export(data: Any, fmt: str, options: dict[str, Any]) -> tuple[BaseExportPlugin, RenderedExport]:
-    """Render a declared export without resolving a connection or credential."""
+def render_named_export(
+    data: Any,
+    fmt: str,
+    options: dict[str, Any],
+    *,
+    provenance: dict[str, Any] | None = None,
+) -> tuple[BaseExportPlugin, RenderedExport]:
+    """Render a declared export without resolving a connection or credential.
+
+    When execution provenance is available, the export's declarations are checked
+    against it exactly as for a saved batch export.
+    """
     resolved = resolve_named_export(fmt, options)
+    if provenance is not None:
+        check_execution_declarations(resolved, provenance)
     return resolved.plugin, _render(data, resolved)
+
+
+def check_execution_declarations(resolved: ResolvedExport, provenance: dict[str, Any]) -> None:
+    """Refuse a render whose declared dataset or aggregation contradicts what ran.
+
+    A declaration is checked only where provenance can attribute an observation to
+    the result. The dataset must be among the observed sources. The aggregation is
+    checked only when exactly one spatial aggregation ran with a named method;
+    otherwise the manifest lists it as missing evidence.
+    """
+    sources_value = provenance.get("sources", [])
+    if not isinstance(sources_value, list) or not all(isinstance(source, dict) for source in sources_value):
+        raise ValueError("Export provenance sources must be a list of mappings")
+    sources = cast(list[dict[str, Any]], sources_value)
+    declared = resolved.references.get("dataset")
+    if (
+        declared is not None
+        and sources
+        and not any(declared in (source.get("collection_id"), source.get("source_dataset_id")) for source in sources)
+    ):
+        raise ValueError("Declared export dataset was not observed during execution")
+
+    observed_value = provenance.get("spatial_aggregations", [])
+    if not isinstance(observed_value, list) or not all(
+        method is None or isinstance(method, str) for method in observed_value
+    ):
+        raise ValueError("Export provenance spatial_aggregations must be a list of method names")
+    observed = cast(list[str | None], observed_value)
+    declared_aggregation = resolved.mapping.get("aggregation")
+    if (
+        declared_aggregation is not None
+        and len(observed) == 1
+        and observed[0] is not None
+        and observed[0] != declared_aggregation
+    ):
+        raise ValueError(
+            f"Declared export aggregation '{declared_aggregation}' does not match the executed "
+            f"spatial aggregation '{observed[0]}'"
+        )
 
 
 def _render(data: Any, resolved: ResolvedExport) -> RenderedExport:
@@ -123,17 +174,7 @@ def write_named_export(
         }
     )
     validate_public_mapping(evidence)
-    declared = resolved.references.get("dataset")
-    sources_value = evidence.get("sources", [])
-    if not isinstance(sources_value, list) or not all(isinstance(source, dict) for source in sources_value):
-        raise ValueError("Export provenance sources must be a list of mappings")
-    sources = cast(list[dict[str, Any]], sources_value)
-    if (
-        declared is not None
-        and sources
-        and not any(declared in (source.get("collection_id"), source.get("source_dataset_id")) for source in sources)
-    ):
-        raise ValueError("Declared export dataset was not observed during execution")
+    check_execution_declarations(resolved, evidence)
     rendered = _render(data, resolved)
     manifest = ExportManifest(
         source_job_id=job_id,

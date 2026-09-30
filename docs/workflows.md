@@ -69,7 +69,7 @@ Open Climate Service ships with ready-to-use workflows for aggregating **any pub
 
 | Workflow | Output |
 |---|---|
-| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON |
+| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a [named export](export_plugins.md), with a delivery manifest |
 | `aggregate_to_chap_csv` | CHAP wide CSV (`time_period`, `location`, one column per variable) |
 
 Both run `load_collection → aggregate_spatial → save_result`: they load the dataset over a time range, compute a spatial statistic of the variable within each feature, and emit one value per feature per time step. Each feature's GeoJSON `id` becomes the DHIS2 `orgUnit` (CHAP `location`), and each time step becomes the DHIS2 `period` (CHAP `time_period`).
@@ -81,15 +81,22 @@ Both run `load_collection → aggregate_spatial → save_result`: they load the 
 | `dataset_id` | both | — | Published GeoZarr collection to aggregate (see `/datasets`) |
 | `temporal_extent` | both | — | `[start, end]` ISO-8601 dates |
 | `geometries` | both | — | GeoJSON `FeatureCollection`; each feature's `id` is the org unit / location |
-| `data_element_id` | DHIS2 only | — | DHIS2 data element id assigned to every value |
-| `method` | both | `mean` | Spatial aggregation method: `mean`, `min`, `max`, or `sum` |
-| `period_type` | both | `month` | Period type used to format each time step: `day`, `week`, `month`, `quarter`, `year` |
+| `export` | DHIS2 only | — | ID of a named DHIS2 export in the instance configuration |
+| `method` | both | `mean` | Spatial aggregation method: `mean`, `min`, `max`, `sum`, or `median` |
+| `period_type` | CHAP only | `month` | Period type used to format each time step: `day`, `week`, `month`, `quarter`, `year` |
 
-> `period_type` **formats** each native time step into a DHIS2 period — it does not re-aggregate in time. Pick a dataset whose native temporal resolution matches the period you want (e.g. a monthly dataset for monthly values).
+The DHIS2 workflow takes no data element or period type. The named export supplies
+the data element mapping, period type, and DHIS2 connection, so the workflow stays
+the same on every instance. When the export declares `aggregation`, the workflow's
+`method` must match it or the run fails.
+
+> The period type **formats** each native time step into a DHIS2 period — it does not re-aggregate in time. Pick a dataset whose native temporal resolution matches the period you want (e.g. a monthly dataset for monthly values).
 
 ### Example
 
-Mean monthly precipitation per district, as DHIS2 data values:
+Mean monthly precipitation per district, as DHIS2 data values. The instance
+declares the `rainfall-monthly` export as shown in
+[Importing data to DHIS2](importing_to_dhis2.md#1-configure-a-named-export):
 
 ```json
 {
@@ -101,9 +108,8 @@ Mean monthly precipitation per district, as DHIS2 data values:
           "dataset_id": "era5land_precipitation_monthly",
           "temporal_extent": ["2025-01-01", "2025-12-31"],
           "geometries": { "type": "FeatureCollection", "features": [ "...org units..." ] },
-          "data_element_id": "fbfJHSPpUQD",
-          "method": "mean",
-          "period_type": "month"
+          "export": "rainfall-monthly",
+          "method": "mean"
         },
         "result": true
       }
@@ -112,7 +118,14 @@ Mean monthly precipitation per district, as DHIS2 data values:
 }
 ```
 
-Submit it to `POST /result` (synchronous) or `POST /jobs` (batch); the result is a DHIS2 `dataValueSet` ready to POST to the DHIS2 Web API. For CHAP CSV, call `aggregate_to_chap_csv` with the same arguments minus `data_element_id`.
+Submit it to `POST /result` to get the `dataValueSet` back directly. Submit it to
+`POST /jobs` for a saved result with a delivery manifest, which can then be delivered
+through `POST /exports/{export_id}`. For CHAP CSV, call `aggregate_to_chap_csv` with
+`period_type` in place of `export`.
+
+To render a DHIS2 payload without a named export, write the graph yourself and pass
+`data_element_id`, `org_unit_field`, and `period_type` to `save_result`. See
+[Ad-hoc DHIS2 JSON](importing_to_dhis2.md#ad-hoc-dhis2-json-without-a-named-export).
 
 ---
 
@@ -158,7 +171,7 @@ Zarr output cannot be produced synchronously, so submit it as a **batch job** (`
       "change": {
         "process_id": "temporal_change",
         "arguments": {
-          "dataset_id": "worldpop_population_global2_R2025A_100m",
+          "dataset_id": "worldpop_population_global2_100m",
           "output_dataset_id": "worldpop_population_change",
           "variable": "pop_change",
           "temporal_extent": ["2015-01-01", "2030-12-31"]

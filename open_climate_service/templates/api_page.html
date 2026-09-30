@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>API · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <h2 id="api-title" tabindex="-1">API</h2>
+        <p class="lead">
+          Everything the interface shows is also available over HTTP. These are the endpoints
+          this instance serves.
+        </p>
+
+        <div class="cards">
+          {% for entry in entry_points %}
+          <a class="panel card" href="{{ mount }}{{ entry.path }}">
+            <h3>{{ entry.title }}</h3>
+            <span class="note">{{ entry.note }}</span>
+          </a>
+          {% endfor %}
+        </div>
+
+        {% if read_only %}
+        <p class="notice">
+          This instance is read-only. Endpoints marked <span class="chip chip-unpublished">closed</span>
+          refuse with 403; everything else answers normally.
+        </p>
+        {% endif %}
+
+        {% for group in groups %}
+        <section class="panel table-wrap endpoints" aria-labelledby="group-{{ loop.index }}">
+          <h3 id="group-{{ loop.index }}" class="table-title">{{ group.name }}</h3>
+          {% if group.note %}<p class="note table-title">{{ group.note }}</p>{% endif %}
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Method</th>
+                <th scope="col">Path</th>
+                <th scope="col">What it does</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for endpoint in group.endpoints %}
+              <tr>
+                <td><code>{{ endpoint.method }}</code></td>
+                <td>
+                  <code>{{ endpoint.path }}</code>
+                  {% if endpoint.closed %}<span class="chip chip-unpublished">closed</span>{% endif %}
+                </td>
+                <td>{{ endpoint.summary }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+        {% endfor %}
+      </main>
+    </div>
+  </body>
+</html>

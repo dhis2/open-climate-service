@@ -6,8 +6,8 @@ GeoTIFF is downloaded to a local cache and opened from disk rather than read laz
 over ``/vsicurl`` (see ``_open_worldpop_raster``); the grid is inferred from the first
 fetched year.
 
-Two plugins, both Global2 with a per-revision id (the hub reissues yearly, currently
-``R2025A``):
+Two plugins, both Global2 under stable dataset ids with the hub revision tracked as
+release metadata (currently ``R2025A``):
 
 - ``WorldPopYearlyPlugin`` — population counts (hub category id=3), shaped to
   ``(t, y, x)`` via ``normalize_period``. The URL builder also knows the 1 km
@@ -146,11 +146,11 @@ class _WorldPopVariant:
 class WorldPopYearlyPlugin(BaseDatasetPlugin):
     """Streaming plugin for yearly WorldPop country population rasters.
 
-    WorldPop reissues the Global2 hub yearly under a new revision (currently
-    ``R2025A``). We track one revision at a time; it, the resolution, and the
-    constrained/unconstrained flavour are plugin parameters and belong in the
-    dataset id, e.g. ``worldpop_population_global2_R2025A_100m``, so a later
-    revision is a new dataset rather than a silent overwrite.
+    WorldPop reissues the Global2 product under a new revision (currently
+    ``R2025A``). The revision is a release identity, not part of the stable dataset
+    id: changing it rematerializes the existing managed dataset and records which
+    logical release it contains. Resolution and constrained/unconstrained flavour
+    remain dataset identity concerns.
 
     Args:
         version: WorldPop release variant. Only ``global2`` (2015–2030) is supported.

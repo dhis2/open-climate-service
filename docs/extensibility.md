@@ -16,7 +16,7 @@ is shared across instances without any `plugins_dir` wiring — see [Installable
 
 ## Datasets
 
-Dataset templates are YAML files that describe a data source. Built-ins live in the package (`open_climate_service/plugins/datasets/`). Custom templates are loaded from `plugins_dir/datasets/`.
+Dataset templates are YAML files that describe an upstream data source. Built-ins live in the package (`open_climate_service/plugins/datasets/`). Custom templates are loaded from `plugins_dir/datasets/`.
 
 ```
 plugins/

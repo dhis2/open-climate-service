@@ -1,0 +1,10 @@
+<svg class="logo" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
+  <defs><clipPath id="ocs-logo-globe"><circle cx="15" cy="17" r="12" /></clipPath></defs>
+  <g clip-path="url(#ocs-logo-globe)" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <path d="M-1 15c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".9" />
+    <path d="M-1 21c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".65" />
+    <path d="M-1 27c4 0 4 3 8 3s4-3 8-3 4 3 8 3 4-3 8-3" opacity=".45" />
+  </g>
+  <circle cx="15" cy="17" r="12" fill="none" stroke="currentColor" stroke-width="2" />
+  <circle cx="26" cy="7" r="4.5" fill="#ffa902" />
+</svg>

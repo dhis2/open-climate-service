@@ -45,6 +45,158 @@ def test_dataset_registry_rejects_unsupported_sync_kind(
         datasets.list_datasets()
 
 
+def test_dataset_registry_rejects_blank_sync_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A blank version reads as 'none declared' and would silently disable release detection."""
+    registry_file = tmp_path / "blank_sync_version.yaml"
+    registry_file.write_text(
+        """
+- id: blank_sync_version
+  name: Blank sync version
+  variable: value
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: "   "
+      authority: worldpop
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="invalid sync.version.value"):
+        datasets.list_datasets()
+
+
+def test_dataset_registry_rejects_a_display_label_as_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """authority is a machine identifier; a display label is rejected, not lower-cased.
+
+    Silently normalising would leave the template saying one thing and the stored record
+    another, for a value that is compared for equality and published outward.
+    """
+    registry_file = tmp_path / "display_authority.yaml"
+    registry_file.write_text(
+        """
+- id: display_authority
+  name: Display authority
+  variable: value
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: R2025A
+      authority: WorldPop Global2
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="invalid sync.version.authority"):
+        datasets.list_datasets()
+
+
+def test_dataset_registry_requires_both_halves_of_a_release_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A value without an authority is not an identity, so it fails at registration."""
+    registry_file = tmp_path / "half_version.yaml"
+    registry_file.write_text(
+        """
+- id: half_version
+  name: Half version
+  variable: value
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: R2025A
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="sync.version is missing authority"):
+        datasets.list_datasets()
+
+
+def test_dataset_registry_rejects_an_over_long_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Registration and the model share one length bound, so neither can pass what the other rejects."""
+    registry_file = tmp_path / "long_authority.yaml"
+    registry_file.write_text(
+        f"""
+- id: long_authority
+  name: Long authority
+  variable: value
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: R2025A
+      authority: {"w" * 65}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="invalid sync.version.authority"):
+        datasets.list_datasets()
+
+
+def test_dataset_registry_rejects_sync_version_on_a_non_release_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Only a release dataset carries a release identity; elsewhere it would never be read."""
+    registry_file = tmp_path / "temporal_sync_version.yaml"
+    registry_file.write_text(
+        """
+- id: temporal_sync_version
+  name: Temporal with version
+  variable: value
+  period_type: daily
+  sync:
+    kind: temporal
+    version:
+      value: R2025A
+      authority: worldpop
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="declares sync.version but has sync.kind 'temporal'"):
+        datasets.list_datasets()
+
+
+def test_worldpop_release_version_matches_its_plugin_revision() -> None:
+    """WorldPop keeps stable dataset identity while its declared revision changes.
+
+    WorldPop states its revision twice — once for release planning, once for the URL the
+    plugin builds — and nothing at runtime couples them, so drift would mean syncing for a
+    revision the plugin never actually downloads. The revision must not leak back into the
+    dataset id or display name, or changing it would create a new dataset instead of syncing
+    the existing one in place.
+    """
+    templates = [dataset for dataset in datasets.list_datasets() if dataset.get("sync", {}).get("kind") == "release"]
+    worldpop = [d for d in templates if "worldpop" in str(d.get("id", ""))]
+    assert worldpop, "expected at least one WorldPop release template"
+    for dataset in worldpop:
+        declared = dataset["sync"]["version"]["value"]
+        revision = dataset.get("ingestion", {}).get("params", {}).get("revision")
+        assert declared == revision, (
+            f"{dataset['id']}: sync.version {declared!r} does not match ingestion.params.revision {revision!r}"
+        )
+        assert declared not in dataset["id"]
+        assert declared not in dataset["name"]
+
+
 def test_dataset_registry_accepts_supported_sync_kind(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -357,7 +509,7 @@ def test_missing_plugins_dir_serves_built_ins_instead_of_raising(
     """A configured plugins_dir that does not exist must not break template listing.
 
     Startup warns and keeps serving, so raising here left the instance reporting healthy with
-    /dataset-templates/ returning 500 — the one route the ingest form needs (CLIM-910).
+    /dataset-templates returning 500 — the one route the ingest form needs (CLIM-910).
     """
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
     monkeypatch.setattr(

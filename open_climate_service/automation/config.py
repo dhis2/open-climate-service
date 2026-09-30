@@ -9,6 +9,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from open_climate_service import config as api_config
 
 
+class TriggerDelivery(BaseModel):
+    """Deliver a triggered job's named export once the job finishes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    export: str = Field(min_length=1)
+    # Writing to a production DHIS2 is an explicit opt-in.
+    dry_run: bool = True
+
+
 class WorkflowTrigger(BaseModel):
     """Bind one dataset update to an existing openEO workflow."""
 
@@ -19,6 +29,7 @@ class WorkflowTrigger(BaseModel):
     workflow_id: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
     replay_existing: bool = False
+    deliver: TriggerDelivery | None = None
 
 
 class AutomationConfig(BaseModel):

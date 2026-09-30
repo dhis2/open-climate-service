@@ -1,6 +1,9 @@
 - id: chirps3_precipitation_daily
   name: Precipitation rate (CHIRPS3)
   short_name: Precipitation
+  description: >-
+    Daily rainfall over land at 5 km, from satellite estimates calibrated against station
+    observations. Covers 50 degrees south to 50 degrees north from 1981 onwards.
   standard_name: lwe_precipitation_rate
   variable: precip
   period_type: daily
@@ -35,17 +38,16 @@
 - id: chirps3_precipitation_monthly
   name: Precipitation rate (CHIRPS3, monthly)
   short_name: Precipitation
+  # The mm/d trap is why the warning is in the description and not only in a comment here: the
+  # source ships a monthly total, this stores a mean daily rate, and reading one as the other is
+  # wrong by a factor of ~30 while looking entirely plausible.
+  description: >-
+    Monthly rainfall over land at 5 km, from satellite estimates calibrated against station
+    observations, from 1981 onwards. Units are mm/d — a MEAN DAILY RATE, not a monthly total.
+    Multiply by the days in the month to get the total.
   standard_name: lwe_precipitation_rate
   variable: precip
   period_type: monthly
-  # Reaches the published STAC collection and /datasets (CLIM-973), which is the only place an
-  # API consumer would see it. The mm/d trap is the reason: the source ships a monthly total,
-  # this stores a mean daily rate, and reading one as the other is wrong by a factor of ~30
-  # while looking entirely plausible. The YAML comment below explains it to whoever edits this
-  # file; this explains it to whoever uses the data.
-  description: >-
-    Units are mm/d — a MEAN DAILY RATE, not a monthly total. Multiply by the days in the month
-    to get the total.
   sync:
     kind: temporal
     execution: append
@@ -89,12 +91,16 @@
 - id: chirps3_precipitation_daily_normal_1991_2020
   name: Precipitation daily normal (CHIRPS3, 1991–2020)
   short_name: Precipitation daily normal
+  description: >-
+    Average CHIRPS rainfall for each day of the year over 1991-2020. The baseline a daily anomaly
+    is measured against.
   variable: precip
   period_type: climatology
   sync:
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -107,12 +113,16 @@
 - id: chirps3_precipitation_monthly_normal_1991_2020
   name: Precipitation monthly normal (CHIRPS3, 1991–2020)
   short_name: Precipitation monthly normal
+  description: >-
+    Average CHIRPS rainfall for each calendar month over 1991-2020. The baseline a monthly anomaly
+    is measured against.
   variable: precip
   period_type: climatology
   sync:
     kind: static
   units: mm/d
   source: Derived (climate_normal workflow)
+  produced_by: climate_normal
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -130,12 +140,16 @@
 - id: chirps3_precipitation_daily_relative_anomaly_1991_2020
   name: Precipitation daily relative anomaly (CHIRPS3, vs 1991–2020 normal)
   short_name: Precipitation anomaly (%)
+  description: >-
+    How far a day's CHIRPS rainfall sits from its 1991-2020 normal, as a percentage of that normal.
+    Negative is drier than usual, positive wetter.
   variable: precip
   period_type: daily
   sync:
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -148,12 +162,16 @@
 - id: chirps3_precipitation_daily_anomaly_1991_2020
   name: Precipitation daily anomaly (CHIRPS3, vs 1991–2020 normal)
   short_name: Precipitation anomaly
+  description: >-
+    A day's CHIRPS rainfall minus its 1991-2020 normal. Negative is drier than usual, positive
+    wetter.
   variable: precip
   period_type: daily
   sync:
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -166,12 +184,16 @@
 - id: chirps3_precipitation_monthly_anomaly_1991_2020
   name: Precipitation monthly anomaly (CHIRPS3, vs 1991–2020 normal)
   short_name: Precipitation monthly anomaly
+  description: >-
+    A month's CHIRPS rainfall minus its 1991-2020 normal, as a mean daily rate. Negative is drier
+    than usual, positive wetter.
   variable: precip
   period_type: monthly
   sync:
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -187,12 +209,16 @@
 - id: chirps3_precipitation_monthly_relative_anomaly_1991_2020
   name: Precipitation monthly relative anomaly (CHIRPS3, vs 1991–2020 normal)
   short_name: Precipitation anomaly (%)
+  description: >-
+    How far a month's CHIRPS rainfall sits from its 1991-2020 normal, as a percentage of that
+    normal. Negative is drier than usual, positive wetter.
   variable: precip
   period_type: monthly
   sync:
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
+  produced_by: climate_anomaly
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center

@@ -17,12 +17,6 @@ override-dependencies = [
     "zarr>=3.1.6",
     "pyarrow>=19.0",
     "xarray>=2025.12.0",
-    # Held below 2.5 in the lock rather than capped here: numpy 2.5 works only with
-    # numba >= 0.67 (xclim's run_length imports it, and older numba refuses 2.5 at import,
-    # taking all 176 indicators with it), and it makes netCDF4 1.7.4 — already the latest —
-    # emit a binary-incompatibility warning because its wheel predates those headers.
-    # Neither is fatal; there is just nothing to gain yet. See PR for the measurements.
-    "numpy>=2.2",
     "dask>=2024.1.0",
     "dask-geopandas>=0.4",
     "geopandas>=1.1",
@@ -146,6 +140,13 @@ server = [
     "ecmwf-datastores-client>=0.4",
     "netcdf4>=1.7",
     "apscheduler>=3.11,<4",
+    # The Overture feature provider (CLIM-893). Pure Python over pyarrow, which is already a
+    # dependency, so this adds a client rather than a stack.
+    "overturemaps>=0.17",
+    # ISO 3166 alpha-3 to alpha-2, to match an instance's declared country_code against
+    # Overture's own country column. The register, and nothing else, at about 40 KB — pycountry
+    # answers the same question but carries ~21 MB of translations this has no use for.
+    "iso3166>=2.1",
 ]
 
 [project.urls]
@@ -210,7 +211,7 @@ module = ["dhis2_client", "dhis2_client.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*"]
+module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*"]
 ignore_missing_imports = true
 
 [tool.pyright]
