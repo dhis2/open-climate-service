@@ -140,11 +140,11 @@ It runs `load_collection → reduce_dimension → save_result`, reducing the tim
 | Name | Description |
 |---|---|
 | `dataset_id` | Published GeoZarr collection to load (see `/datasets`) |
-| `output_dataset_id` | Id of the change dataset to publish (needs a dataset template — see below) |
+| `output_dataset_id` | Id of the change dataset to publish (needs a data source — see below) |
 | `variable` | Variable/band name carried through to the published dataset |
 | `temporal_extent` | `[start, end]` ISO-8601 dates; the change is `value(last) − value(first)` within this range |
 
-The `output_dataset_id` must have a **dataset template** registered on the instance: a YAML in the built-in `plugins/datasets/` folder (or an instance's `plugins_dir/datasets/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Climate Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
+The `output_dataset_id` must have a **data source** registered on the instance: a YAML in the built-in `plugins/datasets/` folder (or an instance's `plugins_dir/datasets/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Climate Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
 
 ```yaml
 - id: worldpop_population_change
@@ -200,7 +200,7 @@ When the job finishes, the new change dataset appears under `/datasets` and on t
 | `frequency` | `dayofyear` (1–366, default) or `month` (1–12) |
 | `smoothing_window` | Circular day-of-year smoothing window in days (0 disables, default 31; ignored for `month`) |
 
-The `output_dataset_id` needs a **static dataset template** (`sync: {kind: static}`, `period_type: climatology`, a `display` block; no ingestion plugin) — auto-registered from the result and source metadata if none exists. Open Climate Service bundles the from-store monthly templates (`era5land_temperature_monthly_normal_1991_2020`, …) plus EDH-direct **day-of-year** ERA5-Land normals (`era5land_*_daily_normal_1991_2020`) that read the reference period straight from Earth Data Hub — no 30-year ingest needed.
+The `output_dataset_id` needs a **static data source** (`sync: {kind: static}`, `period_type: climatology`, a `display` block; no ingestion plugin) — auto-registered from the result and source metadata if none exists. Open Climate Service bundles the from-store monthly templates (`era5land_temperature_monthly_normal_1991_2020`, …) plus EDH-direct **day-of-year** ERA5-Land normals (`era5land_*_daily_normal_1991_2020`) that read the reference period straight from Earth Data Hub — no 30-year ingest needed.
 
 ### Example
 

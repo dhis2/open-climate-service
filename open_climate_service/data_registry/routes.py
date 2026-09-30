@@ -1,4 +1,4 @@
-"""FastAPI router exposing dataset template endpoints."""
+"""FastAPI router exposing the data source endpoints (`/data-sources`)."""
 
 from typing import Any
 
@@ -40,8 +40,8 @@ def _feature_template_view(template: dict[str, Any], providers: dict[str, Any] |
     response_model=list[dict[str, Any]],
     responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
 )
-def list_dataset_templates(request: Request, response: Response) -> list[dict[str, Any]] | HTMLResponse:
-    """Return the available dataset templates from the registry.
+def list_data_sources(request: Request, response: Response) -> list[dict[str, Any]] | HTMLResponse:
+    """Return the available data sources from the registry.
 
     JSON by default, as it has always been. A browser gets the page the rail links to: only a
     client ranking `text/html` above JSON, with `?f=html` and `?f=json` deciding outright.
@@ -83,8 +83,8 @@ def _get_dataset_or_404(dataset_id: str) -> dict[str, Any]:
     response_model=dict,
     responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
 )
-def get_dataset_template(dataset_id: str, request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
-    """Get a single dataset template by ID with derived coverage metadata.
+def get_data_source(dataset_id: str, request: Request, response: Response) -> dict[str, Any] | HTMLResponse:
+    """Get a single data source by ID with derived coverage metadata.
 
     JSON by default. A browser gets the page, where the template can also be ingested;
     `?f=html` and `?f=json` choose explicitly.
@@ -117,7 +117,7 @@ def get_dataset_template(dataset_id: str, request: Request, response: Response) 
         # ingest form it cannot use. Its page is the workflow's, where what makes it is visible
         # beside it; the JSON arm still describes it here, flagged `ingestable: false`.
         if not datasets.is_ingestable(dataset):
-            raise HTTPException(status_code=404, detail=f"Dataset template '{dataset_id}' has no page")
+            raise HTTPException(status_code=404, detail=f"Data source '{dataset_id}' has no page")
         page = HTMLResponse(render_data_source_page(dataset, mount_prefix(request)))
         page.headers["Vary"] = "Accept"
         return page

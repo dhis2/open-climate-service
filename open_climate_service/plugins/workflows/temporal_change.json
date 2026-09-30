@@ -10,7 +10,7 @@
     },
     {
       "name": "output_dataset_id",
-      "description": "ID of the change dataset to publish. If no static dataset template exists yet, OCS auto-registers one on publish.",
+      "description": "ID of the change dataset to publish. If no static data source exists yet, OCS auto-registers one on publish.",
       "schema": { "type": "string" }
     },
     {

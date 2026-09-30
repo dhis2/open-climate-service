@@ -8,7 +8,7 @@ Structure mirrors `data_registry.services.datasets` closely on purpose: same thr
 precedence (built-in, then installed plugin package, then instance `plugins_dir`, last wins),
 same `CONFIGS_DIR` test override, same cache-and-deep-copy shape for the two immutable stages.
 Kept as an independent module rather than folded into that one, so raster-only callers
-(`list_datasets`, the ingest form, `/dataset-templates`) are never handed a feature template by
+(`list_datasets`, the ingest form, `/data-sources`) are never handed a feature template by
 surprise.
 """
 

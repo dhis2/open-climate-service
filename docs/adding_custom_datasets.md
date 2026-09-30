@@ -2,14 +2,14 @@
 
 This guide explains how to add a new dataset source to your Open Climate Service instance — for example a national meteorological service, a regional satellite product, or a custom model output.
 
-The built-in dataset templates (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `climate-service.yaml` at a plugins directory.
+The built-in data sources (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `climate-service.yaml` at a plugins directory.
 
 ## Overview
 
 Adding a custom dataset involves two things:
 
 1. **A streaming plugin** — a Python class that enumerates periods and fetches one period at a time as an `xarray.Dataset`.
-2. **A dataset template YAML** — a file that describes the dataset and tells the API which plugin class to use.
+2. **A data source YAML** — a file that describes the dataset and tells the API which plugin class to use.
 
 Place both in your `plugins/datasets/` directory:
 
@@ -138,7 +138,7 @@ with a regular numeric `step`, e.g. `dayofyear`), and a **dropdown** for a categ
 irregularly-spaced one (e.g. `sex`, or the irregular age bands). The control type follows
 from the dimension's metadata, so there's nothing extra to configure.
 
-## Step 2: Create a dataset template YAML
+## Step 2: Create a data source YAML
 
 ```yaml
 # plugins/datasets/enacts_rainfall.yaml
@@ -170,7 +170,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `variable`   | Yes      | Name of the data variable in the Zarr store (e.g. `precip`, `t2m`, `rainfall`) |
 | `source`     | No       | Name of the upstream data source                                               |
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
-| `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /dataset-templates`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
+| `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /data-sources`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
 | `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Derived datasets](#derived-datasets) |
 
 **Period and sync**
@@ -185,7 +185,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 
 ### Ingestable datasets
 
-Datasets that can be ingested from an external data source are specified with the `ingestion.plugin` parameter. `GET /dataset-templates` reports these as `ingestable`, the `/manage` ingest
+Datasets that can be ingested from an external data source are specified with the `ingestion.plugin` parameter. `GET /data-sources` reports these as `ingestable`, the `/manage` ingest
 form offers only the ingestable ones, and asking to ingest one that is not ingestable returns `400` naming
 the reason. Read the flag rather than inferring it from `sync.kind`: the two are not the same
 question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* ingestable.
@@ -226,7 +226,7 @@ Name the workflow that produces such a template with `produced_by`:
 ```
 
 `produced_by` is metadata, not behaviour: it records where the data comes from, so a reader can get from
-the dataset to the way it is made, and `GET /dataset-templates` reports it. A template that
+the dataset to the way it is made, and `GET /data-sources` reports it. A template that
 declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
 either fetched or produced. The workflow id itself is not checked, because workflows can be
 registered later at runtime.

@@ -30,7 +30,7 @@ my-climate-service/
 ├── .env.example            # committed template for environment variables
 ├── .gitignore
 ├── plugins/
-│   ├── datasets/           # dataset templates (.yaml) + plugin classes (.py)
+│   ├── datasets/           # data sources (.yaml) + plugin classes (.py)
 │   │   ├── enacts_rainfall.yaml
 │   │   └── enacts.py
 │   ├── processes/          # @process-decorated functions (.py)
@@ -187,7 +187,7 @@ Plugins extend the instance with custom datasets, processes, and workflows. They
 ```
 plugins/
 ├── datasets/
-│   ├── enacts_rainfall.yaml    # custom dataset template
+│   ├── enacts_rainfall.yaml    # custom data source
 │   └── enacts.py               # streaming plugin class
 ├── processes/
 │   └── spatial_stats.py        # @process-decorated functions
@@ -195,7 +195,7 @@ plugins/
     └── aggregate_for_dhis2.json
 ```
 
-See [Extensibility](extensibility.md) for the three plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the dataset template field reference and streaming plugin contract.
+See [Extensibility](extensibility.md) for the three plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the data source field reference and streaming plugin contract.
 
 ---
 

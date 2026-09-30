@@ -1,4 +1,4 @@
-"""Feature collection templates on the Dataset templates page and API, and fetching them.
+"""Feature collection templates on the Data sources page and API, and fetching them.
 
 Driven through the HTTP surface a browser and a client use: the template listing and detail
 routes, the list and template pages, `POST /features/{id}/refresh` and the page's
@@ -76,7 +76,7 @@ def _collection_ids(client: TestClient) -> set[str]:
 
 
 def test_the_template_listing_includes_feature_templates_marked_by_kind(client: TestClient) -> None:
-    listed = {t["id"]: t for t in client.get("/dataset-templates").json()}
+    listed = {t["id"]: t for t in client.get("/data-sources").json()}
 
     assert listed["demo_regions"]["itemType"] == "feature"
     assert listed["demo_regions"]["ingestable"] is True
@@ -86,19 +86,19 @@ def test_the_template_listing_includes_feature_templates_marked_by_kind(client: 
 
 
 def test_a_feature_template_is_fetchable_by_id_and_reports_whether_it_was_fetched(client: TestClient) -> None:
-    before = client.get("/dataset-templates/demo_regions")
+    before = client.get("/data-sources/demo_regions")
     assert before.status_code == 200
     assert before.json()["itemType"] == "feature" and before.json()["has_data"] is False
 
     client.post("/features/demo_regions/refresh")
 
-    assert client.get("/dataset-templates/demo_regions").json()["has_data"] is True
+    assert client.get("/data-sources/demo_regions").json()["has_data"] is True
 
 
 def test_the_templates_page_lists_feature_templates_with_a_type_filter(client: TestClient) -> None:
-    page = client.get("/dataset-templates", headers=HTML).text
+    page = client.get("/data-sources", headers=HTML).text
 
-    assert 'href="/dataset-templates/demo_regions"' in page
+    assert 'href="/data-sources/demo_regions"' in page
     assert 'data-kind="features"' in page and 'data-kind="raster"' in page
     assert 'data-filter-field="kind"' in page
     # A template whose provider is missing is not offered for fetching.
@@ -109,7 +109,7 @@ def test_the_templates_page_lists_feature_templates_with_a_type_filter(client: T
 
 
 def test_a_feature_template_page_offers_fetching_without_a_date_range(client: TestClient) -> None:
-    page = client.get("/dataset-templates/demo_regions", headers=HTML)
+    page = client.get("/data-sources/demo_regions", headers=HTML)
 
     assert page.status_code == 200
     html = page.text
@@ -124,7 +124,7 @@ def test_a_read_only_instance_shows_the_page_without_the_form_and_refuses_fetchi
 ) -> None:
     monkeypatch.setattr(api_config, "is_read_only", lambda: True)
 
-    html = client.get("/dataset-templates/demo_regions", headers=HTML).text
+    html = client.get("/data-sources/demo_regions", headers=HTML).text
     assert "fetch-form" not in html and "read-only" in html
     assert client.post("/features/demo_regions/refresh").status_code == 403
     assert client.post("/manage/features/refresh", data={"collection_id": "demo_regions"}).status_code == 403
@@ -184,9 +184,9 @@ def test_the_page_stream_refuses_an_unknown_template_as_json(client: TestClient)
 def test_the_overview_counts_fetchable_feature_templates_among_dataset_templates(client: TestClient) -> None:
     import re
 
-    fetchable = sum(1 for t in client.get("/dataset-templates").json() if t["ingestable"])
+    fetchable = sum(1 for t in client.get("/data-sources").json() if t["ingestable"])
     page = client.get("/", headers=HTML).text
-    shown = re.search(r'<span class="value">(\d+)</span>\s*<span class="label">Dataset templates</span>', page)
+    shown = re.search(r'<span class="value">(\d+)</span>\s*<span class="label">Data sources</span>', page)
 
     assert shown is not None
     assert int(shown.group(1)) == fetchable
@@ -195,13 +195,13 @@ def test_the_overview_counts_fetchable_feature_templates_among_dataset_templates
 def test_an_id_declared_in_both_registries_is_listed_once_and_cannot_be_fetched_as_features(
     client: TestClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    raster_id = next(t["id"] for t in client.get("/dataset-templates").json() if t["itemType"] == "coverage")
+    raster_id = next(t["id"] for t in client.get("/data-sources").json() if t["itemType"] == "coverage")
     (tmp_path / "feature_templates" / "clash.yaml").write_text(
         f"- id: {raster_id}\n  name: Clash\n  id_property: code\n  provider: fake\n", encoding="utf-8"
     )
     feature_templates.reset_feature_template_caches()
 
-    listed = [t for t in client.get("/dataset-templates").json() if t["id"] == raster_id]
+    listed = [t for t in client.get("/data-sources").json() if t["id"] == raster_id]
 
     assert [t["itemType"] for t in listed] == ["coverage"]
     assert any(raster_id in record.getMessage() for record in caplog.records)
@@ -217,8 +217,8 @@ def test_a_listing_loads_the_provider_registry_once(client: TestClient, monkeypa
 
     monkeypatch.setattr(feature_providers, "load_feature_providers", counting)
 
-    client.get("/dataset-templates")
+    client.get("/data-sources")
     assert len(calls) == 1
     calls.clear()
-    client.get("/dataset-templates", headers=HTML)
+    client.get("/data-sources", headers=HTML)
     assert len(calls) == 1

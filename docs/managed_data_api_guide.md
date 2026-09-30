@@ -293,7 +293,7 @@ What this means:
   licence text where one is known, and the STAC collection carries the same information as a
   `rel: license` link plus `providers` for attribution.
 
-- `description` carries the dataset template's own prose, and is `null` when the template
+- `description` carries the data source's own prose, and is `null` when the template
   declares none. It is where a dataset states what its values actually mean, so it is worth
   reading before using one: `chirps3_precipitation_monthly` is a mean daily rate rather than a
   monthly total. The same text is published as the STAC collection `description`.

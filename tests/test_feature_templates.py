@@ -305,7 +305,7 @@ def test_same_id_templates_resolve_from_their_own_registry(monkeypatch: pytest.M
 
 
 def test_list_datasets_never_includes_a_feature_template() -> None:
-    """The raster-only enumeration (the ingest form, /dataset-templates) must not see one."""
+    """The raster-only enumeration (the ingest form, /data-sources) must not see one."""
     ids = [d["id"] for d in registry_datasets.list_datasets()]
     assert "districts" not in ids
 

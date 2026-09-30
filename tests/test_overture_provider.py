@@ -406,7 +406,7 @@ def test_the_provider_module_imports_nothing_private() -> None:
 
 
 def test_the_shipped_template_is_declared_and_names_this_provider() -> None:
-    """The template ships built-in, so a `GET /dataset-templates` lists it with no config."""
+    """The template ships built-in, so a `GET /data-sources` lists it with no config."""
     from open_climate_service.features import templates as feature_templates
 
     declared = {str(t["id"]): t for t in feature_templates.list_feature_templates()}

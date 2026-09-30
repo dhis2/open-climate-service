@@ -251,7 +251,7 @@ def usable_feature_templates() -> list[dict[str, Any]]:
     The two registries validate ids independently, so an instance can declare one id in both.
     That is a configuration error: it is logged, naming the id, and the feature template is left
     out, so listings never carry two resources with one id. The raster template keeps the id,
-    as `GET /dataset-templates/{id}` resolves it, and refreshing the feature one is refused.
+    as `GET /data-sources/{id}` resolves it, and refreshing the feature one is refused.
     """
     raster_ids = _raster_template_ids()
     usable = []

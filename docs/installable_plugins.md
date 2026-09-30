@@ -27,7 +27,7 @@ osc_example_plugin/
   datasets/
     __init__.py
     example.py           # your BaseDatasetPlugin subclass
-    example.yaml         # dataset templates
+    example.yaml         # data sources
   processes/             # optional: @process-decorated callables
     __init__.py
     my_process.py
@@ -69,7 +69,7 @@ instance decides which OCS revision to run:
 dependencies = ["open-climate-service"]
 ```
 
-The `ingestion.plugin` in a dataset template uses the class's **full dotted path** (not a
+The `ingestion.plugin` in a data source uses the class's **full dotted path** (not a
 `plugins_dir`-relative one), since the package is installed on `PYTHONPATH`:
 
 ```yaml
