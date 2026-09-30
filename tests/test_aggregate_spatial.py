@@ -80,10 +80,10 @@ def test_parse_geometries_single_feature_and_geometry() -> None:
     assert labels_geom == ["0"]
 
 
-def test_parse_geometries_accepts_points_among_polygons() -> None:
-    geoms, labels = parse_geometries(_features(("district-1", _box(0, 0, 1, 1)), ("facility-1", _point(0.5, 0.5))))
-    assert labels == ["district-1", "facility-1"]
-    assert [g.geom_type for g in geoms] == ["Polygon", "Point"]
+def test_parse_geometries_refuses_a_point_by_name() -> None:
+    """Sampling at a point is a separate process; this one returns nothing for points."""
+    with pytest.raises(ValueError, match="geometry 'facility-1' is a Point.*separate process"):
+        parse_geometries(_features(("district-1", _box(0, 0, 1, 1)), ("facility-1", _point(0.5, 0.5))))
 
 
 def test_parse_geometries_rejects_a_line_by_name() -> None:
@@ -298,75 +298,9 @@ def test_fractions_standalone_are_refused() -> None:
         reduce_by_method(np.array([1.0, 2.0]), method="fractions")
 
 
-# ---------------------------------------------------------------------------
-# Points
-# ---------------------------------------------------------------------------
-
-
-def test_point_between_centres_is_interpolated_bilinearly() -> None:
-    out = aggregate_spatial(_grid(y_ascending=True), _point(1.5, 2.5), _mean)
-    assert float(out["v"].isel(geometry=0)) == pytest.approx(26.5)
-
-
-def test_point_with_near_takes_the_containing_cell() -> None:
-    out = aggregate_spatial(_grid(y_ascending=True), _point(1.6, 2.4), _mean, method="near")
-    assert float(out["v"].isel(geometry=0)) == 22.0
-
-
-def test_point_on_categorical_data_takes_the_nearest_cell() -> None:
-    da = _categorical(np.array([[10, 20], [20, 30]]))
-    out = aggregate_spatial(da, _point(0.6, 0.9), _named("mean"))
-    assert float(out["lc"].isel(geometry=0)) == 30.0
-
-
-def test_interpolation_over_categorical_data_warns(caplog: pytest.LogCaptureFixture) -> None:
-    da = _categorical(np.array([[10, 20], [20, 30]]))
-    with caplog.at_level(logging.WARNING):
-        aggregate_spatial(da, _point(0.5, 0.5), _named("max"), method="bilinear")
-    assert "interpolation requested over categorical data" in caplog.text
-
-
-def test_point_near_the_grid_edge_uses_its_cell() -> None:
-    """Within half a cell of the edge there is nothing to interpolate towards."""
-    out = aggregate_spatial(_grid(y_ascending=True), _point(3.3, 0.0), _mean)
-    assert float(out["v"].isel(geometry=0)) == 3.0
-
-
-def test_point_beside_a_missing_cell_uses_its_cell() -> None:
-    """A coastal facility next to a sea cell keeps the land value rather than becoming NaN."""
-    da = _grid(y_ascending=True)
-    da[1, 2] = np.nan  # (x=2, y=1)
-    out = aggregate_spatial(da, _point(1.2, 1.2), _mean)
-    assert float(out["v"].isel(geometry=0)) == 11.0
-
-
-def test_point_outside_the_grid_is_nan() -> None:
-    out = aggregate_spatial(_grid(y_ascending=True), _point(50.0, 50.0), _mean)
-    assert np.isnan(float(out["v"].isel(geometry=0)))
-
-
-def test_unknown_point_method_is_refused() -> None:
-    with pytest.raises(ValueError, match="method 'spline' is not supported"):
-        aggregate_spatial(_grid(y_ascending=True), _point(1.0, 1.0), _mean, method="spline")
-
-
-def test_points_and_polygons_keep_their_input_order() -> None:
-    fc = _features(("facility", _point(3.0, 3.0)), ("district", _box(-0.4, -0.4, 1.4, 1.4)))
-    out = aggregate_spatial(_grid(y_ascending=True).expand_dims(t=[0, 1]), fc, _mean)
-    assert list(out["geometry"].values) == ["facility", "district"]
-    np.testing.assert_allclose(out["v"].sel(geometry="facility").values, [33.0, 33.0])
-    np.testing.assert_allclose(out["v"].sel(geometry="district").values, [5.5, 5.5])
-
-
-def test_fractions_over_points_are_refused() -> None:
-    da = _categorical(np.array([[10, 20], [20, 30]]))
-    with pytest.raises(ValueError, match="fractions apply to polygons"):
-        aggregate_spatial(da, _point(0.0, 0.0), _named("fractions"))
-
-
-def test_unknown_method_is_refused_for_polygons_too() -> None:
-    with pytest.raises(ValueError, match="method 'bilinaer' is not supported"):
-        aggregate_spatial(_grid(y_ascending=True), _box(0, 0, 1, 1), _mean, method="bilinaer")
+def test_a_point_is_refused_before_any_data_is_read() -> None:
+    with pytest.raises(ValueError, match="is a Point"):
+        aggregate_spatial(_grid(y_ascending=True), _point(1.5, 2.5), _mean)
 
 
 # ---------------------------------------------------------------------------
@@ -444,17 +378,6 @@ def test_median_of_nearly_equal_weights_is_the_heavier_value() -> None:
     assert float(out["v"].isel(geometry=0)) == 0.0
 
 
-def test_cubic_on_a_grid_too_small_is_a_clear_error() -> None:
-    da = _categorical(np.array([[10, 20], [20, 30]]), resampling="mean")
-    with pytest.raises(ValueError, match="cubic interpolation needs at least 4 cells"):
-        aggregate_spatial(da, _point(0.5, 0.5), _mean, method="cubic")
-
-
-def test_cubic_on_a_large_enough_grid_interpolates() -> None:
-    out = aggregate_spatial(_grid(y_ascending=True), _point(1.5, 1.5), _mean, method="cubic")
-    assert float(out["v"].isel(geometry=0)) == pytest.approx(16.5)
-
-
 def test_standalone_majority_leaves_missing_values_out() -> None:
     assert reduce_by_method(np.array([np.nan, np.nan, 1.0]), method="majority") == 1.0
     assert np.isnan(reduce_by_method(np.array([np.nan]), method="majority"))
@@ -468,9 +391,6 @@ def test_categorical_is_decided_per_variable() -> None:
     polygon = aggregate_spatial(cube, _box(-0.5, -0.5, 1.5, 1.5), _named("mean"))
     assert float(polygon["temp"].isel(geometry=0)) == pytest.approx(5.5)
     assert float(polygon["lc"].isel(geometry=0)) == 20.0
-    point = aggregate_spatial(cube, _point(0.6, 0.9), _named("mean"))
-    assert float(point["temp"].isel(geometry=0)) == pytest.approx(9.6)  # bilinear
-    assert float(point["lc"].isel(geometry=0)) == 90.0  # nearest cell
 
 
 # ---------------------------------------------------------------------------
@@ -563,8 +483,9 @@ def test_a_cube_sliced_to_one_cell_keeps_its_cell_size() -> None:
     """One coordinate gives no cell size, so the declared transform does: 1 km, not 1 m."""
     # OCS stores carry the GDAL GeoTransform on spatial_ref, which survives the slice.
     one = _utm_cube().rio.write_transform().isel(x=slice(0, 1), y=slice(0, 1))
-    point = {"type": "Point", "coordinates": [255_700.0, 6_660_300.0]}  # 200 m from the centre
-    out = aggregate_spatial(one, point, _mean)
+    # 100 m across, 200 m from the centre: inside the real cell, outside a 1 m one.
+    zone = _box(255_650.0, 6_660_250.0, 255_750.0, 6_660_350.0)
+    out = aggregate_spatial(one, zone, _mean)
     assert float(out["tg"].isel(geometry=0)) == 2.0
 
 

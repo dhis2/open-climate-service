@@ -8,7 +8,6 @@ import numpy as np
 import xarray as xr
 
 POLYGON_TYPES = frozenset({"Polygon", "MultiPolygon"})
-POINT_TYPES = frozenset({"Point"})
 
 
 def parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
@@ -40,17 +39,17 @@ def parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
 
 
 def _require_supported_geometry_types(geoms: list[Any], labels: list[str]) -> None:
-    """Refuse a geometry type this process has no defined sampling rule for.
+    """Refuse any geometry that is not a polygon, before any data is read.
 
-    Polygons are area-weighted and points are interpolated. A line or a multipoint would need
-    a rule of its own (length weighting, or one value per member), so it is refused by name
-    rather than routed through a path that would return a number with no defined meaning.
+    Polygons are area-weighted. A point would need sampling instead, which is a different
+    operation with its own process, and a line would need length weighting; each is refused by
+    name rather than routed through a path that would return a number with no defined meaning.
     """
     for geom, label in zip(geoms, labels, strict=True):
-        if geom.geom_type not in POLYGON_TYPES | POINT_TYPES:
+        if geom.geom_type not in POLYGON_TYPES:
             raise ValueError(
-                f"aggregate_spatial: geometry '{label}' is a {geom.geom_type}, which is not "
-                "supported; only Polygon, MultiPolygon and Point are"
+                f"aggregate_spatial: geometry '{label}' is a {geom.geom_type}, which is not supported; "
+                "only Polygon and MultiPolygon are (sampling at points is a separate process)"
             )
 
 

@@ -72,16 +72,9 @@ A dataset declares class codes, such as land cover, with `ingestion.resampling: 
 
 The declaration travels as a cube attribute from `load_collection`. An operation between the two that drops attributes leaves the continuous default.
 
-### Points are interpolated
+### Polygons only
 
-A `Point` samples the surface at its location instead of taking whichever cell contains it:
-
-- continuous data: bilinear interpolation between the four nearest cell centres;
-- categorical data: the nearest cell.
-
-The optional `method` argument, an Open Climate Service extension using openEO's `resample_spatial` names, overrides this: `near`, `bilinear` or `cubic` (which needs at least 4 cells along each axis). Interpolation requested over categorical data is allowed but logged, since it treats class codes as ordinal. Where interpolation has nothing to work with, within half a cell of the grid edge or next to a missing cell such as sea beside a coastal facility, the point takes its containing cell's value. A point outside the grid is NaN.
-
-Points and polygons can be mixed in one feature collection; results keep the input order. Lines and multipoints are refused.
+`aggregate_spatial` takes `Polygon` and `MultiPolygon` geometries. A `Point`, a line or a multipoint is refused by name before any data is read. Sampling a surface at a point is a different operation from aggregating over an area, and will be a process of its own.
 
 ### Values differ from earlier versions
 

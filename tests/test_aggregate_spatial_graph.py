@@ -89,11 +89,9 @@ def test_continuous_template_keeps_the_weighted_mean(dataset: dict[str, Any]) ->
     assert float(envelope.data["v"].sel(geometry="z").item()) == 35.0
 
 
-def test_point_is_interpolated_through_the_graph(dataset: dict[str, Any]) -> None:
-    envelope = _run({"type": "Point", "coordinates": [0.5, 0.5]}, "mean")
-    assert float(envelope.data["v"].sel(geometry="z").item()) == pytest.approx(35.0)
-    # Sampled, not reduced: an export declaring `mean` must not accept it as one.
-    assert envelope.provenance["spatial_aggregations"] == [None]
+def test_a_point_is_refused_through_the_graph(dataset: dict[str, Any]) -> None:
+    with pytest.raises(Exception, match="is a Point"):
+        _run({"type": "Point", "coordinates": [0.5, 0.5]}, "mean")
 
 
 def _run_with(geometry: dict, reducer_graph: dict) -> Any:

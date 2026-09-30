@@ -7,6 +7,5 @@
 * ``grid`` describes the cube's cells, each polygon's coverage of them, and blocked reads.
 * ``weighting`` computes area-weighted statistics over polygons.
 * ``categorical`` handles class data: majority, per-class fractions, and which variables are categorical.
-* ``points`` samples the surface at point geometries.
 * ``pixel_centre`` is the openEO specification's rule, for reducers that cannot be weighted.
 """
