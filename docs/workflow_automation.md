@@ -134,7 +134,11 @@ Each finished job is delivered at most once per export and mode. The idempotency
 `auto:{job_id}:{export}:{dry-run|live}`, so replaying an event or restarting OCS creates no
 second delivery. A job records the delivery it owes in the same write that marks it finished.
 At startup OCS submits any recorded delivery missed because the process stopped after a job
-finished. A job keeps its delivery links when re-run by hand, so a delivered job is not
+finished. If submission fails, the source job exposes the latest failure under
+`usage.delivery_error`; CLIM-1213 retries it during the next startup reconciliation, not on an
+in-process timer. A workflow finishing during shutdown may likewise defer submission until
+the next startup reconciliation. A job keeps its delivery links when re-run by hand, so a
+delivered job is not
 delivered again, even after switching to live; submit the new result through
 `POST /exports/{export_id}` instead.
 
@@ -147,8 +151,9 @@ later. `replay_existing` applies to workflow submission only, never to delivery.
 
 Startup fails, naming the trigger, when `deliver.export` is not a configured export, is
 configured more than once, its plugin is not `dhis2`, it has no `connection`, that connection
-is not configured, or its mapping is invalid. A read-only instance refuses triggers with
-`deliver`, because delivery writes to DHIS2.
+is not configured, its mapping is invalid, or a literal `arguments.export` differs from
+`deliver.export`. A read-only instance validates the same configuration but leaves delivery
+inactive, allowing writable and serving instances to share one tracked configuration.
 
 Delivery needs the optional `dhis2-client` package and the connection's token in the
 server environment. See

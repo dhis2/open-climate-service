@@ -56,7 +56,10 @@ def _automation(deliver: TriggerDelivery | None = None) -> AutomationConfig:
                 id=_TRIGGER,
                 on_update_of="rain_monthly",
                 workflow_id="aggregate_to_dhis2_json",
-                arguments={"dataset_id": "$event.dataset_id"},
+                arguments={
+                    "dataset_id": "$event.dataset_id",
+                    "export": deliver.export if deliver is not None else _EXPORT,
+                },
                 deliver=deliver,
             )
         ]
@@ -200,6 +203,44 @@ def test_finished_triggered_job_delivers_once_and_links_the_delivery(
     assert sent == [{"target": "hmis", "dry_run": True}]
     links = (openeo_jobs.store_get_job(job_id).usage or {})["deliveries"]  # type: ignore[union-attr]
     assert [link["delivery_job_id"] for link in links] == [delivery.job_id]
+
+
+def test_failed_submission_is_visible_and_cleared_after_restart_retry(
+    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.exports import delivery as delivery_module
+
+    original = delivery_module.submit_delivery
+
+    def fail_submission(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("delivery queue unavailable")
+
+    monkeypatch.setattr(delivery_module, "submit_delivery", fail_submission)
+    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    job_id = _triggered_job_id(service)
+    _await_openeo(job_id)
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        stored = openeo_jobs.store_get_job(job_id)
+        error = (stored.usage or {}).get("delivery_error") if stored is not None else None
+        if error is not None:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("delivery submission error was not recorded on the source job")
+
+    assert error["export_id"] == _EXPORT
+    assert error["message"] == "RuntimeError: delivery queue unavailable"
+    assert _deliveries() == []
+
+    # Submission retries are deliberately restart/reconciliation driven for CLIM-1213.
+    monkeypatch.setattr(delivery_module, "submit_delivery", original)
+    service.reconcile_deliveries()
+    _await_deliveries(1)
+    stored = openeo_jobs.store_get_job(job_id)
+    assert stored is not None
+    assert "delivery_error" not in (stored.usage or {})
 
 
 def test_replayed_event_and_repeated_reconciliation_create_no_second_delivery(
@@ -370,11 +411,10 @@ def test_delivery_keys_are_deterministic_per_job_export_and_mode() -> None:
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (lambda settings: settings.update(exports=[]), "which is not configured under exports"),
-        (lambda settings: settings["exports"][0].update(plugin="summary"), "only dhis2 exports deliver"),
+        (lambda settings: settings.update(exports=[]), "which is invalid"),
+        (lambda settings: settings["exports"][0].update(plugin="summary"), "which is invalid"),
         (lambda settings: settings["exports"][0].pop("connection"), "which has no DHIS2 connection"),
         (lambda settings: settings.update(dhis2_connections=[]), "is not configured under dhis2_connections"),
-        (lambda settings: settings.update(read_only=True), "this instance is read-only"),
     ],
 )
 def test_invalid_delivery_is_rejected_at_startup_naming_the_trigger(
@@ -387,6 +427,36 @@ def test_invalid_delivery_is_rejected_at_startup_naming_the_trigger(
     with pytest.raises(ValueError, match=message) as error:
         service.start()
     assert f"Workflow trigger '{_TRIGGER}' delivers export '{_EXPORT}'" in str(error.value)
+
+
+def test_workflow_and_delivery_exports_must_match(instance: dict[str, Any]) -> None:
+    automation = _automation(TriggerDelivery(export=_EXPORT))
+    automation.workflow_triggers[0].arguments["export"] = _OTHER_EXPORT
+    service = WorkflowAutomationService(config_loader=lambda: automation, openeo_service=instance["openeo"])
+
+    with pytest.raises(ValueError, match="workflow and delivery must use the same named export"):
+        service.start()
+
+
+def test_read_only_instance_validates_delivery_but_keeps_it_inactive(instance: dict[str, Any]) -> None:
+    instance["settings"]["read_only"] = True
+    service = WorkflowAutomationService(
+        config_loader=lambda: _automation(TriggerDelivery(export=_EXPORT)), openeo_service=instance["openeo"]
+    )
+
+    service.start()
+
+    assert service._delivery_steps == {}
+    assert not automation_module._delivery_activation_path().exists()
+    finished = utc_now()
+    record = OpenEOJobRecord(
+        id="read-only",
+        status=OpenEOJobStatus.FINISHED,
+        created=finished,
+        finished_at=finished,
+        trigger_id=_TRIGGER,
+    )
+    assert service.delivery_due_for(record) is None
 
 
 def test_job_without_finish_time_counts_as_before_activation(instance: dict[str, Any]) -> None:
@@ -470,7 +540,7 @@ def test_trigger_fields_survive_persistence(instance: dict[str, Any]) -> None:
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (lambda settings: settings["exports"].append(dict(settings["exports"][0])), "configured more than once"),
+        (lambda settings: settings["exports"].append(dict(settings["exports"][0])), "which is invalid"),
         (lambda settings: settings["exports"][0].update(series=[]), "which is invalid"),
     ],
 )

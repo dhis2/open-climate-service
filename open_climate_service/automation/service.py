@@ -21,7 +21,12 @@ from open_climate_service.automation.config import (
 from open_climate_service.jobs import store as job_store
 from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
 from open_climate_service.openeo import workflows
-from open_climate_service.openeo.jobs import OpenEOJobService, get_openeo_job_service, store_list_jobs
+from open_climate_service.openeo.jobs import (
+    OpenEOJobService,
+    get_openeo_job_service,
+    store_list_jobs,
+    store_update_job,
+)
 from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.time import utc_now
 
@@ -193,51 +198,59 @@ def delivery_idempotency_key(job_id: str, export_id: str, dry_run: bool) -> str:
     return f"auto:{job_id}:{export_id}:{_delivery_mode(dry_run)}"
 
 
+def _set_delivery_error(job_id: str, export_id: str, message: str | None) -> None:
+    """Expose the latest automatic-delivery submission error on the source job."""
+    now = utc_now()
+
+    def update(record: OpenEOJobRecord) -> OpenEOJobRecord:
+        usage = dict(record.usage or {})
+        if message is None:
+            usage.pop("delivery_error", None)
+        else:
+            usage["delivery_error"] = {
+                "export_id": export_id,
+                "message": message,
+                "failed_at": now.isoformat(),
+            }
+        return record.model_copy(update={"usage": usage, "updated": now})
+
+    try:
+        store_update_job(job_id, update)
+    except Exception:
+        # Error visibility must not turn a completed workflow into a failed one.
+        logger.exception("Could not update delivery error state for openEO job %s", job_id)
+
+
 def _validate_deliveries(config: AutomationConfig) -> None:
     """Refuse a delivery step that could only fail per job, naming its trigger."""
     from open_climate_service.exports.dhis2 import get_connection_config
-
-    deliveries = [(trigger, trigger.deliver) for trigger in config.workflow_triggers if trigger.deliver is not None]
-    if not deliveries:
-        return
     from open_climate_service.exports.service import resolve_named_export
 
-    definitions = api_config.get_config().get("exports", [])
-    exports: dict[Any, dict[str, Any]] = {}
-    duplicates: set[Any] = set()
-    for definition in definitions if isinstance(definitions, list) else []:
-        if isinstance(definition, dict):
-            identifier = definition.get("id")
-            if identifier in exports:
-                duplicates.add(identifier)
-            exports[identifier] = definition
+    deliveries = [(trigger, trigger.deliver) for trigger in config.workflow_triggers if trigger.deliver is not None]
     for trigger, delivery in deliveries:
         export_id = delivery.export
         prefix = f"Workflow trigger {trigger.id!r} delivers export {export_id!r}"
-        if api_config.is_read_only():
-            raise ValueError(f"{prefix}, but this instance is read-only; delivery requires a writable instance")
-        definition = exports.get(export_id)
-        if definition is None:
-            raise ValueError(f"{prefix}, which is not configured under exports")
-        if export_id in duplicates:
-            raise ValueError(f"{prefix}, which is configured more than once under exports")
-        if definition.get("plugin") != "dhis2":
-            raise ValueError(f"{prefix}, whose plugin is {definition.get('plugin')!r}; only dhis2 exports deliver")
-        connection = definition.get("connection")
-        if not isinstance(connection, str) or not connection.strip():
-            raise ValueError(f"{prefix}, which has no DHIS2 connection")
-        try:
-            get_connection_config(connection.strip())
-        except ValueError:
+        workflow_export = trigger.arguments.get("export")
+        if isinstance(workflow_export, str) and workflow_export != export_id:
             raise ValueError(
-                f"{prefix}, whose connection {connection.strip()!r} is not configured under dhis2_connections"
-            ) from None
-        # The same resolution delivery performs, so a mapping that every delivery would
-        # reject (or any other invalid export configuration) fails here instead.
+                f"{prefix}, but arguments.export is {workflow_export!r}; "
+                "the workflow and delivery must use the same named export"
+            )
         try:
-            resolve_named_export("DHIS2JSON", {"export": export_id})
+            resolved = resolve_named_export("DHIS2JSON", {"export": export_id})
         except ValueError as exc:
             raise ValueError(f"{prefix}, which is invalid: {exc}") from None
+        if resolved.plugin.id != "dhis2":
+            raise ValueError(f"{prefix}, whose plugin is {resolved.plugin.id!r}; only dhis2 exports deliver")
+        connection = resolved.references.get("connection")
+        if connection is None:
+            raise ValueError(f"{prefix}, which has no DHIS2 connection")
+        try:
+            get_connection_config(connection)
+        except ValueError:
+            raise ValueError(
+                f"{prefix}, whose connection {connection!r} is not configured under dhis2_connections"
+            ) from None
 
 
 def _load_activations() -> dict[str, str]:
@@ -630,6 +643,7 @@ class WorkflowAutomationService:
                 delivery_idempotency_key(record.id, export_id, dry_run),
             )
         except HTTPException as exc:
+            _set_delivery_error(record.id, export_id, str(exc.detail))
             # Verification refusals (changed export, missing manifest, re-run source) are
             # operator-actionable configuration states, not crashes.
             logger.warning(
@@ -640,11 +654,13 @@ class WorkflowAutomationService:
                 exc.detail,
             )
             return
-        except Exception:
+        except Exception as exc:
+            _set_delivery_error(record.id, export_id, f"{type(exc).__name__}: {exc}")
             logger.exception(
                 "Workflow trigger %s failed to deliver job %s to export %s", trigger_id, record.id, export_id
             )
             return
+        _set_delivery_error(record.id, export_id, None)
         if not reused:
             logger.info(
                 "Submitted %s delivery %s of job %s to export %s",
