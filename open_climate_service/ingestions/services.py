@@ -1585,14 +1585,25 @@ def _remove_rebuild_leftover(target: Path) -> bool:
 def remove_leftover_rebuilds() -> int:
     """Remove every ``*.icechunk.rebuild`` left in the store directory; returns how many.
 
-    Run at startup, before any job is recovered, so no rebuild can be in progress. Recovery
-    at the start of each ingest also removes one, but a dataset that is never synced again
-    would otherwise keep a partial copy of its whole store on disk indefinitely.
+    Run at startup before this process recovers jobs. An older process may still be rebuilding
+    during an overlapping restart, so remove a leftover only while holding the target store's
+    writer lock. Recovery at the start of each ingest also removes one, but a dataset that is
+    never synced again would otherwise keep a partial copy of its whole store indefinitely.
     """
     directory = Path(downloader.DOWNLOAD_DIR)
     if not directory.is_dir():
         return 0
-    return sum(_remove_rebuild_leftover(path.with_suffix("")) for path in directory.glob("*.icechunk.rebuild"))
+    removed = 0
+    for leftover in directory.glob("*.icechunk.rebuild"):
+        target = leftover.with_suffix("")
+        lock = _acquire_store_lock(target)
+        if not lock.acquire(blocking=False):
+            continue
+        try:
+            removed += _remove_rebuild_leftover(target)
+        finally:
+            lock.release()
+    return removed
 
 
 # Unreachable objects younger than this are kept. Readers take no store lock, and one that

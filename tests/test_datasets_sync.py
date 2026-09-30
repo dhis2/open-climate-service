@@ -2329,4 +2329,28 @@ def test_startup_sweep_removes_every_leftover_rebuild(tmp_path: Path, monkeypatc
     (tmp_path / "keep.icechunk").mkdir()
 
     assert remove_leftover_rebuilds() == 2
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.icechunk", "b.icechunk", "keep.icechunk"]
+    assert sorted(p.name for p in tmp_path.glob("*.icechunk")) == ["a.icechunk", "b.icechunk", "keep.icechunk"]
+    assert list(tmp_path.glob("*.icechunk.rebuild")) == []
+
+
+def test_startup_sweep_skips_rebuild_for_store_another_writer_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.data_manager.services import downloader
+    from open_climate_service.ingestions import services
+
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
+    target = tmp_path / "active.icechunk"
+    target.mkdir()
+    leftover = tmp_path / "active.icechunk.rebuild"
+    leftover.mkdir()
+    lock = services._acquire_store_lock(target)
+    assert lock.acquire(blocking=False)
+    try:
+        assert services.remove_leftover_rebuilds() == 0
+        assert leftover.exists()
+    finally:
+        lock.release()
+
+    assert services.remove_leftover_rebuilds() == 1
+    assert not leftover.exists()
