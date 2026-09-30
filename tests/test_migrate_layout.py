@@ -51,6 +51,10 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     (plugins / "features").mkdir()
     (plugins / "features" / "regions.yaml").write_text("- id: regions\n  name: Regions\n  id_property: id\n")
+    (plugins / "processes").mkdir()
+    (plugins / "processes" / "indices.py").write_text(
+        "from datasets.helpers import clip\nfrom features import regions\n"
+    )
 
     config = tmp_path / "climate-service.yaml"
     config.write_text(f"data_dir: {data}\nplugins_dir: ./plugins\n")
@@ -74,7 +78,11 @@ def test_moves_data_and_plugins_and_rewrites_what_names_them(instance: Path) -> 
     assert records[1]["path"] == str(data / "vectors" / "districts.abc.parquet")
     assert records[2]["path"] == "/mnt/elsewhere/downloads/era5.icechunk", "a store outside the data dir is left alone"
 
-    assert sorted(p.name for p in plugins.iterdir()) == ["rasters", "vectors"]
+    assert sorted(p.name for p in plugins.iterdir()) == ["processes", "rasters", "vectors"]
+    process = (plugins / "processes" / "indices.py").read_text()
+    assert process == "from rasters.helpers import clip\nfrom vectors import regions\n", (
+        "a module outside the template folders imports from them too"
+    )
     assert "plugin: rasters.chelsa.ChelsaPlugin" in (plugins / "rasters" / "chelsa.yaml").read_text()
     module = (plugins / "rasters" / "chelsa.py").read_text()
     assert "from rasters.helpers import clip" in module

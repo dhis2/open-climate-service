@@ -118,21 +118,24 @@ def _rewritten(text: str, pattern: re.Pattern[str]) -> str:
 
 
 def _plan_plugin_files(plugins_root: Path, plan: Plan) -> None:
+    """Dataset templates in the template folders; Python modules anywhere under plugins_dir.
+
+    plugins_dir is on `sys.path`, so a module in `processes/` or `exports/` can import from
+    `datasets` or `features` as readily as a plugin next to its template can.
+    """
+    candidates: list[tuple[Path, re.Pattern[str]]] = []
     for folder in {old for old, _ in PLUGIN_RENAMES} | {new for _, new in PLUGIN_RENAMES}:
         directory = plugins_root / folder
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.rglob("*")):
-            if path.suffix in {".yaml", ".yml"}:
-                pattern = _YAML_PLUGIN
-            elif path.suffix == ".py":
-                pattern = _PY_IMPORT
-            else:
-                continue
-            text = path.read_text(encoding="utf-8")
-            new = _rewritten(text, pattern)
-            if new != text:
-                plan.rewrites.append((path, new))
+        if directory.is_dir():
+            candidates += [(path, _YAML_PLUGIN) for path in directory.rglob("*") if path.suffix in {".yaml", ".yml"}]
+    for path in plugins_root.rglob("*.py"):
+        if not any(part.startswith(".") or part == "__pycache__" for part in path.relative_to(plugins_root).parts):
+            candidates.append((path, _PY_IMPORT))
+    for path, pattern in sorted(candidates):
+        text = path.read_text(encoding="utf-8")
+        new = _rewritten(text, pattern)
+        if new != text:
+            plan.rewrites.append((path, new))
 
 
 def _plugins_root() -> Path | None:
