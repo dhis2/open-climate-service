@@ -351,17 +351,19 @@ def _resolve_workflow_parameters(node: Any, params: dict[str, Any]) -> Any:
     return node
 
 
-def _augment_with_workflows(base_registry: Any) -> Any:
+def _augment_with_workflows(base_registry: Any, workflow_records: list[Any] | None = None) -> Any:
     """Return a registry overlay that adds currently stored workflows to the base registry.
 
-    Workflows are loaded fresh on every call so that PUT /process_graphs changes take
-    effect without restarting the server. Returns the base registry unchanged when none exist.
+    Workflows are loaded fresh on every call, unless the caller passes the records it
+    already loaded, so that PUT /process_graphs changes take effect without restarting
+    the server. Returns the base registry unchanged when none exist.
     """
     from openeo_pg_parser_networkx.process_registry import Process
 
     from open_climate_service.openeo import workflows as workflow_store
 
-    workflow_records = workflow_store.list_workflows().processes
+    if workflow_records is None:
+        workflow_records = workflow_store.list_workflows().processes
     if not workflow_records:
         return base_registry
 
@@ -759,12 +761,16 @@ def run_process_graph(
     if not isinstance(process_graph, dict):
         raise HTTPException(status_code=422, detail="process.process_graph must be an object")
 
-    registry = _augment_with_workflows(_build_process_registry())
+    from open_climate_service.openeo import workflows as workflow_store
+
+    workflow_records = workflow_store.list_workflows().processes
+    registry = _augment_with_workflows(_build_process_registry(), workflow_records)
+    workflow_graphs = {wf.id: dict(wf.process_graph) for wf in workflow_records if wf.process_graph}
     try:
         graph = OpenEOProcessGraph(process_graph)
         from open_climate_service.shared.provenance import capture_execution
 
-        with capture_execution(process) as evidence:
+        with capture_execution(process, workflow_graphs) as evidence:
             result = graph.to_callable(registry)()
             if isinstance(result, SaveResultEnvelope):
                 result.provenance = evidence.describe()

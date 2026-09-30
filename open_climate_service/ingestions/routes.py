@@ -93,24 +93,27 @@ def create_ingestion(
         response.status_code = 202
         response.headers["Location"] = f"{INGESTION_JOB_HREF_BASE}/{job.job_id}"
         return IngestionResponse(ingestion_id=job.job_id, status=job.status, dataset=None)
+    from open_climate_service.ingestions.processes import ingest_dataset, record_inline_update
+
     dataset = _get_dataset_or_404(request.dataset_id)
-    extent = get_extent_or_404()
-    resolved_bbox = list(extent["bbox"])
-    resolved_country_code = extent.get("country_code")
-    artifact = services.create_artifact(
+    get_extent_or_404()  # refuse before any work, as the async branch does
+    artifact, events = ingest_dataset(
         dataset=dataset,
         start=request.start,
         end=request.end,
-        bbox=resolved_bbox,
-        country_code=resolved_country_code,
         overwrite=request.overwrite,
         publish=request.publish,
     )
-    return IngestionResponse(
+    result = IngestionResponse(
         ingestion_id=artifact.artifact_id,
         status="completed",
         dataset=services.get_dataset_summary_for_artifact_or_404(artifact.artifact_id),
     )
+    # Inline ingestion has no job, so its update is recorded as one for automation to see.
+    record_inline_update(
+        label="ingestion", request=request.model_dump(), result=result.model_dump(mode="json"), events=events
+    )
+    return result
 
 
 @ingestions_router.get("", response_model=IngestionListResponse)
@@ -264,11 +267,20 @@ def sync_dataset(
         response.headers["Location"] = f"{INGESTION_JOB_HREF_BASE}/{job.job_id}"
         return SyncResponse(sync_id=None, status=job.status, message="Sync queued", dataset=None, sync_detail=None)
 
-    return services.sync_dataset(
+    from open_climate_service.ingestions.processes import record_inline_update, sync_update_events
+
+    result = services.sync_dataset(
         dataset_id=dataset_id,
         end=request.end,
         publish=request.publish,
     )
+    record_inline_update(
+        label="sync",
+        request={"dataset_id": dataset_id, "end": request.end, "publish": request.publish},
+        result=result.model_dump(mode="json"),
+        events=sync_update_events(dataset_id, result),
+    )
+    return result
 
 
 @sync_router.get("/{dataset_id}/plan", response_model=SyncDetail)
