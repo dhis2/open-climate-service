@@ -27,7 +27,7 @@ osc_example_plugin/
   datasets/
     __init__.py
     example.py           # your BaseDatasetPlugin subclass
-    example.yaml         # data sources
+    example.yaml         # dataset definitions
   processes/             # optional: @process-decorated callables
     __init__.py
     my_process.py
@@ -98,7 +98,7 @@ Templates are merged in increasing order of precedence, per extension point:
 
 **built-in → installed plugins → instance `plugins_dir`**
 
-So `plugins_dir` always wins on an id conflict — an operator can drop a YAML into their local
+So `plugins_dir` always wins on an id conflict — an operator can drop a dataset definition into their local
 `plugins/datasets/` to override an installed plugin's dataset. Overrides are logged at load time.
 
 ## Naming convention

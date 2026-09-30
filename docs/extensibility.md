@@ -16,12 +16,12 @@ is shared across instances without any `plugins_dir` wiring — see [Installable
 
 ## Datasets
 
-Data sources are YAML files that describe an upstream dataset. Built-ins live in the package (`open_climate_service/plugins/datasets/`). Custom ones are loaded from `plugins_dir/datasets/`.
+Each data source is described by a dataset definition, a YAML entry that describes an upstream dataset. Built-ins live in the package (`open_climate_service/plugins/datasets/`). Custom ones are loaded from `plugins_dir/datasets/`.
 
 ```
 plugins/
 └── datasets/
-    ├── enacts_rainfall.yaml    # data source
+    ├── enacts_rainfall.yaml    # dataset definition
     └── enacts.py               # streaming plugin class
 ```
 

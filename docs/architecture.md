@@ -10,7 +10,7 @@ The platform has four first-class concepts. Understanding the distinction betwee
 
 ### Data source
 
-A **data source** is a YAML blueprint that describes an upstream dataset (in the code it is called a dataset template). Built-ins live in `open_climate_service/plugins/datasets/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/datasets/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
+A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset definition**, a YAML blueprint (in the code it is called a dataset template). Built-ins live in `open_climate_service/plugins/datasets/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/datasets/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
 
 A data source defines:
 

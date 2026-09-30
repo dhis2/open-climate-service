@@ -91,7 +91,7 @@ Core parts of the Open Climate Service must function without a connected DHIS2 i
 
 Internally, the Open Climate Service distinguishes between data sources and published datasets:
 
-- **Data sources** — YAML definitions describing a dataset type (source, variable, period type, processing steps). They are listed at `GET /data-sources` and act as blueprints for ingestion.
+- **Data sources** — upstream datasets, each described by a dataset definition: YAML with the source, variable, period type and processing steps. They are listed at `GET /data-sources` and act as blueprints for ingestion.
 - **Published datasets** — actualised, ingested datasets for a specific extent and time range, exposed under `/datasets` and `/stac`. These are what end users and client applications discover and consume.
 
 This mirrors the approach used in the CHAP Modelling Platform, where generic model template YAMLs are distinguished from specific initialised instances.

@@ -30,7 +30,7 @@ my-climate-service/
 ├── .env.example            # committed template for environment variables
 ├── .gitignore
 ├── plugins/
-│   ├── datasets/           # data sources (.yaml) + plugin classes (.py)
+│   ├── datasets/           # dataset definitions (.yaml) + plugin classes (.py)
 │   │   ├── enacts_rainfall.yaml
 │   │   └── enacts.py
 │   ├── processes/          # @process-decorated functions (.py)
@@ -187,7 +187,7 @@ Plugins extend the instance with custom datasets, processes, and workflows. They
 ```
 plugins/
 ├── datasets/
-│   ├── enacts_rainfall.yaml    # custom data source
+│   ├── enacts_rainfall.yaml    # custom dataset definition
 │   └── enacts.py               # streaming plugin class
 ├── processes/
 │   └── spatial_stats.py        # @process-decorated functions

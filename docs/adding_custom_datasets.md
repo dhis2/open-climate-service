@@ -9,7 +9,7 @@ The built-in data sources (CHIRPS3, ERA5-Land, WorldPop) ship as package data. C
 Adding a custom dataset involves two things:
 
 1. **A streaming plugin** — a Python class that enumerates periods and fetches one period at a time as an `xarray.Dataset`.
-2. **A data source YAML** — a file that describes the dataset and tells the API which plugin class to use.
+2. **A dataset definition** — a YAML file that describes the dataset and tells the API which plugin class to use.
 
 Place both in your `plugins/datasets/` directory:
 
@@ -138,7 +138,7 @@ with a regular numeric `step`, e.g. `dayofyear`), and a **dropdown** for a categ
 irregularly-spaced one (e.g. `sex`, or the irregular age bands). The control type follows
 from the dimension's metadata, so there's nothing extra to configure.
 
-## Step 2: Create a data source YAML
+## Step 2: Create a dataset definition
 
 ```yaml
 # plugins/datasets/enacts_rainfall.yaml
