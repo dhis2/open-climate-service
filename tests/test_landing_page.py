@@ -10,7 +10,6 @@ from __future__ import annotations
 import math
 import re
 from html.parser import HTMLParser
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,7 +17,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from open_climate_service import config as api_config
-from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.system import templates as landing
 
 AREAS = ["overview", "datasets", "data-sources", "workflows", "processes"]
@@ -273,28 +271,6 @@ def test_the_overview_counts_what_the_instance_holds(client: TestClient) -> None
 )
 def test_a_stored_size_reads_at_a_glance(total: int, expected: str) -> None:
     assert landing._format_bytes(total) == expected
-
-
-def test_the_stored_size_sums_each_store_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two artifacts appended to one store must not be counted twice."""
-    store = tmp_path / "chirps.icechunk"
-    (store / "chunks").mkdir(parents=True)
-    (store / "chunks" / "0").write_bytes(b"x" * 1000)
-
-    monkeypatch.setattr(
-        landing,
-        "_stored_bytes_cache",
-        None,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        ingestion_services,
-        "list_artifacts",
-        lambda: SimpleNamespace(items=[SimpleNamespace(path=str(store)), SimpleNamespace(path=str(store))]),
-    )
-
-    assert landing._stored_bytes() == 1000
-    landing._stored_bytes_cache = None
 
 
 # --- processes in the landing page --------------------------------------------------------

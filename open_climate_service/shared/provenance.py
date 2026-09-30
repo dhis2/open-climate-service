@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Generator
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -28,6 +28,9 @@ class ExecutionEvidence:
     require_feature_ids: bool = False
     sources: list[dict[str, Any]] = field(default_factory=list)
     features: list[dict[str, Any]] = field(default_factory=list)
+    # One entry per completed aggregate_spatial call: its named method, or None when its
+    # reducer is not a single named reduction.
+    spatial_aggregations: list[str | None] = field(default_factory=list)
     snapshots: dict[str, str] = field(default_factory=dict, repr=False)
 
     def describe(self) -> dict[str, Any]:
@@ -38,6 +41,10 @@ class ExecutionEvidence:
             missing.append("immutable_source_snapshots")
         if not self.features:
             missing.append("feature_inputs")
+        if len(self.spatial_aggregations) != 1 or self.spatial_aggregations[0] is None:
+            # Only one named spatial aggregation can be attributed to the saved result
+            # without per-output lineage; none, several, or an unnamed reducer cannot.
+            missing.append("spatial_aggregation_method")
         # Named feature collection versioning is not implemented in this checkout.
         missing.append("named_feature_collection_versions")
         return {
@@ -45,21 +52,34 @@ class ExecutionEvidence:
             "process_sha256": self.process_sha256,
             "sources": list(self.sources),
             "features": list(self.features),
+            "spatial_aggregations": list(self.spatial_aggregations),
             "missing": missing,
         }
 
 
 _current: ContextVar[ExecutionEvidence | None] = ContextVar("ocs_execution_evidence", default=None)
+_spatial_methods: ContextVar[set[str] | None] = ContextVar("ocs_spatial_methods", default=None)
 
 
 @contextmanager
-def capture_execution(process: dict[str, Any]) -> Generator[ExecutionEvidence]:
-    """Isolate observations between simultaneous graph executions."""
+def capture_execution(
+    process: dict[str, Any],
+    workflows: Mapping[str, Any] | None = None,
+) -> Generator[ExecutionEvidence]:
+    """Isolate observations between simultaneous graph executions.
+
+    ``workflows`` maps workflow (user-defined process) IDs to their process graphs,
+    so a named DHIS2 export saved inside a called workflow is detected as well as
+    one saved directly in the submitted graph.
+    """
     try:
         digest = json_digest(process)
     except (ValueError, TypeError):
         digest = None
-    evidence = ExecutionEvidence(digest, require_feature_ids=_has_named_dhis2_export(process))
+    evidence = ExecutionEvidence(
+        digest,
+        require_feature_ids=_has_named_dhis2_export(process, (workflows or {}).get, set()),
+    )
     token = _current.set(evidence)
     try:
         yield evidence
@@ -92,38 +112,87 @@ def record_source(collection_id: str, artifact: Any) -> None:
     evidence.sources.append(observation)
 
 
+@contextmanager
+def observe_spatial_aggregation() -> Generator[None]:
+    """Attribute named reductions to one aggregate_spatial call and record its method.
+
+    Only reductions running inside this scope count, so a named reducer used for a
+    temporal reduction or anywhere else never reads as a spatial aggregation. The
+    call is recorded only when it completes.
+    """
+    methods: set[str] = set()
+    token = _spatial_methods.set(methods)
+    try:
+        yield
+    finally:
+        _spatial_methods.reset(token)
+    evidence = _current.get()
+    if evidence is not None:
+        evidence.spatial_aggregations.append(next(iter(methods)) if len(methods) == 1 else None)
+
+
+def record_spatial_reduction(method: str) -> None:
+    """Note a named reduction; ignored outside an aggregate_spatial call."""
+    methods = _spatial_methods.get()
+    if methods is not None:
+        methods.add(method)
+
+
 def record_features(geometries: Any) -> None:
     """Fingerprint actual inline feature inputs before positional labels are assigned."""
     evidence = _current.get()
     if evidence is None:
         return
-    if evidence.require_feature_ids:
-        from open_climate_service.shared.features import validate_feature_ids
+    from open_climate_service.shared.features import validate_dhis2_feature_ids, validate_feature_ids
 
-        validate_feature_ids(geometries)
+    if evidence.require_feature_ids:
+        validate_dhis2_feature_ids(geometries)
     if not isinstance(geometries, dict) or geometries.get("type") not in {"Feature", "FeatureCollection"}:
         evidence.features.append({"input_sha256": None, "ids_valid": False, "reason": "no_feature_ids"})
         return
     features = geometries.get("features", []) if geometries.get("type") == "FeatureCollection" else [geometries]
-    if not isinstance(features, list) or not all(isinstance(feature, dict) for feature in features):
+    # The same shapes `validate_feature_ids` accepts. A tuple is what a provider that built its
+    # features with a comprehension hands over, and a recorder that silently skipped one would
+    # leave an execution with no feature fingerprint at all while the aggregation succeeded.
+    if not isinstance(features, Sequence) or isinstance(features, (str, bytes)):
+        return
+    # Annotated, because the union of the two branches above narrows to dict on one of them and
+    # the members of a FeatureCollection are whatever the caller put there.
+    members: list[Any] = list(features)
+    if not all(isinstance(feature, dict) for feature in members):
         return
     # Properties are irrelevant to spatial aggregation and may contain incidental
     # metadata. Fingerprint only the geometry and identity actually used here.
-    relevant = [{"id": feature.get("id"), "geometry": feature.get("geometry")} for feature in features]
-    identifiers = [feature["id"] for feature in relevant]
-    valid = all(isinstance(identifier, str) and bool(identifier.strip()) for identifier in identifiers)
-    valid = valid and len(set(identifiers)) == len(identifiers)
+    relevant = [{"id": feature.get("id"), "geometry": feature.get("geometry")} for feature in members]
+    # Asked of the validator rather than re-derived here. Two implementations of "is this
+    # identity usable" drift: this one read non-blank strings while the validator also accepts
+    # an integer id, so a named DHIS2 export could pass validation and still be manifested as
+    # `ids_valid: false`. One rule, one answer.
+    try:
+        validate_feature_ids(geometries)
+        valid = True
+    except ValueError:
+        valid = False
     try:
         digest = json_digest(relevant)
     except (TypeError, ValueError):
         digest = None
-    evidence.features.append({"input_sha256": digest, "feature_count": len(features), "ids_valid": valid})
+    evidence.features.append({"input_sha256": digest, "feature_count": len(members), "ids_valid": valid})
 
 
-def _has_named_dhis2_export(value: Any) -> bool:
+def _has_named_dhis2_export(
+    value: Any,
+    resolve_workflow: Callable[[str], Any],
+    expanded: set[str],
+) -> bool:
+    """Return True when the graph, or a workflow it calls, saves a named DHIS2 export.
+
+    Each workflow is expanded at most once, which also stops recursive workflows.
+    """
     if isinstance(value, dict):
         arguments = value.get("arguments", {})
-        if value.get("process_id") == "save_result" and isinstance(arguments, dict):
+        process_id = value.get("process_id")
+        if process_id == "save_result" and isinstance(arguments, dict):
             options = arguments.get("options", {})
             if (
                 str(arguments.get("format", "")).upper() == "DHIS2JSON"
@@ -131,7 +200,13 @@ def _has_named_dhis2_export(value: Any) -> bool:
                 and "export" in options
             ):
                 return True
-        return any(_has_named_dhis2_export(child) for child in value.values())
+        if isinstance(process_id, str) and process_id not in expanded:
+            workflow_graph = resolve_workflow(process_id)
+            if workflow_graph is not None:
+                expanded.add(process_id)
+                if _has_named_dhis2_export(workflow_graph, resolve_workflow, expanded):
+                    return True
+        return any(_has_named_dhis2_export(child, resolve_workflow, expanded) for child in value.values())
     if isinstance(value, list):
-        return any(_has_named_dhis2_export(child) for child in value)
+        return any(_has_named_dhis2_export(child, resolve_workflow, expanded) for child in value)
     return False

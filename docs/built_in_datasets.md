@@ -1,8 +1,16 @@
 # Built-in datasets
 
-The Open Climate Service ships with built-in dataset templates covering precipitation, temperature, and population. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
+The Open Climate Service ships with built-in dataset templates covering commonly requested data sources. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
 
 To ingest a built-in dataset for your configured extent, see the [API reference](managed_data_api_guide.md). To add datasets beyond these, see [Adding custom datasets](adding_custom_datasets.md).
+
+---
+
+## ERA5-Land — temperature and precipitation
+
+ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine dataset templates are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
+
+See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 
 ---
 
@@ -50,14 +58,6 @@ That choice keeps every monthly precipitation dataset on the same units, which m
 
 ---
 
-## ERA5-Land — temperature and precipitation
-
-ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine dataset templates are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
-
-See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
-
----
-
 ## WorldPop Global2 — total population (yearly)
 
 | Property               | Value                                                                |
@@ -95,6 +95,82 @@ WorldPop Global2 provides gridded population estimates and projections at 100 m 
 | **Source**             | [WorldPop Global2 age & sex structures](https://hub.worldpop.org/project/categories?id=8) |
 
 Population disaggregated by sex and 5-year age band. Population is the quantity; sex and age are both disaggregation dimensions of it — so WorldPop's ~40 per-(sex, age) GeoTIFFs per country-year are combined into a **single `population` variable** over a `sex` dimension (`female`, `male`) and an ordinal `age_group` dimension (the lower bound of each band: 0, 1, 5, 10, … 90).
+
+---
+
+## Copernicus — elevation (static)
+
+| Property               | Value                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `copdem30_elevation_static`                                                                          |
+| **Variable**           | `elevation`                                                                                          |
+| **Units**              | meters                                                                                               |
+| **Period**             | Yearly                                                                                               |
+| **Spatial coverage**   | Global                                                                                               |
+| **Spatial resolution** | ~30 m                                                                                                |
+| **Record start**       | 2010                                                                                                 |
+| **Record end**         | 2010                                                                                                 |
+| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
+
+Copernicus DEM Global 30m, recording elevation height above sea level. 
+
+**Note**: This dataset is static and non-varying over time, but currently implemented as yearly data for the year 2010
+when the data measurements were made. 
+
+---
+
+## Overture Maps — administrative divisions (feature collection)
+
+| Property             | Value                                                                   |
+| -------------------- | ----------------------------------------------------------------------- |
+| **Collection ID**    | `overture_divisions`                                                    |
+| **Item type**        | Feature collection (GeoParquet), not a raster                           |
+| **Identity**         | `id_property: id` — Overture's own division id                          |
+| **Spatial coverage** | Global; extracted for this instance's configured extent                 |
+| **Version**          | The pinned Overture release, e.g. `2026-09-23.0`                        |
+| **Licence**          | ODbL-1.0 — attribution **and** share-alike                              |
+| **Source**           | [Overture Maps divisions](https://docs.overturemaps.org/guides/divisions/) |
+
+Registered collections are served under `GET /features` and loaded inside a process graph by id
+with `load_features`.
+
+**Pick one administrative level.** A bounding-box window returns every level that overlaps it, so
+the shipped template filters to a single `subtype`, coarsest first: `country`, `dependency`,
+`region`, `county`, `localadmin`, `locality`, `macrohood`, `neighborhood`.
+
+**A window crosses borders.** The bbox is a rectangle, not a country outline, so a neighbouring
+country's divisions come back too. Add `country` to `filters` when that matters.
+
+```yaml
+- id: overture_divisions
+  name: Administrative divisions (Overture Maps)
+  license: ODbL-1.0
+  attribution: © OpenStreetMap contributors, © Overture Maps Foundation
+  id_property: id
+  provider: overture
+  params:
+    release: 2026-09-23.0
+    theme: divisions
+    filters: { subtype: county, country: SL }
+```
+
+**Refreshing** — Overture publishes monthly and the release id *is* the recorded version, so
+comparing what an instance holds against the latest release answers "is this stale" without
+reading the data. Bumping `release` selects which release the **next** provider run extracts; it
+does not itself trigger one. A feature collection is not on the raster sync path — `POST
+/sync/{id}` refuses it — so refreshing means re-running the provider: **Fetch** on its template
+page, or `POST /features/{id}/refresh` (add `Prefer: respond-async` to run it as a background
+job). The release is pinned
+rather than resolved to `latest`, so an upgrade is a visible configuration change and an extract
+is reproducible.
+
+**Other themes** — the provider is generic: `theme` selects the family (`divisions`, `buildings`,
+`places`, `transportation`, `addresses`, `base`) and resolves to the type worth extracting, or
+name `type` outright. Only `divisions` is shipped as a template.
+
+**Licence obligation** — ODbL because divisions incorporate OpenStreetMap. The `license` and
+`attribution` fields are the obligation, not decoration: publishing an extract without surfacing
+them is a breach, and share-alike attaches to a publicly served derived database.
 
 ---
 
