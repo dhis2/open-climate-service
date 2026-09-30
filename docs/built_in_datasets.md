@@ -1,8 +1,16 @@
 # Built-in datasets
 
-The Open Climate Service ships with built-in dataset templates covering precipitation, temperature, and population. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
+The Open Climate Service ships with built-in dataset templates covering commonly requested data sources. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
 
 To ingest a built-in dataset for your configured extent, see the [API reference](managed_data_api_guide.md). To add datasets beyond these, see [Adding custom datasets](adding_custom_datasets.md).
+
+---
+
+## ERA5-Land — temperature and precipitation
+
+ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine dataset templates are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
+
+See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 
 ---
 
@@ -47,14 +55,6 @@ The monthly CHIRPS product, published as one global raster per calendar month. P
 **Transforms** — the source raster is a monthly **total** in mm; it is divided by the number of days in the month and stored as a mean daily rate (`mm/d`). Unlike the daily dataset, where mm and mm/day are the same number, this is a real conversion.
 
 That choice keeps every monthly precipitation dataset on the same units, which matters because `chirps3_precipitation_monthly_normal_1991_2020` is also `mm/d` and is the natural partner for a monthly anomaly — storing the raw total under the same label would make that comparison wrong by a factor of about 30. It is also the form xclim's drought indices expect.
-
----
-
-## ERA5-Land — temperature and precipitation
-
-ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine dataset templates are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
-
-See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 
 ---
 
@@ -163,6 +163,82 @@ other centres), so a sync run earlier in the month finds nothing new.
 
 **Resolution caveat** — 1° is a handful of cells for a country the size of Malawi. Sound for a
 national seasonal outlook, not for district-level maps.
+
+---
+
+## Copernicus — elevation (static)
+
+| Property               | Value                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `copdem30_elevation_static`                                                                          |
+| **Variable**           | `elevation`                                                                                          |
+| **Units**              | meters                                                                                               |
+| **Period**             | Yearly                                                                                               |
+| **Spatial coverage**   | Global                                                                                               |
+| **Spatial resolution** | ~30 m                                                                                                |
+| **Record start**       | 2010                                                                                                 |
+| **Record end**         | 2010                                                                                                 |
+| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
+
+Copernicus DEM Global 30m, recording elevation height above sea level. 
+
+**Note**: This dataset is static and non-varying over time, but currently implemented as yearly data for the year 2010
+when the data measurements were made. 
+
+---
+
+## Overture Maps — administrative divisions (feature collection)
+
+| Property             | Value                                                                   |
+| -------------------- | ----------------------------------------------------------------------- |
+| **Collection ID**    | `overture_divisions`                                                    |
+| **Item type**        | Feature collection (GeoParquet), not a raster                           |
+| **Identity**         | `id_property: id` — Overture's own division id                          |
+| **Spatial coverage** | Global; extracted for this instance's configured extent                 |
+| **Version**          | The pinned Overture release, e.g. `2026-09-23.0`                        |
+| **Licence**          | ODbL-1.0 — attribution **and** share-alike                              |
+| **Source**           | [Overture Maps divisions](https://docs.overturemaps.org/guides/divisions/) |
+
+Registered collections are served under `GET /features` and loaded inside a process graph by id
+with `load_features`.
+
+**Pick one administrative level.** A bounding-box window returns every level that overlaps it, so
+the shipped template filters to a single `subtype`, coarsest first: `country`, `dependency`,
+`region`, `county`, `localadmin`, `locality`, `macrohood`, `neighborhood`.
+
+**A window crosses borders.** The bbox is a rectangle, not a country outline, so a neighbouring
+country's divisions come back too. Add `country` to `filters` when that matters.
+
+```yaml
+- id: overture_divisions
+  name: Administrative divisions (Overture Maps)
+  license: ODbL-1.0
+  attribution: © OpenStreetMap contributors, © Overture Maps Foundation
+  id_property: id
+  provider: overture
+  params:
+    release: 2026-09-23.0
+    theme: divisions
+    filters: { subtype: county, country: SL }
+```
+
+**Refreshing** — Overture publishes monthly and the release id *is* the recorded version, so
+comparing what an instance holds against the latest release answers "is this stale" without
+reading the data. Bumping `release` selects which release the **next** provider run extracts; it
+does not itself trigger one. A feature collection is not on the raster sync path — `POST
+/sync/{id}` refuses it — so refreshing means re-running the provider: **Fetch** on its template
+page, or `POST /features/{id}/refresh` (add `Prefer: respond-async` to run it as a background
+job). The release is pinned
+rather than resolved to `latest`, so an upgrade is a visible configuration change and an extract
+is reproducible.
+
+**Other themes** — the provider is generic: `theme` selects the family (`divisions`, `buildings`,
+`places`, `transportation`, `addresses`, `base`) and resolves to the type worth extracting, or
+name `type` outright. Only `divisions` is shipped as a template.
+
+**Licence obligation** — ODbL because divisions incorporate OpenStreetMap. The `license` and
+`attribution` fields are the obligation, not decoration: publishing an extract without surfacing
+them is a breach, and share-alike attaches to a publicly served derived database.
 
 ---
 

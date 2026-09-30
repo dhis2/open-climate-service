@@ -52,15 +52,32 @@ data_dir: ./data   # required — directory for downloaded NetCDF files and Zarr
 #         period_type: day
 #       replay_existing: false  # default: do not backfill events predating this trigger
 #
-#     - id: chirps-to-dhis2-json
+#     - id: chirps-to-dhis2
 #       on_update_of: chirps3_precipitation_daily
 #       workflow_id: aggregate_to_dhis2_json
 #       arguments:
 #         dataset_id: $event.dataset_id
 #         temporal_extent: [$event.previous_end, $event.current_end]
 #         geometries: {from_features: districts}
-#         data_element_id: BXgDHhPdFVU
-#         period_type: day
+#         export: chirps-daily   # a named export under `exports` (below)
+#         method: mean           # must match the export's `aggregation` when it declares one
+#
+# The named export owns the DHIS2 mapping and connection. The job it produces carries a
+# delivery manifest, so the saved result can be submitted to POST /exports/chirps-daily.
+# dhis2_connections:
+#   - id: national-hmis
+#     url: https://hmis.example.org/dhis
+#     token_env: DHIS2_IMPORT_TOKEN
+# exports:
+#   - id: chirps-daily
+#     plugin: dhis2
+#     dataset: chirps3_precipitation_daily
+#     connection: national-hmis
+#     aggregation: mean
+#     period_type: daily
+#     series:
+#       - select: {}
+#         data_element: BXgDHhPdFVU
 
 # plugins_dir: ./plugins/   # optional — plugin root: YAML templates in plugins/datasets/, Python modules importable by dotted path
 # crs: EPSG:4326             # optional — CRS for stored GeoZarr files (default: EPSG:4326); use e.g. EPSG:25833 for UTM33

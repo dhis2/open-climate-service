@@ -316,6 +316,18 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             roles=["data"],
         ),
     )
+    # As for a raster collection: only when the file is there, so a client never follows a
+    # thumbnail href to a 404.
+    if thumbnail_path(dataset_id).is_file():
+        collection.add_asset(
+            "thumbnail",
+            pystac.Asset(
+                href=absolute_url(request, f"/datasets/{path_segment(dataset_id)}/thumbnail.png"),
+                media_type="image/png",
+                title="Thumbnail",
+                roles=["thumbnail"],
+            ),
+        )
 
     # `transform_hrefs=False` because every href here is already absolute. With it on, pystac
     # resolves the root link to rewrite relative ones — which means *fetching* the catalogue

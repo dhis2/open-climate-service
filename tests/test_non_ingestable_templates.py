@@ -64,7 +64,9 @@ def test_every_listed_template_reports_ingestability(client: TestClient) -> None
     payload = client.get("/dataset-templates").json()
     assert payload, "no templates listed"
     assert all("ingestable" in t for t in payload)
-    assert all(t["ingestable"] == registry.is_ingestable(t) for t in payload)
+    # For a raster template the flag is the registry's rule; a feature template's means its
+    # provider is available, and is covered with the feature templates.
+    assert all(t["ingestable"] == registry.is_ingestable(t) for t in payload if t["itemType"] == "coverage")
 
 
 def test_a_single_template_reports_it_too(client: TestClient) -> None:

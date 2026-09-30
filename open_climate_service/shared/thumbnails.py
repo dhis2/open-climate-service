@@ -5,16 +5,20 @@ an ingest that produced a flipped grid, a wrong extent or a unit error looks exa
 one that did not. A thumbnail is what makes the difference visible, in a STAC browser, on
 the landing page and during ingest QA.
 
-Both callers render the same way and differ only in what they are for, so the difference is
-one parameter rather than two renderers:
+Both raster callers render the same way and differ only in what they are for, so the
+difference is one parameter rather than two renderers:
 
 * an openEO ``PNG`` result is a *data product* — it keeps the cube's own pixel dimensions;
 * a STAC thumbnail is an *icon* — its longest side is rendered at
   :data:`THUMBNAIL_LONG_SIDE_PIXELS` whatever the store's resolution.
+
+A feature collection has no grid to render, so :func:`write_feature_thumbnail` draws its
+geometry instead, to the same path, size and publishing rules.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -320,7 +324,6 @@ def write_dataset_thumbnail(
     none at all.
     """
     import logging
-    import os
     from contextlib import closing
 
     logger = logging.getLogger(__name__)
@@ -350,29 +353,152 @@ def write_dataset_thumbnail(
             logger.warning("Every value in the slice chosen for '%s' is missing; no thumbnail", dataset_id)
             return None
 
-        # Rendered to a sibling and moved into place, never written over the published file.
-        # That path is served by HTTP, so writing in place would let a request read a
-        # half-written PNG, and a savefig that failed part way would truncate a previously
-        # good thumbnail — the opposite of the leave-the-old-one-alone behaviour above.
-        # `os.replace` within one directory is atomic, so a reader sees the old file or the
-        # new one and never something in between.
-        published = thumbnail_path(dataset_id)
-        published.parent.mkdir(parents=True, exist_ok=True)
-        # `.png` last: matplotlib picks the output format from the extension, so a plain
-        # `.tmp` suffix would be rejected rather than written.
-        pending = published.with_name(f".{published.stem}.{os.getpid()}.tmp.png")
-        try:
-            render_png(
+        return _publish_thumbnail(
+            dataset_id,
+            lambda pending: render_png(
                 chosen,
                 pending,
                 colormap=display.get("colormap"),
                 clim=clim,
                 long_side=THUMBNAIL_LONG_SIDE_PIXELS,
-            )
-            os.replace(pending, published)
-        finally:
-            pending.unlink(missing_ok=True)
-        return published
+            ),
+        )
     except Exception:
         logger.warning("Could not render a thumbnail for '%s'; publishing without one", dataset_id, exc_info=True)
+        return None
+
+
+def _publish_thumbnail(dataset_id: str, render: Callable[[Path], object]) -> Path:
+    """Run *render* against a sibling file and move the result over the published thumbnail.
+
+    Rendered to a sibling and moved into place, never written over the published file. That
+    path is served by HTTP, so writing in place would let a request read a half-written PNG,
+    and a savefig that failed part way would truncate a previously good thumbnail — the
+    opposite of the leave-the-old-one-alone rule the writers follow. `os.replace` within one
+    directory is atomic, so a reader sees the old file or the new one and never something in
+    between.
+    """
+    import os
+
+    published = thumbnail_path(dataset_id)
+    published.parent.mkdir(parents=True, exist_ok=True)
+    # `.png` last: matplotlib picks the output format from the extension, so a plain `.tmp`
+    # suffix would be rejected rather than written.
+    pending = published.with_name(f".{published.stem}.{os.getpid()}.tmp.png")
+    try:
+        render(pending)
+        os.replace(pending, published)
+    finally:
+        pending.unlink(missing_ok=True)
+    return published
+
+
+# Feature thumbnails are drawn in the web interface's own greens: a fill light enough that
+# dense boundaries stay readable, and an outline dark enough to show them.
+_FEATURE_FILL = "#cfe3cf"
+_FEATURE_EDGE = "#2f5f2f"
+_FEATURE_LINE_WIDTH = 0.4
+_FEATURE_POINT_SIZE = 6.0
+
+
+def render_features_png(frame: Any, path: str | Path, *, long_side: int) -> Path:
+    """Draw a GeoDataFrame's geometry to a transparent PNG whose longest side is *long_side*.
+
+    Polygons are filled and outlined, lines drawn as lines and points as dots, so a mixed
+    collection (districts and the clinics in them) renders as what it holds. Geometry is
+    simplified to about one output pixel first: at 512 px a detailed coastline is otherwise
+    drawn as a dark band of overlapping segments, and simplifying is also what keeps a large
+    collection quick to draw.
+    """
+    import matplotlib
+
+    matplotlib.use("agg")  # non-interactive backend — safe on worker threads
+    import matplotlib.pyplot as plt
+
+    xmin, ymin, xmax, ymax = (float(value) for value in frame.total_bounds)
+    width, height = xmax - xmin, ymax - ymin
+    # A single point, or points on one line, has no extent along an axis; give it one so the
+    # figure has a size and the points land in the middle rather than on the edge.
+    if width == 0 and height == 0:
+        width = height = 1.0
+        xmin, ymin, xmax, ymax = xmin - 0.5, ymin - 0.5, xmax + 0.5, ymax + 0.5
+    elif width == 0:
+        xmin, xmax, width = xmin - height / 2, xmax + height / 2, height
+    elif height == 0:
+        ymin, ymax, height = ymin - width / 2, ymax + width / 2, width
+
+    scale = long_side / max(width, height)
+    pixel = max(width, height) / long_side
+    # A GeometryCollection belongs to none of the buckets below, so a collection of them would
+    # draw nothing. Exploding splits it (and every multi-part geometry) into single parts first.
+    parts = frame.explode(index_parts=False)
+    geometry_types = parts.geometry.geom_type
+    areas = parts[geometry_types.isin(["Polygon", "MultiPolygon"])]
+    lines = parts[geometry_types.isin(["LineString", "MultiLineString", "LinearRing"])]
+    points = parts[geometry_types.isin(["Point", "MultiPoint"])]
+    if areas.empty and lines.empty and points.empty:
+        # Raised rather than drawn: a blank image would replace a previous, useful thumbnail.
+        raise ValueError(f"No drawable geometry among types {sorted(set(geometry_types))}")
+
+    dpi = 100
+    fig = plt.figure(
+        figsize=(max(1, round(width * scale)) / dpi, max(1, round(height * scale)) / dpi),
+        dpi=dpi,
+    )
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+        ax.set_axis_off()
+        if not areas.empty:
+            areas.geometry.simplify(pixel, preserve_topology=True).plot(
+                ax=ax, facecolor=_FEATURE_FILL, edgecolor=_FEATURE_EDGE, linewidth=_FEATURE_LINE_WIDTH
+            )
+        if not lines.empty:
+            lines.geometry.simplify(pixel).plot(ax=ax, color=_FEATURE_EDGE, linewidth=_FEATURE_LINE_WIDTH * 2)
+        if not points.empty:
+            points.plot(ax=ax, color=_FEATURE_EDGE, markersize=_FEATURE_POINT_SIZE)
+        # Half a pixel of margin, so outlines along the frame's edge are not clipped in half.
+        ax.set_xlim(xmin - pixel / 2, xmax + pixel / 2)
+        ax.set_ylim(ymin - pixel / 2, ymax + pixel / 2)
+        ax.set_aspect("equal", adjustable="datalim")
+        fig.savefig(path, dpi=dpi, transparent=True)
+    finally:
+        plt.close(fig)
+    return path
+
+
+def write_feature_thumbnail(collection_path: str | Path, collection_id: str) -> Path | None:
+    """Draw a feature collection's stored GeoParquet to its thumbnail, returning the path, or None.
+
+    Called once per refresh, after the collection's record is durable, so the image always
+    describes a collection that is registered. Written to the same path as a raster's, so the
+    datasets page, `GET /datasets/{id}/thumbnail.png` and the STAC `thumbnail` asset all pick it
+    up unchanged.
+
+    **Never raises**, and never removes an existing thumbnail, for the reasons
+    :func:`write_dataset_thumbnail` gives: a collection is not less registered for being
+    unrecognisable, and an older image still identifies it.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    if not collection_id:
+        return None
+    try:
+        import geopandas as gpd
+
+        frame = gpd.read_parquet(collection_path)
+        frame = frame[frame.geometry.notna() & ~frame.geometry.is_empty]
+        if frame.empty:
+            logger.warning("Feature collection '%s' has no geometry to draw; no thumbnail", collection_id)
+            return None
+        # Drawn in the instance CRS, the projection the instance's rasters are stored in.
+        frame = frame.to_crs(api_config.get_crs())
+        return _publish_thumbnail(
+            collection_id,
+            lambda pending: render_features_png(frame, pending, long_side=THUMBNAIL_LONG_SIDE_PIXELS),
+        )
+    except Exception:
+        logger.warning("Could not draw a thumbnail for '%s'; registering without one", collection_id, exc_info=True)
         return None

@@ -24,7 +24,10 @@ from open_climate_service import config as api_config
 
 logger = logging.getLogger(__name__)
 
-F = TypeVar("F", bound=Callable[..., Mapping[str, Any]])
+ProviderResult = Mapping[str, Any] | tuple[Mapping[str, Any], str | None]
+"""What a provider may return: a FeatureCollection, or one paired with the release it read."""
+
+F = TypeVar("F", bound=Callable[..., ProviderResult])
 
 _OCS_FEATURE_PROVIDER_ATTR = "__ocs_feature_provider__"
 
@@ -45,8 +48,20 @@ def feature_provider(name: object) -> Callable[[F], F]:
             '''Return org unit boundaries as a GeoJSON FeatureCollection.'''
             ...
 
-    The decorated function receives a template's declared `params` as keyword arguments and must
-    return a GeoJSON FeatureCollection. It does not, and must not, set its own `properties.id`
+    The decorated function receives a template's declared `params` as keyword arguments and
+    returns either a GeoJSON FeatureCollection, or a `(FeatureCollection, version)` pair where
+    `version` identifies the upstream release it just fetched::
+
+        return collection  # nothing meaningful to report
+        return collection, "2026-09-23.0"  # an upstream release id
+
+    The second form exists because a provider is the only thing that knows which release it
+    actually read. A template may declare `sync.version` instead, but that sits beside the
+    parameter selecting the release and drifts as soon as one is edited, so a reported version
+    wins over a declared one. The authority half of the recorded identity is this registry name,
+    supplied by the caller — a provider does not name the scheme it releases under.
+
+    It does not, and must not, set its own `properties.id`
     identity guarantee beyond what the template's `id_property` names — identity validation
     happens once, uniformly, on the way to disk (`shared.features.validate_feature_ids`, via
     `store.write_feature_collection`), not inside each provider.
@@ -70,7 +85,7 @@ def get_feature_provider_name(obj: Any) -> str | None:
     return getattr(obj, _OCS_FEATURE_PROVIDER_ATTR, None)
 
 
-def load_feature_providers() -> dict[str, Callable[..., Mapping[str, Any]]]:
+def load_feature_providers() -> dict[str, Callable[..., ProviderResult]]:
     """Return {name: callable} for every @feature_provider-decorated function.
 
     Resolution order (last wins), matching `plugin_processes.load_plugin_processes` and
@@ -87,7 +102,7 @@ def load_feature_providers() -> dict[str, Callable[..., Mapping[str, Any]]]:
     modest cost of re-scanning is not worth the staleness risk `reset_template_caches` exists to
     manage for the busier dataset path.
     """
-    found: dict[str, Callable[..., Mapping[str, Any]]] = {}
+    found: dict[str, Callable[..., ProviderResult]] = {}
     for func in _scan_builtin_providers():
         name = get_feature_provider_name(func)
         if name:
@@ -103,7 +118,7 @@ def load_feature_providers() -> dict[str, Callable[..., Mapping[str, Any]]]:
     return found
 
 
-def get_feature_provider(name: str) -> Callable[..., Mapping[str, Any]] | None:
+def get_feature_provider(name: str) -> Callable[..., ProviderResult] | None:
     """Return one registered provider by name, or None if nothing is registered under it."""
     return load_feature_providers().get(name)
 
