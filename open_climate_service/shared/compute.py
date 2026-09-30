@@ -26,8 +26,8 @@ from dask.threaded import ContextAwareThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_JOBS_ENV = "CLIMATE_SERVICE_MAX_CONCURRENT_JOBS"
-DEFAULT_MAX_CONCURRENT_JOBS = 3
-"""One ingest and two openEO jobs, the load CLIM-1229 was measured under, all make progress."""
+DEFAULT_MAX_CONCURRENT_JOBS = 2
+"""An ingest and the workflow it triggers. Memory, not CPU, is what a laptop runs out of first."""
 
 _SLOT_POLL_SECONDS = 2.0
 
@@ -35,13 +35,15 @@ _SLOT_POLL_SECONDS = 2.0
 def dask_thread_budget() -> int:
     """Threads for all dask computation in this process.
 
-    `DASK_NUM_WORKERS` (dask's own `num_workers` setting) wins when set. Otherwise one less
-    than the core count, so the web server keeps a core while jobs compute.
+    `DASK_NUM_WORKERS` (dask's own `num_workers` setting) wins when set. Otherwise half the
+    cores: reads are mostly decompression, and a monthly mean over a year of daily data took
+    2.26 s on 4 threads against 2.19 s on 12 (CLIM-1230), so the other half buys little and
+    keeps a laptop responsive while an ingest runs.
     """
     configured = dask.config.get("num_workers", None)
     if configured:
         return max(1, int(configured))
-    return max(1, (os.cpu_count() or 1) - 1)
+    return max(1, (os.cpu_count() or 1) // 2)
 
 
 _in_shared_pool = threading.local()

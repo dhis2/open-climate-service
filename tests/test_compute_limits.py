@@ -175,13 +175,11 @@ def test_install_is_idempotent_and_sets_the_process_pool(monkeypatch: pytest.Mon
             first.shutdown()
 
 
-def test_thread_budget_defaults_below_the_core_count(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(compute.os, "cpu_count", lambda: 12)
-    with dask.config.set(num_workers=None):
-        assert compute.dask_thread_budget() == 11
-    monkeypatch.setattr(compute.os, "cpu_count", lambda: 1)
-    with dask.config.set(num_workers=None):
-        assert compute.dask_thread_budget() == 1
+def test_thread_budget_defaults_to_half_the_cores(monkeypatch: pytest.MonkeyPatch) -> None:
+    for cores, expected in [(12, 6), (8, 4), (3, 1), (1, 1)]:
+        monkeypatch.setattr(compute.os, "cpu_count", lambda cores=cores: cores)
+        with dask.config.set(num_workers=None):
+            assert compute.dask_thread_budget() == expected
 
 
 def test_thread_budget_follows_dask_num_workers() -> None:

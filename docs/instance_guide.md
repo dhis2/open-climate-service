@@ -261,19 +261,25 @@ dedicated instance Docker guide is planned.
 
 ### Compute limits
 
-Background jobs share the machine with the web server, so OCS bounds how much of it they
-take. The defaults suit a dedicated server; lower them on a machine that does other work.
+Background jobs share the machine with the web server, and usually with the rest of a
+laptop, so OCS bounds how much of it they take. The defaults are chosen for a laptop.
 
 | Setting | Default | Bounds |
 | --- | --- | --- |
-| `DASK_NUM_WORKERS` | cores - 1 | Threads for all dask computation in the process, shared by every job and request |
-| `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` | 3 | Ingestion, sync, feature refresh and openEO batch jobs running at once, together |
+| `DASK_NUM_WORKERS` | half the cores | Threads for all dask computation in the process, shared by every job and request |
+| `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` | 2 | Ingestion, sync, feature refresh and openEO batch jobs running at once, together |
 | `TOKIO_WORKER_THREADS` | cores | Worker threads of Icechunk's storage runtime |
 
 A job beyond the limit waits queued (`accepted` for ingestion jobs, with the message
 "Waiting for a free job slot"; `queued` for openEO jobs) and starts when another finishes.
 Synchronous requests such as `POST /result` are not counted as jobs, but their computation
 uses the same dask threads.
+
+Memory runs out before CPU does: a zonal statistics job over a country can peak at about
+3 GB. On a machine with 8 GB or less, keep `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` at 1 or 2.
+Docker Desktop gives its VM only part of the machine's memory, and `compose.yml` sets no
+limit of its own, so size the limit to what the VM has. A dedicated server can raise both
+settings; more dask threads than half the cores rarely makes reads faster.
 
 Icechunk also starts short-lived I/O threads while it reads and writes files. Their number
 follows the amount of concurrent reading, so `DASK_NUM_WORKERS` is what bounds them.
