@@ -173,6 +173,8 @@ def submit_delivery(
                         raise HTTPException(
                             status_code=409, detail="Idempotency key reused with different delivery content"
                         )
+                # Idempotent; repairs the link when a crash hit between enqueue and linking.
+                link_source_job(source_job_id, export_id, existing_job.job_id)
                 return existing_job.job_id, True
 
         with lease_export_input(export_id, source_job_id) as verified:

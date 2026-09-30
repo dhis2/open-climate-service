@@ -6,17 +6,28 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from open_climate_service import config as api_config
-from open_climate_service.automation.config import AutomationConfig, WorkflowTrigger, get_automation_config
+from open_climate_service.automation.config import (
+    AutomationConfig,
+    TriggerDelivery,
+    WorkflowTrigger,
+    get_automation_config,
+)
 from open_climate_service.jobs import store as job_store
 from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
 from open_climate_service.openeo import workflows
-from open_climate_service.openeo.jobs import OpenEOJobService, get_openeo_job_service
-from open_climate_service.openeo.schemas import OpenEOJobCreate
+from open_climate_service.openeo.jobs import (
+    OpenEOJobService,
+    get_openeo_job_service,
+    store_list_jobs,
+    store_update_job,
+)
+from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -41,15 +52,205 @@ def _resolve_event_values(value: Any, event: JobEvent) -> Any:
     return value
 
 
-def _activation_path() -> Path:
-    """Return the file recording each trigger's activation boundary."""
+def _automation_dir() -> Path:
     data_dir = api_config.get_data_dir()
     if data_dir is not None:
         base = data_dir
     else:
         xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
         base = xdg_data / "climate-service"
-    return base / "automation" / "activation.json"
+    return base / "automation"
+
+
+def _activation_path() -> Path:
+    """Return the file recording each trigger's activation boundary."""
+    return _automation_dir() / "activation.json"
+
+
+def _delivery_activation_path() -> Path:
+    """Return the file recording when each trigger's delivery step became active."""
+    return _automation_dir() / "delivery_activation.json"
+
+
+def _delivery_mode(dry_run: bool) -> str:
+    return "dry-run" if dry_run else "live"
+
+
+def _load_delivery_activations() -> dict[str, dict[str, str]]:
+    """Return ``{trigger_id: {"export", "mode", "activated_at"}}``, tolerating a missing or corrupt file.
+
+    A lost or incomplete entry is re-stamped at the next start, which delivers nothing finished
+    before it: the safe reading, since pushing history is the failure this boundary prevents.
+    """
+    path = _delivery_activation_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # ValueError covers invalid JSON and non-UTF-8 bytes (UnicodeDecodeError).
+        logger.warning("Could not read delivery activation file %s; deliveries restart from now", path)
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    fields = ("export", "mode", "activated_at")
+    return {
+        key: {field: value[field] for field in fields}
+        for key, value in payload.items()
+        if isinstance(key, str)
+        and isinstance(value, dict)
+        and all(isinstance(value.get(field), str) for field in fields)
+        and _parse_time(value["activated_at"]) is not None
+    }
+
+
+def _parse_time(value: str) -> datetime | None:
+    try:
+        return _as_utc(datetime.fromisoformat(value))
+    except ValueError:
+        return None
+
+
+def _save_delivery_activations(activations: dict[str, dict[str, str]]) -> None:
+    path = _delivery_activation_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(activations, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temp, path)
+
+
+def _sync_delivery_activations(config: AutomationConfig) -> dict[str, dict[str, str]]:
+    """Stamp new delivery steps, forget removed ones, and return the boundaries now in force.
+
+    A trigger gains a boundary when it first delivers, or changes its export or its mode.
+    The mode matters as much as the export: a job that finished under ``dry_run: true`` and
+    was never delivered must not be imported live after switching to ``dry_run: false``.
+    Removing ``deliver`` drops the boundary, so adding it back later does not deliver the
+    jobs that finished in between.
+    """
+    current = _load_delivery_activations()
+    now = utc_now().isoformat()
+    wanted: dict[str, dict[str, str]] = {}
+    for trigger in config.workflow_triggers:
+        if trigger.deliver is None:
+            continue
+        binding = {"export": trigger.deliver.export, "mode": _delivery_mode(trigger.deliver.dry_run)}
+        existing = current.get(trigger.id)
+        if existing is not None and all(existing[key] == value for key, value in binding.items()):
+            wanted[trigger.id] = existing
+        else:
+            wanted[trigger.id] = {**binding, "activated_at": now}
+    if wanted != current:
+        _save_delivery_activations(wanted)
+    return wanted
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+@dataclass(frozen=True)
+class _DeliveryStep:
+    """A trigger's delivery settings and the boundary before which nothing is delivered."""
+
+    delivery: TriggerDelivery
+    activated_at: datetime
+
+
+def _delivery_steps(config: AutomationConfig, activations: dict[str, dict[str, str]]) -> dict[str, _DeliveryStep]:
+    """Index each delivering trigger by ID, parsing its activation boundary once.
+
+    A trigger whose boundary is missing or unreadable is left out, so it delivers nothing:
+    pushing history is the failure the boundary exists to prevent.
+    """
+    steps: dict[str, _DeliveryStep] = {}
+    for trigger in config.workflow_triggers:
+        activation = activations.get(trigger.id)
+        if (
+            trigger.deliver is None
+            or activation is None
+            or activation["export"] != trigger.deliver.export
+            or activation["mode"] != _delivery_mode(trigger.deliver.dry_run)
+        ):
+            continue
+        activated_at = _parse_time(activation["activated_at"])
+        if activated_at is None:
+            continue
+        steps[trigger.id] = _DeliveryStep(trigger.deliver, activated_at)
+    return steps
+
+
+def _finished_after(record: OpenEOJobRecord, activated_at: datetime) -> bool:
+    """True when a job finished at or after a delivery activation boundary.
+
+    Jobs without a recorded finish time finished before this boundary existed.
+    """
+    return record.finished_at is not None and _as_utc(record.finished_at) >= activated_at
+
+
+def delivery_idempotency_key(job_id: str, export_id: str, dry_run: bool) -> str:
+    """Deterministic key: one delivery per triggered job, export, and mode.
+
+    The mode is part of the key because a key reused with a different ``dry_run`` is a
+    conflict, and switching a trigger from dry run to live must not collide with earlier
+    dry-run deliveries.
+    """
+    return f"auto:{job_id}:{export_id}:{_delivery_mode(dry_run)}"
+
+
+def _set_delivery_error(job_id: str, export_id: str, message: str | None) -> None:
+    """Expose the latest automatic-delivery submission error on the source job."""
+    now = utc_now()
+
+    def update(record: OpenEOJobRecord) -> OpenEOJobRecord:
+        usage = dict(record.usage or {})
+        if message is None:
+            usage.pop("delivery_error", None)
+        else:
+            usage["delivery_error"] = {
+                "export_id": export_id,
+                "message": message,
+                "failed_at": now.isoformat(),
+            }
+        return record.model_copy(update={"usage": usage, "updated": now})
+
+    try:
+        store_update_job(job_id, update)
+    except Exception:
+        # Error visibility must not turn a completed workflow into a failed one.
+        logger.exception("Could not update delivery error state for openEO job %s", job_id)
+
+
+def _validate_deliveries(config: AutomationConfig) -> None:
+    """Refuse a delivery step that could only fail per job, naming its trigger."""
+    from open_climate_service.exports.dhis2 import get_connection_config
+    from open_climate_service.exports.service import resolve_named_export
+
+    deliveries = [(trigger, trigger.deliver) for trigger in config.workflow_triggers if trigger.deliver is not None]
+    for trigger, delivery in deliveries:
+        export_id = delivery.export
+        prefix = f"Workflow trigger {trigger.id!r} delivers export {export_id!r}"
+        workflow_export = trigger.arguments.get("export")
+        if isinstance(workflow_export, str) and workflow_export != export_id:
+            raise ValueError(
+                f"{prefix}, but arguments.export is {workflow_export!r}; "
+                "the workflow and delivery must use the same named export"
+            )
+        try:
+            resolved = resolve_named_export("DHIS2JSON", {"export": export_id})
+        except ValueError as exc:
+            raise ValueError(f"{prefix}, which is invalid: {exc}") from None
+        if resolved.plugin.id != "dhis2":
+            raise ValueError(f"{prefix}, whose plugin is {resolved.plugin.id!r}; only dhis2 exports deliver")
+        connection = resolved.references.get("connection")
+        if connection is None:
+            raise ValueError(f"{prefix}, which has no DHIS2 connection")
+        try:
+            get_connection_config(connection)
+        except ValueError:
+            raise ValueError(
+                f"{prefix}, whose connection {connection!r} is not configured under dhis2_connections"
+            ) from None
 
 
 def _load_activations() -> dict[str, str]:
@@ -59,7 +260,8 @@ def _load_activations() -> dict[str, str]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # ValueError covers invalid JSON and non-UTF-8 bytes (UnicodeDecodeError).
         logger.warning("Could not read automation activation file %s; triggers will not replay history", path)
         return {}
     if not isinstance(payload, dict):
@@ -298,6 +500,9 @@ class WorkflowAutomationService:
         self._config_loader = config_loader
         self._openeo_service = openeo_service
         self._config: AutomationConfig | None = None
+        # Built by start(), the only writer of delivery boundaries in this process, so the
+        # finish hook and reconciliation never re-read the activation file per job.
+        self._delivery_steps: dict[str, _DeliveryStep] = {}
 
     def start(self) -> None:
         """Load configuration, validate triggers, and record activation boundaries.
@@ -305,8 +510,11 @@ class WorkflowAutomationService:
         Validation runs even on a read-only instance so a configuration error surfaces at startup
         rather than only once the instance is made writable.
         """
+        self._delivery_steps = {}
         self._config = self._config_loader()
         if not self._config.workflow_triggers:
+            if not api_config.is_read_only():
+                _sync_delivery_activations(self._config)
             return
         for trigger in self._config.workflow_triggers:
             if workflows.get_workflow(trigger.workflow_id) is None:
@@ -314,8 +522,10 @@ class WorkflowAutomationService:
         _validate_output_ownership(self._config)
         _validate_event_references(self._config)
         _validate_feature_references(self._config)
+        _validate_deliveries(self._config)
         if api_config.is_read_only():
             return
+        self._delivery_steps = _delivery_steps(self._config, _sync_delivery_activations(self._config))
         activations = _load_activations()
         now = utc_now().isoformat()
         changed = False
@@ -357,6 +567,108 @@ class WorkflowAutomationService:
                 if trigger.on_update_of != event.data.get("dataset_id"):
                     continue
                 self._submit_safely(trigger, event, service)
+
+    def delivery_due_for(self, record: OpenEOJobRecord) -> dict[str, str] | None:
+        """Return the delivery a job finishing now owes, to be stored with its FINISHED state.
+
+        Called while the job is being marked finished, so the obligation is recorded in the
+        same write. A job finishing while its trigger has no active delivery step (``deliver``
+        absent, an older boundary, or a read-only instance) records nothing and is never
+        delivered later, even if the same step is configured again.
+        """
+        step = self._active_step(record)
+        if step is None:
+            return None
+        return {"export": step.delivery.export, "mode": _delivery_mode(step.delivery.dry_run)}
+
+    def on_job_finished(self, record: OpenEOJobRecord) -> None:
+        """Submit the delivery for a triggered job that just finished, when its trigger asks."""
+        step = self._due_step(record)
+        if step is not None:
+            self._deliver_safely(str(record.trigger_id), step.delivery, record)
+
+    def reconcile_deliveries(self) -> None:
+        """Submit deliveries missed while the process was down.
+
+        Covers a process killed after a job finished and before its delivery was submitted.
+        A job whose source record already lists a delivery for the export is skipped, so
+        earlier dry-run deliveries are not repeated live after ``dry_run`` is switched off.
+        The deterministic idempotency key makes a double submission harmless.
+        """
+        if not self._delivery_steps or api_config.is_read_only():
+            return
+        for record in store_list_jobs():
+            step = self._due_step(record)
+            if step is not None:
+                self._deliver_safely(str(record.trigger_id), step.delivery, record)
+
+    def _active_step(self, record: OpenEOJobRecord) -> _DeliveryStep | None:
+        """Return the step configured for a finished triggered job's trigger, or None."""
+        # Steps exist only after start() validated and stamped them on a writable instance.
+        if record.status != OpenEOJobStatus.FINISHED or record.trigger_id is None or api_config.is_read_only():
+            return None
+        step = self._delivery_steps.get(record.trigger_id)
+        if step is None or not _finished_after(record, step.activated_at):
+            return None
+        return step
+
+    def _due_step(self, record: OpenEOJobRecord) -> _DeliveryStep | None:
+        """Return the step a finished job still owes, or None.
+
+        The job must have recorded this exact export and mode when it finished, and must not
+        already list a delivery for the export. The second check covers a re-run: its delivery
+        links survive, so a job delivered as a dry run is not imported live after the switch.
+        """
+        step = self._active_step(record)
+        if step is None:
+            return None
+        expected = {"export": step.delivery.export, "mode": _delivery_mode(step.delivery.dry_run)}
+        if record.delivery_due != expected or _lists_delivery(record, step.delivery.export):
+            return None
+        return step
+
+    def _deliver_safely(self, trigger_id: str, delivery: TriggerDelivery, record: OpenEOJobRecord) -> None:
+        """Submit one delivery, logging rather than raising so siblings still run."""
+        from fastapi import HTTPException
+
+        from open_climate_service.exports.delivery import submit_delivery
+
+        export_id = delivery.export
+        dry_run = delivery.dry_run
+        try:
+            delivery_job_id, reused = submit_delivery(
+                export_id,
+                record.id,
+                dry_run,
+                delivery_idempotency_key(record.id, export_id, dry_run),
+            )
+        except HTTPException as exc:
+            _set_delivery_error(record.id, export_id, str(exc.detail))
+            # Verification refusals (changed export, missing manifest, re-run source) are
+            # operator-actionable configuration states, not crashes.
+            logger.warning(
+                "Workflow trigger %s could not deliver job %s to export %s: %s",
+                trigger_id,
+                record.id,
+                export_id,
+                exc.detail,
+            )
+            return
+        except Exception as exc:
+            _set_delivery_error(record.id, export_id, f"{type(exc).__name__}: {exc}")
+            logger.exception(
+                "Workflow trigger %s failed to deliver job %s to export %s", trigger_id, record.id, export_id
+            )
+            return
+        _set_delivery_error(record.id, export_id, None)
+        if not reused:
+            logger.info(
+                "Submitted %s delivery %s of job %s to export %s",
+                "dry-run" if dry_run else "live",
+                delivery_job_id,
+                record.id,
+                export_id,
+            )
 
     def _submit_safely(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> None:
         """Submit one trigger/event pair without letting a failure skip its siblings."""
@@ -405,6 +717,13 @@ class WorkflowAutomationService:
                 job.id,
                 event.event_id,
             )
+
+
+def _lists_delivery(record: OpenEOJobRecord, export_id: str) -> bool:
+    deliveries = (record.usage or {}).get("deliveries")
+    return isinstance(deliveries, list) and any(
+        isinstance(item, dict) and item.get("export_id") == export_id for item in deliveries
+    )
 
 
 _service: WorkflowAutomationService | None = None

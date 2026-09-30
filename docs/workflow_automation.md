@@ -99,9 +99,70 @@ independently in that pool. Bounding total workflow concurrency is a general res
 concern deferred to CLIM-845; until then the per-store lock remains the write-safety boundary for
 workflows that publish managed datasets.
 
+## Deliver the result to DHIS2
+
+A trigger can deliver its job's result once the job finishes. The workflow must save through a
+[named export](export_plugins.md), and `deliver.export` names that same export:
+
+```yaml
+automation:
+  workflow_triggers:
+    - id: chirps-monthly-to-districts
+      on_update_of: chirps3_precipitation_monthly
+      workflow_id: aggregate_to_dhis2_json
+      arguments:
+        dataset_id: $event.dataset_id
+        temporal_extent: [$event.previous_end, $event.current_end]
+        geometries: { from_features: districts }
+        export: chirps-monthly-districts
+      deliver:
+        export: chirps-monthly-districts
+        dry_run: true   # the default; set false to import into DHIS2
+```
+
+When a job created by the trigger finishes, OCS submits a delivery exactly as
+[`POST /exports/{export_id}`](export_plugins.md#deliver-a-saved-export) does. Verification,
+chunking, checkpoints, the per-export lock, and the import report all come from that delivery
+job. The source job lists it under `usage.deliveries`. A job that fails or is canceled
+delivers nothing.
+
+`dry_run` defaults to `true`, so writing to DHIS2 is an explicit opt-in. Inspect the dry-run
+reports first, then set `dry_run: false`. Only jobs that finish after the change are imported.
+Jobs that finished earlier are never imported live, whether or not their dry run was delivered.
+
+Each finished job is delivered at most once per export and mode. The idempotency key is
+`auto:{job_id}:{export}:{dry-run|live}`, so replaying an event or restarting OCS creates no
+second delivery. A job records the delivery it owes in the same write that marks it finished.
+At startup OCS submits any recorded delivery missed because the process stopped after a job
+finished. If submission fails, the source job exposes the latest failure under
+`usage.delivery_error`; OCS retries it during the next startup reconciliation, not on an
+in-process timer. A workflow finishing during shutdown may likewise defer submission until
+the next startup reconciliation. A job keeps its delivery links when re-run by hand, so a
+delivered job is not delivered again, even after switching to live; submit the new result through
+`POST /exports/{export_id}` instead.
+
+Adding `deliver` to an existing trigger does not deliver its history. The delivery step has
+its own activation time, and only jobs that finish after it are delivered. Changing
+`deliver.export` or `deliver.dry_run`, or removing `deliver` and adding it back, starts a new
+activation. A job that finishes while its trigger has no active delivery step, for example
+while `deliver` is absent or the instance is read-only, owes nothing and is never delivered
+later. `replay_existing` applies to workflow submission only, never to delivery.
+
+Startup fails, naming the trigger, when `deliver.export` is not a configured export, is
+configured more than once, its plugin is not `dhis2`, it has no `connection`, that connection
+is not configured, its mapping is invalid, or a literal `arguments.export` differs from
+`deliver.export`. A read-only instance validates the same configuration but leaves delivery
+inactive, allowing writable and serving instances to share one tracked configuration.
+
+Delivery needs the optional `dhis2-client` package and the connection's token in the
+server environment. See
+[named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins).
+
 ## Current boundary
 
 This mechanism dispatches workflows owned by the same OCS instance. It does not provide workflow
-dependency graphs, cross-service retries, webhooks, or distributed event consumption. Exactly
+dependency graphs, cross-service retries, webhooks, or distributed event consumption. A delivery
+that ends partial, rejected, or unknown is reported on its delivery job but does not yet notify
+anyone, and failed workflow jobs are not retried (CLIM-919). Exactly
 one writable OCS process should perform automation until the stores and leadership model become
 shared and transactional.
