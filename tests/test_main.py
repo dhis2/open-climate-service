@@ -93,3 +93,43 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         "shutdown",
         "openeo-shutdown",
     ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("read_only", [False, True])
+async def test_lifespan_runs_pending_store_collections_at_startup_and_periodically(
+    monkeypatch: pytest.MonkeyPatch, read_only: bool
+) -> None:
+    """What guarantees a failed attempt's data is freed even if the store is never synced again."""
+    import asyncio
+
+    from open_climate_service.ingestions import services
+
+    sweeps: list[int] = []
+    monkeypatch.setattr(services, "collect_pending_garbage_everywhere", lambda: sweeps.append(1) or 0)
+    monkeypatch.setattr(services, "remove_leftover_rebuilds", lambda: 0)
+    monkeypatch.setattr(main.api_config, "is_read_only", lambda: read_only)
+    monkeypatch.setattr(main, "_MAINTENANCE_INTERVAL_S", 0.01)
+
+    class _Quiet:
+        def __getattr__(self, name: str) -> object:
+            return lambda *args, **kwargs: None
+
+    for factory in (
+        "get_job_service",
+        "get_openeo_job_service",
+        "get_workflow_automation_service",
+        "get_scheduler_service",
+    ):
+        monkeypatch.setattr(main, factory, lambda: _Quiet())
+
+    async with main._lifespan(FastAPI()):
+        await asyncio.sleep(0.1)
+        seen = len(sweeps)
+    await asyncio.sleep(0.05)
+
+    if read_only:
+        assert sweeps == []  # may share its data directory with a writing instance
+    else:
+        assert seen >= 2  # once at startup, then on the interval
+        assert len(sweeps) == seen, "the loop stops with the app"
