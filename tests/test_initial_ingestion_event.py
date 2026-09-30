@@ -315,5 +315,6 @@ def test_inline_sync_is_recorded_as_a_completed_job_with_its_event(
     [event] = record.events
     # The action is the sync planner's own choice; the event reports it as planned.
     assert event.data["action"] in {"append", "rematerialize"}
-    assert (event.data["previous_end"], event.data["current_end"]) == ("2026-01-02", "2026-01-03")
+    expected_previous_end = "2026-01-02" if event.data["action"] == "append" else None
+    assert (event.data["previous_end"], event.data["current_end"]) == (expected_previous_end, "2026-01-03")
     assert len(_triggered_jobs()) == 2

@@ -329,9 +329,15 @@ def test_successful_job_persists_result_and_events_atomically(monkeypatch: pytes
     consume.assert_called_once_with(completed.events)
 
 
-@pytest.mark.parametrize("action", [SyncAction.APPEND, SyncAction.REMATERIALIZE])
+@pytest.mark.parametrize(
+    ("action", "expected_previous_end"),
+    [
+        (SyncAction.APPEND, "2026-01-02"),
+        (SyncAction.REMATERIALIZE, None),
+    ],
+)
 def test_execute_sync_returns_dataset_updated_after_completed_change(
-    action: SyncAction, monkeypatch: pytest.MonkeyPatch
+    action: SyncAction, expected_previous_end: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(processes.services, "sync_dataset", lambda **_: _sync_response(action))
 
@@ -345,7 +351,7 @@ def test_execute_sync_returns_dataset_updated_after_completed_change(
         "dataset_id": "managed-dataset",
         "artifact_id": "artifact-2",
         "action": action.value,
-        "previous_end": "2026-01-02",
+        "previous_end": expected_previous_end,
         "current_start": "2026-01-01",
         "current_end": "2026-01-03",
     }

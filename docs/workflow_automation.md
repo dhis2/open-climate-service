@@ -38,7 +38,8 @@ exact event references can be used at any nesting level:
 
 After an initial ingestion, `previous_end` is JSON/YAML `null`, because no periods were stored
 before. A temporal interval of `[$event.previous_end, $event.current_end]` is therefore open at
-the start and reads through `current_end` from the dataset's earliest available period. An
+the start and reads through `current_end` from the dataset's earliest available period. This
+means the first triggered workflow run processes the complete ingested history. An
 ingestion that rewrites the whole store, including `overwrite`, also uses `null` because every
 period was rewritten. After an append, `previous_end` is the old coverage boundary, so that
 interval includes the boundary and the newly appended periods. A workflow that always needs an
@@ -92,7 +93,9 @@ A workflow is considered only after a successful ingestion or sync has persisted
 does re-ingesting a dataset that is already current. Ingestion and sync, whether queued,
 scheduled, run inline, or started from the admin pages, all use the same path. Work run inline
 is recorded as a completed job under `/ingestions/jobs`, because that record is what makes
-its event durable.
+its event durable after the operation returns. Unlike queued ingestion, inline execution has
+no pre-write job checkpoint: if the process stops after committing data but before recording
+the completed job, that update event cannot be recovered automatically.
 
 An ingestion job notes in its checkpoint that it is about to change stored data, before
 fetching anything. If OCS stops after the data is committed but before the job completes,

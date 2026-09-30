@@ -139,7 +139,10 @@ def sync_update_events(dataset_id: str, response: SyncResponse) -> list[JobEvent
             dataset_id=dataset_id,
             artifact_id=response.sync_id,
             action=detail.action.value,
-            previous_end=detail.current_end,
+            # A rematerialization may rewrite every historical value, so workflows
+            # must process the complete post-update coverage rather than only the
+            # periods after the old boundary.
+            previous_end=detail.current_end if detail.action == SyncAction.APPEND else None,
             current_start=detail.current_start,
             current_end=detail.target_end,
         )
