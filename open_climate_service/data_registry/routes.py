@@ -74,7 +74,7 @@ def _get_dataset_or_404(dataset_id: str) -> dict[str, Any]:
     """Look up a dataset template by ID or raise 404."""
     dataset = datasets.get_dataset(dataset_id)
     if not dataset:
-        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Data source '{dataset_id}' not found")
     return dataset
 
 
@@ -102,7 +102,7 @@ def get_data_source(dataset_id: str, request: Request, response: Response) -> di
 
         feature = feature_templates.get_feature_template(dataset_id)
         if feature is None:
-            raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+            raise HTTPException(status_code=404, detail=f"Data source '{dataset_id}' not found")
         if prefers_html(request):
             page = HTMLResponse(render_feature_source_page(feature, mount_prefix(request)))
             page.headers["Vary"] = "Accept"

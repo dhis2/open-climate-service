@@ -38,7 +38,7 @@ The Datasets and Data sources lists can be searched and filtered, and are shown 
 time. Without JavaScript each list is complete.
 
 Datasets and data sources can be shown as **tiles** or as a **list**; the choice is
-remembered in the browser. Templates show their provider, description and details, with no
+remembered in the browser. Data sources show their provider, description and details, with no
 preview, since they hold no data yet.
 Each dataset shows its thumbnail, source, a short description, publication status, period,
 temporal coverage and units. A dataset ingested before thumbnails existed shows its colour
@@ -112,7 +112,7 @@ There is no separate console: data is added from the page of the thing it concer
 - **Ingest** from a data source page (`/data-sources/{dataset_id}`): enter a start and an
   optional end, choose whether to publish and whether to overwrite an existing store, and
   start. Progress streams on the page; the dataset page opens when it finishes.
-- **Fetch** a feature collection from its template page: choose whether to publish and start.
+- **Fetch** a feature collection from its data source page: choose whether to publish and start.
   Progress streams on the page; the collection opens when it finishes.
 - **Sync** from a dataset page (`/datasets/{dataset_id}`): the page shows what the source
   has published since the last sync, and **Start sync** fetches it, optionally only up to a
