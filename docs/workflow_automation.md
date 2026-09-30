@@ -135,11 +135,10 @@ Each finished job is delivered at most once per export and mode. The idempotency
 second delivery. A job records the delivery it owes in the same write that marks it finished.
 At startup OCS submits any recorded delivery missed because the process stopped after a job
 finished. If submission fails, the source job exposes the latest failure under
-`usage.delivery_error`; CLIM-1213 retries it during the next startup reconciliation, not on an
+`usage.delivery_error`; OCS retries it during the next startup reconciliation, not on an
 in-process timer. A workflow finishing during shutdown may likewise defer submission until
 the next startup reconciliation. A job keeps its delivery links when re-run by hand, so a
-delivered job is not
-delivered again, even after switching to live; submit the new result through
+delivered job is not delivered again, even after switching to live; submit the new result through
 `POST /exports/{export_id}` instead.
 
 Adding `deliver` to an existing trigger does not deliver its history. The delivery step has
