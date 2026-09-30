@@ -6,7 +6,10 @@ import inspect
 import logging
 import threading
 import time
+from collections.abc import Generator
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
@@ -25,6 +28,7 @@ from open_climate_service.jobs.models import (
     JobStatus,
 )
 from open_climate_service.shared.dynamic_import import get_dynamic_function
+from open_climate_service.shared.persistence import AlreadyLocked, try_index_lock
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -45,6 +49,36 @@ def _job_links(job_id: str, href_base: str = "/jobs") -> list[JobLink]:
 
 def _catalog_links() -> list[JobLink]:
     return [JobLink(href="/jobs", rel="self", title="Jobs")]
+
+
+_PENDING_STATUSES = frozenset({JobStatus.ACCEPTED, JobStatus.RUNNING, JobStatus.RETRYING})
+"""States a job can be recovered or executed from; anything else is terminal."""
+
+
+def _lease_path(job_id: str) -> Path:
+    return store.JOBS_DIR / "leases" / job_id
+
+
+@contextmanager
+def _execution_lease(job_id: str) -> Generator[bool]:
+    """Hold one job's execution lease for the duration of the block; yield whether it was won.
+
+    A job may execute in at most one process at a time. Without this, a second process could
+    recover a job that the first was still running, typically across an overlapping restart:
+    both then wrote the same store, one failed on a commit conflict and marked the shared
+    record failed, and the other went on writing for hours behind that failed status. The
+    lease is a file lock, so the operating system releases it when its process exits.
+    """
+    try:
+        lease = try_index_lock(_lease_path(job_id))
+        lease.__enter__()
+    except AlreadyLocked:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        lease.__exit__(None, None, None)
 
 
 def _supports_argument(func: Any, name: str) -> bool:
@@ -122,6 +156,10 @@ class JobService:
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
         self._event_consumer: Callable[[list[JobEvent]], None] | None = None
+        self._stopping = threading.Event()
+        self._watched: set[str] = set()
+        # How often a job leased by another process is checked for takeover.
+        self.lease_poll_seconds = 5.0
 
     def set_event_consumer(self, consumer: Callable[[list[JobEvent]], None] | None) -> None:
         """Register the process-local consumer for newly persisted domain events."""
@@ -129,6 +167,7 @@ class JobService:
 
     def shutdown(self) -> None:
         """Stop the executor without waiting for outstanding work."""
+        self._stopping.set()
         self._executor.shutdown()
 
     def list_jobs(self) -> JobListResponse:
@@ -228,37 +267,93 @@ class JobService:
         return record
 
     def recover_pending_jobs(self) -> None:
-        """Requeue interrupted jobs on startup."""
+        """Requeue interrupted jobs on startup.
+
+        A job still executing in another live process, typically one that has not finished
+        shutting down, is left to it and watched instead: if that process exits without
+        finishing the job, this one takes it over as soon as the lease is released.
+        """
         for record in store.list_job_records():
-            if record.status not in {JobStatus.ACCEPTED, JobStatus.RUNNING, JobStatus.RETRYING}:
+            if record.status not in _PENDING_STATUSES:
                 continue
-            if record.cancel_requested:
-                store.mutate_job_record(
-                    record.job_id,
-                    lambda current: current.model_copy(
-                        update={
-                            "status": JobStatus.CANCELLED,
-                            "finished_at": utc_now(),
-                            "progress": JobProgress(message="Cancelled before recovery requeue"),
-                        }
-                    ),
-                )
-                continue
-            if record.status == JobStatus.RUNNING:
-                store.mutate_job_record(
-                    record.job_id,
-                    lambda current: current.model_copy(
-                        update={
-                            "status": JobStatus.ACCEPTED,
-                            "attempt": max(0, current.attempt - 1),
-                            "finished_at": None,
-                            "retry_after": None,
-                            "error": None,
-                            "progress": JobProgress(message="Requeued after restart during execution"),
-                        }
-                    ),
-                )
-            self._enqueue_job(record.job_id)
+            requeue = False
+            with _execution_lease(record.job_id) as won:
+                if won:
+                    requeue = self._recover(record.job_id)
+            if not won:
+                logger.warning("Job %s is still executing in another process; watching for takeover", record.job_id)
+                self._watch_for_takeover(record.job_id)
+            elif requeue:
+                self._enqueue_job(record.job_id)
+
+    def _watch_for_takeover(self, job_id: str) -> None:
+        """Take over a job from another process once its execution lease is released.
+
+        The record is re-read while holding the lease, so a job the other process finished
+        is left alone, and one it abandoned is recovered exactly as at startup. At most one
+        watcher runs per job, and none starts once the service is stopping.
+        """
+        with self._lock:
+            if self._stopping.is_set() or job_id in self._watched:
+                return
+            self._watched.add(job_id)
+
+        def watch() -> None:
+            try:
+                while not self._stopping.wait(self.lease_poll_seconds):
+                    with _execution_lease(job_id) as won:
+                        if not won:
+                            continue
+                        requeue = self._recover(job_id)
+                    if requeue and not self._stopping.is_set():
+                        logger.info("Took over job %s after its previous process released it", job_id)
+                        # Should another process win the lease before this worker does, the
+                        # worker starts a fresh watcher, so the job is never left unwatched.
+                        with self._lock:
+                            self._watched.discard(job_id)
+                        self._enqueue_job(job_id)
+                    return
+            finally:
+                with self._lock:
+                    self._watched.discard(job_id)
+
+        threading.Thread(target=watch, name=f"job-takeover-{job_id}", daemon=True).start()
+
+    def _recover(self, job_id: str) -> bool:
+        """Prepare one interrupted job for requeueing; return whether it should run.
+
+        The caller holds the job's execution lease, so no other process can be changing it.
+        """
+        record = store.get_job_record(job_id)
+        if record is None or record.status not in _PENDING_STATUSES:
+            return False
+        if record.cancel_requested:
+            store.mutate_job_record(
+                job_id,
+                lambda current: current.model_copy(
+                    update={
+                        "status": JobStatus.CANCELLED,
+                        "finished_at": utc_now(),
+                        "progress": JobProgress(message="Cancelled before recovery requeue"),
+                    }
+                ),
+            )
+            return False
+        if record.status == JobStatus.RUNNING:
+            store.mutate_job_record(
+                job_id,
+                lambda current: current.model_copy(
+                    update={
+                        "status": JobStatus.ACCEPTED,
+                        "attempt": max(0, current.attempt - 1),
+                        "finished_at": None,
+                        "retry_after": None,
+                        "error": None,
+                        "progress": JobProgress(message="Requeued after restart during execution"),
+                    }
+                ),
+            )
+        return True
 
     def update_progress(
         self,
@@ -312,7 +407,22 @@ class JobService:
 
     def _run_job(self, job_id: str) -> None:
         try:
-            self._execute_job(job_id)
+            with _execution_lease(job_id) as won:
+                if not won:
+                    # Another process is executing this job, for example one that won the
+                    # lease between recovery here and this worker starting. Leave its record
+                    # alone, since any status written from here would describe work this
+                    # process is not doing, but watch it: if that process exits without
+                    # finishing, nothing else would ever pick the job up.
+                    logger.warning("Job %s is executing in another process; watching for takeover", job_id)
+                    self._watch_for_takeover(job_id)
+                    return
+                # Re-read under the lease: another process may have finished the job between
+                # this one queueing it and winning the lease. A terminal job never runs again.
+                current = store.get_job_record(job_id)
+                if current is None or current.status not in _PENDING_STATUSES:
+                    return
+                self._execute_job(job_id)
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)

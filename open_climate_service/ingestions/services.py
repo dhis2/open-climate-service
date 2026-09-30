@@ -82,9 +82,57 @@ from open_climate_service.streaming.store import (
 logger = logging.getLogger(__name__)
 MutationResult = TypeVar("MutationResult")
 
+
 # Per-store threading locks prevent two concurrent ingest/sync runs from writing
 # to the same Icechunk store simultaneously (which causes MVCC commit conflicts).
-_store_locks: dict[str, threading.Lock] = {}
+class StoreWriteLock:
+    """Exclusive writer lock for one Icechunk store, across threads and across processes.
+
+    The thread lock alone was invisible to a second OCS process: an overlapping restart, an
+    auto-reload, or a second worker could run a write against the same store at the same
+    time, and Icechunk then rejected one of them with a commit conflict. The file lock beside
+    the store makes the second writer refuse up front instead. The operating system releases
+    it when the holding process exits, so a crash never leaves a store locked.
+    """
+
+    def __init__(self, store_path: Path) -> None:
+        self._thread_lock = threading.Lock()
+        self._lock_path = store_path.with_name(f"{store_path.name}.lock")
+        self._handle: Any | None = None
+
+    def acquire(self, blocking: bool = True) -> bool:
+        """Take the lock; with ``blocking=False`` return False at once when another writer holds it."""
+        if not self._thread_lock.acquire(blocking=blocking):
+            return False
+        try:
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(self._lock_path, "a+", encoding="utf-8")  # noqa: SIM115 -- held until release()
+            try:
+                flags = portalocker.LOCK_EX if blocking else portalocker.LOCK_EX | portalocker.LOCK_NB
+                portalocker.lock(handle, flags)
+            except portalocker.exceptions.LockException:
+                handle.close()
+                self._thread_lock.release()
+                return False
+        except BaseException:
+            self._thread_lock.release()
+            raise
+        self._handle = handle
+        return True
+
+    def release(self) -> None:
+        handle, self._handle = self._handle, None
+        try:
+            if handle is not None:
+                try:
+                    portalocker.unlock(handle)
+                finally:
+                    handle.close()
+        finally:
+            self._thread_lock.release()
+
+
+_store_locks: dict[str, StoreWriteLock] = {}
 _store_locks_mutex = threading.Lock()
 
 # Consolidated zarr metadata cache: (store_path, snapshot_id) → metadata dict.
@@ -122,12 +170,16 @@ class _StoreNormalizationResult:
     swapped: bool = False
 
 
-def _acquire_store_lock(store_path: Path) -> threading.Lock:
-    """Return the exclusive lock for store_path, creating it if needed."""
+def _acquire_store_lock(store_path: Path) -> StoreWriteLock:
+    """Return the exclusive writer lock for store_path, creating it if needed.
+
+    Every writer of a managed Icechunk store must hold this lock, whichever path it takes:
+    ingestion, sync, or an openEO job publishing a managed dataset.
+    """
     key = str(store_path.resolve())
     with _store_locks_mutex:
         if key not in _store_locks:
-            _store_locks[key] = threading.Lock()
+            _store_locks[key] = StoreWriteLock(Path(key))
         return _store_locks[key]
 
 
