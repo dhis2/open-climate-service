@@ -30,9 +30,11 @@ my-climate-service/
 ├── .env.example            # committed template for environment variables
 ├── .gitignore
 ├── plugins/
-│   ├── rasters/           # dataset templates (.yaml) + plugin classes (.py)
+│   ├── rasters/           # raster dataset templates (.yaml) + plugin classes (.py)
 │   │   ├── enacts_rainfall.yaml
 │   │   └── enacts.py
+│   ├── vectors/           # vector dataset templates (.yaml) + feature providers (.py)
+│   │   └── districts.yaml
 │   ├── processes/          # @process-decorated functions (.py)
 │   │   └── my_process.py
 │   └── workflows/          # reusable process graph compositions (.json)
@@ -182,13 +184,15 @@ The `/extent` endpoint should return your configured bounding box.
 
 ## Adding plugins
 
-Plugins extend the instance with custom datasets, processes, and workflows. They live in `plugins_dir` and are loaded automatically. The `plugins_dir` is added to `sys.path`, so Python modules placed directly inside it are importable.
+Plugins extend the instance with custom raster and vector datasets, processes, and workflows. They live in `plugins_dir` and are loaded automatically. The `plugins_dir` is added to `sys.path`, so Python modules placed directly inside it are importable.
 
 ```
 plugins/
 ├── rasters/
-│   ├── enacts_rainfall.yaml    # custom dataset template
+│   ├── enacts_rainfall.yaml    # raster dataset template
 │   └── enacts.py               # streaming plugin class
+├── vectors/
+│   └── districts.yaml          # vector dataset template
 ├── processes/
 │   └── spatial_stats.py        # @process-decorated functions
 └── workflows/

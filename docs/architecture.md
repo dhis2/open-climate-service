@@ -10,15 +10,17 @@ The platform has four first-class concepts. Understanding the distinction betwee
 
 ### Data source
 
-A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint. Built-ins live in `open_climate_service/plugins/rasters/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
+A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint: raster templates in `rasters/`, vector templates in `vectors/`. Built-ins live in `open_climate_service/plugins/rasters/` and `open_climate_service/plugins/vectors/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` and `{plugins_dir}/vectors/`, where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
 
-A dataset template defines:
+A raster dataset template defines:
 
 - the dataset identifier and display metadata
 - the variable name, units, and period type
 - how to ingest the data (`ingestion.plugin` — a dotted path to a streaming plugin class)
 - any data transformations applied inside the plugin before returning
 - what sync strategy to use (`sync.kind`, `sync.execution`)
+
+A vector dataset template names a `provider` (a `@feature_provider` function) and its `params` instead, and is fetched with `POST /features/{id}/refresh` rather than `POST /ingestions`.
 
 Templates are config, not code. If a template needs custom logic, the logic goes into a Python function referenced by dotted path from the YAML.
 

@@ -99,7 +99,7 @@ Templates are merged in increasing order of precedence, per extension point:
 **built-in → installed plugins → instance `plugins_dir`**
 
 So `plugins_dir` always wins on an id conflict — an operator can drop a dataset template into their local
-`plugins/rasters/` to override an installed plugin's dataset. Overrides are logged at load time.
+`plugins/rasters/` or `plugins/vectors/` to override an installed plugin's dataset. Overrides are logged at load time.
 
 ## Naming convention
 

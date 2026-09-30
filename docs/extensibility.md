@@ -17,13 +17,16 @@ is shared across instances without any `plugins_dir` wiring — see [Installable
 
 ## Datasets
 
-Each data source is described by a dataset template, a YAML entry that describes an upstream dataset. Built-ins live in the package (`open_climate_service/plugins/rasters/`). Custom ones are loaded from `plugins_dir/rasters/`.
+Each data source is described by a dataset template, a YAML entry that describes an upstream dataset. Raster templates live in `rasters/` and vector templates in `vectors/`. Built-ins live in the package (`open_climate_service/plugins/rasters/`, `open_climate_service/plugins/vectors/`). Custom ones are loaded from `plugins_dir/rasters/` and `plugins_dir/vectors/`.
 
 ```
 plugins/
-└── rasters/
-    ├── enacts_rainfall.yaml    # dataset template
-    └── enacts.py               # streaming plugin class
+├── rasters/
+│   ├── enacts_rainfall.yaml    # raster dataset template
+│   └── enacts.py               # streaming plugin class
+└── vectors/
+    ├── districts.yaml          # vector dataset template
+    └── districts.py            # @feature_provider function
 ```
 
 ```yaml
@@ -31,9 +34,9 @@ plugins/
 plugins_dir: ./plugins/
 ```
 
-All `*.yaml` files in `plugins_dir/rasters/` are merged with the built-ins. A custom template with the same `id` as a built-in overrides it — useful for adjusting display ranges or availability settings on an existing dataset.
+All `*.yaml` files in `plugins_dir/rasters/` and `plugins_dir/vectors/` are merged with the built-ins. A custom template with the same `id` as a built-in overrides it — useful for adjusting display ranges or availability settings on an existing dataset.
 
-A Python plugin class is declared alongside the YAML using the `ingestion.plugin` dotted path. Plugins subclass `BaseDatasetPlugin` and implement just `periods()` and `fetch_period()` — the base class provides the concurrency defaults and canonical dimension names. `fetch_period` is a regular (blocking) method run in a worker thread, or an `async def` for natively-async sources. Any data transformations (unit conversion, dimension renaming, nodata masking, bbox clipping) are applied inside the fetch before the `xr.Dataset` is returned, typically via the `normalize_period` helper. The grid (shape, dtype, nodata, CRS) is inferred from the first fetched period; a projected-grid source declares its CRS via the `crs` class attribute.
+A raster template declares its Python plugin class alongside the YAML using the `ingestion.plugin` dotted path. Plugins subclass `BaseDatasetPlugin` and implement just `periods()` and `fetch_period()` — the base class provides the concurrency defaults and canonical dimension names. `fetch_period` is a regular (blocking) method run in a worker thread, or an `async def` for natively-async sources. Any data transformations (unit conversion, dimension renaming, nodata masking, bbox clipping) are applied inside the fetch before the `xr.Dataset` is returned, typically via the `normalize_period` helper. The grid (shape, dtype, nodata, CRS) is inferred from the first fetched period; a projected-grid source declares its CRS via the `crs` class attribute.
 
 See [Adding custom datasets](adding_custom_datasets.md) for the full template field reference, the streaming plugin contract, and the available helpers.
 
