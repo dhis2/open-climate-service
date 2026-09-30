@@ -267,7 +267,7 @@ laptop, so OCS bounds how much of it they take. The defaults are chosen for a la
 | Setting | Default | Bounds |
 | --- | --- | --- |
 | `DASK_NUM_WORKERS` | half the cores | Threads for all dask computation in the process, shared by every job and request |
-| `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` | 2 | Ingestion, sync, feature refresh and openEO batch jobs running at once, together |
+| `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` | 2 | Ingestion, sync, feature refresh, export delivery and openEO batch jobs running at once, together |
 | `TOKIO_WORKER_THREADS` | cores | Worker threads of Icechunk's storage runtime |
 
 A job beyond the limit waits queued (`accepted` for ingestion jobs, with the message

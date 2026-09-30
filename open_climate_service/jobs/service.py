@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import logging
 import threading
-import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Protocol
 from uuid import uuid4
@@ -132,14 +131,25 @@ class JobService:
         self._lock = threading.Lock()
         self._event_consumer: Callable[[list[JobEvent]], None] | None = None
         self._stopping = threading.Event()
+        # Jobs waiting out a retry backoff. A timer, not a sleeping worker, so a backoff
+        # holds neither a job slot nor one of the executor's threads.
+        self._retry_timers: dict[str, threading.Timer] = {}
 
     def set_event_consumer(self, consumer: Callable[[list[JobEvent]], None] | None) -> None:
         """Register the process-local consumer for newly persisted domain events."""
         self._event_consumer = consumer
 
     def shutdown(self) -> None:
-        """Stop the executor without waiting for outstanding work."""
+        """Stop the executor without waiting for outstanding work.
+
+        A job waiting out a retry backoff stays RETRYING, and the next start requeues it.
+        """
         self._stopping.set()
+        with self._lock:
+            timers = list(self._retry_timers.values())
+            self._retry_timers.clear()
+        for timer in timers:
+            timer.cancel()
         self._executor.shutdown()
 
     def list_jobs(self) -> JobListResponse:
@@ -266,7 +276,24 @@ class JobService:
             ),
         )
 
-        if record.status == JobStatus.ACCEPTED:
+        if record.status == JobStatus.RETRYING:
+            with self._lock:
+                timer = self._retry_timers.pop(job_id, None)
+            if timer is not None:
+                # Popped before it fired, so no attempt will start: record it now rather than
+                # when the backoff ends.
+                timer.cancel()
+                record = store.mutate_job_record(
+                    job_id,
+                    lambda current: current.model_copy(
+                        update={
+                            "status": JobStatus.CANCELLED,
+                            "finished_at": utc_now(),
+                            "progress": JobProgress(message="Cancelled before retry execution resumed"),
+                        }
+                    ),
+                )
+        elif record.status == JobStatus.ACCEPTED:
             with self._lock:
                 future = self._futures.get(job_id)
             if future is not None and future.cancel():
@@ -353,17 +380,28 @@ class JobService:
             future = self._executor.submit(self._run_job, job_id)
             self._futures[job_id] = future
 
-    def _sleep_for_retry(self, job_id: str, seconds: int) -> bool:
-        """Sleep in short intervals so retry wait remains cancellation-aware."""
-        remaining = float(seconds)
-        while remaining > 0:
-            record = store.get_job_record(job_id)
-            if record is not None and record.cancel_requested:
-                return False
-            interval = min(1.0, remaining)
-            time.sleep(interval)
-            remaining -= interval
-        return True
+    def _schedule_retry(self, job_id: str, seconds: int) -> None:
+        """Requeue a job once its retry backoff has passed, without holding a worker meanwhile."""
+        with self._lock:
+            if self._stopping.is_set():
+                return  # stays RETRYING, so the next start requeues it
+            timer = threading.Timer(seconds, self._retry_due, args=(job_id,))
+            timer.daemon = True
+            self._retry_timers[job_id] = timer
+        timer.start()
+        # A cancellation that arrived after the attempt failed but before the timer existed
+        # found nothing to stop; requeue now so the pre-execution check records it.
+        if self._cancel_requested(job_id):
+            self._retry_due(job_id, cancel_timer=True)
+
+    def _retry_due(self, job_id: str, *, cancel_timer: bool = False) -> None:
+        with self._lock:
+            timer = self._retry_timers.pop(job_id, None)
+        if timer is None:
+            return  # cancelled, or the service stopped
+        if cancel_timer:
+            timer.cancel()
+        self._enqueue_job(job_id)
 
     def _run_job(self, job_id: str) -> None:
         try:
@@ -418,9 +456,9 @@ class JobService:
                 retry_after = self._run_attempt(job_id, started)
             finally:
                 slots.release()
-            if retry_after is None:
-                return
-            self._sleep_for_retry(job_id, retry_after)
+            if retry_after is not None:
+                self._schedule_retry(job_id, retry_after)
+            return
 
     def _cancel_requested(self, job_id: str) -> bool:
         record = store.get_job_record(job_id)

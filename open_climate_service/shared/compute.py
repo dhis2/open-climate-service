@@ -7,8 +7,9 @@ Two limits, because two things multiplied without bound (CLIM-1229):
   job thread and each request thread that computed therefore started a full pool, so one
   ingest and two openEO jobs on a 12-core server ran well over a hundred compute threads,
   and the storage layer's I/O threads grew with them.
-* **A shared number of job slots** across native jobs (ingestion, sync, feature refresh)
-  and openEO jobs, which otherwise each ran up to four at a time from separate pools.
+* **A shared number of job slots** across native jobs (ingestion, sync, feature refresh,
+  export delivery) and openEO jobs, which otherwise each ran up to four at a time from
+  separate pools.
 """
 
 from __future__ import annotations

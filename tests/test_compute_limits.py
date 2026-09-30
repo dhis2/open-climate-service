@@ -257,27 +257,87 @@ def test_a_native_job_still_waiting_at_shutdown_stays_accepted(
     assert not _ran.is_set()
 
 
-def test_a_retrying_job_gives_up_its_slot_while_it_waits(
-    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    free_during_wait: list[bool] = []
-
-    def sleep_for_retry(self: JobService, job_id: str, seconds: int) -> bool:
-        took = one_slot.acquire(should_stop=lambda: True)
-        free_during_wait.append(took)
-        if took:
-            one_slot.release()
-        return True
-
-    monkeypatch.setattr(JobService, "_sleep_for_retry", sleep_for_retry)
+def _failed_once_and_backing_off(
+    persisted: dict[str, JobRecord], monkeypatch: pytest.MonkeyPatch, delay: int
+) -> tuple[JobService, JobRecord, list[str]]:
+    """A job whose first attempt failed, left waiting out a `delay`-second backoff."""
+    enqueued: list[str] = []
+    monkeypatch.setattr(JobService, "_enqueue_job", lambda self, job_id: enqueued.append(job_id))
+    monkeypatch.setattr("open_climate_service.jobs.service._retry_delay_seconds", lambda attempt: delay)
     service = JobService()
     job = service.submit_callable_job(func=_fails_once_callable, label="sync", request={}, max_attempts=2)
+    enqueued.clear()
+    service._execute_job(job.job_id)
+    return service, job, enqueued
+
+
+def test_a_retry_backoff_holds_neither_a_slot_nor_a_worker(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, job, enqueued = _failed_once_and_backing_off(persisted, monkeypatch, delay=60)
+
+    # `_execute_job` returned, so the executor thread is free, and the slot with it.
+    assert persisted[job.job_id].status == JobStatus.RETRYING
+    assert one_slot.acquire(should_stop=lambda: True)
+    one_slot.release()
+    assert enqueued == []
+    service.shutdown()
+
+
+def test_a_job_is_requeued_once_its_backoff_has_passed(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, job, enqueued = _failed_once_and_backing_off(persisted, monkeypatch, delay=0)
+    _wait_until(lambda: enqueued == [job.job_id])
 
     service._execute_job(job.job_id)
 
-    assert free_during_wait == [True]
     assert persisted[job.job_id].status == JobStatus.SUCCESSFUL
     assert len(_attempts) == 2
+
+
+def test_cancelling_during_a_backoff_is_recorded_at_once(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, job, enqueued = _failed_once_and_backing_off(persisted, monkeypatch, delay=60)
+
+    record = service.request_cancellation(job.job_id)
+
+    assert record.status == JobStatus.CANCELLED
+    assert persisted[job.job_id].progress.message == "Cancelled before retry execution resumed"
+    assert enqueued == []
+    service.shutdown()
+
+
+def test_a_cancellation_that_beats_the_timer_still_ends_the_job(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelled after the attempt failed but before its backoff timer existed."""
+    original = JobService._schedule_retry
+
+    def cancel_first(self: JobService, job_id: str, seconds: int) -> None:
+        persisted[job_id] = persisted[job_id].model_copy(update={"cancel_requested": True})
+        original(self, job_id, seconds)
+
+    monkeypatch.setattr(JobService, "_schedule_retry", cancel_first)
+    service, job, enqueued = _failed_once_and_backing_off(persisted, monkeypatch, delay=60)
+
+    assert enqueued == [job.job_id], "requeued at once instead of after the backoff"
+    service._execute_job(job.job_id)
+    assert persisted[job.job_id].status == JobStatus.CANCELLED
+    assert len(_attempts) == 1
+
+
+def test_a_job_backing_off_at_shutdown_stays_retrying(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, job, _ = _failed_once_and_backing_off(persisted, monkeypatch, delay=0)
+    service.shutdown()
+    time.sleep(0.1)
+
+    # Whether the timer fired first or not, the next start's recovery requeues it.
+    assert persisted[job.job_id].status == JobStatus.RETRYING
+    assert len(_attempts) == 1
 
 
 def test_openeo_and_native_jobs_share_the_slots(
