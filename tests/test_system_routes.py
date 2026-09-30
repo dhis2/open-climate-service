@@ -157,6 +157,7 @@ async def test_manage_ingest_strips_string_inputs_and_treats_blank_end_as_none(
         overwrite: bool,
         publish: bool,
         on_progress: Callable[[int | None, int | None, str | None], None],
+        **_: object,
     ) -> None:
         captured["dataset"] = dataset
         captured["start"] = start

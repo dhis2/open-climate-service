@@ -182,6 +182,10 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data: dict[str, object] = record.model_dump(mode="json", exclude_none=False)
     data["error_message"] = record.error_message
     data["cancel_requested"] = record.cancel_requested
+    data["trigger_id"] = record.trigger_id
+    data["source_event_id"] = record.source_event_id
+    data["finished_at"] = record.finished_at.isoformat() if record.finished_at is not None else None
+    data["delivery_due"] = record.delivery_due
     return data
 
 
@@ -197,6 +201,24 @@ class OpenEOJobService:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="openeo-job")
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
+        self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
+        self._delivery_due: Callable[[OpenEOJobRecord], dict[str, str] | None] | None = None
+
+    def set_delivery_due_provider(self, provider: Callable[[OpenEOJobRecord], dict[str, str] | None] | None) -> None:
+        """Register the callback that says which delivery a job owes as it finishes.
+
+        It is called inside the store mutation that marks the job FINISHED, so its answer is
+        persisted atomically with that state. It must be a fast, in-memory lookup.
+        """
+        self._delivery_due = provider
+
+    def set_finished_listener(self, listener: Callable[[OpenEOJobRecord], None] | None) -> None:
+        """Register the process-local callback run after a job is persisted as FINISHED.
+
+        The callback runs on the job's worker thread. Its failures are logged and never
+        change the finished job's status.
+        """
+        self._finished_listener = listener
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -292,6 +314,8 @@ class OpenEOJobService:
                 {"rel": "self", "href": f"/jobs/{job_id}", "type": "application/json"},
                 {"rel": "results", "href": f"/jobs/{job_id}/results", "type": "application/json"},
             ],
+            trigger_id=trigger_id,
+            source_event_id=source_event_id,
         )
 
         def _create_once(records: list[dict[str, object]]) -> tuple[OpenEOJobRecord, bool]:
@@ -406,25 +430,23 @@ class OpenEOJobService:
             future = self._futures.get(job_id)
             cancelled_before_start = future is not None and future.cancel()
 
-        if cancelled_before_start:
-            # future.cancel() returned True — the job was still queued in the thread
-            # pool and will never start.  Transition the store atomically: only if the
-            # status is still QUEUED (guards against the edge case where the worker
-            # already set it to RUNNING before we got the lock).
-            def _mark_canceled_if_queued(r: OpenEOJobRecord) -> OpenEOJobRecord:
-                if r.status == OpenEOJobStatus.QUEUED:
-                    return r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()})
-                # Race lost — worker already started; fall back to cooperative cancellation.
-                return r.model_copy(update={"cancel_requested": True, "updated": utc_now()})
+        def _cancel(r: OpenEOJobRecord) -> OpenEOJobRecord:
+            # Re-checked inside the store mutation: the worker may have finished the job since
+            # the read above. Whichever mutation lands first decides. If cancellation does,
+            # the worker's own finishing mutation sees the flag and records CANCELED; if
+            # completion does, this refuses, so a finished job never gains a late flag after
+            # its delivery may already have been submitted.
+            if r.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+                raise HTTPException(status_code=400, detail="Job is not running or queued")
+            if cancelled_before_start and r.status == OpenEOJobStatus.QUEUED:
+                # future.cancel() returned True: the job was still queued in the thread pool
+                # and will never start.
+                return r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()})
+            # Running (or the worker already claimed it): cooperative cancellation; the worker
+            # checks this flag in the same mutation that would mark the job FINISHED.
+            return r.model_copy(update={"cancel_requested": True, "updated": utc_now()})
 
-            store_update_job(job_id, _mark_canceled_if_queued)
-        else:
-            # Job is running (or no future registered yet) — set flag for cooperative
-            # cancellation; the worker checks this before marking FINISHED.
-            store_update_job(
-                job_id,
-                lambda r: r.model_copy(update={"cancel_requested": True, "updated": utc_now()}),
-            )
+        store_update_job(job_id, _cancel)
 
     def get_results(self, job_id: str) -> OpenEOJobResults:
         """Return result asset links for a finished job."""
@@ -495,16 +517,7 @@ class OpenEOJobService:
                 )
                 return
             output_path = self._persist_result(job_id, result)
-            store_update_job(
-                job_id,
-                lambda r: r.model_copy(
-                    update={
-                        "status": OpenEOJobStatus.FINISHED,
-                        "updated": utc_now(),
-                        "usage": {"output_path": output_path} if output_path else {},
-                    }
-                ),
-            )
+            finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
         except Exception as job_exc:
             logger.exception("openEO job %s failed", job_id)
             error_msg = f"{type(job_exc).__name__}: {job_exc}"
@@ -518,6 +531,44 @@ class OpenEOJobService:
                     }
                 ),
             )
+        else:
+            # Outside the try: a listener failure must not turn a finished job into an error.
+            if finished.status == OpenEOJobStatus.FINISHED:
+                self._notify_finished(finished)
+
+    def _finish(self, record: OpenEOJobRecord, output_path: str | None) -> OpenEOJobRecord:
+        """Mark a job FINISHED, or CANCELED if cancellation arrived while its result was saved.
+
+        Runs inside the store mutation, so a cancel request cannot land between this check
+        and the write.
+        """
+        now = utc_now()
+        if record.cancel_requested:
+            return record.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": now})
+        usage: dict[str, Any] = {"output_path": output_path} if output_path else {}
+        deliveries = (record.usage or {}).get("deliveries")
+        if isinstance(deliveries, list) and deliveries:
+            # A re-run keeps its delivery links, so an automated delivery is not repeated.
+            usage["deliveries"] = deliveries
+        finished = record.model_copy(
+            update={"status": OpenEOJobStatus.FINISHED, "updated": now, "finished_at": now, "usage": usage}
+        )
+        due: dict[str, str] | None = None
+        if self._delivery_due is not None:
+            try:
+                due = self._delivery_due(finished)
+            except Exception:
+                logger.exception("Delivery lookup failed for openEO job %s; it will not be delivered", record.id)
+        return finished.model_copy(update={"delivery_due": due})
+
+    def _notify_finished(self, record: OpenEOJobRecord) -> None:
+        listener = self._finished_listener
+        if listener is None:
+            return
+        try:
+            listener(record)
+        except Exception:
+            logger.exception("Finished-job listener failed for openEO job %s", record.id)
 
     def _persist_result(self, job_id: str, result: Any) -> str | None:
         import xarray as xr
@@ -754,48 +805,61 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
     store_path = downloader.DOWNLOAD_DIR / f"{dataset_id}.icechunk"
     store_path.parent.mkdir(parents=True, exist_ok=True)
 
-    downloader.write_to_icechunk_store(
-        _strip_non_serializable_attrs(ds),
-        store_path,
-        x_dim,
-        y_dim,
-        t_dim,
-        crs=crs,
-        pyramid_method=downloader.resampling_method_from_template(template),
-        commit_message=f"Published from openEO job: {dataset_id}",
-    )
+    # The same writer lock as ingestion and sync. Publishing into a store while one of those
+    # writes it would make one of them fail with an Icechunk commit conflict.
+    store_lock = ingestion_services._acquire_store_lock(store_path)
+    if not store_lock.acquire(blocking=False):
+        raise RuntimeError(
+            f"Managed dataset '{dataset_id}' is being written by an ingestion, sync, or another job; "
+            "run this job again once that finishes"
+        )
+    try:
+        downloader.write_to_icechunk_store(
+            _strip_non_serializable_attrs(ds),
+            store_path,
+            x_dim,
+            y_dim,
+            t_dim,
+            crs=crs,
+            pyramid_method=downloader.resampling_method_from_template(template),
+            commit_message=f"Published from openEO job: {dataset_id}",
+        )
 
-    # A derived product is a published dataset and appears in the same lists, so it gets a
-    # thumbnail on the same terms. One write, so this is already the once-per-run render the
-    # streaming path has to arrange deliberately. Never raises.
-    write_dataset_thumbnail(
-        store_path,
-        {**template, "id": dataset_id, "variable": variable},
-    )
+        # A derived product is a published dataset and appears in the same lists, so it gets a
+        # thumbnail on the same terms. One write, so this is already the once-per-run render the
+        # streaming path has to arrange deliberately. Never raises.
+        write_dataset_thumbnail(
+            store_path,
+            {**template, "id": dataset_id, "variable": variable},
+        )
 
-    record = ArtifactRecord(
-        artifact_id=str(uuid.uuid4()),
-        dataset_id=dataset_id,
-        dataset_name=dataset_name,
-        variable=variable,
-        period_type=period_type,
-        format=ArtifactFormat.ICECHUNK,
-        path=str(store_path),
-        asset_paths=[str(store_path)],
-        size_bytes=stored_bytes(store_path),
-        variables=[str(v) for v in ds.data_vars],
-        request_scope=ArtifactRequestScope(
-            start=coverage.temporal.start,
-            end=coverage.temporal.end,
-        ),
-        coverage=coverage,
-        created_at=datetime.now(UTC),
-        publication=ArtifactPublication(),
-    )
-    _publish_raw = options.get("publish", True)
-    if not isinstance(_publish_raw, bool):
-        raise ValueError(f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}")
-    ingestion_services.register_artifact_record(record, publish=_publish_raw)
+        record = ArtifactRecord(
+            artifact_id=str(uuid.uuid4()),
+            dataset_id=dataset_id,
+            dataset_name=dataset_name,
+            variable=variable,
+            period_type=period_type,
+            format=ArtifactFormat.ICECHUNK,
+            path=str(store_path),
+            asset_paths=[str(store_path)],
+            size_bytes=stored_bytes(store_path),
+            variables=[str(v) for v in ds.data_vars],
+            request_scope=ArtifactRequestScope(
+                start=coverage.temporal.start,
+                end=coverage.temporal.end,
+            ),
+            coverage=coverage,
+            created_at=datetime.now(UTC),
+            publication=ArtifactPublication(),
+        )
+        _publish_raw = options.get("publish", True)
+        if not isinstance(_publish_raw, bool):
+            raise ValueError(
+                f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}"
+            )
+        ingestion_services.register_artifact_record(record, publish=_publish_raw)
+    finally:
+        store_lock.release()
 
 
 def _recover_temporal_from_attrs(ds: Any) -> tuple[str | None, str | None]:
