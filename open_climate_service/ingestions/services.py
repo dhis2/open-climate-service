@@ -1536,12 +1536,27 @@ def _maybe_build_pyramid(
     attrs on every commit. We detect that case and skip the read-rewrite entirely, avoiding
     the write amplification of re-emitting the whole store on every sync.
 
+    A temporal append to a pyramid store only needs the coarser levels extended to the
+    periods level 0 has gained, which ``append_pyramid_levels`` does in place. Anything else
+    (a first ingest, a replacement, a changed resampling method) rebuilds.
+
     Returns whether normalization completed and whether it swapped the store.
     Errors remain logged and swallowed so a brand-new plain flat artifact can
     still be registered; callers updating an existing store use the result to
     roll back instead.
     """
     from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
+
+    try:
+        appended = downloader.append_pyramid_levels(
+            store_path, pyramid_method=downloader.resampling_method_from_template(dataset)
+        )
+    except Exception:
+        # One commit, so a failure leaves the store as the ingest committed it.
+        logger.warning("Could not append to the pyramid levels of '%s'; rebuilding", store_path.name, exc_info=True)
+        appended = None
+    if appended is not None:
+        return _StoreNormalizationResult(completed=True)
 
     try:
         ds = open_icechunk_dataset(store_path)
