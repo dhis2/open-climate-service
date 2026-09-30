@@ -29,8 +29,8 @@ from typing import Any
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]  # loads .env
 from open_climate_service import config as api_config
 
-DATA_RENAMES = (("downloads", api_config.RASTERS_SUBDIR), ("features", api_config.VECTORS_SUBDIR))
-PLUGIN_RENAMES = (("datasets", api_config.RASTERS_SUBDIR), ("features", api_config.VECTORS_SUBDIR))
+DATA_RENAMES = (("downloads", "rasters"), ("features", "vectors"))
+PLUGIN_RENAMES = (("datasets", "rasters"), ("features", "vectors"))
 
 _PATH_FIELDS = ("path", "asset_paths")
 

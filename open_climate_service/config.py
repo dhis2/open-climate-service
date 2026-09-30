@@ -112,10 +112,6 @@ def _block_uses_interpolation(text: str, key: str) -> bool:
 DEFAULT_CRS = "EPSG:4326"
 DEFAULT_NAME = "Open Climate Service"
 DEFAULT_ID = "open-climate-service"  # operators should always set id: in climate-service.yaml
-RASTERS_SUBDIR = "rasters"
-"""Raster dataset templates under ``plugins/`` and their Icechunk stores under the data directory."""
-VECTORS_SUBDIR = "vectors"
-"""Vector dataset templates under ``plugins/`` and their GeoParquet files under the data directory."""
 
 
 def get_id() -> str:
@@ -215,7 +211,7 @@ def get_data_root() -> Path:
 
 def get_download_root() -> Path:
     """Return the directory holding managed artifact stores."""
-    return get_data_root() / RASTERS_SUBDIR
+    return get_data_root() / "rasters"
 
 
 def get_features_root() -> Path:
@@ -230,7 +226,7 @@ def get_features_root() -> Path:
     into existence, so a file dropped in here that nothing registered is ignored by every
     listing (CLIM-836).
     """
-    return get_data_root() / VECTORS_SUBDIR
+    return get_data_root() / "vectors"
 
 
 def get_utc_offset_hours() -> float:

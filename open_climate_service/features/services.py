@@ -279,8 +279,7 @@ def refreshable_feature_template_or_error(collection_id: str) -> dict[str, Any]:
     if collection_id in _raster_template_ids():
         raise HTTPException(
             status_code=409,
-            detail=f"'{collection_id}' is declared as both a raster and a feature collection data source; "
-            "rename one of them",
+            detail=f"'{collection_id}' is declared as both a raster and vector data source; rename one of them",
         )
     if not is_refreshable(template):
         raise HTTPException(

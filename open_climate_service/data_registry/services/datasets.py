@@ -137,7 +137,7 @@ def list_datasets() -> list[dict[str, Any]]:
         root_str = str(root)
         if root_str not in sys.path:
             sys.path.append(root_str)
-        datasets_subdir = root / api_config.RASTERS_SUBDIR
+        datasets_subdir = root / "rasters"
         if datasets_subdir.is_dir():
             for dataset in _load_from_dir(datasets_subdir):
                 ds_id = dataset["id"]
@@ -205,7 +205,7 @@ def get_instance_datasets_dir(*, create: bool = False) -> Path:
     if not root.is_dir():
         raise ValueError(f"plugins_dir '{root}' does not exist or is not a directory")
 
-    datasets_dir = root / api_config.RASTERS_SUBDIR
+    datasets_dir = root / "rasters"
     if create:
         datasets_dir.mkdir(parents=True, exist_ok=True)
     if not datasets_dir.is_dir():
@@ -275,7 +275,7 @@ def _parse_builtin_datasets() -> list[dict[str, Any]]:
     package lives inside site-packages with no guarantee that the project root
     directory (and its data/ folder) is accessible.
     """
-    pkg = importlib.resources.files("open_climate_service") / "plugins" / api_config.RASTERS_SUBDIR
+    pkg = importlib.resources.files("open_climate_service") / "plugins" / "rasters"
     datasets: list[dict[str, Any]] = []
     for resource in pkg.iterdir():
         if not resource.name.endswith((".yaml", ".yml")):
@@ -318,7 +318,7 @@ def _parse_entry_point_datasets() -> list[tuple[str, dict[str, Any]]]:
     from open_climate_service.plugin_discovery import iter_plugin_subdirs
 
     results: list[tuple[str, dict[str, Any]]] = []
-    for plugin_name, _package, datasets_res in iter_plugin_subdirs(api_config.RASTERS_SUBDIR):
+    for plugin_name, _package, datasets_res in iter_plugin_subdirs("rasters"):
         try:
             for resource in datasets_res.iterdir():
                 if not resource.name.endswith((".yaml", ".yml")):

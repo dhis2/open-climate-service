@@ -74,7 +74,7 @@ def list_feature_templates() -> list[dict[str, Any]]:
         config_path = api_config.get_config_path()
         base = config_path.parent if config_path else Path()
         root = (base / config_plugins_dir).resolve()
-        features_subdir = root / api_config.VECTORS_SUBDIR
+        features_subdir = root / "vectors"
         if features_subdir.is_dir():
             for template in _load_from_dir(features_subdir):
                 template_id = template["id"]
@@ -145,7 +145,7 @@ def _load_builtin_feature_templates() -> list[dict[str, Any]]:
 
 @functools.lru_cache(maxsize=1)
 def _parse_builtin_feature_templates() -> list[dict[str, Any]]:
-    pkg = importlib.resources.files("open_climate_service") / "plugins" / api_config.VECTORS_SUBDIR
+    pkg = importlib.resources.files("open_climate_service") / "plugins" / "vectors"
     templates: list[dict[str, Any]] = []
     try:
         resources = list(pkg.iterdir())
@@ -180,7 +180,7 @@ def _parse_entry_point_feature_templates() -> list[tuple[str, dict[str, Any]]]:
     from open_climate_service.plugin_discovery import iter_plugin_subdirs
 
     results: list[tuple[str, dict[str, Any]]] = []
-    for plugin_name, _package, features_res in iter_plugin_subdirs(api_config.VECTORS_SUBDIR):
+    for plugin_name, _package, features_res in iter_plugin_subdirs("vectors"):
         try:
             for resource in features_res.iterdir():
                 if not resource.name.endswith((".yaml", ".yml")):

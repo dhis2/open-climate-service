@@ -111,7 +111,7 @@ This keeps spatial configuration explicit without turning it into a runtime writ
 Each dataset item includes:
 
 - public dataset id
-- source data source id (`source_dataset_id`)
+- the data source it came from (`source_dataset_id`)
 - dataset metadata from the registry
 - current extent
 - last updated timestamp

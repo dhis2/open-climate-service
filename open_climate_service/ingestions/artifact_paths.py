@@ -82,7 +82,7 @@ def _rebase_legacy(candidate: Path, root: Path) -> Path:
         return candidate
     parts = candidate.parts
     for index in range(1, len(parts) - 1):
-        if parts[index] != api_config.RASTERS_SUBDIR:
+        if parts[index] != "rasters":
             continue
         rebased = resolved_root.joinpath(*parts[index:])
         if rebased.exists():

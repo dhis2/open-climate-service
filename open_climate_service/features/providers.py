@@ -124,7 +124,7 @@ def get_feature_provider(name: str) -> Callable[..., ProviderResult] | None:
 
 
 def _scan_builtin_providers() -> list[Any]:
-    pkg = importlib.resources.files("open_climate_service") / "plugins" / api_config.VECTORS_SUBDIR
+    pkg = importlib.resources.files("open_climate_service") / "plugins" / "vectors"
     funcs: list[Any] = []
     try:
         for resource in pkg.iterdir():
@@ -142,11 +142,11 @@ def _scan_plugin_package_providers() -> list[Any]:
     from open_climate_service.plugin_discovery import iter_plugin_subdirs
 
     funcs: list[Any] = []
-    for _name, package, features_res in iter_plugin_subdirs(api_config.VECTORS_SUBDIR):
+    for _name, package, features_res in iter_plugin_subdirs("vectors"):
         for resource in features_res.iterdir():
             if not resource.name.endswith(".py") or resource.name.startswith("_"):
                 continue
-            funcs.extend(_load_from_module(f"{package}.{api_config.VECTORS_SUBDIR}.{resource.name[:-3]}"))
+            funcs.extend(_load_from_module(f"{package}.vectors.{resource.name[:-3]}"))
     return funcs
 
 
@@ -157,7 +157,7 @@ def _scan_instance_providers() -> list[Any]:
         return []
     config_path = api_config.get_config_path()
     base = config_path.parent if config_path else Path()
-    features_dir = (base / plugins_dir_raw).resolve() / api_config.VECTORS_SUBDIR
+    features_dir = (base / plugins_dir_raw).resolve() / "vectors"
     if not features_dir.is_dir():
         return []
     funcs: list[Any] = []

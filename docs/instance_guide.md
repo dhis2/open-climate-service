@@ -227,24 +227,6 @@ open-climate-service = { git = "https://github.com/dhis2/open-climate-service.gi
 
 Pinning to a released version (`==X.Y.Z`) is recommended over tracking `main`: a release is reproducible, whereas `main`'s dependency tree shifts over time and can change under you between syncs.
 
-#### Moving to the rasters/vectors layout
-
-Plugin folders are `plugins/rasters/` and `plugins/vectors/`, and the data directory holds
-`rasters/` and `vectors/`. Earlier versions used `plugins/datasets/`, `plugins/features/`,
-`data/downloads/` and `data/features/`, and the old names are no longer read: an instance
-that has not moved starts with no data sources and no stores. With the server stopped, run
-once from the instance directory:
-
-```bash
-uv run python -m open_climate_service.migrate_layout --dry-run   # report what would change
-uv run python -m open_climate_service.migrate_layout
-```
-
-It renames the four folders, rewrites the store paths in `data/artifacts/records.json`, and
-rewrites `plugin: datasets.…` in templates and `from datasets…` imports in plugin modules.
-It refuses to run if an old and a new folder both exist. An installed plugin package ships
-its own `rasters/` and `vectors/` folders, so upgrade it to a release that does.
-
 ### Troubleshooting
 
 - **Always run inside the synced environment** — use `make run` or `uv run uvicorn …`, never a bare `uvicorn`/`python`. If a stray virtual environment is activated (`echo $VIRTUAL_ENV`), deactivate it; uv warns when `VIRTUAL_ENV` doesn't match the project's `.venv`.

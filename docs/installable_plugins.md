@@ -16,9 +16,9 @@ keeps working exactly as before, and still takes precedence (see [Precedence](#p
 ## Package layout
 
 An importable package can ship any combination of these extension points — **raster and vector
-dataset templates, processes, workflows and exports are auto-discovered** when the package is
+data sources, processes, workflows and exports are auto-discovered** when the package is
 installed. `rasters/`, `vectors/`, `processes/` and `exports/` hold importable Python (with the
-dataset templates alongside it in `rasters/` and `vectors/`), so each needs an `__init__.py` (`workflows/` is plain JSON and does
+templates alongside it in `rasters/` and `vectors/`), so each needs an `__init__.py` (`workflows/` is plain JSON and does
 not):
 
 ```
@@ -36,7 +36,7 @@ osc_example_plugin/
   exports/               # optional: pure export renderers
     __init__.py
     my_export.py         # exposes plugin = BaseExportPlugin subclass instance
-  vectors/               # optional: vector dataset templates and their providers
+  vectors/               # optional: vector templates and their providers
     __init__.py
     example.yaml         # feature templates (id, name, id_property, optional provider + params)
     my_provider.py       # @feature_provider-decorated callables
@@ -86,9 +86,9 @@ uv add osc-example-plugin
 ```
 
 OCS auto-discovers every installed package in the `open_climate_service.plugins` group and loads
-its `rasters/*.yaml` dataset templates, its `processes/` (`@process`-decorated callables), its
+its `rasters/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
 `workflows/*.json` (openEO UDPs), its `exports/` renderers (see [Export plugins](export_plugins.md)),
-and its `vectors/*.yaml` dataset templates and `@feature_provider`-decorated callables. The ingestion
+and its `vectors/*.yaml` templates and `@feature_provider`-decorated callables. The ingestion
 plugin class is importable by dotted path because the package is installed. The datasets then
 appear in `/datasets` and can be ingested like any built-in.
 
