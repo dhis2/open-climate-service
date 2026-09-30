@@ -35,12 +35,9 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  ingestion:\n    plugin: datasets.chelsa.ChelsaPlugin\n    params: {}\n"
     )
     (plugins / "datasets" / "chelsa.py").write_text(
-        "from datasets.helpers import clip\n"
-        "import datasets.helpers\n"
-        "import datasets\n"
-        "import datasets as d\n"
-        "from datasets import helpers\n"
         "from open_climate_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin\n"
+        "import open_climate_service.plugins.features.dhis2\n"
+        "from datasets import load_dataset\n"
         "import datasets_extra\n"
         "\n"
         "datasets = ['not an import']\n"
@@ -54,7 +51,7 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (plugins / "features" / "regions.yaml").write_text("- id: regions\n  name: Regions\n  id_property: id\n")
     (plugins / "processes").mkdir()
     (plugins / "processes" / "indices.py").write_text(
-        "from datasets.helpers import clip\nfrom features import regions\n"
+        "from open_climate_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin\n"
     )
 
     config = tmp_path / "climate-service.yaml"
@@ -82,17 +79,14 @@ def test_moves_data_and_plugins_and_rewrites_what_names_them(instance: Path) -> 
 
     assert sorted(p.name for p in plugins.iterdir()) == ["processes", "rasters", "vectors"]
     process = (plugins / "processes" / "indices.py").read_text()
-    assert process == "from rasters.helpers import clip\nfrom vectors import regions\n", (
+    assert process == "from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin\n", (
         "a module outside the template folders imports from them too"
     )
     assert "plugin: rasters.chelsa.ChelsaPlugin" in (plugins / "rasters" / "chelsa.yaml").read_text()
     module = (plugins / "rasters" / "chelsa.py").read_text()
-    assert "from rasters.helpers import clip" in module
-    assert "import rasters.helpers" in module
-    assert "\nimport rasters\n" in module
-    assert "import rasters as d" in module
-    assert "from rasters import helpers" in module
     assert "from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin" in module
+    assert "import open_climate_service.plugins.vectors.dhis2" in module
+    assert "from datasets import load_dataset" in module, "a bare datasets import is another package"
     assert "import datasets_extra" in module, "a module that only starts with the word is left alone"
     override = (plugins / "rasters" / "chirps_override.yaml").read_text()
     assert "plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin" in override

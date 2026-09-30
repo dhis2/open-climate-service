@@ -112,14 +112,17 @@ def _plan_records(data_root: Path, plan: Plan) -> None:
         plan.records = (index, records)
 
 
-# The old folder as the first component of a dotted path, or after the built-in package:
-# `plugin: datasets.x.Class` or `plugin: open_climate_service.plugins.datasets.x.Class` in a
-# dataset template, and `from datasets.x import y`, `from datasets import x`, `import datasets`,
-# `import datasets as d` (and the same with the built-in prefix) in a plugin module. Nothing
-# else is touched: the words are common.
-_PREFIX = r"((?:open_climate_service\.plugins\.)?)"
-_YAML_PLUGIN = re.compile(r"^(\s*plugin:\s*['\"]?)" + _PREFIX + r"(datasets|features)(?=\.)", re.MULTILINE)
-_PY_IMPORT = re.compile(r"^(\s*(?:from|import)\s+)" + _PREFIX + r"(datasets|features)(?=[.\s,]|$)", re.MULTILINE)
+# In a dataset template, the old folder as the first component of the plugin path or after the
+# built-in package: `plugin: datasets.x.Class`, `plugin: open_climate_service.plugins.datasets.x.Class`.
+# In a plugin module, only imports of the built-in folders (`from open_climate_service.plugins.datasets.x
+# import y`): no plugin imports a sibling by the bare folder name, and a bare `datasets` or `features`
+# is as likely another package. Nothing else is touched: the words are common.
+_YAML_PLUGIN = re.compile(
+    r"^(\s*plugin:\s*['\"]?)((?:open_climate_service\.plugins\.)?)(datasets|features)(?=\.)", re.MULTILINE
+)
+_PY_IMPORT = re.compile(
+    r"^(\s*(?:from|import)\s+)(open_climate_service\.plugins\.)(datasets|features)(?=[.\s,]|$)", re.MULTILINE
+)
 
 
 def _rewritten(text: str, pattern: re.Pattern[str]) -> str:
