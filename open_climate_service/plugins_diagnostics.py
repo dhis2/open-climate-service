@@ -17,7 +17,8 @@ logger = logging.getLogger("open_climate_service")
 
 # (subdirectory, glob) for each plugin kind under plugins_dir.
 _PLUGIN_SUBDIRS: tuple[tuple[str, str], ...] = (
-    ("datasets", "*.y*ml"),
+    (api_config.RASTERS_SUBDIR, "*.y*ml"),
+    (api_config.VECTORS_SUBDIR, "*.y*ml"),
     ("processes", "*.py"),
     ("workflows", "*.json"),
 )

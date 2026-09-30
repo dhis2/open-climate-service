@@ -1,14 +1,15 @@
 # Extensibility
 
-The Open Climate Service supports three plugin types, all following the same pattern: place files in the appropriate subdirectory of `plugins_dir` and the service picks them up automatically — no forking or patching of core code required.
+The Open Climate Service supports four plugin types, all following the same pattern: place files in the appropriate subdirectory of `plugins_dir` and the service picks them up automatically — no forking or patching of core code required.
 
 | Plugin type | Location | Format |
 | ----------- | -------- | ------ |
-| Datasets | `plugins_dir/datasets/` | `.yaml` + `.py` |
+| Raster dataset templates | `plugins_dir/rasters/` | `.yaml` + `.py` |
+| Vector dataset templates | `plugins_dir/vectors/` | `.yaml` + `.py` |
 | Processes | `plugins_dir/processes/` | `.py` |
 | Workflows | `plugins_dir/workflows/` | `.json` |
 
-The same three plugin types can also be packaged and **installed** (`uv add`), so a reusable plugin
+The same plugin types can also be packaged and **installed** (`uv add`), so a reusable plugin
 is shared across instances without any `plugins_dir` wiring — see [Installable plugins](installable_plugins.md).
 `plugins_dir` still takes precedence, so it can override an installed plugin locally.
 
@@ -16,11 +17,11 @@ is shared across instances without any `plugins_dir` wiring — see [Installable
 
 ## Datasets
 
-Each data source is described by a dataset template, a YAML entry that describes an upstream dataset. Built-ins live in the package (`open_climate_service/plugins/datasets/`). Custom ones are loaded from `plugins_dir/datasets/`.
+Each data source is described by a dataset template, a YAML entry that describes an upstream dataset. Built-ins live in the package (`open_climate_service/plugins/rasters/`). Custom ones are loaded from `plugins_dir/rasters/`.
 
 ```
 plugins/
-└── datasets/
+└── rasters/
     ├── enacts_rainfall.yaml    # dataset template
     └── enacts.py               # streaming plugin class
 ```
@@ -30,7 +31,7 @@ plugins/
 plugins_dir: ./plugins/
 ```
 
-All `*.yaml` files in `plugins_dir/datasets/` are merged with the built-ins. A custom template with the same `id` as a built-in overrides it — useful for adjusting display ranges or availability settings on an existing dataset.
+All `*.yaml` files in `plugins_dir/rasters/` are merged with the built-ins. A custom template with the same `id` as a built-in overrides it — useful for adjusting display ranges or availability settings on an existing dataset.
 
 A Python plugin class is declared alongside the YAML using the `ingestion.plugin` dotted path. Plugins subclass `BaseDatasetPlugin` and implement just `periods()` and `fetch_period()` — the base class provides the concurrency defaults and canonical dimension names. `fetch_period` is a regular (blocking) method run in a worker thread, or an `async def` for natively-async sources. Any data transformations (unit conversion, dimension renaming, nodata masking, bbox clipping) are applied inside the fetch before the `xr.Dataset` is returned, typically via the `normalize_period` helper. The grid (shape, dtype, nodata, CRS) is inferred from the first fetched period; a projected-grid source declares its CRS via the `crs` class attribute.
 

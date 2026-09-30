@@ -34,7 +34,7 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts_dir)
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
-    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
+    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "vectors")
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
 
 
@@ -153,12 +153,12 @@ def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
     from open_climate_service.data_registry.services import datasets as registry
     from open_climate_service.openeo import jobs
 
-    configs = tmp_path / "datasets"
-    configs.mkdir()
+    configs = tmp_path / "plugins" / "rasters"
+    configs.mkdir(parents=True)
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
     registry.reset_template_caches()
-    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path / "downloads")
-    (tmp_path / "downloads").mkdir()
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path / "rasters")
+    (tmp_path / "rasters").mkdir()
     cube = xr.Dataset(
         {"tp": (("t", "y", "x"), np.full((3, 2, 2), 2.0, dtype="float32"), {"units": "mm/d"})},
         coords={"t": pd.date_range("2026-01-01", periods=3, freq="D"), "y": [1.0, 0.0], "x": [0.0, 1.0]},

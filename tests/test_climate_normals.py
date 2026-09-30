@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.datasets import era5_land as cn
-from open_climate_service.plugins.datasets.era5_land import ERA5LandNormalsPlugin
+from open_climate_service.plugins.rasters import era5_land as cn
+from open_climate_service.plugins.rasters.era5_land import ERA5LandNormalsPlugin
 
 
 def _synthetic_region(*, var: str = "t2m", time_dim: str = "valid_time", years: tuple[str, str] = ("1991", "1992")):

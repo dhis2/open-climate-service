@@ -114,7 +114,7 @@ def test_entry_point_plugin_template_overrides_builtin(monkeypatch: pytest.Monke
 
 
 def test_plugins_dir_template_overrides_entry_point_plugin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    features_dir = tmp_path / "features"
+    features_dir = tmp_path / "vectors"
     features_dir.mkdir()
     (features_dir / "districts.yaml").write_text(
         "- id: districts\n  name: plugins_dir\n  id_property: orgUnitCode\n", encoding="utf-8"
@@ -201,7 +201,7 @@ def test_an_instance_provider_overrides_an_installed_plugin_of_the_same_name(mon
 def test_an_instance_provider_file_is_discovered_from_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Exercises the real `_load_from_path` path, not the autouse fixture's `_scan_instance_providers` stub."""
     monkeypatch.undo()  # drop the autouse fixture's stub of _scan_instance_providers for this one test
-    features_dir = tmp_path / "features"
+    features_dir = tmp_path / "vectors"
     features_dir.mkdir()
     (features_dir / "dhis2.py").write_text(
         "from open_climate_service.features.providers import feature_provider\n"

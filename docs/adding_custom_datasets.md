@@ -11,11 +11,11 @@ Adding a custom dataset involves two things:
 1. **A streaming plugin** — a Python class that enumerates periods and fetches one period at a time as an `xarray.Dataset`.
 2. **A dataset template** — a YAML file that describes the dataset and tells the API which plugin class to use.
 
-Place both in your `plugins/datasets/` directory:
+Place both in your `plugins/rasters/` directory:
 
 ```
 plugins/
-└── datasets/
+└── rasters/
     ├── enacts_rainfall.yaml
     └── enacts.py          # the plugin class
 ```
@@ -27,7 +27,7 @@ the concurrency defaults and the canonical dimension names; the framework handle
 concurrency, store commits, artifact registration, and publication.
 
 ```python
-# plugins/datasets/enacts.py
+# plugins/rasters/enacts.py
 # Everything you need to write a plugin is importable from open_climate_service.streaming.
 import xarray as xr
 from open_climate_service.streaming import BaseDatasetPlugin, daily_period_ids, normalize_period
@@ -141,7 +141,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 ## Step 2: Create a dataset template
 
 ```yaml
-# plugins/datasets/enacts_rainfall.yaml
+# plugins/rasters/enacts_rainfall.yaml
 - id: enacts_rainfall_daily
   name: ENACTS Rainfall (daily)
   short_name: Rainfall
@@ -192,7 +192,7 @@ question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* i
 
 | Field                  | Required | Description                                                                                                                                     |
 | ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
+| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
 | `ingestion.params`     | No       | Extra keyword arguments forwarded to `fetch_period` as `**params`, and to the plugin constructor                                                |
 | `ingestion.resampling` | No       | Pyramid coarsening for large layers: `mean` (default; continuous data), `max`/`min`/`sum`, or `mode`/`nearest` for categorical data — see below |
 
@@ -201,13 +201,13 @@ Multiple templates can share the same plugin class and differ only in `params`:
 ```yaml
 - id: era5land_temperature_hourly
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandHourlySingleBandPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandHourlySingleBandPlugin
     params:
       variable: 2m_temperature
 
 - id: era5land_precipitation_hourly
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandPrecipitationPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipitationPlugin
     params:
       variable: total_precipitation
 ```
@@ -431,7 +431,7 @@ data_dir: ./data
 plugins_dir: ./plugins/
 ```
 
-All `*.yaml` files in `plugins_dir/datasets/` are loaded and merged with the built-in templates. Custom templates are additive — the built-ins remain available unless you deliberately override one by using the same `id`.
+All `*.yaml` files in `plugins_dir/rasters/` are loaded and merged with the built-in templates. Custom templates are additive — the built-ins remain available unless you deliberately override one by using the same `id`.
 
 Since `plugins_dir` is added to `sys.path`, the plugin class at `datasets.enacts.ENACTSRainfallPlugin` is importable without installing a package.
 

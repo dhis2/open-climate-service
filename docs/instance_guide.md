@@ -30,7 +30,7 @@ my-climate-service/
 ├── .env.example            # committed template for environment variables
 ├── .gitignore
 ├── plugins/
-│   ├── datasets/           # dataset templates (.yaml) + plugin classes (.py)
+│   ├── rasters/           # dataset templates (.yaml) + plugin classes (.py)
 │   │   ├── enacts_rainfall.yaml
 │   │   └── enacts.py
 │   ├── processes/          # @process-decorated functions (.py)
@@ -137,7 +137,7 @@ plugins_dir: ./plugins/
 | `extent.name` | No | Human-readable label shown in API responses |
 | `extent.country_code` | No | ISO 3166-1 alpha-3 — required for WorldPop downloads |
 | `data_dir` | Yes | Directory for downloaded files and Zarr stores, resolved relative to the config file |
-| `plugins_dir` | No | Directory containing `datasets/`, `processes/`, and `workflows/` plugin subdirectories |
+| `plugins_dir` | No | Directory containing `rasters/`, `vectors/`, `processes/` and `workflows/` plugin subdirectories |
 | `read_only` | No | Set `true` to refuse all state-changing requests — see [Read-only instances](#read-only-instances). Defaults to `false` |
 | `scheduler` | No | Instance-level scheduled dataset-sync configuration. See [Scheduled dataset synchronization](scheduled_sync.md) |
 | `automation` | No | Event-driven workflow bindings for successful dataset updates. See [Dataset-update workflow automation](workflow_automation.md) |
@@ -186,7 +186,7 @@ Plugins extend the instance with custom datasets, processes, and workflows. They
 
 ```
 plugins/
-├── datasets/
+├── rasters/
 │   ├── enacts_rainfall.yaml    # custom dataset template
 │   └── enacts.py               # streaming plugin class
 ├── processes/
@@ -195,7 +195,7 @@ plugins/
     └── aggregate_for_dhis2.json
 ```
 
-See [Extensibility](extensibility.md) for the three plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the dataset template field reference and streaming plugin contract.
+See [Extensibility](extensibility.md) for the plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the dataset template field reference and streaming plugin contract.
 
 ---
 
@@ -222,6 +222,24 @@ open-climate-service = { git = "https://github.com/dhis2/open-climate-service.gi
 ```
 
 Pinning to a released version (`==X.Y.Z`) is recommended over tracking `main`: a release is reproducible, whereas `main`'s dependency tree shifts over time and can change under you between syncs.
+
+#### Moving to the rasters/vectors layout
+
+Plugin folders are `plugins/rasters/` and `plugins/vectors/`, and the data directory holds
+`rasters/` and `vectors/`. Earlier versions used `plugins/datasets/`, `plugins/features/`,
+`data/downloads/` and `data/features/`, and the old names are no longer read: an instance
+that has not moved starts with no data sources and no stores. With the server stopped, run
+once from the instance directory:
+
+```bash
+uv run python -m open_climate_service.migrate_layout --dry-run   # report what would change
+uv run python -m open_climate_service.migrate_layout
+```
+
+It renames the four folders, rewrites the store paths in `data/artifacts/records.json`, and
+rewrites `plugin: datasets.…` in templates and `from datasets…` imports in plugin modules.
+It refuses to run if an old and a new folder both exist. An installed plugin package ships
+its own `rasters/` and `vectors/` folders, so upgrade it to a release that does.
 
 ### Troubleshooting
 

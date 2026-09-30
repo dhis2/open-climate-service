@@ -1,8 +1,8 @@
 """Discovery of installable OCS plugins via entry points (#118).
 
 A plugin package declares an ``open_climate_service.plugins`` entry point whose value
-is its top-level import package. The framework then loads the package's ``datasets/``,
-``processes/``, ``workflows/`` and ``exports/`` folders the same way it reads an instance's
+is its top-level import package. The framework then loads the package's ``rasters/``,
+``vectors/``, ``processes/``, ``workflows/`` and ``exports/`` folders the same way it reads an instance's
 ``plugins_dir`` — so an installed package contributes the same extension points, with
 no config wiring beyond installing it.
 """

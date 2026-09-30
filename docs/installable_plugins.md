@@ -15,16 +15,16 @@ keeps working exactly as before, and still takes precedence (see [Precedence](#p
 
 ## Package layout
 
-An importable package can ship any combination of these extension points — **datasets,
-processes, workflows, exports, and features are auto-discovered** when the package is installed.
-`datasets/`, `processes/`, `exports/`, and `features/` hold importable Python (or, for `features/`,
-YAML templates alongside it), so each needs an `__init__.py` (`workflows/` is plain JSON and does
+An importable package can ship any combination of these extension points — **raster and vector
+dataset templates, processes, workflows and exports are auto-discovered** when the package is
+installed. `rasters/`, `vectors/`, `processes/` and `exports/` hold importable Python (with the
+dataset templates alongside it in `rasters/` and `vectors/`), so each needs an `__init__.py` (`workflows/` is plain JSON and does
 not):
 
 ```
 osc_example_plugin/
   __init__.py
-  datasets/
+  rasters/
     __init__.py
     example.py           # your BaseDatasetPlugin subclass
     example.yaml         # dataset templates
@@ -36,7 +36,7 @@ osc_example_plugin/
   exports/               # optional: pure export renderers
     __init__.py
     my_export.py         # exposes plugin = BaseExportPlugin subclass instance
-  features/              # optional: feature collection templates and providers
+  vectors/               # optional: vector dataset templates and their providers
     __init__.py
     example.yaml         # feature templates (id, name, id_property, optional provider + params)
     my_provider.py       # @feature_provider-decorated callables
@@ -74,7 +74,7 @@ The `ingestion.plugin` in a dataset template uses the class's **full dotted path
 
 ```yaml
 ingestion:
-  plugin: osc_example_plugin.datasets.example.ExamplePlugin
+  plugin: osc_example_plugin.rasters.example.ExamplePlugin
 ```
 
 ## Install and discover
@@ -86,9 +86,9 @@ uv add osc-example-plugin
 ```
 
 OCS auto-discovers every installed package in the `open_climate_service.plugins` group and loads
-its `datasets/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
+its `rasters/*.yaml` dataset templates, its `processes/` (`@process`-decorated callables), its
 `workflows/*.json` (openEO UDPs), its `exports/` renderers (see [Export plugins](export_plugins.md)),
-and its `features/*.yaml` templates and `@feature_provider`-decorated callables. The ingestion
+and its `vectors/*.yaml` dataset templates and `@feature_provider`-decorated callables. The ingestion
 plugin class is importable by dotted path because the package is installed. The datasets then
 appear in `/datasets` and can be ingested like any built-in.
 
@@ -99,7 +99,7 @@ Templates are merged in increasing order of precedence, per extension point:
 **built-in → installed plugins → instance `plugins_dir`**
 
 So `plugins_dir` always wins on an id conflict — an operator can drop a dataset template into their local
-`plugins/datasets/` to override an installed plugin's dataset. Overrides are logged at load time.
+`plugins/rasters/` to override an installed plugin's dataset. Overrides are logged at load time.
 
 ## Naming convention
 

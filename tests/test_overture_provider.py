@@ -17,7 +17,7 @@ from shapely.geometry import Polygon
 from open_climate_service.extents import services as extent_services
 from open_climate_service.features import providers as feature_providers
 from open_climate_service.features import services as feature_services
-from open_climate_service.plugins.features import overture
+from open_climate_service.plugins.vectors import overture
 
 SIERRA_LEONE = [-13.5, 6.9, -10.1, 10.0]
 
@@ -461,7 +461,7 @@ def test_the_reported_release_becomes_the_collection_version(
     from open_climate_service.features import templates as feature_templates
     from open_climate_service.ingestions import services as ingestion_services
 
-    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
+    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "vectors")
     artifacts = tmp_path / "artifacts"
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts)
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", artifacts / "records.json")
@@ -489,7 +489,7 @@ def _feature_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     from open_climate_service import config as api_config
     from open_climate_service.ingestions import services as ingestion_services
 
-    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
+    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "vectors")
     artifacts = tmp_path / "artifacts"
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts)
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", artifacts / "records.json")

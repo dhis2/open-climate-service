@@ -61,7 +61,7 @@ def _feature_instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     feature_templates.reset_feature_template_caches()
     # `get_feature_provider` goes through `load_feature_providers`, so this covers both.
     monkeypatch.setattr(feature_providers, "load_feature_providers", lambda: {"fake": _fake_provider})
-    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
+    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "vectors")
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts_dir)

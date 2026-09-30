@@ -10,7 +10,7 @@ The platform has four first-class concepts. Understanding the distinction betwee
 
 ### Data source
 
-A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint. Built-ins live in `open_climate_service/plugins/datasets/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/datasets/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
+A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint. Built-ins live in `open_climate_service/plugins/rasters/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
 
 A dataset template defines:
 
@@ -42,7 +42,7 @@ Multiple artifacts can exist for the same data source if data was ingested at di
 
 Artifacts are stored in `{data_dir}/artifacts/records.json`, where `data_dir` is the path configured in `climate-service.yaml`. This is an internal implementation detail — consumers should never depend on artifact IDs or artifact paths directly.
 
-Store paths are persisted relative to `data_dir` (`downloads/foo.icechunk`) and resolved to absolute paths when records are loaded, so the data directory stays portable: it can be moved, copied to another host, or written in a container at `/app/data` and read from the host. Records written before this convention hold absolute paths and are re-rooted onto the current `data_dir` on read, then rewritten in relative form on the next update. Stores kept outside `data_dir` are recorded as absolute paths.
+Store paths are persisted relative to `data_dir` (`rasters/foo.icechunk`) and resolved to absolute paths when records are loaded, so the data directory stays portable: it can be moved, copied to another host, or written in a container at `/app/data` and read from the host. Records written before this convention hold absolute paths and are re-rooted onto the current `data_dir` on read, then rewritten in relative form on the next update. Stores kept outside `data_dir` are recorded as absolute paths.
 
 ### Managed dataset
 
@@ -253,13 +253,13 @@ Multiple YAML templates can reference the same plugin class and differentiate vi
 ```yaml
 # era5land_temperature_hourly.yaml
 ingestion:
-  plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
   params:
     variable: t2m
 
 # era5land_precipitation_hourly.yaml
 ingestion:
-  plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
   params:
     variable: tp
 ```
