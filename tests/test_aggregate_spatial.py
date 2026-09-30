@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import xarray as xr
 
 from open_climate_service.plugins.processes.aggregate_spatial import (
@@ -21,6 +22,10 @@ def _box(xmin: float, ymin: float, xmax: float, ymax: float) -> dict:
         "type": "Polygon",
         "coordinates": [[[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]],
     }
+
+
+def _point(x: float, y: float) -> dict:
+    return {"type": "Point", "coordinates": [x, y]}
 
 
 def _grid(y_ascending: bool) -> xr.DataArray:
@@ -54,6 +59,49 @@ def test_parse_geometries_single_feature_and_geometry() -> None:
     assert labels_feat == ["x"]
     _, labels_geom = _parse_geometries(_box(0, 0, 1, 1))
     assert labels_geom == ["0"]
+
+
+def test_parse_geometries_rejects_a_point() -> None:
+    """No defined sampling semantics exist for a point yet (CLIM-785) -- refuse rather than
+    silently rasterize to whichever pixel happens to contain it."""
+    fc = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "id": "facility-1", "geometry": _point(0.5, 0.5)},
+        ],
+    }
+    with pytest.raises(ValueError, match="geometry 'facility-1' is a Point.*CLIM-785"):
+        _parse_geometries(fc)
+
+
+def test_parse_geometries_rejects_a_point_among_polygons() -> None:
+    """A single bad geometry in an otherwise-valid hierarchy must name itself, not the batch."""
+    fc = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "id": "district-1", "geometry": _box(0, 0, 1, 1)},
+            {"type": "Feature", "id": "facility-1", "geometry": _point(0.5, 0.5)},
+        ],
+    }
+    with pytest.raises(ValueError, match="geometry 'facility-1' is a Point"):
+        _parse_geometries(fc)
+
+
+def test_parse_geometries_accepts_a_multipolygon() -> None:
+    multi = {
+        "type": "MultiPolygon",
+        "coordinates": [_box(0, 0, 1, 1)["coordinates"], _box(2, 2, 3, 3)["coordinates"]],
+    }
+    geoms, labels = _parse_geometries({"type": "Feature", "id": "m", "geometry": multi})
+    assert labels == ["m"]
+    assert geoms[0].geom_type == "MultiPolygon"
+
+
+def test_aggregate_spatial_rejects_a_point_before_touching_the_raster() -> None:
+    da = _grid(y_ascending=True)
+    fc = {"type": "FeatureCollection", "features": [{"type": "Feature", "id": "p", "geometry": _point(0.5, 0.5)}]}
+    with pytest.raises(ValueError, match="geometry 'p' is a Point"):
+        aggregate_spatial(da, fc, _mean)
 
 
 # ---------------------------------------------------------------------------

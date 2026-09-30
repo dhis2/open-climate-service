@@ -87,20 +87,18 @@ def test_both_workflows_registered_as_processes() -> None:
 
 def test_aggregate_to_org_units_dhis2json() -> None:
     overlay = _overlay_with_mock_dataset()
-    # period_type omitted -> declared default "month" applies
+    # Mapping and period type come from the named export, so the workflow forwards only its ID.
     envelope = overlay["aggregate_to_dhis2_json"].implementation(
         dataset_id="my_dataset",
         temporal_extent=["2025-01-01", "2025-02-28"],
         geometries=_GEOMETRIES,
-        data_element_id="DE_TEMP",
+        export="rain-monthly",
     )
     assert envelope.format == "DHIS2JSON"
-    payload = jobs._build_dhis2_json_payload(envelope.data.to_dataframe().reset_index(), envelope.options)
-    dv = payload["dataValues"]
-    assert {d["orgUnit"] for d in dv} == {"OU_A", "OU_B"}
-    assert {d["period"] for d in dv} == {"202501", "202502"}
-    assert all(d["dataElement"] == "DE_TEMP" for d in dv)
-    assert len(dv) == 4
+    assert envelope.options == {"export": "rain-monthly"}
+    frame = envelope.data.to_dataframe().reset_index()
+    assert set(frame["geometry"]) == {"OU_A", "OU_B"}
+    assert len(frame) == 4
 
 
 def test_aggregate_to_org_units_chap_csv() -> None:
@@ -120,19 +118,19 @@ def test_aggregate_to_org_units_chap_csv() -> None:
 
 
 # OU_A covers pixels with t=0 values [0, 1, 5, 6] -> mean 3, sum 12, min 0, max 6.
-@pytest.mark.parametrize(("method", "expected"), [("mean", "3"), ("sum", "12"), ("min", "0"), ("max", "6")])
-def test_method_selects_reducer(method: str, expected: str) -> None:
+@pytest.mark.parametrize(("method", "expected"), [("mean", 3.0), ("sum", 12.0), ("min", 0.0), ("max", 6.0)])
+def test_method_selects_reducer(method: str, expected: float) -> None:
     overlay = _overlay_with_mock_dataset()
     envelope = overlay["aggregate_to_dhis2_json"].implementation(
         dataset_id="my_dataset",
         temporal_extent=["2025-01-01", "2025-02-28"],
         geometries=_GEOMETRIES,
-        data_element_id="DE",
+        export="rain-monthly",
         method=method,
     )
-    dv = jobs._build_dhis2_json_payload(envelope.data.to_dataframe().reset_index(), envelope.options)["dataValues"]
-    ou_a_jan = next(d["value"] for d in dv if d["orgUnit"] == "OU_A" and d["period"] == "202501")
-    assert ou_a_jan == expected
+    frame = envelope.data.to_dataframe().reset_index()
+    ou_a_jan = frame[(frame["geometry"] == "OU_A") & (frame["t"] == np.datetime64("2025-01-01"))]["tp"]
+    assert ou_a_jan.tolist() == [expected]
 
 
 def test_reduce_by_method_dispatches() -> None:

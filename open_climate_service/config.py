@@ -113,6 +113,7 @@ DEFAULT_CRS = "EPSG:4326"
 DEFAULT_NAME = "Open Climate Service"
 DEFAULT_ID = "open-climate-service"  # operators should always set id: in climate-service.yaml
 DOWNLOAD_SUBDIR = "downloads"
+FEATURES_SUBDIR = "features"
 
 
 def get_id() -> str:
@@ -213,6 +214,21 @@ def get_data_root() -> Path:
 def get_download_root() -> Path:
     """Return the directory holding managed artifact stores."""
     return get_data_root() / DOWNLOAD_SUBDIR
+
+
+def get_features_root() -> Path:
+    """Return the one directory holding feature collections, as GeoParquet.
+
+    One location, not a second answer to where features live: a collection is either here or
+    it does not exist. It sits beside `downloads/` rather than inside it because the two hold
+    different things — a raster store is a directory an Icechunk repository owns, a feature
+    collection is a single file this service writes.
+
+    Being the store directory does not make it an inbox. A record is what brings a collection
+    into existence, so a file dropped in here that nothing registered is ignored by every
+    listing (CLIM-836).
+    """
+    return get_data_root() / FEATURES_SUBDIR
 
 
 def get_utc_offset_hours() -> float:

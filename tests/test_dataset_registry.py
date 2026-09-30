@@ -509,7 +509,7 @@ def test_missing_plugins_dir_serves_built_ins_instead_of_raising(
     """A configured plugins_dir that does not exist must not break template listing.
 
     Startup warns and keeps serving, so raising here left the instance reporting healthy with
-    /dataset-templates/ returning 500 — the one route the ingest form needs (CLIM-910).
+    /dataset-templates returning 500 — the one route the ingest form needs (CLIM-910).
     """
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
     monkeypatch.setattr(
