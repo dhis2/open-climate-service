@@ -5,13 +5,10 @@ import importlib.resources
 import json
 import logging
 import math
-import os
 import re
-import time
 from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
-from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -607,6 +604,73 @@ def render_data_source_page(template: dict[str, Any], mount: str) -> str:
     )
 
 
+_OBLIGATION_LABELS = {
+    "attribution": "attribution",
+    "share-alike": "share-alike",
+    "non-commercial": "non-commercial use only",
+    "no-derivatives": "no derivatives",
+}
+
+
+def _feature_source_page_context(template: dict[str, Any], datasets: list[Any], *, read_only: bool) -> dict[str, Any]:
+    """Everything a feature collection template page shows, and whether it can offer fetching.
+
+    No date range and no extent requirement: a collection has no time axis, and a provider
+    decides for itself whether it needs the instance extent (Overture does, DHIS2 does not).
+    """
+    from open_climate_service.features.services import is_refreshable
+    from open_climate_service.shared.licences import parse_licence
+
+    raw_params = template.get("params")
+    params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+    filters = _feature_filters(template)
+    refreshable = is_refreshable(template)
+    fetched = next((dataset for dataset in datasets if dataset.dataset_id == template["id"]), None)
+    obligations = sorted(parse_licence(template.get("license")).obligations)
+    facts: list[Fact] = [
+        ("Identifier", str(template["id"]), None),
+        ("Provider", str(template.get("provider") or ""), None),
+        ("Release", str(params.get("release") or ""), None),
+        ("Theme", str(params.get("theme") or ""), None),
+        ("Filters", ", ".join(f"{key}: {value}" for key, value in filters.items()), None),
+        ("Identity property", str(template.get("id_property") or ""), None),
+        ("Licence", _licence_label(template) or "", None),
+        ("Attribution", str(template.get("attribution") or ""), None),
+    ]
+    return {
+        "source": {"id": template["id"], "name": template.get("name") or template["id"]},
+        "paragraphs": _paragraphs(str(template.get("description") or "")),
+        "facts": [fact for fact in facts if fact[1]],
+        "licence": _licence_label(template) or "",
+        "obligations": [_OBLIGATION_LABELS.get(obligation, obligation) for obligation in obligations],
+        "refreshable": refreshable,
+        "fetched": (
+            {
+                "id": fetched.dataset_id,
+                "status": "published" if fetched.publication.status == "published" else "unpublished",
+            }
+            if fetched is not None
+            else None
+        ),
+        "can_fetch": refreshable and not read_only,
+        "read_only": read_only,
+    }
+
+
+def render_feature_source_page(template: dict[str, Any], mount: str) -> str:
+    """Render the page for one feature collection template, with the form that fetches it."""
+    return get_template("feature_source_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "data-sources"),
+        job_script=_read_asset("ocs_jobs.js"),
+        **_feature_source_page_context(template, _load_datasets(), read_only=api_config.is_read_only()),
+    )
+
+
 _TITLE_WORDS = {"chap": "CHAP", "csv": "CSV", "dhis2": "DHIS2", "json": "JSON"}
 
 _RESULT_FORMATS = {
@@ -661,7 +725,47 @@ def _source_view(template: dict[str, Any]) -> dict[str, Any]:
         "period_type": template.get("period_type") or "",
         "resolution": template.get("resolution") or "",
         "licence": _licence_label(template),
+        "kind": "raster",
+        "level": "",
     }
+
+
+def _feature_filters(template: dict[str, Any]) -> dict[str, Any]:
+    params = template.get("params")
+    filters = params.get("filters") if isinstance(params, dict) else None
+    return filters if isinstance(filters, dict) else {}
+
+
+def _feature_source_view(template: dict[str, Any]) -> dict[str, Any]:
+    """A feature collection template card, shaped like a raster one so both list together."""
+    subtype = _feature_filters(template).get("subtype")
+    return {
+        "id": template["id"],
+        "name": template.get("name") or template["id"],
+        "provider": template.get("source") or str(template.get("provider") or ""),
+        "provider_url": template.get("source_url"),
+        "description": " ".join(str(template.get("description") or "").split()),
+        "variable": "",
+        "units": "",
+        "period_type": "",
+        "resolution": "",
+        "licence": _licence_label(template),
+        "kind": "features",
+        "level": str(subtype) if isinstance(subtype, str) else "",
+    }
+
+
+def _load_feature_templates() -> list[dict[str, Any]]:
+    """Feature collection templates whose provider this instance has, so they can be fetched."""
+    try:
+        from open_climate_service.features import providers as feature_providers
+        from open_climate_service.features.services import is_refreshable, usable_feature_templates
+
+        providers = feature_providers.load_feature_providers()
+        return [t for t in usable_feature_templates() if is_refreshable(t, providers)]
+    except Exception:
+        _log.exception("Unexpected error loading feature collection templates")
+        return []
 
 
 def render_data_sources_page(mount: str) -> str:
@@ -669,7 +773,8 @@ def render_data_sources_page(mount: str) -> str:
 
     The HTML arm of `GET /dataset-templates`, which answers JSON to everything but a browser.
     A narrower view than the JSON: only what can be fetched, because that is what the page
-    offers to act on. The JSON lists every template and flags `ingestable`.
+    offers to act on. The JSON lists every template and flags `ingestable`. Raster and feature
+    collection templates are listed together, labelled by kind, as datasets are.
     """
     templates = _load_templates()
     return get_template("data_sources_page.html").render(
@@ -680,7 +785,8 @@ def render_data_sources_page(mount: str) -> str:
         styles=_read_asset("ocs_ui.css"),
         list_script=_read_asset("ocs_list.js"),
         nav=page_nav(mount, "data-sources"),
-        sources=[_source_view(t) for t in _ingestable_templates(templates)],
+        sources=[_source_view(t) for t in _ingestable_templates(templates)]
+        + [_feature_source_view(t) for t in _load_feature_templates()],
     )
 
 
@@ -1371,62 +1477,29 @@ def _extent_globe(extent: dict[str, Any] | None) -> dict[str, Any] | None:
     return _globe((xmin, ymin, xmax, ymax))
 
 
-_SIZE_CACHE_SECONDS = 60.0
-
-
-def _directory_bytes(path: Path) -> int:
-    """Bytes held under a store directory, following none of its symlinks."""
-    total = 0
-    stack = [path]
-    while stack:
-        try:
-            entries = list(os.scandir(stack.pop()))
-        except OSError:
-            continue
-        for entry in entries:
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    stack.append(Path(entry.path))
-                elif entry.is_file(follow_symlinks=False):
-                    total += entry.stat(follow_symlinks=False).st_size
-            except OSError:
-                continue
-    return total
-
-
-_stored_bytes_cache: tuple[float, int] | None = None
-
-
 def _stored_bytes() -> int:
-    """Total size on disk of every store this instance's artifacts point at.
+    """Total size of every store this instance's artifacts point at.
 
-    Walked rather than read from a record: nothing stores a size, and an Icechunk store grows
-    with each sync, so a recorded one would be stale. Distinct paths only — successive
-    ingestions of the same dataset append to a single store. Cached for a minute, because a
-    store is tens of thousands of chunk files and the overview is reloaded far more often than
-    the data changes.
+    Read from the records, never measured here. A store can be hundreds of thousands of chunk
+    files, and walking them on a page load while a heavy job held the GIL took this page from
+    seconds to many minutes. Each ingest, sync, openEO publish and feature refresh records the
+    size it leaves behind, so the newest record for a path carries that store's current size;
+    distinct paths only, since successive ingestions of a dataset append to one store. A record
+    without a size (written before sizes were recorded) counts as nothing until re-ingested.
     """
-    global _stored_bytes_cache
-    now = time.monotonic()
-    if _stored_bytes_cache is not None and now - _stored_bytes_cache[0] < _SIZE_CACHE_SECONDS:
-        return _stored_bytes_cache[1]
     try:
         from open_climate_service.ingestions.services import list_artifacts
 
-        paths = {artifact.path for artifact in list_artifacts().items if artifact.path}
-        total = sum(_directory_bytes(Path(path)) if Path(path).is_dir() else _file_bytes(Path(path)) for path in paths)
+        newest: dict[str, Any] = {}
+        for artifact in list_artifacts().items:
+            if artifact.path and (
+                artifact.path not in newest or artifact.created_at > newest[artifact.path].created_at
+            ):
+                newest[artifact.path] = artifact
     except Exception:
-        _log.exception("Unexpected error measuring stored data")
-        total = 0
-    _stored_bytes_cache = (now, total)
-    return total
-
-
-def _file_bytes(path: Path) -> int:
-    try:
-        return path.stat().st_size
-    except OSError:
+        _log.exception("Unexpected error reading stored data sizes")
         return 0
+    return sum(artifact.size_bytes or 0 for artifact in newest.values())
 
 
 def _format_bytes(total: int) -> str:
@@ -1441,7 +1514,11 @@ def _format_bytes(total: int) -> str:
     return f"{size:.0f} TB" if size >= 100 else f"{size:.1f} TB"
 
 
-def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) -> dict[str, Any]:
+def _landing_catalogue(
+    templates: list[dict[str, Any]],
+    workflows: list[Any],
+    feature_templates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Split templates between the Dataset templates and Workflows areas by what can be ingested.
 
     A template is fetched or produced, never both (registration refuses `produced_by` beside
@@ -1450,7 +1527,8 @@ def _landing_catalogue(templates: list[dict[str, Any]], workflows: list[Any]) ->
     Workflows as an output of an unknown workflow, rather than silently dropped.
     """
     sources = sorted(
-        (_source_view(t) for t in _ingestable_templates(templates)),
+        [_source_view(t) for t in _ingestable_templates(templates)]
+        + [_feature_source_view(t) for t in feature_templates or []],
         key=lambda source: (source["provider"].lower(), source["name"].lower()),
     )
     workflow_ids = {workflow.id for workflow in workflows}
@@ -1591,7 +1669,7 @@ def render_landing(version: str, mount: str) -> str:
     """
     extent = _load_extent()
     templates = _load_templates()
-    catalogue = _landing_catalogue(templates, _load_workflows())
+    catalogue = _landing_catalogue(templates, _load_workflows(), _load_feature_templates())
     return get_template("landing_page.html").render(
         version=version,
         mount=mount,

@@ -12,6 +12,7 @@ Key concepts:
 - **Artifacts / managed datasets** — ingested instances of a template for a specific spatial extent and time range. Exposed under `/datasets` and `/zarr/{dataset_id}`.
 - **Extent** — a single named spatial bounding box configured at instance setup time (`id`, `bbox`, optional `country_code`). Exposed at `GET /extent`.
 - **GeoZarr stores** — datasets are stored as chunked Zarr v3 archives with GeoZarr spatial attributes. Flat stores for small extents; multiscale pyramids for large ones. Served chunk-by-chunk over HTTP with no specialised server middleware.
+- **Feature collections** — vector datasets (org unit polygons, facility points) stored as GeoParquet under `<data_dir>/features`, tracked by the same `ArtifactRecord` as rasters and discriminated by `itemType: "feature"`. A record is what makes a collection exist: the listing reads records, never the filesystem, so the store directory is not an inbox.
 
 ## Repository layout
 
@@ -21,6 +22,7 @@ open_climate_service/
   data_accessor/    # open zarr / netcdf for read (accessor.py)
   data_registry/    # dataset template YAML loading
   ingestions/       # artifact lifecycle: create, list, sync, publish
+  features/         # feature collection store, GeoParquet reader, GET /features
   publications/     # STAC publication metadata
   extents/          # spatial extent config
   shared/           # dhis2 adapter, time utils

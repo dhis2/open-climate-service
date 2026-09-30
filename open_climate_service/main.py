@@ -14,6 +14,7 @@ from open_climate_service.automation.service import get_workflow_automation_serv
 from open_climate_service.data_registry import routes as dataset_template_routes
 from open_climate_service.exports import routes as exports_routes
 from open_climate_service.extents import routes as extent_routes
+from open_climate_service.features import routes as feature_routes
 from open_climate_service.ingestions import routes as ingestion_routes
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.openeo import routes as openeo_routes
@@ -79,10 +80,20 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     job_service = get_job_service()
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()
-    openeo_service.recover_pending_jobs()
     automation_service = get_workflow_automation_service()
     automation_service.start()
     job_service.set_event_consumer(automation_service.consume)
+    # Registered before openEO jobs are recovered: a re-enqueued triggered job records the
+    # delivery it owes as it finishes, which it cannot do before these are in place. A job
+    # finishing during reconciliation is caught by one or the other; the deterministic
+    # delivery key makes being caught by both harmless.
+    openeo_service.set_delivery_due_provider(automation_service.delivery_due_for)
+    openeo_service.set_finished_listener(automation_service.on_job_finished)
+    openeo_service.recover_pending_jobs()
+    try:
+        automation_service.reconcile_deliveries()
+    except Exception:
+        logger.exception("Workflow delivery reconciliation failed; continuing startup")
     try:
         automation_service.replay()
     except Exception:
@@ -95,6 +106,11 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         yield
     finally:
         job_service.set_event_consumer(None)
+        # The listener goes first: a delivery a job records from here on is reconciled at the
+        # next start. The delivery provider is deliberately left in place. The executor does
+        # not wait for running jobs, so one can still finish after this; clearing the provider
+        # would persist it with no delivery owed, and nothing could recover that.
+        openeo_service.set_finished_listener(None)
         scheduler_service.shutdown()
         job_service.shutdown()
         openeo_service.shutdown()
@@ -199,6 +215,7 @@ def create_app() -> FastAPI:
     _app.include_router(openeo_routes.udp_router, prefix="/process_graphs", tags=["openEO"])
     _app.include_router(openeo_routes.result_router, prefix="/result", tags=["openEO"])
     _app.include_router(extent_routes.router, prefix="/extent", tags=["Extent"])
+    _app.include_router(feature_routes.router, prefix="/features", tags=["Features"])
     _app.include_router(dataset_template_routes.router, prefix="/dataset-templates", tags=["Dataset templates"])
     _app.include_router(ingestion_routes.datasets_router, prefix="/datasets", tags=["Datasets"])
     _app.include_router(ingestion_routes.ingestions_router, prefix="/ingestions", tags=["Ingestions"])

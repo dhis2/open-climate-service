@@ -1,59 +1,87 @@
 {
   "id": "aggregate_to_dhis2_json",
-  "summary": "Aggregate a GeoZarr dataset to DHIS2 org units and export DHIS2 JSON",
-  "description": "Generic org-unit aggregation workflow. Loads a published GeoZarr dataset over a time range, spatially aggregates its variable within each GeoJSON feature (e.g. a DHIS2 organisation unit) using the chosen method, and exports the result as a DHIS2 `dataValueSet` JSON payload.\n\nEach feature's GeoJSON `id` becomes the DHIS2 `orgUnit`, each time step becomes a DHIS2 `period` (formatted according to `period_type`), and the dataset variable becomes the `value`. Aggregation is performed at the dataset's native temporal resolution, so set `period_type` to match it (e.g. `month` for a monthly dataset, `day` for a daily one).\n\nUsage — call this process as the result of a process graph, passing your dataset id and org-unit GeoJSON:\n\n{\n  \"agg\": {\n    \"process_id\": \"aggregate_to_dhis2_json\",\n    \"arguments\": {\n      \"dataset_id\": \"era5land_precipitation_monthly\",\n      \"temporal_extent\": [\"2025-01-01\", \"2025-12-31\"],\n      \"geometries\": { \"type\": \"FeatureCollection\", \"features\": [ ... ] },\n      \"data_element_id\": \"fbfJHSPpUQD\",\n      \"method\": \"mean\",\n      \"period_type\": \"month\"\n    },\n    \"result\": true\n  }\n}",
+  "summary": "Aggregate a GeoZarr dataset to DHIS2 org units and save a named, deliverable DHIS2 export",
+  "description": "Org-unit aggregation workflow for DHIS2. Loads a published GeoZarr dataset over a time range, spatially aggregates its variable within each GeoJSON feature (a DHIS2 organisation unit) using the chosen method, and saves the result as a DHIS2 `dataValueSet` through a named export configured in `climate-service.yaml`.\n\nThe named export owns every instance-specific setting: data element and category option combos, period type, the DHIS2 connection, and the optional dataset and org-unit references. The workflow itself stays reusable across instances. As a batch job it writes a versioned delivery manifest, so the saved result can be submitted to `POST /exports/{export_id}` for DHIS2 delivery.\n\nEach feature's GeoJSON `id` must be the DHIS2 organisation unit UID. Aggregation is performed at the dataset's native temporal resolution, so the export's `period_type` must match it. When the export declares `aggregation`, it must equal `method`.\n\nFor an ad-hoc payload without instance configuration, write the graph directly and call `save_result` with format `DHIS2JSON` and the `data_element_id`, `org_unit_field`, and `period_type` options; such a payload is downloadable but not eligible for server-side delivery.\n\nUsage:\n\n{\n  \"agg\": {\n    \"process_id\": \"aggregate_to_dhis2_json\",\n    \"arguments\": {\n      \"dataset_id\": \"era5land_precipitation_monthly\",\n      \"temporal_extent\": [\"2025-01-01\", \"2025-12-31\"],\n      \"geometries\": { \"type\": \"FeatureCollection\", \"features\": [ ... ] },\n      \"export\": \"rainfall-monthly\",\n      \"method\": \"mean\"\n    },\n    \"result\": true\n  }\n}",
   "parameters": [
     {
       "name": "dataset_id",
       "description": "ID of the published GeoZarr collection to aggregate (as listed under /datasets).",
-      "schema": { "type": "string" }
+      "schema": {
+        "type": "string"
+      }
     },
     {
       "name": "temporal_extent",
       "description": "Time range to load as [start, end] ISO-8601 date strings.",
-      "schema": { "type": "array", "subtype": "temporal-interval" }
+      "schema": {
+        "type": "array",
+        "subtype": "temporal-interval"
+      }
     },
     {
       "name": "geometries",
-      "description": "GeoJSON FeatureCollection of organisation units. Each feature's `id` is used as the DHIS2 orgUnit identifier.",
-      "schema": { "type": "object", "subtype": "geojson" }
+      "description": "GeoJSON FeatureCollection of organisation units. Each feature's `id` must be its DHIS2 organisation unit UID.",
+      "schema": {
+        "type": "object",
+        "subtype": "geojson"
+      }
     },
     {
-      "name": "data_element_id",
-      "description": "DHIS2 data element id assigned to every exported value.",
-      "schema": { "type": "string" }
+      "name": "export",
+      "description": "ID of a named DHIS2 export declared under `exports` in the instance configuration. It supplies the data element mapping, period type, and delivery connection.",
+      "schema": {
+        "type": "string"
+      }
     },
     {
       "name": "method",
       "description": "Spatial aggregation method applied to the pixels within each org unit: mean (default), min, max, sum, or median.",
-      "schema": { "type": "string" },
+      "schema": {
+        "type": "string",
+        "enum": [
+          "mean",
+          "min",
+          "max",
+          "sum",
+          "median"
+        ]
+      },
       "default": "mean"
-    },
-    {
-      "name": "period_type",
-      "description": "DHIS2 period type used to format each time step (day, week, month, quarter, year). Should match the dataset's native temporal resolution.",
-      "schema": { "type": "string" },
-      "default": "month"
     }
   ],
   "process_graph": {
     "load": {
       "process_id": "load_collection",
       "arguments": {
-        "id": { "from_parameter": "dataset_id" },
-        "temporal_extent": { "from_parameter": "temporal_extent" }
+        "id": {
+          "from_parameter": "dataset_id"
+        },
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
       }
     },
     "zonal": {
       "process_id": "aggregate_spatial",
       "arguments": {
-        "data": { "from_node": "load" },
-        "geometries": { "from_parameter": "geometries" },
+        "data": {
+          "from_node": "load"
+        },
+        "geometries": {
+          "from_parameter": "geometries"
+        },
         "reducer": {
           "process_graph": {
             "reduce": {
               "process_id": "reduce_by_method",
-              "arguments": { "data": { "from_parameter": "data" }, "method": { "from_parameter": "method" } },
+              "arguments": {
+                "data": {
+                  "from_parameter": "data"
+                },
+                "method": {
+                  "from_parameter": "method"
+                }
+              },
               "result": true
             }
           }
@@ -63,12 +91,14 @@
     "save": {
       "process_id": "save_result",
       "arguments": {
-        "data": { "from_node": "zonal" },
+        "data": {
+          "from_node": "zonal"
+        },
         "format": "DHIS2JSON",
         "options": {
-          "data_element_id": { "from_parameter": "data_element_id" },
-          "org_unit_field": "geometry",
-          "period_type": { "from_parameter": "period_type" }
+          "export": {
+            "from_parameter": "export"
+          }
         }
       },
       "result": true
