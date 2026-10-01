@@ -270,6 +270,30 @@ def test_the_dataset_page_lists_the_identifier_first() -> None:
     assert context["data"][0] == ("Identifier", "chirps_monthly", None)
 
 
+def test_the_dataset_page_shows_temporal_coverage_under_the_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
+
+    html = landing.render_dataset_page(_record(), "/ocs")
+    title_end = html.index('<div class="dataset-page">')
+
+    assert '<span class="range">2020-01 – 2026-07</span>' in html[:title_end]
+    assert '<span class="period">Monthly</span>' in html[:title_end]
+
+
+def test_a_dataset_without_temporal_coverage_shows_no_coverage_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
+    record = _record(
+        itemType="feature",
+        period_type=None,
+        extent={
+            "spatial": {"xmin": 80.0, "ymin": 26.0, "xmax": 88.0, "ymax": 30.0},
+            "temporal": {"start": None, "end": None},
+        },
+    )
+
+    assert 'class="page-coverage"' not in landing.render_dataset_page(record, "/ocs")
+
+
 @pytest.mark.parametrize(("item_type", "raster"), [("coverage", True), ("feature", False)])
 def test_the_dataset_page_offers_the_map_viewer_and_colour_scale_only_for_a_raster(
     monkeypatch: pytest.MonkeyPatch, item_type: str, raster: bool

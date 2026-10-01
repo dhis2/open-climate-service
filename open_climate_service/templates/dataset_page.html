@@ -26,6 +26,12 @@
           <h2>{{ dataset.name }}</h2>
           <span class="chip chip-{{ dataset.status }}">{{ dataset.status }}</span>
         </div>
+        {% if dataset.coverage %}
+        <p class="page-coverage">
+          {% if dataset.period_type %}<span class="period">{{ dataset.period_type | capitalize }}</span>{% endif %}
+          <span class="range">{{ dataset.coverage }}</span>
+        </p>
+        {% endif %}
 
         <div class="dataset-page">
           <div class="stack">
