@@ -376,6 +376,8 @@ Levels are aggregated from the full-resolution data, and `ingestion.resampling` 
 
 `mean`/`max`/`min`/`sum`/`nearest` are computed by [topozarr](https://github.com/carbonplan/topozarr), which builds each level from the one above. That is valid for all five because they are _composable_ — for `nearest`, taking the corner of each corner gives the same cell as taking every nth cell of the original.
 
+`mode` also tells `aggregate_spatial` a layer is categorical, so it aggregates class codes by majority rather than averaging them; see [Spatial aggregation](processes.md#spatial-aggregation). `max` and `nearest` do not: over a presence mask, the area-weighted mean is the share of the zone where it is present.
+
 `mode` is not composable: mode-of-modes is not mode-of-native, since a locally dominant class can win at coarse zoom even when it is globally rare. So Open Climate Service resamples `mode` levels from the native resolution itself. A first-class `mode` upstream is still open as [carbonplan/topozarr#26](https://github.com/carbonplan/topozarr/issues/26); when it lands, that local path can go.
 
 ### Spatial and temporal extents

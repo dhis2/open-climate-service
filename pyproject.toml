@@ -89,6 +89,9 @@ server = [
     # needs a `topozarr-core` pin of its own. Do not lower this floor.
     "topozarr>=0.1.4,<0.2",
     "rioxarray>=0.17",
+    # Cell coverage fractions for aggregate_spatial, so a zone smaller than a cell still
+    # gets a value (CLIM-785). C++ with numpy as its only dependency.
+    "exactextract>=0.3,<0.4",
     # Directly imported (shared/time.py, streaming, openeo). Capped to 2.x; pandas
     # 3.0 is a breaking major and not yet validated against this stack.
     "pandas>=2.3,<3",
@@ -211,7 +214,7 @@ module = ["dhis2_client", "dhis2_client.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*"]
+module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*", "exactextract", "exactextract.*"]
 ignore_missing_imports = true
 
 [tool.pyright]
