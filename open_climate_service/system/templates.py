@@ -197,21 +197,19 @@ def _colormap_ramp(name: str | None) -> str:
     return f"linear-gradient(90deg, {stops})"
 
 
-# Characters of an ISO date a period type needs: a monthly store written by a workflow keeps
-# full dates ("2026-01-01"), and the label should read like one ingested monthly ("2026-01").
-_PERIOD_LABEL_LENGTHS = {"monthly": 7, "yearly": 4}
-
-
 def _coverage_label(start: object, end: object, period_type: object = None) -> str:
+    """A coverage range in the dataset's own periods.
+
+    A store a workflow wrote keeps full dates ("2026-01-01"), so its bounds go through the same
+    converter as the ingest form: monthly reads `2026-01`, weekly `2026-W38`, as an ingested
+    store does. Period types the converter does not know (climatology) stay as stored.
+    """
     if not start and not end:
         return ""
-    length = _PERIOD_LABEL_LENGTHS.get(str(period_type))
+    period = str(period_type) if period_type in _PERIOD_FORMAT_HINTS else ""
 
     def label(value: object) -> str:
-        if not value:
-            return "…"
-        text = str(value)
-        return text[:length] if length and re.fullmatch(r"\d{4}(-\d{2}){0,2}", text) else text
+        return _period_value(str(value), period) if value else "…"
 
     return f"{label(start)} – {label(end)}"
 
@@ -350,8 +348,9 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         ("Standard name", str(template.get("standard_name") or ""), None),
         ("Units", record.units or "", None),
         ("Cell methods", str(template.get("cell_methods") or ""), None),
-        ("Period type", record.period_type, None),
-        ("Temporal coverage", summary["coverage"], None),
+        # Both sit under the title when there is a coverage; a climatology has none, so its
+        # period type stays here rather than disappearing from the page.
+        ("Period type", "" if summary["coverage"] else record.period_type, None),
         ("Direction", str(template.get("temporal_direction") or ""), None),
         ("Resolution", record.resolution or "", None),
         (

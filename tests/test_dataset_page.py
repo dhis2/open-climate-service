@@ -278,6 +278,21 @@ def test_the_dataset_page_shows_temporal_coverage_under_the_title(monkeypatch: p
 
     assert '<span class="range">2020-01 – 2026-07</span>' in html[:title_end]
     assert '<span class="period">Monthly</span>' in html[:title_end]
+    # Moved, not copied: About no longer repeats them.
+    about = _visible_text(html[title_end:])
+    assert "Temporal coverage" not in about and "Period type" not in about
+
+
+def test_a_climatology_keeps_its_period_type_in_about() -> None:
+    record = _record(
+        period_type="climatology",
+        extent={
+            "spatial": {"xmin": 80.0, "ymin": 26.0, "xmax": 88.0, "ymax": 30.0},
+            "temporal": {"start": None, "end": None},
+        },
+    )
+
+    assert ("Period type", "climatology", None) in landing._dataset_page_context(record, None)["data"]
 
 
 def test_a_dataset_without_temporal_coverage_shows_no_coverage_line(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -300,6 +315,10 @@ def test_a_dataset_without_temporal_coverage_shows_no_coverage_line(monkeypatch:
         ("monthly", "2026-01-01", "2026-08-01", "2026-01 – 2026-08"),
         ("monthly", "1990-01", "2026-08", "1990-01 – 2026-08"),
         ("yearly", "2015-01-01", "2030-01-01", "2015 – 2030"),
+        ("weekly", "2026-09-14", "2026-09-21", "2026-W38 – 2026-W39"),
+        # ISO week-year: 2024-12-30 is in week 1 of 2025.
+        ("weekly", "2024-12-23", "2024-12-30", "2024-W52 – 2025-W01"),
+        ("climatology", "2026-01-01", "2026-12-01", "2026-01-01 – 2026-12-01"),
         ("daily", "2026-01-01", "2026-08-31", "2026-01-01 – 2026-08-31"),
         ("dekadal", "2026-01-01", None, "2026-01-01 – …"),
     ],
