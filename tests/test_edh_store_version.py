@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.datasets import era5_land
+from open_climate_service.plugins.rasters import era5_land
 
 _STORE = "https://api.earthdatahub.destine.eu/era5/store.zarr"
 

@@ -20,7 +20,7 @@
     temporal:
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.gefs_forecast.GefsForecastPlugin
+    plugin: open_climate_service.plugins.rasters.gefs_forecast.GefsForecastPlugin
     params:
       variable: temperature_2m
       # Ensemble spread as a quantile axis rather than a mean: the spread is the point of an
@@ -62,7 +62,7 @@
     temporal:
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.gefs_forecast.GefsForecastPlugin
+    plugin: open_climate_service.plugins.rasters.gefs_forecast.GefsForecastPlugin
     params:
       variable: precipitation_surface
       # Upstream is an average rate in kg m-2 s-1, so a daily total is the day's mean rate

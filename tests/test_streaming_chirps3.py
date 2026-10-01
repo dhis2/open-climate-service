@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from open_climate_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin
+from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
 
 
 def test_chirps3_plugin_periods_are_clamped_to_complete_month(monkeypatch: pytest.MonkeyPatch) -> None:

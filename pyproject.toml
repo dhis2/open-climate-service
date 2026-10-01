@@ -139,7 +139,7 @@ server = [
     "ecmwf-datastores-client>=0.4",
     "netcdf4>=1.7",
     # The GRIB engine for the C3S seasonal forecast plugin, which reads what CDS delivers
-    # (`xr.open_dataset(..., engine="cfgrib")` in plugins/datasets/c3s_seasonal.py). Declared
+    # (`xr.open_dataset(..., engine="cfgrib")` in plugins/rasters/c3s_seasonal.py). Declared
     # rather than relied on transitively: it arrived via earthkit-data until that was dropped,
     # and an xarray engine going missing surfaces only when an ingest runs.
     #

@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.datasets.c3s_seasonal import C3SSeasonalAnomalyPlugin
+from open_climate_service.plugins.rasters.c3s_seasonal import C3SSeasonalAnomalyPlugin
 from open_climate_service.shared import forecast
 
 BBOX = [32.0, -17.0, 36.0, -9.0]
@@ -73,7 +73,7 @@ def published_through(monkeypatch: pytest.MonkeyPatch) -> Callable[[date], None]
 
     def _set(cutoff: date) -> None:
         monkeypatch.setattr(
-            "open_climate_service.plugins.datasets.c3s_seasonal._availability_cutoff",
+            "open_climate_service.plugins.rasters.c3s_seasonal._availability_cutoff",
             lambda: cutoff,
         )
 

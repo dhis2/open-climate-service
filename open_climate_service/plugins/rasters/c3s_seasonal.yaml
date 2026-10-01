@@ -28,7 +28,7 @@
     temporal:
       resolution: P1M
   ingestion:
-    plugin: open_climate_service.plugins.datasets.c3s_seasonal.C3SSeasonalAnomalyPlugin
+    plugin: open_climate_service.plugins.rasters.c3s_seasonal.C3SSeasonalAnomalyPlugin
     params:
       variable: 2m_temperature_anomaly
       # ECMWF SEAS5.1. The system number is part of the data's identity — a different system is
@@ -76,7 +76,7 @@
     temporal:
       resolution: P1M
   ingestion:
-    plugin: open_climate_service.plugins.datasets.c3s_seasonal.C3SSeasonalAnomalyPlugin
+    plugin: open_climate_service.plugins.rasters.c3s_seasonal.C3SSeasonalAnomalyPlugin
     params:
       variable: total_precipitation_anomalous_rate_of_accumulation
       originating_centre: ecmwf

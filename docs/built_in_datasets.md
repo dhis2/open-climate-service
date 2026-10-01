@@ -1,6 +1,6 @@
 # Built-in datasets
 
-The Open Climate Service ships with built-in dataset templates covering commonly requested data sources. Each template describes an upstream data source and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
+The Open Climate Service ships with built-in data sources for commonly requested climate and population data. Each one describes an upstream dataset and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
 
 To ingest a built-in dataset for your configured extent, see the [API reference](managed_data_api_guide.md). To add datasets beyond these, see [Adding custom datasets](adding_custom_datasets.md).
 
@@ -8,7 +8,7 @@ To ingest a built-in dataset for your configured extent, see the [API reference]
 
 ## ERA5-Land — temperature and precipitation
 
-ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine dataset templates are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
+ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine data sources are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
 
 See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 

@@ -167,8 +167,8 @@ def test_a_dimensionless_result_is_refused_by_a_dimensional_template() -> None:
 @pytest.fixture
 def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the template registry and the store directory at a temporary instance."""
-    configs = tmp_path / "datasets"
-    configs.mkdir()
+    configs = tmp_path / "plugins" / "rasters"
+    configs.mkdir(parents=True)
     # The source these tests declare as `source_dataset_id`. Registered because lineage that
     # does not resolve is now an error rather than silently "not derived from anything"
     # (CLIM-946) — a typo there would otherwise disable licence propagation. Writing it also
@@ -183,13 +183,13 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  sync:\n"
         "    kind: temporal\n"
         "  ingestion:\n"
-        "    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin\n",
+        "    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
     registry.reset_template_caches()
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "downloads")
-    (tmp_path / "downloads").mkdir()
+    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "rasters")
+    (tmp_path / "rasters").mkdir()
     return configs
 
 

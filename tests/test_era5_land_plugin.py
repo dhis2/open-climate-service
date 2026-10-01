@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.datasets.era5_land import (
+from open_climate_service.plugins.rasters.era5_land import (
     ERA5LandCDSHourlyPlugin,
     ERA5LandDailyTemperaturePlugin,
     ERA5LandEDHDailyPlugin,
@@ -34,7 +34,7 @@ def test_era5_land_hourly_periods_enumerates_hours() -> None:
     plugin = ERA5LandCDSHourlyPlugin(variable="t2m")
     cutoff = datetime(2026, 1, 1, 2, tzinfo=timezone.utc)
     with patch(
-        "open_climate_service.plugins.datasets.era5_land._hourly_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._hourly_availability_cutoff",
         return_value=cutoff,
     ):
         periods = asyncio.run(plugin.periods("2026-01-01T00", "2026-01-01T05"))
@@ -112,7 +112,7 @@ def test_era5_land_hourly_availability_cutoff_uses_cds() -> None:
     fake_client = MagicMock()
     fake_client.get_collection.return_value = fake_col
 
-    with patch("open_climate_service.plugins.datasets.era5_land._CdsClient", return_value=fake_client):
+    with patch("open_climate_service.plugins.rasters.era5_land._CdsClient", return_value=fake_client):
         cutoff = _hourly_availability_cutoff()
 
     assert cutoff == datetime(2026, 5, 29, 23, tzinfo=timezone.utc)
@@ -121,7 +121,7 @@ def test_era5_land_hourly_availability_cutoff_uses_cds() -> None:
 def test_era5_land_daily_periods_enumerates_days() -> None:
     plugin = ERA5LandDailyTemperaturePlugin()
     with patch(
-        "open_climate_service.plugins.datasets.era5_land._daily_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._daily_availability_cutoff",
         return_value=date(2024, 1, 3),
     ):
         periods = asyncio.run(plugin.periods("2024-01-01", "2024-01-10"))
@@ -161,7 +161,7 @@ def test_era5_land_daily_availability_cutoff_uses_cds() -> None:
     fake_client = MagicMock()
     fake_client.get_collection.return_value = fake_col
 
-    with patch("open_climate_service.plugins.datasets.era5_land._CdsClient", return_value=fake_client):
+    with patch("open_climate_service.plugins.rasters.era5_land._CdsClient", return_value=fake_client):
         cutoff = _daily_availability_cutoff()
 
     assert cutoff == date(2026, 5, 29)
@@ -175,7 +175,7 @@ def test_era5_land_monthly_plugin_rejects_unknown_variable() -> None:
 def test_era5_land_monthly_periods_enumerates_months() -> None:
     plugin = ERA5LandMonthlyPlugin(variable="t2m")
     with patch(
-        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._monthly_availability_cutoff",
         return_value=date(2024, 3, 1),
     ):
         periods = asyncio.run(plugin.periods("2024-01", "2024-06"))
@@ -185,7 +185,7 @@ def test_era5_land_monthly_periods_enumerates_months() -> None:
 def test_era5_land_monthly_periods_empty_when_start_after_cutoff() -> None:
     plugin = ERA5LandMonthlyPlugin(variable="t2m")
     with patch(
-        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._monthly_availability_cutoff",
         return_value=date(2023, 12, 1),
     ):
         periods = asyncio.run(plugin.periods("2024-01", "2024-06"))
@@ -212,14 +212,14 @@ def test_era5_land_monthly_fetch_renames_coords_and_converts_temperature(
 
     # fetch_period now does the CDS download inline, then renames + converts. Mock the
     # client + open_dataset so the real fetch_period runs against the raw netCDF.
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", lambda: MagicMock())
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._CdsClient", lambda: MagicMock())
     # The year batch clamps to what CDS publishes; pin it so the test does not reach the
     # catalogue (CLIM-956).
     monkeypatch.setattr(
-        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._monthly_availability_cutoff",
         lambda: date(2026, 7, 1),
     )
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
     ds = plugin.fetch_period("2024-01", [-1.0, 8.0, 31.0, 10.0])
 
     assert "t" in ds.dims
@@ -257,7 +257,7 @@ def test_monthly_availability_cutoff_uses_cds_end_datetime() -> None:
     fake_client = MagicMock()
     fake_client.get_collection.return_value = fake_col
 
-    with patch("open_climate_service.plugins.datasets.era5_land._CdsClient", return_value=fake_client):
+    with patch("open_climate_service.plugins.rasters.era5_land._CdsClient", return_value=fake_client):
         cutoff = _monthly_availability_cutoff()
 
     assert cutoff == date(2026, 4, 1)
@@ -265,7 +265,7 @@ def test_monthly_availability_cutoff_uses_cds_end_datetime() -> None:
 
 def test_monthly_availability_cutoff_raises_when_cds_unavailable() -> None:
     with (
-        patch("open_climate_service.plugins.datasets.era5_land._CdsClient", side_effect=Exception("network error")),
+        patch("open_climate_service.plugins.rasters.era5_land._CdsClient", side_effect=Exception("network error")),
         pytest.raises(Exception, match="network error"),
     ):
         _monthly_availability_cutoff()
@@ -353,8 +353,8 @@ def test_edh_open_zarr_injects_api_key_in_url(monkeypatch: pytest.MonkeyPatch) -
     # `_edh_open_zarr` also probes the store's Zarr version on open. Stubbed, or this unit
     # test reaches the real EDH host: the probe swallows its own failures, so it would still
     # pass while depending on DNS and spending up to two 15-second timeouts.
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._edh_is_zarr_v3", lambda _url: True)
-    with patch("open_climate_service.plugins.datasets.era5_land.xr.open_zarr", fake_open_zarr):
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._edh_is_zarr_v3", lambda _url: True)
+    with patch("open_climate_service.plugins.rasters.era5_land.xr.open_zarr", fake_open_zarr):
         _edh_open_zarr("https://api.earthdatahub.destine.eu/era5/test.zarr")
 
     assert captured[0] == "https://edh:mytoken@api.earthdatahub.destine.eu/era5/test.zarr"
@@ -391,7 +391,7 @@ def _era5_cube_with_extras() -> xr.Dataset:
 
 def test_auxiliary_cleanup_drops_the_phantom_ensemble_coords() -> None:
     """`number`/`expver` otherwise surface as a stray `bands` dimension in an anomaly."""
-    from open_climate_service.plugins.datasets.era5_land import _drop_auxiliary_variables
+    from open_climate_service.plugins.rasters.era5_land import _drop_auxiliary_variables
 
     out = _drop_auxiliary_variables(_era5_cube_with_extras(), "t2m")
 
@@ -407,7 +407,7 @@ def test_auxiliary_cleanup_keeps_the_crs() -> None:
     still be recorded correctly — by luck. A projected source cleaned the same way would be
     silently mislabelled, which is what this pins.
     """
-    from open_climate_service.plugins.datasets.era5_land import _drop_auxiliary_variables
+    from open_climate_service.plugins.rasters.era5_land import _drop_auxiliary_variables
 
     before = _era5_cube_with_extras()
 
@@ -421,7 +421,7 @@ def test_auxiliary_cleanup_keeps_the_crs() -> None:
 
 def test_auxiliary_cleanup_honours_a_declared_grid_mapping() -> None:
     """A source naming its grid mapping something other than `spatial_ref` must survive too."""
-    from open_climate_service.plugins.datasets.era5_land import _drop_auxiliary_variables
+    from open_climate_service.plugins.rasters.era5_land import _drop_auxiliary_variables
 
     ds = _era5_cube_with_extras().rename({"spatial_ref": "my_crs"})
     ds["t2m"].attrs["grid_mapping"] = "my_crs"
@@ -487,14 +487,14 @@ def test_monthly_fetch_collapses_expver_so_the_cube_stays_three_dimensional(
     raw_ds = _expver_nc("t2m")
     raw_ds["t2m"] = raw_ds["t2m"] + 273.15  # kelvin, as CDS delivers it
 
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", lambda: MagicMock())
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._CdsClient", lambda: MagicMock())
     # The year batch clamps to what CDS publishes; pin it so the test does not reach the
     # catalogue (CLIM-956).
     monkeypatch.setattr(
-        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._monthly_availability_cutoff",
         lambda: date(2026, 7, 1),
     )
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
     ds = plugin.fetch_period("2026-06", [-1.0, 8.0, 31.0, 10.0])
 
     assert set(ds.dims) == {"t", "y", "x"}
@@ -518,14 +518,14 @@ def test_monthly_fetch_drops_auxiliary_coordinates(monkeypatch: pytest.MonkeyPat
         },
     )
 
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", lambda: MagicMock())
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._CdsClient", lambda: MagicMock())
     # The year batch clamps to what CDS publishes; pin it so the test does not reach the
     # catalogue (CLIM-956).
     monkeypatch.setattr(
-        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._monthly_availability_cutoff",
         lambda: date(2026, 7, 1),
     )
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land.xr.open_dataset", lambda *a, **k: raw_ds)
     ds = plugin.fetch_period("2026-06", [-1.0, 8.0, 31.0, 10.0])
 
     assert "number" not in ds.coords
@@ -565,7 +565,7 @@ def test_hourly_fetch_keeps_its_time_coordinate_after_cleaning(monkeypatch: pyte
     plugin = ERA5LandCDSHourlyPlugin(variable="t2m")
 
     def fake_fetch_month(self: object, year: int, month: int, bbox: tuple[float, float, float, float]) -> xr.Dataset:
-        from open_climate_service.plugins.datasets.era5_land import _drop_auxiliary_variables
+        from open_climate_service.plugins.rasters.era5_land import _drop_auxiliary_variables
 
         ds = xr.Dataset(
             {"t2m": (("t", "y", "x"), np.array([[[20.0]]], dtype=np.float32))},
@@ -616,10 +616,10 @@ def _capture_cds(monkeypatch: pytest.MonkeyPatch, year: int = 2003) -> list[dict
         months = [int(m) for m in submitted[-1]["month"]]
         return _yearly_nc("t2m", months, year)
 
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land._CdsClient", fake_client)
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", fake_open)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._CdsClient", fake_client)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land.xr.open_dataset", fake_open)
     monkeypatch.setattr(
-        "open_climate_service.plugins.datasets.era5_land._monthly_availability_cutoff",
+        "open_climate_service.plugins.rasters.era5_land._monthly_availability_cutoff",
         lambda: date(2026, 7, 1),
     )
     return submitted
@@ -686,7 +686,7 @@ def test_a_year_spanning_the_product_type_boundary_is_split(monkeypatch: pytest.
     def fake_open(*_a: object, **_k: object) -> xr.Dataset:
         return _yearly_nc("tp", [int(m) for m in submitted[-1]["month"]], 2022)
 
-    monkeypatch.setattr("open_climate_service.plugins.datasets.era5_land.xr.open_dataset", fake_open)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land.xr.open_dataset", fake_open)
     plugin = ERA5LandMonthlyPlugin(variable="tp")
 
     plugin.fetch_period("2022-10", [-1.0, 8.0, 31.0, 10.0])

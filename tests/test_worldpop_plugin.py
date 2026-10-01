@@ -6,7 +6,7 @@ import pytest
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # registers the .rio accessor for the fakes
 import xarray as xr
 
-from open_climate_service.plugins.datasets.worldpop import (
+from open_climate_service.plugins.rasters.worldpop import (
     WorldPopYearlyPlugin,
     _population_url,
     _resolve_variant,
@@ -35,7 +35,7 @@ def test_worldpop_plugin_periods_enumerates_years() -> None:
 
 
 def test_worldpop_periods_clamped_to_global2_window() -> None:
-    from open_climate_service.plugins.datasets.worldpop import WorldPopAgeSexYearlyPlugin
+    from open_climate_service.plugins.rasters.worldpop import WorldPopAgeSexYearlyPlugin
 
     plugin = WorldPopYearlyPlugin()
     # Global2 only publishes 2015–2030, so out-of-range years are dropped (no 404s).
@@ -73,7 +73,7 @@ def test_worldpop_plugin_fetch_period_reads_country_url(monkeypatch: pytest.Monk
         captured["url"] = url
         return _fake_geotiff([[[1.0, 2.0], [3.0, 4.0]]])
 
-    monkeypatch.setattr("open_climate_service.plugins.datasets.worldpop._open_worldpop_raster", fake_open)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.worldpop._open_worldpop_raster", fake_open)
 
     dataset = plugin.fetch_period("2022", [-1.0, -1.0, 5.0, 5.0], country_code="SLE")
 
@@ -118,7 +118,7 @@ def test_worldpop_plugin_variant_resolver_rejects_unknown_product() -> None:
 def test_worldpop_plugin_renames_output_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     plugin = WorldPopYearlyPlugin(product="total", variable="population_total")
     monkeypatch.setattr(
-        "open_climate_service.plugins.datasets.worldpop._open_worldpop_raster",
+        "open_climate_service.plugins.rasters.worldpop._open_worldpop_raster",
         lambda url, **_: _fake_geotiff([[[1.0, 2.0], [3.0, 4.0]]]),
     )
 
@@ -132,7 +132,7 @@ def test_worldpop_plugin_masks_nodata_sentinel_to_nan(monkeypatch: pytest.Monkey
     """Values equal to the WorldPop -99999 sentinel must become NaN, not be stored."""
     plugin = WorldPopYearlyPlugin()
     monkeypatch.setattr(
-        "open_climate_service.plugins.datasets.worldpop._open_worldpop_raster",
+        "open_climate_service.plugins.rasters.worldpop._open_worldpop_raster",
         lambda url, **_: _fake_geotiff([[[5.0, -99999.0], [12.0, 7.0]]]),
     )
 
@@ -157,7 +157,7 @@ def test_worldpop_plugin_accepts_extra_kwargs() -> None:
 
 
 def test_agesex_url_encodes_country_year_sex_age() -> None:
-    from open_climate_service.plugins.datasets.worldpop import _agesex_url
+    from open_climate_service.plugins.rasters.worldpop import _agesex_url
 
     u = _agesex_url(2020, "sle", "R2025A", "f", "05", True)
     assert "/AgeSex_structures/Global_2015_2030/R2025A/2020/SLE/v1/100m/constrained/" in u
@@ -165,18 +165,18 @@ def test_agesex_url_encodes_country_year_sex_age() -> None:
 
 
 def test_agesex_plugin_rejects_non_100m() -> None:
-    from open_climate_service.plugins.datasets.worldpop import WorldPopAgeSexYearlyPlugin
+    from open_climate_service.plugins.rasters.worldpop import WorldPopAgeSexYearlyPlugin
 
     with pytest.raises(ValueError, match="only resolution '100m'"):
         WorldPopAgeSexYearlyPlugin(resolution="1km")
 
 
 def test_agesex_fetch_builds_population_sex_age_cube(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.datasets.worldpop import _AGE_BANDS, WorldPopAgeSexYearlyPlugin
+    from open_climate_service.plugins.rasters.worldpop import _AGE_BANDS, WorldPopAgeSexYearlyPlugin
 
     plugin = WorldPopAgeSexYearlyPlugin()
     monkeypatch.setattr(
-        "open_climate_service.plugins.datasets.worldpop._open_worldpop_raster",
+        "open_climate_service.plugins.rasters.worldpop._open_worldpop_raster",
         lambda url, **_: _fake_geotiff([[[1.0, 2.0], [3.0, 4.0]]]),
     )
 

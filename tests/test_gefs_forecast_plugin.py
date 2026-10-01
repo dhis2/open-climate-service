@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.datasets.gefs_forecast import GefsForecastPlugin
+from open_climate_service.plugins.rasters.gefs_forecast import GefsForecastPlugin
 from open_climate_service.shared import forecast
 
 INITS = np.array(["2026-01-01T00", "2026-01-02T00"], dtype="datetime64[ns]")
