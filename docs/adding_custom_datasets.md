@@ -9,13 +9,13 @@ The built-in dataset templates (CHIRPS3, ERA5-Land, WorldPop) ship as package da
 Adding a custom dataset involves two things:
 
 1. **A streaming plugin** — a Python class that enumerates periods and fetches one period at a time as an `xarray.Dataset`.
-2. **A dataset template YAML** — a file that describes the dataset and tells the API which plugin class to use.
+2. **A dataset template** — a YAML file that describes the dataset and tells the API which plugin class to use.
 
-Place both in your `plugins/datasets/` directory:
+Place both in your `plugins/rasters/` directory:
 
 ```
 plugins/
-└── datasets/
+└── rasters/
     ├── enacts_rainfall.yaml
     └── enacts.py          # the plugin class
 ```
@@ -27,7 +27,7 @@ the concurrency defaults and the canonical dimension names; the framework handle
 concurrency, store commits, artifact registration, and publication.
 
 ```python
-# plugins/datasets/enacts.py
+# plugins/rasters/enacts.py
 # Everything you need to write a plugin is importable from open_climate_service.streaming.
 import xarray as xr
 from open_climate_service.streaming import BaseDatasetPlugin, daily_period_ids, normalize_period
@@ -138,10 +138,10 @@ with a regular numeric `step`, e.g. `dayofyear`), and a **dropdown** for a categ
 irregularly-spaced one (e.g. `sex`, or the irregular age bands). The control type follows
 from the dimension's metadata, so there's nothing extra to configure.
 
-## Step 2: Create a dataset template YAML
+## Step 2: Create a dataset template
 
 ```yaml
-# plugins/datasets/enacts_rainfall.yaml
+# plugins/rasters/enacts_rainfall.yaml
 - id: enacts_rainfall_daily
   name: ENACTS Rainfall (daily)
   short_name: Rainfall
@@ -151,7 +151,7 @@ from the dimension's metadata, so there's nothing extra to configure.
     kind: temporal
     execution: append
   ingestion:
-    plugin: datasets.enacts.ENACTSRainfallPlugin
+    plugin: rasters.enacts.ENACTSRainfallPlugin
   units: mm
   resolution: 4 km x 4 km
   source: ENACTS
@@ -170,7 +170,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `variable`   | Yes      | Name of the data variable in the Zarr store (e.g. `precip`, `t2m`, `rainfall`) |
 | `source`     | No       | Name of the upstream data source                                               |
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
-| `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /dataset-templates`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
+| `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /data-sources`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
 | `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Derived datasets](#derived-datasets) |
 
 **Period and sync**
@@ -185,14 +185,14 @@ from the dimension's metadata, so there's nothing extra to configure.
 
 ### Ingestable datasets
 
-Datasets that can be ingested from an external data source are specified with the `ingestion.plugin` parameter. `GET /dataset-templates` reports these as `ingestable`, the `/manage` ingest
+Datasets that can be ingested from an external data source are specified with the `ingestion.plugin` parameter. `GET /data-sources` reports these as `ingestable`, the `/manage` ingest
 form offers only the ingestable ones, and asking to ingest one that is not ingestable returns `400` naming
 the reason. Read the flag rather than inferring it from `sync.kind`: the two are not the same
 question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* ingestable.
 
 | Field                  | Required | Description                                                                                                                                     |
 | ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
+| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
 | `ingestion.params`     | No       | Extra keyword arguments forwarded to `fetch_period` as `**params`, and to the plugin constructor                                                |
 | `ingestion.resampling` | No       | Pyramid coarsening for large layers: `mean` (default; continuous data), `max`/`min`/`sum`, or `mode`/`nearest` for categorical data — see below |
 
@@ -201,13 +201,13 @@ Multiple templates can share the same plugin class and differ only in `params`:
 ```yaml
 - id: era5land_temperature_hourly
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandHourlySingleBandPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandHourlySingleBandPlugin
     params:
       variable: 2m_temperature
 
 - id: era5land_precipitation_hourly
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandPrecipitationPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipitationPlugin
     params:
       variable: total_precipitation
 ```
@@ -226,7 +226,7 @@ Name the workflow that produces such a template with `produced_by`:
 ```
 
 `produced_by` is metadata, not behaviour: it records where the data comes from, so a reader can get from
-the dataset to the way it is made, and `GET /dataset-templates` reports it. A template that
+the dataset to the way it is made, and `GET /data-sources` reports it. A template that
 declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
 either fetched or produced. The workflow id itself is not checked, because workflows can be
 registered later at runtime.
@@ -267,7 +267,7 @@ the revision so sync can see it:
       value: R2025A # the source's own identifier, not a period
       authority: mypopulation # whose scheme names it — an identifier, not a label
   ingestion:
-    plugin: datasets.my_population.MyPopulationPlugin
+    plugin: rasters.my_population.MyPopulationPlugin
     params:
       revision: R2025A
 ```
@@ -326,7 +326,7 @@ A forecast's periods lie in the _future_, which changes what an ingestion reques
   sync:
     kind: temporal # still temporal: re-running fetches a fresher forecast
   ingestion:
-    plugin: datasets.my_forecast.MyForecastPlugin
+    plugin: rasters.my_forecast.MyForecastPlugin
     params:
       max_lead_days: 7
 ```
@@ -489,9 +489,9 @@ data_dir: ./data
 plugins_dir: ./plugins/
 ```
 
-All `*.yaml` files in `plugins_dir/datasets/` are loaded and merged with the built-in templates. Custom templates are additive — the built-ins remain available unless you deliberately override one by using the same `id`.
+All `*.yaml` files in `plugins_dir/rasters/` are loaded and merged with the built-in templates. Custom templates are additive — the built-ins remain available unless you deliberately override one by using the same `id`.
 
-Since `plugins_dir` is added to `sys.path`, the plugin class at `datasets.enacts.ENACTSRainfallPlugin` is importable without installing a package.
+Since `plugins_dir` is added to `sys.path`, the plugin class at `rasters.enacts.ENACTSRainfallPlugin` is importable without installing a package.
 
 ## Step 4: Ingest and publish
 

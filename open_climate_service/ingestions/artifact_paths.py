@@ -61,9 +61,9 @@ def to_absolute(raw: str) -> str:
 def _rebase_legacy(candidate: Path, root: Path) -> Path:
     """Re-root a legacy absolute path onto root, preferring the longest matching suffix.
 
-    Managed stores always live at ``{data_root}/downloads/<name>`` (``downloader.DOWNLOAD_DIR``,
+    Managed stores always live at ``{data_root}/rasters/<name>`` (``downloader.DOWNLOAD_DIR``,
     the sole trusted root in ``sync_engine._artifact_storage_roots``), so only a suffix
-    starting at a ``downloads`` component is considered - a longer suffix would otherwise
+    starting at a ``rasters`` component is considered - a longer suffix would otherwise
     bind the record to a lookalike elsewhere under the root, and the rebased path would be
     persisted in a form sync rejects as untrusted.
 
@@ -82,7 +82,7 @@ def _rebase_legacy(candidate: Path, root: Path) -> Path:
         return candidate
     parts = candidate.parts
     for index in range(1, len(parts) - 1):
-        if parts[index] != api_config.DOWNLOAD_SUBDIR:
+        if parts[index] != "rasters":
             continue
         rebased = resolved_root.joinpath(*parts[index:])
         if rebased.exists():

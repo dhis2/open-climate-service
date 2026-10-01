@@ -49,7 +49,7 @@ The Open Climate Service targets the same access pattern at country scale for ar
 
 ## Store layout on disk
 
-Each managed dataset has exactly one store on disk, under `{data_dir}/downloads/{dataset_id}.icechunk`. All stores use the [Icechunk](https://icechunk.io) versioned Zarr v3 format.
+Each managed dataset has exactly one store on disk, under `{data_dir}/rasters/{dataset_id}.icechunk`. All stores use the [Icechunk](https://icechunk.io) versioned Zarr v3 format.
 
 Inside the store, the layout is either:
 

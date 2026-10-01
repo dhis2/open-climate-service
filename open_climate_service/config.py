@@ -112,8 +112,6 @@ def _block_uses_interpolation(text: str, key: str) -> bool:
 DEFAULT_CRS = "EPSG:4326"
 DEFAULT_NAME = "Open Climate Service"
 DEFAULT_ID = "open-climate-service"  # operators should always set id: in climate-service.yaml
-DOWNLOAD_SUBDIR = "downloads"
-FEATURES_SUBDIR = "features"
 
 
 def get_id() -> str:
@@ -202,7 +200,7 @@ def get_data_root() -> Path:
 
     ``get_data_dir`` returns None when no config file is present. Every consumer that
     needs a concrete directory then repeats the same XDG fallback, so it lives here
-    instead. Subdirectories (``downloads``, ``artifacts``, ``jobs``) hang off this root.
+    instead. Subdirectories (``rasters``, ``vectors``, ``artifacts``, ``jobs``) hang off this root.
     """
     data_dir = get_data_dir()
     if data_dir is not None:
@@ -213,14 +211,14 @@ def get_data_root() -> Path:
 
 def get_download_root() -> Path:
     """Return the directory holding managed artifact stores."""
-    return get_data_root() / DOWNLOAD_SUBDIR
+    return get_data_root() / "rasters"
 
 
 def get_features_root() -> Path:
     """Return the one directory holding feature collections, as GeoParquet.
 
     One location, not a second answer to where features live: a collection is either here or
-    it does not exist. It sits beside `downloads/` rather than inside it because the two hold
+    it does not exist. It sits beside `rasters/` rather than inside it because the two hold
     different things — a raster store is a directory an Icechunk repository owns, a feature
     collection is a single file this service writes.
 
@@ -228,7 +226,7 @@ def get_features_root() -> Path:
     into existence, so a file dropped in here that nothing registered is ignored by every
     listing (CLIM-836).
     """
-    return get_data_root() / FEATURES_SUBDIR
+    return get_data_root() / "vectors"
 
 
 def get_utc_offset_hours() -> float:

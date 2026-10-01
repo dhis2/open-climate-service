@@ -18,7 +18,7 @@
       end: "2010"
       resolution: P1Y
   ingestion:
-    plugin: open_climate_service.plugins.datasets.copdem30.CopDEM30Plugin
+    plugin: open_climate_service.plugins.rasters.copdem30.CopDEM30Plugin
   standard_name: surface_altitude
   units: m
   resolution: 30 m x 30 m

@@ -17,7 +17,7 @@ import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # registe
 import xarray as xr
 from rasterio.enums import ColorInterp, MaskFlags
 
-from open_climate_service.plugins.datasets.stac_imagery import (
+from open_climate_service.plugins.rasters.stac_imagery import (
     _MASK_ALPHA,
     _MASK_NODATA,
     _MASK_NONZERO,
@@ -30,7 +30,7 @@ from open_climate_service.plugins.datasets.stac_imagery import (
 
 _CI = ColorInterp
 _RGB = ("red", "green", "blue")
-_LOGGER = "open_climate_service.plugins.datasets.stac_imagery"
+_LOGGER = "open_climate_service.plugins.rasters.stac_imagery"
 
 
 @pytest.fixture
@@ -215,7 +215,7 @@ def _catalog(docs: dict[str, dict[str, Any]]) -> Callable[[str], dict[str, Any]]
 
 def test_flat_collection_is_walked(monkeypatch: pytest.MonkeyPatch) -> None:
     """Vantor's shape: a collection whose items hang directly off it."""
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     root = "https://example.invalid/collection.json"
     docs = {
@@ -230,7 +230,7 @@ def test_flat_collection_is_walked(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_nested_catalog_is_walked(monkeypatch: pytest.MonkeyPatch) -> None:
     """Planet's shape: root -> phase -> per-sensor collection -> items."""
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     root = "https://example.invalid/catalog.json"
     docs = {
@@ -250,7 +250,7 @@ def test_nested_catalog_is_walked(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_collection_filter_prunes_leaves_but_not_intermediate_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     """The sensor name is on the leaf collection, not on Planet's pre/post-event split, so a
     filter applied to intermediate nodes would prune the whole tree."""
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     root = "https://example.invalid/catalog.json"
     docs = {
@@ -279,7 +279,7 @@ def test_collection_filter_prunes_leaves_but_not_intermediate_nodes(monkeypatch:
 
 
 def test_cloud_and_property_filters_drop_items(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     root = "https://example.invalid/collection.json"
     docs = {
@@ -330,7 +330,7 @@ def test_periods_are_bounded_by_the_requested_range() -> None:
 
 
 def test_empty_catalogue_raises_rather_than_ingesting_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     root = "https://example.invalid/collection.json"
     monkeypatch.setattr(stac_imagery, "_get_json", _catalog({root: {"links": []}}))
@@ -341,7 +341,7 @@ def test_empty_catalogue_raises_rather_than_ingesting_nothing(monkeypatch: pytes
 def test_missing_asset_key_is_reported_not_silently_skipped(
     monkeypatch: pytest.MonkeyPatch, warnings_log: pytest.LogCaptureFixture
 ) -> None:
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     root = "https://example.invalid/collection.json"
     docs = {
@@ -392,7 +392,7 @@ def test_mask_reference_is_applied_per_strategy() -> None:
     """The nodata strategy must compare against the declared value, not against zero."""
     import xarray as xr
 
-    from open_climate_service.plugins.datasets.stac_imagery import _SceneMeta
+    from open_climate_service.plugins.rasters.stac_imagery import _SceneMeta
 
     window = xr.DataArray(
         np.array([[[0, 255], [7, 7]], [[0, 255], [7, 7]], [[0, 255], [7, 7]]], dtype="uint8"),
@@ -435,8 +435,8 @@ def test_scene_tiff_tags_do_not_leak_onto_the_stored_variable(
     appearing to describe the whole variable."""
     from rasterio.warp import transform_bounds
 
-    from open_climate_service.plugins.datasets import stac_imagery
-    from open_climate_service.plugins.datasets.stac_imagery import _SceneMeta
+    from open_climate_service.plugins.rasters import stac_imagery
+    from open_climate_service.plugins.rasters.stac_imagery import _SceneMeta
 
     clip = [85.3474, 28.2087, 85.3608, 28.2207]
     plugin = _plugin(
@@ -500,7 +500,7 @@ def _search_page(items: list[dict[str, Any]], next_body: dict[str, Any] | None =
 
 def test_stac_api_is_detected_and_searched(monkeypatch: pytest.MonkeyPatch) -> None:
     """A global archive cannot be walked, so an item-search API must be queried instead."""
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     monkeypatch.setattr(stac_imagery, "_get_json", lambda url: _api_root())
     post = _FakePost([_search_page([_item("2026-08-12", (85.3, 28.1, 85.4, 28.3))])])
@@ -517,7 +517,7 @@ def test_stac_api_is_detected_and_searched(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_a_static_catalogue_is_not_mistaken_for_an_api(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `search` link alone is not enough: some static catalogues link to a search UI."""
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     root = "https://example.invalid/collection.json"
     docs = {
@@ -539,7 +539,7 @@ def test_a_static_catalogue_is_not_mistaken_for_an_api(monkeypatch: pytest.Monke
 
 
 def test_search_follows_next_pages(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     monkeypatch.setattr(stac_imagery, "_get_json", lambda url: _api_root())
     post = _FakePost(
@@ -558,7 +558,7 @@ def test_search_page_cap_warns_rather_than_silently_truncating(
     monkeypatch: pytest.MonkeyPatch, warnings_log: pytest.LogCaptureFixture
 ) -> None:
     """Bounding the sweep is right; letting it read as 'that was everything' is not."""
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     monkeypatch.setattr(stac_imagery, "_get_json", lambda url: _api_root())
     # Every page advertises another, so only the cap stops it.
@@ -571,7 +571,7 @@ def test_search_page_cap_warns_rather_than_silently_truncating(
 
 
 def test_search_results_with_no_usable_asset_raise(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     monkeypatch.setattr(stac_imagery, "_get_json", lambda url: _api_root())
     monkeypatch.setattr(stac_imagery.httpx, "post", _FakePost([_search_page([])]))
@@ -584,7 +584,7 @@ def test_asset_href_resolves_against_the_item_self_link(
 ) -> None:
     """A relative asset href in a search response must resolve against the item, not against
     whichever link happens to be first."""
-    from open_climate_service.plugins.datasets import stac_imagery
+    from open_climate_service.plugins.rasters import stac_imagery
 
     item = _item("2026-08-12", (85.3, 28.1, 85.4, 28.3))
     item["assets"]["visual"]["href"] = "TCI.tif"

@@ -68,7 +68,7 @@ def create_ingestion(
     response: Response,
     prefer: str | None = Header(default=None),
 ) -> IngestionResponse:
-    """Create or update a managed dataset from a dataset template and configured extent.
+    """Create or update a managed dataset from a data source and the configured extent.
 
     Pass ``Prefer: respond-async`` to queue the ingestion as a background job and
     return immediately with 202 + ``Location: /ingestions/jobs/{id}``.

@@ -21,7 +21,7 @@
       {{ nav }}
 
       <main id="content">
-        <p class="breadcrumb"><a href="{{ mount }}/dataset-templates">Dataset templates</a> / {{ source.id }}</p>
+        <p class="breadcrumb"><a href="{{ mount }}/data-sources">Data sources</a> / {{ source.id }}</p>
         <div class="page-title">
           <h2>{{ source.name }}</h2>
           <span class="chip">Features</span>
@@ -39,7 +39,7 @@
                 {% endfor %}
               </div>
               {% else %}
-              <p class="note">No description has been provided for this feature collection template.</p>
+              <p class="note">No description has been provided for this data source.</p>
               {% endif %}
             </section>
 
@@ -73,7 +73,7 @@
                 <div class="notice error" data-job-error role="alert" hidden></div>
               </form>
               {% elif not refreshable %}
-              <p class="note">This template names no provider this instance has, so it cannot be fetched here.</p>
+              <p class="note">This data source names no provider this instance has, so it cannot be fetched here.</p>
               {% elif read_only %}
               <p class="note">This instance is read-only, so collections cannot be fetched here.</p>
               {% endif %}
@@ -107,7 +107,7 @@
                 {% if fetched %}
                 <a class="button-link" href="{{ mount }}/datasets/{{ fetched.id }}">Fetched collection</a>
                 {% endif %}
-                <a class="button-link" href="{{ mount }}/dataset-templates/{{ source.id }}?f=json">Metadata (JSON)</a>
+                <a class="button-link" href="{{ mount }}/data-sources/{{ source.id }}?f=json">Metadata (JSON)</a>
               </div>
             </section>
           </div>

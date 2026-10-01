@@ -259,7 +259,7 @@ def test_service_skips_missing_template_without_failing_startup(monkeypatch: pyt
     scheduler.start.assert_called_once_with()
     scheduler.add_job.assert_not_called()
     assert service.status().schedules[0].last_outcome == CheckOutcome.ERROR
-    assert "no registered template" in (service.status().schedules[0].last_message or "")
+    assert "no registered data source" in (service.status().schedules[0].last_message or "")
     assert warning.call_args.args[-1] == 0
 
 

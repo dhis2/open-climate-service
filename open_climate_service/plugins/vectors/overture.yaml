@@ -36,7 +36,7 @@
       subtype: county
 
 # Everything under `params` is passed to the provider as keyword arguments, so a copy of this
-# template in an instance's own `plugins/features/` can narrow the extract further without any
+# template in an instance's own `plugins/vectors/` can narrow the extract further without any
 # code change. The full vocabulary:
 #
 #   release:  Overture release id. Required, and pinned — it becomes the collection's version.

@@ -17,7 +17,7 @@ The main branch now centers on one narrow vertical slice:
 
 1. define dataset templates in the Open Climate Service registry
 2. define configured extents for the Open Climate Service instance
-3. ingest data into a managed dataset for one dataset template plus one extent
+3. ingest data into a managed dataset for one data source plus one extent
 4. publish that managed dataset as a STAC collection under `/stac`
 5. expose native metadata under `/datasets`, STAC discovery under `/stac`, and raw Zarr access under `/zarr`
 6. sync existing managed datasets forward through `/sync`
@@ -111,7 +111,7 @@ This keeps spatial configuration explicit without turning it into a runtime writ
 Each dataset item includes:
 
 - public dataset id
-- source dataset template id
+- the data source it came from (`source_dataset_id`)
 - dataset metadata from the registry
 - current extent
 - last updated timestamp
@@ -209,7 +209,7 @@ Implemented sync behavior:
 ### Ingestion
 
 1. client submits `dataset_id`, `start`, optional `end`, and optional `extent_id`
-2. Open Climate Service resolves the dataset template from the registry
+2. Open Climate Service resolves the data source from the registry
 3. Open Climate Service resolves `extent_id` to a concrete bbox or other configured spatial input
 4. Open Climate Service checks for an existing matching internal artifact
 5. if needed, Open Climate Service downloads the source data
