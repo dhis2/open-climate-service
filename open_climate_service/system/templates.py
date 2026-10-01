@@ -232,6 +232,7 @@ def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, An
         "status": status,
         "has_thumbnail": has_thumbnail,
         "ramp": _colormap_ramp(colormap if isinstance(colormap, str) else None),
+        "kind": "vector" if dataset.item_type == "feature" else "raster",
     }
 
 
@@ -374,7 +375,7 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         "published": summary["status"] == "published",
         # A feature collection has no colour scale and the map viewer draws only rasters, so
         # the page offers neither for one.
-        "vector": record.item_type == "feature",
+        "vector": summary["kind"] == "vector",
     }
 
 
@@ -754,7 +755,7 @@ def _feature_source_view(template: dict[str, Any]) -> dict[str, Any]:
         "period_type": "",
         "resolution": "",
         "licence": _licence_label(template),
-        "kind": "features",
+        "kind": "vector",
         "level": str(subtype) if isinstance(subtype, str) else "",
     }
 

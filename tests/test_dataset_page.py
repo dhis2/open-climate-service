@@ -185,6 +185,22 @@ def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
         assert "items" in response.json()
 
 
+@pytest.mark.parametrize(
+    ("item_types", "filter_shown"), [(["coverage", "feature"], True), (["coverage", "coverage"], False)]
+)
+def test_the_dataset_list_filters_by_type_when_it_holds_both(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, item_types: list[str], filter_shown: bool
+) -> None:
+    records = [_record(f"ds_{i}", itemType=item_type) for i, item_type in enumerate(item_types)]
+    monkeypatch.setattr(landing, "_load_datasets", lambda: records)
+
+    body = client.get("/datasets", headers={"Accept": BROWSER_ACCEPT}).text
+
+    assert ('data-filter-field="kind"' in body) is filter_shown
+    assert body.count('data-kind="raster"') == item_types.count("coverage")
+    assert body.count('data-kind="vector"') == item_types.count("feature")
+
+
 def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
     from open_climate_service.ingestions import services
