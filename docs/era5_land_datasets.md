@@ -1,6 +1,6 @@
 # ERA5-Land datasets
 
-ERA5-Land is a global reanalysis of land surface variables produced by ECMWF. It provides a consistent record from 1950 to the near-present at ~9 km resolution. The Open Climate Service ships six ERA5-Land dataset templates covering temperature and precipitation at daily and monthly resolution.
+ERA5-Land is a global reanalysis of land surface variables produced by ECMWF. It provides a consistent record from 1950 to the near-present at ~9 km resolution. The Open Climate Service ships six ERA5-Land data sources covering temperature and precipitation at daily and monthly resolution.
 
 ## Setup
 

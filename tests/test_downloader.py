@@ -22,14 +22,14 @@ def test_resolve_download_dir_uses_data_dir_from_config(monkeypatch: pytest.Monk
     config_file.write_text("data_dir: ./data\nextent:\n  id: test\n", encoding="utf-8")
     monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    assert downloader._resolve_download_dir() == tmp_path / "data" / "downloads"
+    assert downloader._resolve_download_dir() == tmp_path / "data" / "rasters"
 
 
 def test_resolve_download_dir_uses_xdg_when_no_config(monkeypatch: pytest.MonkeyPatch) -> None:
     with tempfile.TemporaryDirectory() as xdg:
         monkeypatch.delenv("CLIMATE_SERVICE_CONFIG", raising=False)
         monkeypatch.setenv("XDG_DATA_HOME", xdg)
-        assert downloader._resolve_download_dir() == Path(xdg) / "climate-service" / "downloads"
+        assert downloader._resolve_download_dir() == Path(xdg) / "climate-service" / "rasters"
 
 
 def test_resolve_artifacts_dir_uses_data_dir_from_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -530,7 +530,7 @@ class ArtifactRecord(BaseModel):
 class CreateIngestionRequest(BaseModel):
     """Request payload for creating or updating a managed dataset."""
 
-    dataset_id: str = Field(description="Source dataset template id from the Open Climate Service registry.")
+    dataset_id: str = Field(description="Id of the data source to ingest from, as listed at GET /data-sources.")
     start: str | None = Field(
         default=None,
         description=(
@@ -585,7 +585,7 @@ class DatasetRecord(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     dataset_id: str = Field(description="Stable public identifier for the managed dataset.")
-    source_dataset_id: str = Field(description="Dataset template id from which this managed dataset was created.")
+    source_dataset_id: str = Field(description="Id of the data source this managed dataset was created from.")
     dataset_name: str = Field(description="Full display name of the dataset.")
     short_name: str | None = Field(default=None, description="Short display name of the dataset.")
     description: str | None = Field(
@@ -749,8 +749,8 @@ class SyncDetail(BaseModel):
     strings alone.
     """
 
-    source_dataset_id: str = Field(description="Source dataset template id used to plan the sync.")
-    sync_kind: SyncKind = Field(description="Sync planning mode declared by the dataset template.")
+    source_dataset_id: str = Field(description="Id of the data source used to plan the sync.")
+    sync_kind: SyncKind = Field(description="Sync planning mode the data source declares.")
     action: SyncAction = Field(description="Planner-selected sync action.")
     reason: str = Field(description="Stable machine-readable reason for the selected action.")
     message: str = Field(description="Human-readable summary of the planned sync outcome.")
