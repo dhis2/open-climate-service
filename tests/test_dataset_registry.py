@@ -211,7 +211,7 @@ def test_dataset_registry_accepts_supported_sync_kind(
   sync:
     kind: temporal
   ingestion:
-    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin
+    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
         encoding="utf-8",
     )
@@ -234,7 +234,7 @@ def test_dataset_registry_accepts_ingestion_plugin_without_function(
   sync:
     kind: temporal
   ingestion:
-    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin
+    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
         encoding="utf-8",
     )
@@ -305,7 +305,7 @@ def test_dataset_registry_accepts_supported_sync_execution(
     kind: temporal
     execution: append
   ingestion:
-    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin
+    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
         encoding="utf-8",
     )
@@ -336,7 +336,7 @@ def test_write_dataset_template_persists_into_plugins_dir(
         }
     )
 
-    assert path == plugins_dir / "datasets" / "derived_change.yaml"
+    assert path == plugins_dir / "rasters" / "derived_change.yaml"
     assert path.exists()
     loaded = datasets.get_dataset("derived_change")
     assert loaded is not None
@@ -435,7 +435,7 @@ def test_entry_point_plugin_overrides_builtin(monkeypatch: pytest.MonkeyPatch) -
 
 def test_plugins_dir_overrides_entry_point_plugin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """plugins_dir takes precedence over an installed plugin on id conflict."""
-    datasets_dir = tmp_path / "datasets"
+    datasets_dir = tmp_path / "rasters"
     datasets_dir.mkdir()
     (datasets_dir / "x.yaml").write_text("- id: x\n  name: plugins_dir\n  sync:\n    kind: static\n", encoding="utf-8")
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
@@ -509,7 +509,7 @@ def test_missing_plugins_dir_serves_built_ins_instead_of_raising(
     """A configured plugins_dir that does not exist must not break template listing.
 
     Startup warns and keeps serving, so raising here left the instance reporting healthy with
-    /dataset-templates returning 500 — the one route the ingest form needs (CLIM-910).
+    /data-sources returning 500 — the one route the ingest form needs (CLIM-910).
     """
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
     monkeypatch.setattr(

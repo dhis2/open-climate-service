@@ -250,7 +250,7 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
     )
 
@@ -300,7 +300,7 @@ def test_plan_sync_for_plugin_backed_icechunk_uses_committed_store_state(
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -420,7 +420,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_without
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -460,7 +460,7 @@ def test_plan_sync_for_plugin_backed_icechunk_skips_non_local_store_path(
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -505,7 +505,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_win
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -529,7 +529,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_fil
         artifact_id="a1",
         managed_dataset_id="chirps3_precipitation_daily_sle",
         end="2026-01-15",
-        path="file:///C:/data/downloads/chirps3_precipitation_daily.icechunk",
+        path="file:///C:/data/rasters/chirps3_precipitation_daily.icechunk",
     )
     latest.format = ArtifactFormat.ICECHUNK
 
@@ -551,7 +551,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_fil
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -592,7 +592,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_st
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -625,7 +625,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_co
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -652,14 +652,14 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_unt
         warnings.append(message % args if args else message)
 
     monkeypatch.setattr(sync_engine.logger, "warning", fake_warning)
-    monkeypatch.setattr(sync_engine, "_artifact_storage_roots", lambda: (Path("/srv/app/data/downloads"),))
+    monkeypatch.setattr(sync_engine, "_artifact_storage_roots", lambda: (Path("/srv/app/data/rasters"),))
 
     result = sync_engine.plan_sync(
         source_dataset={
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -677,7 +677,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_rel
         artifact_id="a1",
         managed_dataset_id="chirps3_precipitation_daily_sle",
         end="2026-01-15",
-        path="data/downloads/chirps3_precipitation_daily.icechunk",
+        path="data/rasters/chirps3_precipitation_daily.icechunk",
     )
     latest.format = ArtifactFormat.ICECHUNK
 
@@ -693,7 +693,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_rel
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -729,7 +729,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_co
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -759,7 +759,7 @@ def test_sync_dataset_append_policy_falls_back_for_plugin_backed_non_icechunk_ar
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
     )
 
@@ -1841,7 +1841,7 @@ def test_plan_sync_append_for_icechunk_artifact(
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",

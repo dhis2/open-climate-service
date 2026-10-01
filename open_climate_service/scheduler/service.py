@@ -85,7 +85,7 @@ class SchedulerService:
         """Reject unsupported targets without taking down unrelated API routes."""
         template = self._template_loader(schedule.dataset_id)
         if template is None:
-            raise ValueError(f"Scheduled dataset {schedule.dataset_id!r} has no registered template")
+            raise ValueError(f"Scheduled dataset {schedule.dataset_id!r} has no registered data source")
         if registry_datasets.is_future_facing(template):
             raise ValueError(
                 f"Scheduled dataset {schedule.dataset_id!r} is future-facing; forecast refresh requires "
