@@ -87,11 +87,11 @@ Each dataset ID maps to exactly one output artifact in the form of a GeoZarr sto
 
 Core parts of the Open Climate Service must function without a connected DHIS2 instance. Spatial extent is defined via instance configuration rather than a DHIS2 org unit query. Aggregation accepts GeoJSON features from any source and outputs CSV or JSON as well as DHIS2 data values.
 
-### 5.6 Dataset templates and published datasets
+### 5.6 Data sources and published datasets
 
-Internally, the Open Climate Service distinguishes between dataset templates and published datasets:
+Internally, the Open Climate Service distinguishes between data sources and published datasets:
 
-- **Dataset templates** — YAML definitions describing a dataset type (source, variable, period type, processing steps). These are internal and act as blueprints for ingestion.
+- **Data sources** — upstream datasets, each described by a dataset template: YAML with the source, variable, period type and processing steps. They are listed at `GET /data-sources` and act as blueprints for ingestion.
 - **Published datasets** — actualised, ingested datasets for a specific extent and time range, exposed under `/datasets` and `/stac`. These are what end users and client applications discover and consume.
 
 This mirrors the approach used in the CHAP Modelling Platform, where generic model template YAMLs are distinguished from specific initialised instances.

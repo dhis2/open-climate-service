@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from open_climate_service.features.providers import get_feature_provider
-from open_climate_service.plugins.features import dhis2 as provider
-from open_climate_service.plugins.features.dhis2 import _fetch_org_units, _require_unique_ids, dhis2_org_units
+from open_climate_service.plugins.vectors import dhis2 as provider
+from open_climate_service.plugins.vectors.dhis2 import _fetch_org_units, _require_unique_ids, dhis2_org_units
 
 
 def _org_unit(uid: str, name: str) -> dict[str, Any]:

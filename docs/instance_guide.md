@@ -30,9 +30,11 @@ my-climate-service/
 ├── .env.example            # committed template for environment variables
 ├── .gitignore
 ├── plugins/
-│   ├── datasets/           # dataset templates (.yaml) + plugin classes (.py)
+│   ├── rasters/           # raster dataset templates (.yaml) + plugin classes (.py)
 │   │   ├── enacts_rainfall.yaml
 │   │   └── enacts.py
+│   ├── vectors/           # vector dataset templates (.yaml) + feature providers (.py)
+│   │   └── districts.yaml
 │   ├── processes/          # @process-decorated functions (.py)
 │   │   └── my_process.py
 │   └── workflows/          # reusable process graph compositions (.json)
@@ -137,7 +139,7 @@ plugins_dir: ./plugins/
 | `extent.name` | No | Human-readable label shown in API responses |
 | `extent.country_code` | No | ISO 3166-1 alpha-3 — required for WorldPop downloads |
 | `data_dir` | Yes | Directory for downloaded files and Zarr stores, resolved relative to the config file |
-| `plugins_dir` | No | Directory containing `datasets/`, `processes/`, and `workflows/` plugin subdirectories |
+| `plugins_dir` | No | Directory containing `rasters/`, `vectors/`, `processes/` and `workflows/` plugin subdirectories |
 | `read_only` | No | Set `true` to refuse all state-changing requests — see [Read-only instances](#read-only-instances). Defaults to `false` |
 | `scheduler` | No | Instance-level scheduled dataset-sync configuration. See [Scheduled dataset synchronization](scheduled_sync.md) |
 | `automation` | No | Event-driven workflow bindings for successful dataset updates. See [Dataset-update workflow automation](workflow_automation.md) |
@@ -182,20 +184,22 @@ The `/extent` endpoint should return your configured bounding box.
 
 ## Adding plugins
 
-Plugins extend the instance with custom datasets, processes, and workflows. They live in `plugins_dir` and are loaded automatically. The `plugins_dir` is added to `sys.path`, so Python modules placed directly inside it are importable.
+Plugins extend the instance with custom raster and vector datasets, processes, and workflows. They live in `plugins_dir` and are loaded automatically. The `plugins_dir` is added to `sys.path`, so Python modules placed directly inside it are importable.
 
 ```
 plugins/
-├── datasets/
-│   ├── enacts_rainfall.yaml    # custom dataset template
+├── rasters/
+│   ├── enacts_rainfall.yaml    # raster dataset template
 │   └── enacts.py               # streaming plugin class
+├── vectors/
+│   └── districts.yaml          # vector dataset template
 ├── processes/
 │   └── spatial_stats.py        # @process-decorated functions
 └── workflows/
     └── aggregate_for_dhis2.json
 ```
 
-See [Extensibility](extensibility.md) for the three plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the dataset template field reference and streaming plugin contract.
+See [Extensibility](extensibility.md) for the plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the dataset template field reference and streaming plugin contract.
 
 ---
 

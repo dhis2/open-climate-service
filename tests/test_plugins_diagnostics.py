@@ -36,9 +36,9 @@ def test_warns_on_missing_subdir_and_counts_files(
     monkeypatch: pytest.MonkeyPatch, capture: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
     plugins = tmp_path / "plugins"
-    (plugins / "datasets").mkdir(parents=True)
+    (plugins / "rasters").mkdir(parents=True)
     (plugins / "processes").mkdir()
-    (plugins / "datasets" / "x.yaml").write_text("- id: x\n")
+    (plugins / "rasters" / "x.yaml").write_text("- id: x\n")
     # workflows/ intentionally absent
     config_path = tmp_path / "climate-service.yaml"
     config_path.write_text("plugins_dir: ./plugins/\n")
@@ -48,7 +48,7 @@ def test_warns_on_missing_subdir_and_counts_files(
     pd.log_plugin_loading()
 
     text = capture.text
-    assert "datasets=1" in text  # counted the one template file
+    assert "rasters=1" in text  # counted the one template file
     assert "workflows" in text and "missing" in text  # warned that workflows/ won't load
 
 
