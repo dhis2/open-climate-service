@@ -18,7 +18,7 @@ from .conftest import MountedClientFactory
 
 _CONFIGURED = "https://ocs-demo-nepal.dhis2.org"
 # `?f=html` because the URL answers JSON by default: these tests are about the page.
-_SOURCE_PAGE = "/dataset-templates/chirps3_precipitation_daily?f=html"
+_SOURCE_PAGE = "/data-sources/chirps3_precipitation_daily?f=html"
 
 
 @pytest.fixture

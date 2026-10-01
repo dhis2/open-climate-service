@@ -136,7 +136,7 @@ LOGO = Markup(_read_asset("ocs_logo.svg"))
 _NAV_ITEMS = (
     ("overview", "Overview", "/"),
     ("datasets", "Datasets", "/datasets"),
-    ("data-sources", "Dataset templates", "/dataset-templates"),
+    ("data-sources", "Data sources", "/data-sources"),
     ("workflows", "Workflows", "/workflows"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
@@ -314,7 +314,7 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
     elif template and registry_datasets.is_ingestable(template):
         # Linked, now that the dataset template has a page: the template page already links to
         # the dataset it produced, so this closes that pair rather than leaving it one-way.
-        origin = ("Origin", "Fetched from the dataset template", f"/dataset-templates/{template['id']}")
+        origin = ("Origin", "Fetched from the data source", f"/data-sources/{template['id']}")
     else:
         origin = ("Origin", "", None)
 
@@ -476,7 +476,7 @@ def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
 def _data_source_page_context(
     template: dict[str, Any], datasets: list[Any], *, read_only: bool, has_extent: bool, today: date
 ) -> dict[str, Any]:
-    """Everything the dataset template page shows, and whether it can offer the ingest form."""
+    """Everything the data source page shows, and whether it can offer the ingest form."""
     display = _mapping(template.get("display"))
     sync = _mapping(template.get("sync"))
     sync_kind = str(sync.get("kind") or "")
@@ -584,7 +584,7 @@ def _data_source_page_context(
 
 
 def render_data_source_page(template: dict[str, Any], mount: str) -> str:
-    """Render the page for one dataset template, with the form that ingests it."""
+    """Render the page for one data source, with the form that ingests it."""
     read_only = api_config.is_read_only()
     return get_template("data_source_page.html").render(
         version=app_version,
@@ -658,7 +658,7 @@ def _feature_source_page_context(template: dict[str, Any], datasets: list[Any], 
 
 
 def render_feature_source_page(template: dict[str, Any], mount: str) -> str:
-    """Render the page for one feature collection template, with the form that fetches it."""
+    """Render the page for one feature collection data source, with the form that fetches it."""
     return get_template("feature_source_page.html").render(
         version=app_version,
         mount=mount,
@@ -769,9 +769,9 @@ def _load_feature_templates() -> list[dict[str, Any]]:
 
 
 def render_data_sources_page(mount: str) -> str:
-    """Render the list of dataset templates this instance can fetch from.
+    """Render the list of data sources this instance can fetch from.
 
-    The HTML arm of `GET /dataset-templates`, which answers JSON to everything but a browser.
+    The HTML arm of `GET /data-sources`, which answers JSON to everything but a browser.
     A narrower view than the JSON: only what can be fetched, because that is what the page
     offers to act on. The JSON lists every template and flags `ingestable`. Raster and feature
     collection templates are listed together, labelled by kind, as datasets are.
@@ -1222,9 +1222,10 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
 
 _API_GROUP_NOTES = {
     "Datasets": "What this instance holds, and the metadata for each dataset.",
-    "Dataset templates": "What this instance can ingest, and whether each template is ingestable.",
-    "Ingestions": "Fetch a dataset template into this instance, and follow the job it starts.",
+    "Data sources": "What this instance can ingest, and whether each data source is ingestable.",
+    "Ingestions": "Ingest from a data source into this instance, and follow the job it starts.",
     "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
+    "Features": "Feature collections as GeoParquet, and refreshing one from its data source.",
     "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
     "Icechunk": "The same stores for the Icechunk SDK, with version history.",
     "STAC": "Catalogue metadata for discovery, one collection per published dataset.",
@@ -1519,7 +1520,7 @@ def _landing_catalogue(
     workflows: list[Any],
     feature_templates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Split templates between the Dataset templates and Workflows areas by what can be ingested.
+    """Split templates between the Data sources and Workflows areas by what can be ingested.
 
     A template is fetched or produced, never both (registration refuses `produced_by` beside
     `ingestion.plugin`), so each appears in exactly one area. A non-ingestable template whose
@@ -1643,7 +1644,7 @@ def _ingestable_templates(templates: list[dict[str, Any]]) -> list[dict[str, Any
 
     Templates without an ingestion plugin — typically workflow outputs published via
     ``save_result`` — have no upstream fetch path, so there is nothing to fetch them from.
-    Shares the registry's predicate with ``GET /dataset-templates`` and with the ingest path
+    Shares the registry's predicate with ``GET /data-sources`` and with the ingest path
     that refuses them, so every surface agrees about what is offerable.
 
     Takes the list rather than loading it, because each caller already has one and a second
