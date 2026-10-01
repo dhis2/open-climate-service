@@ -713,19 +713,30 @@ class OpenEOJobService:
             if self._stopping.is_set():
                 return  # stays QUEUED with its retry_at, so the next start resumes the wait
             previous = self._retry_timers.pop(job_id, None)
-            timer = threading.Timer(max(0.0, seconds), self._retry_due, args=(job_id,))
+            timer = threading.Timer(max(0.0, seconds), self._retry_due)
+            # The timer passes itself, so a replaced timer that fires anyway can tell it is stale.
+            timer.args = (job_id, timer)
             timer.daemon = True
             self._retry_timers[job_id] = timer
         if previous is not None:
             previous.cancel()
         timer.start()
 
-    def _retry_due(self, job_id: str) -> None:
+    def _retry_due(self, job_id: str, timer: threading.Timer | None = None) -> None:
+        """Requeue a job whose backoff has passed, if ``timer`` is still the one registered for it.
+
+        A timer replaced by a later `_schedule_retry` may already be firing when it is
+        cancelled. Without the identity check it would pop its replacement and requeue the job
+        early, cutting the new backoff short. ``None`` acts on whichever timer is registered.
+        """
         with self._lock:
-            timer = self._retry_timers.pop(job_id, None)
+            current = self._retry_timers.get(job_id)
+            if current is None or (timer is not None and current is not timer):
+                return  # cancelled, or superseded by a newer timer that will requeue the job
+            del self._retry_timers[job_id]
             # A timer can fire while shutdown is in progress. The job then stays QUEUED with
             # its retry_at, and the next start requeues it.
-            if timer is None or self._stopping.is_set():
+            if self._stopping.is_set():
                 return
         self._enqueue(job_id)
 
@@ -867,6 +878,10 @@ class OpenEOJobService:
                 "finished_at": now,
                 "usage": usage,
                 "publishing": False,
+                # The attempt history ends with the outcome that counts, in the same write.
+                "logs": _append_log(record, f"attempt {record.attempt} of {record.max_attempts} finished")
+                if record.max_attempts > 1
+                else record.logs,
             }
         )
         due: dict[str, str] | None = None
