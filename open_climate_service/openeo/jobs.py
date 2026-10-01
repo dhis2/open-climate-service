@@ -51,6 +51,12 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobStatus,
     OpenEOJobUpdate,
 )
+from open_climate_service.shared.cancellation import (
+    ExecutionCancelled,
+    cancellation_scope,
+    enter_publication,
+    raise_if_cancelled,
+)
 from open_climate_service.shared.cf import is_temperature_like
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.persistence import execution_lease
@@ -191,12 +197,18 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data["attempt"] = record.attempt
     data["max_attempts"] = record.max_attempts
     data["retry_at"] = record.retry_at.isoformat() if record.retry_at is not None else None
+    data["publishing"] = record.publishing
     return data
 
 
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
+
+
+def _cancel_requested(job_id: str) -> bool:
+    record = store_get_job(job_id)
+    return bool(record and record.cancel_requested)
 
 
 def _execution_lease_path(job_id: str) -> Path:
@@ -355,6 +367,7 @@ class OpenEOJobService:
                     update={
                         "status": OpenEOJobStatus.QUEUED,
                         "updated": utc_now(),
+                        "publishing": False,
                         "logs": _append_log(
                             r, f"attempt {r.attempt} of {r.max_attempts} interrupted by a server restart; requeued"
                         ),
@@ -370,6 +383,7 @@ class OpenEOJobService:
                     "status": OpenEOJobStatus.ERROR,
                     "error_message": _with_attempts("Interrupted by server restart", r),
                     "updated": utc_now(),
+                    "publishing": False,
                     "logs": _append_log(r, f"attempt {r.attempt} of {r.max_attempts} interrupted by a server restart")
                     if r.max_attempts > 1
                     else r.logs,
@@ -616,6 +630,11 @@ class OpenEOJobService:
             # its delivery may already have been submitted.
             if r.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
                 raise HTTPException(status_code=400, detail="Job is not running or queued")
+            if r.publishing:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Job is publishing its result and can no longer be cancelled",
+                )
             if cancelled_before_start and r.status == OpenEOJobStatus.QUEUED:
                 # future.cancel() returned True: the job was still queued in the thread pool
                 # and will never start.
@@ -743,22 +762,31 @@ class OpenEOJobService:
                     "updated": utc_now(),
                     "attempt": r.attempt + 1,
                     "retry_at": None,
+                    "publishing": False,
                 }
             ),
         )
 
         try:
-            result = run_process_graph(record.process)
-            # Re-read record — cancellation may have been requested while running.
-            current = store_get_job(job_id)
-            if current is not None and current.cancel_requested:
-                store_update_job(
-                    job_id,
-                    lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()}),
-                )
-                return None
-            output_path = self._persist_result(job_id, result)
+            # Cancellation is checked before every process and dask task, and once more,
+            # atomically, at the point of no return of any publication (CLIM-1221).
+            with cancellation_scope(
+                lambda: _cancel_requested(job_id),
+                enter_publication=lambda: self._enter_publication(job_id),
+            ):
+                result = run_process_graph(record.process)
+                raise_if_cancelled(force=True)
+                output_path = self._persist_result(job_id, result)
             finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
+        except ExecutionCancelled:
+            logger.info("openEO job %s was cancelled while running; nothing was published", job_id)
+            store_update_job(
+                job_id,
+                lambda r: r.model_copy(
+                    update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now(), "publishing": False}
+                ),
+            )
+            return None
         except Exception as job_exc:
             logger.exception("openEO job %s failed", job_id)
             return self._record_failure(job_id, started, job_exc)
@@ -767,6 +795,21 @@ class OpenEOJobService:
         if finished.status == OpenEOJobStatus.FINISHED:
             self._notify_finished(finished)
         return None
+
+    def _enter_publication(self, job_id: str) -> None:
+        """Pass the point of no return, or raise if the job was cancelled first.
+
+        One store mutation, so it is atomic with `cancel_job`: whichever lands first decides.
+        If the cancellation did, nothing is published. If this did, the attempt finishes,
+        and a later cancel request is refused rather than leaving a half-published result.
+        """
+
+        def _gate(r: OpenEOJobRecord) -> OpenEOJobRecord:
+            if r.cancel_requested:
+                raise ExecutionCancelled("The job was cancelled before it could publish")
+            return r.model_copy(update={"publishing": True, "updated": utc_now()})
+
+        store_update_job(job_id, _gate)
 
     def _record_failure(self, job_id: str, started: OpenEOJobRecord, exc: Exception) -> float | None:
         """Record a failed attempt: requeue it for a retry, or mark the job ERROR."""
@@ -784,6 +827,7 @@ class OpenEOJobService:
                         "status": OpenEOJobStatus.QUEUED,
                         "error_message": error,
                         "retry_at": retry_at,
+                        "publishing": False,
                         "updated": utc_now(),
                         "logs": _append_log(
                             r,
@@ -803,6 +847,7 @@ class OpenEOJobService:
                     "status": OpenEOJobStatus.ERROR,
                     "error_message": _with_attempts(error, r),
                     "updated": utc_now(),
+                    "publishing": False,
                     "logs": _append_log(r, f"attempt {r.attempt} of {r.max_attempts} {outcome}: {error}")
                     if r.max_attempts > 1
                     else r.logs,
@@ -832,6 +877,7 @@ class OpenEOJobService:
                 "updated": now,
                 "finished_at": now,
                 "usage": usage,
+                "publishing": False,
                 # The attempt history ends with the outcome that counts, in the same write.
                 "logs": _append_log(record, f"attempt {record.attempt} of {record.max_attempts} finished")
                 if record.max_attempts > 1
@@ -1051,14 +1097,18 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
     variable = _derive_variable(ds, options)
     source_template = _resolve_source_template(options)
     template = _reg.get_dataset(dataset_id)
+    # A template this call registers, so a cancellation before publication can remove it again.
+    created_template: Path | None = None
     if template is None:
         # Validate the candidate before it reaches disk. Persisting first left an incompatible
         # template behind when publication then failed, and the corrected retry reloaded that
         # template and failed again — the operator had to delete a YAML to get unstuck.
         candidate = _derive_managed_dataset_template(ds, options, source_template, t_dim)
         _reject_incompatible_template_units(ds, variable, cf_attrs_from_template(candidate))
+        # Nothing reaches disk for a job that is already cancelled.
+        raise_if_cancelled(force=True)
         try:
-            _reg.write_dataset_template(candidate)
+            created_template = _reg.write_dataset_template(candidate)
         except FileExistsError:
             pass
         template = _reg.get_dataset(dataset_id)
@@ -1099,16 +1149,26 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             "run this job again once that finishes"
         )
     try:
-        downloader.write_to_icechunk_store(
-            _strip_non_serializable_attrs(ds),
-            store_path,
-            x_dim,
-            y_dim,
-            t_dim,
-            crs=crs,
-            pyramid_method=downloader.resampling_method_from_template(template),
-            commit_message=f"Published from openEO job: {dataset_id}",
-        )
+        try:
+            downloader.write_to_icechunk_store(
+                _strip_non_serializable_attrs(ds),
+                store_path,
+                x_dim,
+                y_dim,
+                t_dim,
+                crs=crs,
+                pyramid_method=downloader.resampling_method_from_template(template),
+                commit_message=f"Published from openEO job: {dataset_id}",
+                # The point of no return: a cancelled job stops here, before the commit, so
+                # the store keeps its previous state and nothing is published.
+                before_commit=enter_publication,
+            )
+        except ExecutionCancelled:
+            if created_template is not None:
+                # Registered by this attempt for a dataset that now will not exist.
+                created_template.unlink(missing_ok=True)
+                _reg.reset_template_caches()
+            raise
 
         # A derived product is a published dataset and appears in the same lists, so it gets a
         # thumbnail on the same terms. One write, so this is already the once-per-run render the

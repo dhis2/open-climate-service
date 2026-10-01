@@ -459,10 +459,20 @@ def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyP
     assert published["stac"]["href"] == "/stac/collections/my_aggregate"
 
 
+def _store_finished_job(job_id: str) -> None:
+    """Result files are only served for a finished job (CLIM-1221)."""
+    from open_climate_service.openeo.jobs import store_create_job
+    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_climate_service.shared.time import utc_now
+
+    store_create_job(OpenEOJobRecord(id=job_id, status=OpenEOJobStatus.FINISHED, created=utc_now()))
+
+
 def test_download_result_file_serves_geojson_with_geojson_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
     geojson_path = results_dir / "result.geojson"
@@ -478,6 +488,7 @@ def test_download_result_file_serves_json_with_json_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
     json_path = results_dir / "result.json"
