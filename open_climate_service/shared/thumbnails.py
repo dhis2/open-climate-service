@@ -35,10 +35,11 @@ from open_climate_service import config as api_config
 # Upscaling here with nearest-neighbour keeps the cell boundaries crisp, which is also the
 # honest picture of a coarse dataset, and costs a couple of KB: flat blocks compress well.
 #
-# 512 rather than 600: STAC best practice for the role is "less than 600x600 pixels", and a
-# square store rendered at an exact 600 long side would sit on that boundary rather than
-# inside it.
-THUMBNAIL_LONG_SIDE_PIXELS = 512
+# 1024, above STAC's "less than 600x600 pixels" guidance for the role, on purpose: the same
+# file is the large preview on the dataset page, about 750 CSS pixels wide, and at 512 it was
+# visibly blurry there on a high-density screen. A PNG of flat colour areas stays small at
+# this size, and STAC clients scale a thumbnail down to fit anyway.
+THUMBNAIL_LONG_SIDE_PIXELS = 1024
 
 _DEFAULT_COLORMAP = "viridis"
 
@@ -131,7 +132,7 @@ def decimate(arr: Any, *, long_side: int) -> Any:
     cell beyond one per output pixel is read, held in memory and then thrown away by the
     render's nearest-neighbour sampling. Reading them is not free: the accessor opens the
     store's *finest* pyramid level, so a 0.05-degree global field arrives as 7200x3600 — 200 MB
-    of float64 materialised to produce an image 512 px across, on a machine that is otherwise
+    of float64 materialised to produce an image 1024 px across, on a machine that is otherwise
     in the middle of finishing a sync. Striding first keeps what is read proportional to what
     is drawn.
 
@@ -406,7 +407,7 @@ def render_features_png(frame: Any, path: str | Path, *, long_side: int) -> Path
 
     Polygons are filled and outlined, lines drawn as lines and points as dots, so a mixed
     collection (districts and the clinics in them) renders as what it holds. Geometry is
-    simplified to about one output pixel first: at 512 px a detailed coastline is otherwise
+    simplified to about one output pixel first: at thumbnail size a detailed coastline is otherwise
     drawn as a dark band of overlapping segments, and simplifying is also what keeps a large
     collection quick to draw.
     """
