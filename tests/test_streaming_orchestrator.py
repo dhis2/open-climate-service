@@ -554,3 +554,55 @@ def test_orchestrator_resume_supports_custom_time_dimension(tmp_path: Path) -> N
         period_type="daily",
     )
     assert rerun.periods_written == 0
+
+
+class _ForeignAttrsPlugin(_FakePlugin):
+    """A plugin that sanitizes nothing, like every plugin that has not met this problem yet."""
+
+    async def fetch_period(self, period_id: str, bbox: list[float], **params: Any) -> xr.Dataset:
+        ds = await super().fetch_period(period_id, bbox, **params)
+        # Exactly the shape dynamical.org's GEFS store publishes on its coordinates.
+        ds["x"].attrs["statistics_approximate"] = {"min": -180.0, "max": 179.75}
+        ds["precip"].attrs["GRIB_extra"] = {"nested": "mapping"}
+        ds.attrs["provenance"] = {"source": "somewhere"}
+        ds["precip"].attrs["long_name"] = "kept"
+        return ds
+
+
+def test_orchestrator_drops_attrs_no_netcdf_export_could_write(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The guard belongs at the boundary, not in the plugins that happened to notice.
+
+    Zarr stores a nested mapping happily, so the ingest looks clean and every later NetCDF export
+    of the store fails with a 500 instead. This plugin does nothing about it, and must still
+    produce an exportable store.
+    """
+    store_path = tmp_path / "streaming-store.zarr"
+    repo = _FakeRepo(str(store_path))
+
+    monkeypatch.setattr(streaming_orchestrator, "open_or_create_repo", lambda path: repo)
+    monkeypatch.setattr(
+        streaming_orchestrator,
+        "read_committed_period_ids",
+        lambda path, period_type, time_dim="t": _read_committed_periods_from_zarr(path, period_type, time_dim=time_dim),
+    )
+    monkeypatch.setattr(streaming_orchestrator, "is_store_empty", lambda path: not path.exists())
+
+    run_streaming_ingest_sync(
+        plugin=_ForeignAttrsPlugin(),
+        params={},
+        dataset={"id": "foreign-attrs"},
+        bbox=[0.0, 0.0, 1.0, 1.0],
+        start="2026-01-01",
+        end="2026-01-03",
+        store_path=store_path,
+        period_type="daily",
+    )
+
+    written = xr.open_zarr(store_path, consolidated=None)
+    try:
+        assert "statistics_approximate" not in written["x"].attrs
+        assert "GRIB_extra" not in written["precip"].attrs
+        assert "provenance" not in written.attrs
+        assert written["precip"].attrs.get("long_name") == "kept"
+    finally:
+        written.close()

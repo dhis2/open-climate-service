@@ -29,7 +29,7 @@ from open_climate_service.shared.time import (
     datetime_to_period_string,
     parse_period_string_to_datetime,
 )
-from open_climate_service.streaming import BaseDatasetPlugin, monthly_period_ids
+from open_climate_service.streaming import BaseDatasetPlugin, cell_pad, monthly_period_ids
 from open_climate_service.transforms.climatology import circular_rolling_mean
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
 
@@ -606,18 +606,21 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
             self._close_cached_locked()
             xmin, ymin, xmax, ymax = bbox_tuple
             ds = _edh_open_zarr(self._edh_url)
-            # Extend bbox by half a grid step (0.05°) to avoid floating-point
-            # boundary exclusion (e.g. 360 - 10.1 = 349.8999... misses the 349.9
-            # grid point). CDS API is inclusive of boundary points; this aligns
-            # the EDH selection so both sources return the same spatial grid.
-            _eps = 0.05
+            # Extend the bbox by half a grid step, derived from the axis rather than assumed.
+            # This does two jobs: it keeps the cells straddling each bbox edge, which a plain
+            # label slice drops because it selects on cell centres, and it avoids
+            # floating-point boundary exclusion (e.g. 360 - 10.1 = 349.8999... misses the
+            # 349.9 grid point). CDS is inclusive of boundary points, so this also keeps the
+            # EDH and CDS paths returning the same spatial grid.
+            lat_pad = cell_pad(ds["latitude"])
+            lon_pad = cell_pad(ds["longitude"])
             if self._edh_lon_360:
-                xmin_sel = (xmin % 360) - _eps
-                xmax_sel = (xmax % 360) + _eps
+                xmin_sel = (xmin % 360) - lon_pad
+                xmax_sel = (xmax % 360) + lon_pad
             else:
-                xmin_sel, xmax_sel = xmin - _eps, xmax + _eps
+                xmin_sel, xmax_sel = xmin - lon_pad, xmax + lon_pad
             self._cached_region = ds[[self.variable]].sel(
-                latitude=slice(ymax + _eps, ymin - _eps),
+                latitude=slice(ymax + lat_pad, ymin - lat_pad),
                 longitude=slice(xmin_sel, xmax_sel),
             )
             self._cached_bbox = bbox_tuple
@@ -1107,12 +1110,16 @@ class ERA5LandNormalsPlugin(BaseDatasetPlugin):
     def _load_reference(self, bbox: list[float]) -> xr.Dataset:
         """Load the reference-period ERA5-Land data from EDH as a (valid_time, y, x) dataset."""
         start_year, end_year = self.period
-        eps = 0.05
         xmin, ymin, xmax, ymax = map(float, bbox)
         ds = _edh_open_zarr(_EDH_DAILY_URL)
         try:
+            # Half a grid step, derived from the axis: label selection is on cell centres, so
+            # without it the cells straddling each bbox edge are dropped and the reference
+            # period covers less than the requested extent.
+            eps = cell_pad(ds["longitude"])
+            lat_pad = cell_pad(ds["latitude"])
             base = ds[[self.edh_variable]].sel(
-                latitude=slice(ymax + eps, ymin - eps),
+                latitude=slice(ymax + lat_pad, ymin - lat_pad),
                 valid_time=slice(f"{start_year}-01-01", f"{end_year}-12-31"),
             )
             # EDH stores longitude in [0, 360). Map the WGS84 (-180/180) bbox onto it.

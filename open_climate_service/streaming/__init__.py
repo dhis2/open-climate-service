@@ -13,7 +13,7 @@ their canonical home.
 
 from open_climate_service.shared.time import daily_period_ids, monthly_period_ids
 from open_climate_service.streaming.base import BaseDatasetPlugin
-from open_climate_service.streaming.helpers import normalize_period
+from open_climate_service.streaming.helpers import bbox_slice, bbox_slices, cell_pad, normalize_period
 from open_climate_service.streaming.orchestrator import StreamingIngestResult, run_streaming_ingest_sync
 from open_climate_service.streaming.protocol import IngestionPlugin
 
@@ -21,6 +21,9 @@ __all__ = [
     "BaseDatasetPlugin",
     "IngestionPlugin",
     "StreamingIngestResult",
+    "bbox_slice",
+    "bbox_slices",
+    "cell_pad",
     "daily_period_ids",
     "monthly_period_ids",
     "normalize_period",

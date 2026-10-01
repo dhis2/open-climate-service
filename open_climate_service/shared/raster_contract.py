@@ -9,7 +9,8 @@ source delivers (see CLIM-821).
 
 The contract:
 
-1. the temporal dimension is named ``t``
+1. the temporal dimension is named ``t`` — or, for a forecast cube, the pair
+   ``reference_time``/``lead_time`` stands in for it (see :mod:`open_climate_service.shared.forecast`)
 2. spatial dims are named ``y`` / ``x`` and ordered ``(…, y, x)``
 3. ``y`` descends — array row 0 is the northernmost row
 4. for a geographic CRS, longitudes run −180…180 rather than 0…360
@@ -370,8 +371,14 @@ def published_contract_violations(
     than only in a test run, and available to anyone debugging a store that renders oddly.
     Each violation carries a ``kind`` so callers can match on it without depending on wording.
     """
+    from . import forecast
+
     problems: list[Violation] = []
     dims = set(str(d) for d in ds.dims)
+    # A forecast cube satisfies invariant 1 with two axes rather than one: it has no `t` by
+    # design, because no single axis means "the period this value describes" (see shared/forecast).
+    if forecast.is_forecast_cube(ds):
+        time_dim = forecast.REFERENCE_DIM
     if time_dim not in dims:
         found = [a for a in _TIME_ALIASES if a in dims]
         problems.append(
