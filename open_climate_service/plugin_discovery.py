@@ -23,10 +23,10 @@ PLUGIN_ENTRY_POINT_GROUP = "open_climate_service.plugins"
 def iter_plugin_subdirs(subdir: str) -> Iterator[tuple[str, str, Traversable]]:
     """Yield ``(plugin_name, package, <package>/<subdir>)`` for installed plugins.
 
-    Only plugins that actually ship the requested ``<subdir>`` (``datasets`` /
+    Only plugins that actually ship the requested ``<subdir>`` (``rasters`` / ``vectors`` /
     ``processes`` / ``workflows`` / ``exports``) are yielded. ``package`` is the plugin's import
-    package, so a caller that needs to *import* modules (processes) can build the
-    dotted path, while a caller that reads files (datasets, workflows) can iterate
+    package, so a caller that needs to *import* modules (processes, vector providers) can build
+    the dotted path, while a caller that reads files (dataset templates, workflows) can iterate
     the returned traversable.
     """
     for entry_point in entry_points(group=PLUGIN_ENTRY_POINT_GROUP):

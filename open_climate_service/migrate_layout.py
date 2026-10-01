@@ -62,7 +62,14 @@ def _plan_rename(parent: Path, old: str, new: str, plan: Plan) -> None:
 
 
 def _migrated_path(raw: str, root: Path) -> str:
-    """The same store path with its first folder renamed, relative or absolute under root."""
+    """The same store path with its first folder renamed, written relative when it is ours.
+
+    A path under root comes back relative, the portable form `artifact_paths.to_portable`
+    writes, so a migrated data directory can be moved or copied. A path outside root is
+    claimed only when it no longer exists here and the same store does exist under root:
+    a container's `/app/data/downloads/x` seen from the host. One that still exists is a store
+    deliberately kept elsewhere, even when root holds a store of the same name, and is left alone.
+    """
     mapping = dict(DATA_RENAMES)
     # Absolute is decided by the native path, so a Windows record (`C:\\data\\downloads\\...`)
     # is recognised on Windows; relative records are always written with forward slashes.
@@ -80,15 +87,15 @@ def _migrated_path(raw: str, root: Path) -> str:
     else:
         parts = relative.parts
         if parts and parts[0] in mapping:
-            return str(root.joinpath(mapping[parts[0]], *parts[1:]))
-        return raw
-    # Recorded under another mount, such as a container's /app/data: the store is ours when
-    # the same suffix exists under this data root, as store-path rebasing would find it.
+            parts = (mapping[parts[0]], *parts[1:])
+        return PurePosixPath(*parts).as_posix()
+    if candidate.exists():
+        return raw  # a store deliberately kept outside the data directory
     parts = candidate.parts
     for index in range(1, len(parts) - 1):
         if parts[index] in mapping and root.joinpath(*parts[index:]).exists():
             return PurePosixPath(mapping[parts[index]], *parts[index + 1 :]).as_posix()
-    return raw  # a store deliberately kept outside the data directory
+    return raw  # nothing under root matches: keep what was recorded
 
 
 def _plan_records(data_root: Path, plan: Plan) -> None:

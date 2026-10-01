@@ -73,7 +73,7 @@ def test_moves_data_and_plugins_and_rewrites_what_names_them(instance: Path) -> 
     records = json.loads((data / "artifacts" / "records.json").read_text())
     assert records[0]["path"] == "rasters/chirps.icechunk"
     assert records[0]["asset_paths"] == ["rasters/chirps.icechunk"]
-    assert records[1]["path"] == str(data / "vectors" / "districts.abc.parquet")
+    assert records[1]["path"] == "vectors/districts.abc.parquet", "an absolute path under the data dir becomes portable"
     assert records[2]["path"] == "/mnt/elsewhere/downloads/era5.icechunk", "a store outside the data dir is left alone"
     assert records[3]["path"] == "rasters/chirps.icechunk", "a store recorded under a container's mount is ours"
 
@@ -147,4 +147,17 @@ def test_a_data_dir_reached_through_a_symlink_is_migrated(instance: Path) -> Non
     assert migrate_layout.main([]) == 0
 
     [record] = json.loads(index.read_text())
-    assert Path(record["path"]) == (instance / "data" / "rasters" / "chirps.icechunk").resolve()
+    assert record["path"] == "rasters/chirps.icechunk"
+
+
+def test_an_external_store_that_still_exists_is_left_alone(instance: Path) -> None:
+    """Same suffix as a store under the data dir, but it exists where it was recorded."""
+    external = instance / "archive" / "downloads" / "chirps.icechunk"
+    external.mkdir(parents=True)
+    index = instance / "data" / "artifacts" / "records.json"
+    index.write_text(json.dumps([{"artifact_id": "a", "path": str(external)}]) + "\n")
+
+    assert migrate_layout.main([]) == 0
+
+    [record] = json.loads(index.read_text())
+    assert record["path"] == str(external)
