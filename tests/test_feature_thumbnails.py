@@ -28,7 +28,7 @@ TEMPLATE = {"id": "districts", "name": "District boundaries", "id_property": "co
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Keep collections, records and thumbnails out of the developer's data directory."""
-    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "features")
+    monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "vectors")
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts_dir)

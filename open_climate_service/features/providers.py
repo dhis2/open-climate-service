@@ -91,9 +91,9 @@ def load_feature_providers() -> dict[str, Callable[..., ProviderResult]]:
     Resolution order (last wins), matching `plugin_processes.load_plugin_processes` and
     `data_registry.services.datasets.list_datasets`:
 
-    1. Built-in file plugins — `open_climate_service/plugins/features/`.
-    2. Installed plugin packages — `<package>/features/` (entry-point plugins, #118).
-    3. Instance plugins — `plugins_dir/features/` (overrides everything).
+    1. Built-in file plugins — `open_climate_service/plugins/vectors/`.
+    2. Installed plugin packages — `<package>/vectors/` (entry-point plugins, #118).
+    3. Instance plugins — `plugins_dir/vectors/` (overrides everything).
 
     A name registered at a later stage silently replaces an earlier one — a `plugins_dir`
     provider named `dhis2` can override the built-in of the same name, matching how a template
@@ -124,13 +124,13 @@ def get_feature_provider(name: str) -> Callable[..., ProviderResult] | None:
 
 
 def _scan_builtin_providers() -> list[Any]:
-    pkg = importlib.resources.files("open_climate_service") / "plugins" / "features"
+    pkg = importlib.resources.files("open_climate_service") / "plugins" / "vectors"
     funcs: list[Any] = []
     try:
         for resource in pkg.iterdir():
             if not resource.name.endswith(".py") or resource.name.startswith("_"):
                 continue
-            module_name = f"open_climate_service.plugins.features.{resource.name[:-3]}"
+            module_name = f"open_climate_service.plugins.vectors.{resource.name[:-3]}"
             funcs.extend(_load_from_module(module_name))
     except (FileNotFoundError, NotADirectoryError):
         pass
@@ -138,15 +138,15 @@ def _scan_builtin_providers() -> list[Any]:
 
 
 def _scan_plugin_package_providers() -> list[Any]:
-    """Scan `features/` in each installed plugin package (#118)."""
+    """Scan `vectors/` in each installed plugin package (#118)."""
     from open_climate_service.plugin_discovery import iter_plugin_subdirs
 
     funcs: list[Any] = []
-    for _name, package, features_res in iter_plugin_subdirs("features"):
+    for _name, package, features_res in iter_plugin_subdirs("vectors"):
         for resource in features_res.iterdir():
             if not resource.name.endswith(".py") or resource.name.startswith("_"):
                 continue
-            funcs.extend(_load_from_module(f"{package}.features.{resource.name[:-3]}"))
+            funcs.extend(_load_from_module(f"{package}.vectors.{resource.name[:-3]}"))
     return funcs
 
 
@@ -157,7 +157,7 @@ def _scan_instance_providers() -> list[Any]:
         return []
     config_path = api_config.get_config_path()
     base = config_path.parent if config_path else Path()
-    features_dir = (base / plugins_dir_raw).resolve() / "features"
+    features_dir = (base / plugins_dir_raw).resolve() / "vectors"
     if not features_dir.is_dir():
         return []
     funcs: list[Any] = []

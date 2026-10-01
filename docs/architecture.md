@@ -8,17 +8,19 @@ This document explains how the Open Climate Service is structured, why it is str
 
 The platform has four first-class concepts. Understanding the distinction between them is the foundation for understanding everything else.
 
-### Dataset template
+### Data source
 
-A **template** is a YAML blueprint that describes an upstream data source. Built-ins live in `open_climate_service/plugins/datasets/` inside the package (loaded via `importlib.resources`). Custom templates live in `{plugins_dir}/datasets/` where `plugins_dir` is set in `climate-service.yaml`. It has no state — it describes what _could_ be ingested, not what _has been_ ingested.
+A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint: raster templates in `rasters/`, vector templates in `vectors/`. Built-ins live in `open_climate_service/plugins/rasters/` and `open_climate_service/plugins/vectors/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` and `{plugins_dir}/vectors/`, where `plugins_dir` is set in `climate-service.yaml`. A data source has no state — it describes what _could_ be ingested, not what _has been_ ingested.
 
-A template defines:
+A raster dataset template defines:
 
 - the dataset identifier and display metadata
 - the variable name, units, and period type
 - how to ingest the data (`ingestion.plugin` — a dotted path to a streaming plugin class)
 - any data transformations applied inside the plugin before returning
 - what sync strategy to use (`sync.kind`, `sync.execution`)
+
+A vector dataset template names a `provider` (a `@feature_provider` function) and its `params` instead, and is fetched with `POST /features/{id}/refresh` rather than `POST /ingestions`.
 
 Templates are config, not code. If a template needs custom logic, the logic goes into a Python function referenced by dotted path from the YAML.
 
@@ -32,17 +34,17 @@ The streaming engine lives in `open_climate_service.streaming`, while `open_clim
 
 An **artifact** is the internal record of a completed data ingestion. It is the persistence layer — not a public API concept. Each ingestion produces exactly one artifact, which records:
 
-- what dataset template it came from
+- what data source it came from
 - the exact spatial extent and time range that was materialized
 - where the data lives on disk (path to the zarr store or netCDF files)
 - when it was created
 - whether it has been published
 
-Multiple artifacts can exist for the same dataset template if data was ingested at different times (they form the version history). The most recent artifact for a given `dataset_id` is what the public API serves.
+Multiple artifacts can exist for the same data source if data was ingested at different times (they form the version history). The most recent artifact for a given `dataset_id` is what the public API serves.
 
 Artifacts are stored in `{data_dir}/artifacts/records.json`, where `data_dir` is the path configured in `climate-service.yaml`. This is an internal implementation detail — consumers should never depend on artifact IDs or artifact paths directly.
 
-Store paths are persisted relative to `data_dir` (`downloads/foo.icechunk`) and resolved to absolute paths when records are loaded, so the data directory stays portable: it can be moved, copied to another host, or written in a container at `/app/data` and read from the host. Records written before this convention hold absolute paths and are re-rooted onto the current `data_dir` on read, then rewritten in relative form on the next update. Stores kept outside `data_dir` are recorded as absolute paths.
+Store paths are persisted relative to `data_dir` (`rasters/foo.icechunk`) and resolved to absolute paths when records are loaded, so the data directory stays portable: it can be moved, copied to another host, or written in a container at `/app/data` and read from the host. Records written before this convention hold absolute paths and are re-rooted onto the current `data_dir` on read, then rewritten in relative form on the next update. Stores kept outside `data_dir` are recorded as absolute paths.
 
 ### Managed dataset
 
@@ -253,13 +255,13 @@ Multiple YAML templates can reference the same plugin class and differentiate vi
 ```yaml
 # era5land_temperature_hourly.yaml
 ingestion:
-  plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
   params:
     variable: t2m
 
 # era5land_precipitation_hourly.yaml
 ingestion:
-  plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
   params:
     variable: tp
 ```

@@ -43,7 +43,7 @@ def _collection(*features: dict[str, Any]) -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def feature_store_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the store at a temporary directory, and keep records out of the real index."""
-    root = tmp_path / "features"
+    root = tmp_path / "vectors"
     monkeypatch.setattr(api_config, "get_features_root", lambda: root)
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", artifacts_dir)

@@ -142,7 +142,7 @@ def test_the_overview_links_to_every_area_as_a_page(client: TestClient) -> None:
     """
     html = client.get("/", headers={"Accept": "text/html"}).text
 
-    for path in ("/datasets", "/dataset-templates", "/workflows", "/processes"):
+    for path in ("/datasets", "/data-sources", "/workflows", "/processes"):
         assert f'href="{path}"' in html
     assert "data-area-link" not in html, "nothing switches areas in place any more"
     # The stat cards are links too, and pointed at fragments this page no longer has.
@@ -189,12 +189,12 @@ def test_access_and_version_are_stated_without_a_configured_extent(
     assert "Version" in visible and "9.9.9" in visible
 
 
-def test_the_interface_calls_them_dataset_templates(client: TestClient) -> None:
-    """The stat card and the rail agree, and neither says "data source"."""
+def test_the_interface_calls_them_data_sources(client: TestClient) -> None:
+    """The stat card and the rail agree, and neither says "dataset template"."""
     visible = _visible_text(client.get("/", headers={"Accept": "text/html"}).text)
 
-    assert visible.lower().count("dataset templates") == 2
-    assert "data source" not in visible.lower()
+    assert visible.lower().count("data sources") == 2
+    assert "dataset template" not in visible.lower()
 
 
 def test_colours_come_from_the_token_block(client: TestClient) -> None:

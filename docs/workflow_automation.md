@@ -52,7 +52,7 @@ as output dataset IDs, geometries, and DHIS2 identifiers remain in instance conf
 ### Referencing a feature collection
 
 Within an automation trigger, `geometries: { from_features: districts }` names a feature
-collection declared under `plugins/features/` (see
+collection declared under `plugins/vectors/` (see
 [Installable plugins](installable_plugins.md#package-layout)) instead of embedding a
 `FeatureCollection` inline. This shorthand is resolved by the automation service and is not a
 general openEO process-graph argument. Direct process graphs should call `load_features`
