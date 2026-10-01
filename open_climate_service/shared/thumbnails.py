@@ -35,10 +35,9 @@ from open_climate_service import config as api_config
 # Upscaling here with nearest-neighbour keeps the cell boundaries crisp, which is also the
 # honest picture of a coarse dataset, and costs a couple of KB: flat blocks compress well.
 #
-# 1024, above STAC's "less than 600x600 pixels" guidance for the role, on purpose: the same
-# file is the large preview on the dataset page, about 750 CSS pixels wide, and at 512 it was
-# visibly blurry there on a high-density screen. A PNG of flat colour areas stays small at
-# this size, and STAC clients scale a thumbnail down to fit anyway.
+# 1024, because the same file is the large preview on the dataset page, about 750 CSS pixels
+# wide, and at 512 it was visibly blurry there on a high-density screen. A PNG of flat colour
+# areas stays small at this size.
 THUMBNAIL_LONG_SIDE_PIXELS = 1024
 
 _DEFAULT_COLORMAP = "viridis"
