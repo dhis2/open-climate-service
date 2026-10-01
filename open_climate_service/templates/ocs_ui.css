@@ -643,6 +643,21 @@ button:disabled {
 .page-title h2 {
   margin: 0;
 }
+/* Under the title, because when a dataset starts and ends is the first thing a reader checks. */
+.page-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacers-dp8);
+  align-items: baseline;
+  margin: calc(-1 * var(--spacers-dp8)) 0 var(--spacers-dp16);
+  font-size: var(--font-size-body);
+}
+.page-coverage .range {
+  font-variant-numeric: tabular-nums;
+}
+.page-coverage .period {
+  color: var(--colors-grey700);
+}
 .dataset-page {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
