@@ -126,10 +126,15 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
     async with main._lifespan(FastAPI()):
         await asyncio.sleep(0.1)
         seen = len(sweeps)
+    # A sweep runs in a worker thread, which cancelling the loop cannot interrupt, so one
+    # already in flight when the app stops may still finish. Nothing starts after that.
+    await asyncio.sleep(0.05)
+    after_stop = len(sweeps)
     await asyncio.sleep(0.05)
 
     if read_only:
         assert sweeps == []  # may share its data directory with a writing instance
     else:
         assert seen >= 2  # once at startup, then on the interval
-        assert len(sweeps) == seen, "the loop stops with the app"
+        assert after_stop <= seen + 1, "at most the in-flight sweep finishes after the app stops"
+        assert len(sweeps) == after_stop, "the loop stops with the app"
