@@ -650,7 +650,7 @@ button:disabled {
   gap: var(--spacers-dp8);
   align-items: baseline;
   margin: calc(-1 * var(--spacers-dp8)) 0 var(--spacers-dp16);
-  font-size: 1.125rem;
+  font-size: var(--font-size-body);
 }
 .page-coverage .range {
   font-weight: 600;
