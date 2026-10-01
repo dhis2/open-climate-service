@@ -248,6 +248,26 @@ def test_the_dataset_page_lists_only_what_is_known() -> None:
     assert [link.rel for link in context["links"]] == ["zarr"]
 
 
+def test_the_dataset_page_lists_the_identifier_first() -> None:
+    context = landing._dataset_page_context(_record("chirps_monthly"), _ingestable("chirps_monthly"))
+
+    assert context["data"][0] == ("Identifier", "chirps_monthly", None)
+
+
+@pytest.mark.parametrize(("item_type", "raster"), [("coverage", True), ("feature", False)])
+def test_the_dataset_page_offers_the_map_viewer_and_colour_scale_only_for_a_raster(
+    monkeypatch: pytest.MonkeyPatch, item_type: str, raster: bool
+) -> None:
+    """The map viewer draws only rasters, and a feature collection has no colour scale."""
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
+
+    html = landing.render_dataset_page(_record(itemType=item_type), "/ocs")
+
+    assert ("Open in map viewer" in html) is raster
+    assert ('class="ramp-bar"' in html) is raster
+    assert ("--ramp: linear-gradient" in html) is raster
+
+
 def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
 

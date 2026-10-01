@@ -319,7 +319,6 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         origin = ("Origin", "", None)
 
     about: list[Fact] = [
-        ("Identifier", record.dataset_id, None),
         ("Short name", record.short_name or "", None),
         ("Source", record.source or "", record.source_url),
         origin,
@@ -327,6 +326,8 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         ("Providers", providers, None),
     ]
     data: list[Fact] = [
+        # First, because it is what a reader copies into a process graph or an export.
+        ("Identifier", record.dataset_id, None),
         ("Variable", record.variable, None),
         ("Standard name", str(template.get("standard_name") or ""), None),
         ("Units", record.units or "", None),
@@ -371,6 +372,9 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         "status_facts": present(status),
         "links": [link for link in record.links if link.rel != "self"],
         "published": summary["status"] == "published",
+        # A feature collection has no colour scale and the map viewer draws only rasters, so
+        # the page offers neither for one.
+        "vector": record.item_type == "feature",
     }
 
 

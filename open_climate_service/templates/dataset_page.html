@@ -32,7 +32,7 @@
             <div class="panel item">
               <div
                 class="thumb{% if dataset.has_thumbnail %} has-image{% endif %}"
-                style="--ramp: {{ dataset.ramp }}"
+                {% if not vector %}style="--ramp: {{ dataset.ramp }}"{% endif %}
               >
                 {% if dataset.has_thumbnail %}
                 <img
@@ -112,7 +112,7 @@
             <section class="panel" aria-labelledby="access-title">
               <h3 id="access-title">Access</h3>
               <div class="actions">
-                {% if published %}
+                {% if published and not vector %}
                 <a class="button-link primary" href="{{ mount }}/map?dataset={{ dataset.id | urlencode }}">Open in map viewer</a>
                 {% endif %}
                 {% for link in links %}
@@ -122,7 +122,7 @@
               </div>
               {% if not published %}
               <p class="note" style="margin-top: var(--spacers-dp8)">
-                This dataset is not published, so it is not in the map viewer or the STAC catalog.
+                This dataset is not published, so it is not in {% if not vector %}the map viewer or {% endif %}the STAC catalog.
               </p>
               {% endif %}
             </section>
@@ -135,7 +135,9 @@
                 <dd>{{ value }}</dd>
                 {% endfor %}
               </dl>
+              {% if not vector %}
               <span class="ramp-bar" style="--ramp: {{ dataset.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
+              {% endif %}
             </section>
           </div>
         </div>
