@@ -144,7 +144,7 @@ It runs `load_collection → reduce_dimension → save_result`, reducing the tim
 | `variable` | Variable/band name carried through to the published dataset |
 | `temporal_extent` | `[start, end]` ISO-8601 dates; the change is `value(last) − value(first)` within this range |
 
-The `output_dataset_id` must have a **dataset template** registered on the instance: a YAML in the built-in `plugins/datasets/` folder (or an instance's `plugins_dir/datasets/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Climate Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
+The `output_dataset_id` must have a **dataset template** registered on the instance, in the built-in `plugins/rasters/` folder (or an instance's `plugins_dir/rasters/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Climate Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
 
 ```yaml
 - id: worldpop_population_change

@@ -17,7 +17,7 @@
       begin: "1981-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin
+    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
   # Daily precipitation as a rate (mm/day): a daily total in mm equals the mean daily
   # rate (the cell is one day), so this is a relabel, not a value change. Storing precip
   # as a flux is what xclim drought indices (SPI/SPEI) consume directly.
@@ -58,7 +58,7 @@
       begin: "1981-01-01"
       resolution: P1M
   ingestion:
-    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3MonthlyPlugin
+    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3MonthlyPlugin
   # The source raster is a monthly *total* in mm — confirmed against the sum of the same
   # month's dailies, which matches exactly — so the plugin divides by the number of days to
   # store a mean daily rate. Unlike the daily dataset this is a real conversion, not a

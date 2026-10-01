@@ -27,7 +27,7 @@
       end: "2030"
       resolution: P1Y
   ingestion:
-    plugin: open_climate_service.plugins.datasets.worldpop.WorldPopYearlyPlugin
+    plugin: open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin
     params:
       version: global2
       revision: R2025A
@@ -75,7 +75,7 @@
       end: "2030"
       resolution: P1Y
   ingestion:
-    plugin: open_climate_service.plugins.datasets.worldpop.WorldPopAgeSexYearlyPlugin
+    plugin: open_climate_service.plugins.rasters.worldpop.WorldPopAgeSexYearlyPlugin
     params:
       revision: R2025A
       resolution: 100m

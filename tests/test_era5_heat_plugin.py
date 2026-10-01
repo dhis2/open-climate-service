@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.datasets.era5_heat import (
+from open_climate_service.plugins.rasters.era5_heat import (
     ERA5HeatDailyUTCIPlugin,
     ERA5HeatZarrDailyFromHourlyPlugin,
     ERA5HeatZarrHourlyPlugin,

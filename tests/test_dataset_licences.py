@@ -25,7 +25,7 @@ from open_climate_service.shared.licences import (
     parse_licence,
 )
 
-_BUILTIN_TEMPLATES = sorted(glob.glob("open_climate_service/plugins/datasets/*.yaml"))
+_BUILTIN_TEMPLATES = sorted(glob.glob("open_climate_service/plugins/rasters/*.yaml"))
 
 
 # -- parsing ----------------------------------------------------------------------------

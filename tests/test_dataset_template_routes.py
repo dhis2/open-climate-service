@@ -1,6 +1,6 @@
 """The dataset-template detail route (CLIM-897).
 
-`GET /dataset-templates/{id}` returned 500 for every template with nothing ingested, because
+`GET /data-sources/{id}` returned 500 for every template with nothing ingested, because
 it derived coverage unconditionally and the last of the three data sources raised
 `OSError: no files to open` on an empty glob.
 
@@ -57,10 +57,10 @@ def test_every_listed_template_is_individually_fetchable(client: TestClient) -> 
     """The guard the bug needed. Sixteen of seventeen templates on the Nepal demo returned 500
     while the list endpoint returned all of them, so a per-template check that happened to pick
     an ingested one would have passed."""
-    listed = client.get("/dataset-templates").json()
+    listed = client.get("/data-sources").json()
     assert listed, "no templates to check"
 
-    responses = {t["id"]: client.get(f"/dataset-templates/{t['id']}") for t in listed}
+    responses = {t["id"]: client.get(f"/data-sources/{t['id']}") for t in listed}
 
     failures = {name: r.status_code for name, r in responses.items() if r.status_code != 200}
     assert not failures, f"templates not individually fetchable: {failures}"
@@ -83,7 +83,7 @@ def test_a_template_with_nothing_ingested_is_returned_with_null_coverage(
 
     monkeypatch.setattr(accessor, "get_data", nothing_ingested)
 
-    response = client.get("/dataset-templates/chirps3_precipitation_daily")
+    response = client.get("/data-sources/chirps3_precipitation_daily")
 
     assert response.status_code == 200
     body = response.json()
@@ -103,7 +103,7 @@ def test_a_template_with_data_still_reports_derived_coverage(
     `except`."""
     monkeypatch.setattr(accessor, "get_data", lambda *args, **kwargs: _cube())
 
-    body = client.get("/dataset-templates/chirps3_precipitation_daily").json()
+    body = client.get("/data-sources/chirps3_precipitation_daily").json()
 
     assert body["has_data"] is True
     assert body["coverage"]["temporal"]["start"] is not None
@@ -111,7 +111,7 @@ def test_a_template_with_data_still_reports_derived_coverage(
 
 
 def test_an_id_that_is_not_a_template_is_still_404(client: TestClient) -> None:
-    assert client.get("/dataset-templates/definitely_not_a_template").status_code == 404
+    assert client.get("/data-sources/definitely_not_a_template").status_code == 404
 
 
 # -- the accessor contract underneath -------------------------------------------------------
