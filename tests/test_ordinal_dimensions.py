@@ -60,6 +60,31 @@ def test_build_ordinal_dimensions_omits_step_for_irregular_axis() -> None:
     assert "step" not in dims["band"]
 
 
+def test_build_ordinal_dimensions_publishes_string_labels() -> None:
+    """A string-labelled axis must publish its labels, because clients cannot read them.
+
+    Load-bearing rather than cosmetic. A string coordinate is written as the Zarr v3
+    extension type ``fixed_length_utf32``, which is not in the core specification and which
+    the JavaScript reader rejects outright. STAC is therefore the only place a browser
+    client can learn what the labels are, and it resolves them to indices before selecting.
+    Drop these values and a true-colour composite has nothing to map its bands onto.
+
+    ``worldpop_agesex_*`` has carried a string ``sex`` axis for the same reason, so this
+    covers existing datasets and not only the composite case.
+    """
+    ds = xr.Dataset(
+        {"reflectance": (("band", "y", "x"), np.zeros((3, 2, 2), dtype="uint8"))},
+        coords={"band": ["red", "green", "blue"], "y": [1.0, 2.0], "x": [1.0, 2.0]},
+    )
+
+    dims = _build_ordinal_dimensions(ds, "x", "y", None)
+
+    assert dims["band"]["values"] == ["red", "green", "blue"]
+    assert dims["band"]["type"] == "other"
+    # No step: a step on a non-numeric axis would invite a client to synthesise labels.
+    assert "step" not in dims["band"]
+
+
 def test_read_committed_period_ids_ordinal_coord(tmp_path: Path) -> None:
     # Round-trip an integer day-of-year axis through the store and confirm
     # committed ids come back as plain strings ("1".."366"), not datetime-parsed
