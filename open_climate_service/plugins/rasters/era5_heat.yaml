@@ -14,7 +14,7 @@
       begin: "1940-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
+    plugin: open_climate_service.plugins.rasters.era5_heat.ERA5HeatDailyUTCIPlugin
     params: 
       temporal_aggregation: mean
   units: degC
@@ -48,7 +48,7 @@
       begin: "1940-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
+    plugin: open_climate_service.plugins.rasters.era5_heat.ERA5HeatDailyUTCIPlugin
     params: 
       temporal_aggregation: max
   units: degC
@@ -82,7 +82,7 @@
       begin: "1940-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_heat.ERA5HeatDailyUTCIPlugin
+    plugin: open_climate_service.plugins.rasters.era5_heat.ERA5HeatDailyUTCIPlugin
     params: 
       temporal_aggregation: min
   units: degC

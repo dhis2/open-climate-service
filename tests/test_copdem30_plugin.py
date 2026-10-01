@@ -4,7 +4,7 @@ import os
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.datasets.copdem30 import CopDEM30Plugin
+from open_climate_service.plugins.rasters.copdem30 import CopDEM30Plugin
 
 _TEST_BBOX = [28.7, -2.9, 28.8, -2.8]
 

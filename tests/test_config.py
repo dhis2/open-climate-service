@@ -233,8 +233,8 @@ def test_plugins_dir_adds_root_to_sys_path_and_makes_modules_importable(
     pkg_dir.mkdir(parents=True)
     (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
     (pkg_dir / "source.py").write_text("VALUE = 42\n", encoding="utf-8")
-    (plugins_dir / "datasets").mkdir()
-    (plugins_dir / "datasets" / "custom.yaml").write_text(
+    (plugins_dir / "rasters").mkdir()
+    (plugins_dir / "rasters" / "custom.yaml").write_text(
         """
 - id: plugin_dataset
   name: Plugin dataset
@@ -266,7 +266,7 @@ def test_plugins_dir_adds_root_to_sys_path_and_makes_modules_importable(
 
 
 def test_plugins_dir_in_config_adds_to_bundled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    datasets_subdir = tmp_path / "plugins" / "datasets"
+    datasets_subdir = tmp_path / "plugins" / "rasters"
     datasets_subdir.mkdir(parents=True)
     (datasets_subdir / "custom.yaml").write_text(
         """
@@ -300,7 +300,7 @@ def test_plugins_dir_resolved_relative_to_config_file(monkeypatch: pytest.Monkey
     still point at the correct sibling directory.
     """
     deployment_dir = tmp_path / "deployment"
-    datasets_subdir = deployment_dir / "plugins" / "datasets"
+    datasets_subdir = deployment_dir / "plugins" / "rasters"
     datasets_subdir.mkdir(parents=True)
     (datasets_subdir / "custom.yaml").write_text(
         """
@@ -325,7 +325,7 @@ def test_plugins_dir_resolved_relative_to_config_file(monkeypatch: pytest.Monkey
 
 
 def test_plugins_dir_in_config_overrides_bundled_by_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    datasets_subdir = tmp_path / "plugins" / "datasets"
+    datasets_subdir = tmp_path / "plugins" / "rasters"
     datasets_subdir.mkdir(parents=True)
     (datasets_subdir / "chirps3.yaml").write_text(
         """
