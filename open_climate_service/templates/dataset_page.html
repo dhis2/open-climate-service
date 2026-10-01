@@ -79,8 +79,12 @@
 
           <div class="stack">
             <section class="panel" aria-labelledby="sync-title">
-              <h3 id="sync-title">Sync</h3>
-              {% if syncable and not read_only %}
+              <h3 id="sync-title">{% if vector %}Refresh{% else %}Sync{% endif %}</h3>
+              {% if refresh_href %}
+              <p class="note">
+                This collection is refreshed from <a href="{{ mount }}{{ refresh_href }}">its data source</a>, which fetches it again from the provider.
+              </p>
+              {% elif syncable and not read_only %}
               <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
                 Checking the source for new data…
               </p>
@@ -134,7 +138,7 @@
             </section>
 
             <section class="panel" aria-labelledby="status-title">
-              <h3 id="status-title">Status and display</h3>
+              <h3 id="status-title">{% if vector %}Status{% else %}Status and display{% endif %}</h3>
               <dl class="facts">
                 {% for label, value, href in status_facts %}
                 <dt>{{ label }}</dt>

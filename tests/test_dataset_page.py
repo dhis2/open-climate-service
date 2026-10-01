@@ -294,6 +294,46 @@ def test_a_dataset_without_temporal_coverage_shows_no_coverage_line(monkeypatch:
     assert 'class="page-coverage"' not in landing.render_dataset_page(record, "/ocs")
 
 
+@pytest.mark.parametrize(
+    ("period_type", "start", "end", "label"),
+    [
+        ("monthly", "2026-01-01", "2026-08-01", "2026-01 – 2026-08"),
+        ("monthly", "1990-01", "2026-08", "1990-01 – 2026-08"),
+        ("yearly", "2015-01-01", "2030-01-01", "2015 – 2030"),
+        ("daily", "2026-01-01", "2026-08-31", "2026-01-01 – 2026-08-31"),
+        ("dekadal", "2026-01-01", None, "2026-01-01 – …"),
+    ],
+)
+def test_coverage_reads_at_the_dataset_period(period_type: str, start: str, end: str | None, label: str) -> None:
+    """A monthly store a workflow wrote keeps full dates; the label reads like an ingested one."""
+    record = _record(
+        period_type=period_type,
+        extent={
+            "spatial": {"xmin": 80.0, "ymin": 26.0, "xmax": 88.0, "ymax": 30.0},
+            "temporal": {"start": start, "end": end},
+        },
+    )
+
+    assert landing._dataset_view(record, None)["coverage"] == label
+
+
+def test_a_vector_dataset_links_to_the_data_source_it_is_refreshed_from(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.features import templates as feature_templates
+
+    monkeypatch.setattr(
+        feature_templates, "get_feature_template", lambda template_id: {"id": template_id, "license": "ODbL-1.0"}
+    )
+    record = _record("districts", itemType="feature", period_type=None)
+
+    html = landing.render_dataset_page(record, "/ocs")
+    text = _visible_text(html)
+
+    assert 'href="/ocs/data-sources/districts"' in html
+    assert "no source to sync from" not in text
+    assert "Refresh" in text and "Status and display" not in text
+    assert 'id="sync-form"' not in html
+
+
 @pytest.mark.parametrize(("item_type", "raster"), [("coverage", True), ("feature", False)])
 def test_the_dataset_page_offers_the_map_viewer_and_colour_scale_only_for_a_raster(
     monkeypatch: pytest.MonkeyPatch, item_type: str, raster: bool

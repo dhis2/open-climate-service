@@ -22,7 +22,7 @@
 
       <main id="content">
         <h2 id="data-sources-title" tabindex="-1">Data sources</h2>
-        <p class="lead">Data this instance can fetch from outside providers: rasters and feature collections.</p>
+        <p class="lead">Data this instance can fetch from outside providers: raster and vector data.</p>
         {% if sources %}
         {% set periods = sources | map(attribute="period_type") | reject("equalto", "") | unique | sort | list %}
         {% set kinds = sources | map(attribute="kind") | unique | sort | list %}
