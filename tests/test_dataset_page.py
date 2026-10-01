@@ -336,18 +336,38 @@ def test_coverage_reads_at_the_dataset_period(period_type: str, start: str, end:
     assert landing._dataset_view(record, None)["coverage"] == label
 
 
-def test_a_vector_dataset_links_to_the_data_source_it_is_refreshed_from(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("provider", "raster_collision", "linked", "refreshable"),
+    [
+        ("fake", False, True, True),  # a provider this instance has
+        (None, False, True, False),  # providerless: a hand-registered collection
+        ("missing", False, True, False),  # names a provider this instance lacks
+        ("fake", True, False, False),  # the id is a raster data source's, which /data-sources opens
+    ],
+)
+def test_a_vector_dataset_links_its_data_source_and_offers_refresh_only_where_it_works(
+    monkeypatch: pytest.MonkeyPatch, provider: str | None, raster_collision: bool, linked: bool, refreshable: bool
+) -> None:
+    from open_climate_service.features import providers as feature_providers
     from open_climate_service.features import templates as feature_templates
 
+    template = {"id": "districts", "name": "Districts", "license": "ODbL-1.0"}
+    if provider:
+        template["provider"] = provider
+    monkeypatch.setattr(feature_templates, "get_feature_template", lambda template_id: dict(template))
+    monkeypatch.setattr(feature_providers, "load_feature_providers", lambda: {"fake": object()})
     monkeypatch.setattr(
-        feature_templates, "get_feature_template", lambda template_id: {"id": template_id, "license": "ODbL-1.0"}
+        registry_datasets, "get_dataset", lambda dataset_id: {"id": dataset_id} if raster_collision else None
     )
-    record = _record("districts", itemType="feature", period_type=None)
 
-    html = landing.render_dataset_page(record, "/ocs")
+    html = landing.render_dataset_page(_record("districts", itemType="feature", period_type=None), "/ocs")
     text = _visible_text(html)
 
-    assert 'href="/ocs/data-sources/districts"' in html
+    assert ('href="/ocs/data-sources/districts"' in html) is linked
+    # Never claims how the collection was made: a template is no evidence it was fetched.
+    assert "Fetched from" not in text
+    assert ("fetches it again from the provider" in text) is refreshable
+    assert ("cannot be refreshed here" in text) is not refreshable
     assert "no source to sync from" not in text
     assert "Refresh" in text and "Status and display" not in text
     assert 'id="sync-form"' not in html

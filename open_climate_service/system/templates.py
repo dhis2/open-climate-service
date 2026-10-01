@@ -284,7 +284,7 @@ def _record_licence_label(record: Any) -> str:
     return str(record.license)
 
 
-def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[str, Any]:
+def _dataset_page_context(record: Any, template: dict[str, Any] | None, refreshable: bool = False) -> dict[str, Any]:
     """Everything the dataset page shows: the managed record, plus what its template adds.
 
     Each fact is a (label, value, href) triple and is dropped when it has no value, so the
@@ -316,8 +316,9 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
     )
 
     if template and vector:
-        # A vector template has no sync of its own: it is refreshed from its data source page.
-        origin: Fact = ("Origin", "Fetched from the data source", f"/data-sources/{template['id']}")
+        # Linked, not described: a template without a provider declares a hand-registered
+        # collection, so a matching template does not show the collection was fetched.
+        origin: Fact = ("Data source", str(template.get("name") or template["id"]), f"/data-sources/{template['id']}")
     elif template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
         # The workflow's page, not its process graph: the link is named after the workflow, so
         # it should open the thing a reader can read. The JSON stays a click away, behind the
@@ -392,17 +393,26 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         # A feature collection has no colour scale and the map viewer draws only rasters, so
         # the page offers neither for one.
         "vector": vector,
-        "refresh_href": f"/data-sources/{template['id']}" if vector and template else None,
+        # Only where the data source page offers a fetch: a provider this instance has.
+        "refresh_href": f"/data-sources/{template['id']}" if vector and template and refreshable else None,
     }
 
 
 def render_dataset_page(record: Any, mount: str) -> str:
     """Render the HTML page for one managed dataset, linked from the landing page."""
+    refreshable = False
     try:
         if record.item_type == "feature":
+            from open_climate_service.features.services import is_refreshable
             from open_climate_service.features.templates import get_feature_template
 
-            template = get_feature_template(record.source_dataset_id or record.dataset_id)
+            source_id = record.source_dataset_id or record.dataset_id
+            template = get_feature_template(source_id)
+            # An id a raster template also declares resolves to the raster at /data-sources, and
+            # refreshing the vector one is refused, so neither is linked.
+            if template is not None and registry_datasets.get_dataset(source_id) is not None:
+                template = None
+            refreshable = template is not None and is_refreshable(template)
         else:
             template = registry_datasets.get_dataset(record.source_dataset_id) or registry_datasets.get_dataset(
                 record.dataset_id
@@ -419,7 +429,7 @@ def render_dataset_page(record: Any, mount: str) -> str:
         nav=page_nav(mount, "datasets"),
         job_script=_read_asset("ocs_jobs.js"),
         read_only=api_config.is_read_only(),
-        **_dataset_page_context(record, template),
+        **_dataset_page_context(record, template, refreshable),
     )
 
 
