@@ -86,7 +86,9 @@ def test_transient_failure_is_retried_and_only_the_successful_attempt_delivers(
 
     assert record.status == OpenEOJobStatus.FINISHED
     assert (record.attempt, record.max_attempts, len(calls)) == (2, 3, 2)
-    assert "attempt 1 of 3 failed: OSError: remote store unreachable" in (record.logs or "")
+    logs = (record.logs or "").splitlines()
+    assert "attempt 1 of 3 failed: OSError: remote store unreachable" in logs[0]
+    assert logs[-1].endswith("attempt 2 of 3 finished")  # the history ends with the outcome
     assert len(_deliveries()) == 1
     assert len(sent) == 1
 
@@ -389,3 +391,32 @@ def test_scheduling_a_retry_again_replaces_the_pending_timer(instance: dict[str,
         assert not first.is_alive()  # the replaced timer was cancelled, not left to fire
     finally:
         second.cancel()
+
+
+def test_a_replaced_timer_that_fires_anyway_does_not_cut_the_new_backoff_short(instance: dict[str, Any]) -> None:
+    openeo = instance["openeo"]
+    enqueued: list[str] = []
+    openeo._enqueue = lambda job_id: enqueued.append(job_id)  # type: ignore[method-assign]
+    openeo._schedule_retry("rescheduled", 3600)
+    old = openeo._retry_timers["rescheduled"]
+    openeo._schedule_retry("rescheduled", 3600)
+    new = openeo._retry_timers["rescheduled"]
+    try:
+        # The old timer had already entered its callback when it was replaced.
+        openeo._retry_due("rescheduled", old)
+        assert enqueued == []
+        assert openeo._retry_timers["rescheduled"] is new
+        # The registered timer still requeues the job when it fires.
+        openeo._retry_due("rescheduled", new)
+        assert enqueued == ["rescheduled"]
+    finally:
+        new.cancel()
+
+
+def test_a_single_attempt_job_keeps_no_attempt_history(
+    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _failing_then(monkeypatch, [])
+    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT), max_attempts=1))
+    record = _await_openeo(job_id)
+    assert (record.status, record.logs) == (OpenEOJobStatus.FINISHED, None)
