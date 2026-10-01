@@ -553,20 +553,30 @@ class JobService:
                 if self._stopping.is_set():
                     return  # still accepted, so the next start recovers it
                 continue  # cancelled while waiting; the check above records it
-            try:
-                started = store.mutate_job_record(
-                    job_id,
-                    lambda current: current.model_copy(
-                        update={
-                            "status": JobStatus.RUNNING,
-                            "started_at": current.started_at or utc_now(),
-                            "finished_at": None,
-                            "attempt": current.attempt + 1,
-                            "retry_after": None,
-                            "error": None,
-                        }
-                    ),
+            cancelled = False
+
+            def start(current: JobRecord) -> JobRecord:
+                # Checked in the same write that marks it RUNNING, so a cancellation that
+                # lands after the slot is won still stops the job before it runs.
+                nonlocal cancelled
+                if current.cancel_requested:
+                    cancelled = True
+                    return current
+                return current.model_copy(
+                    update={
+                        "status": JobStatus.RUNNING,
+                        "started_at": current.started_at or utc_now(),
+                        "finished_at": None,
+                        "attempt": current.attempt + 1,
+                        "retry_after": None,
+                        "error": None,
+                    }
                 )
+
+            try:
+                started = store.mutate_job_record(job_id, start)
+                if cancelled:
+                    continue  # the check above records it
                 retry_after = self._run_attempt(job_id, started)
             finally:
                 slots.release()

@@ -122,16 +122,23 @@ class JobSlots:
         """Take a slot, waiting as long as needed; False if `should_stop` turned true first.
 
         Waits in short intervals so a cancelled job or a stopping service gives up its
-        place instead of holding a pool thread forever.
+        place instead of holding a pool thread forever. `should_stop` is checked again once
+        a slot is won, since a cancellation or shutdown can land during the wait itself.
         """
         if self._semaphore.acquire(blocking=False):
-            return True
+            return self._keep_unless_stopping(should_stop)
         if on_wait is not None:
             on_wait()
         while not should_stop():
             if self._semaphore.acquire(timeout=_SLOT_POLL_SECONDS):
-                return True
+                return self._keep_unless_stopping(should_stop)
         return False
+
+    def _keep_unless_stopping(self, should_stop: Callable[[], bool]) -> bool:
+        if should_stop():
+            self._semaphore.release()
+            return False
+        return True
 
     def release(self) -> None:
         self._semaphore.release()

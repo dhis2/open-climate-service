@@ -204,6 +204,14 @@ def test_job_limit_refuses_a_value_that_is_not_a_positive_integer(monkeypatch: p
         compute.max_concurrent_jobs()
 
 
+def _slot_is_free(slots: JobSlots) -> bool:
+    """Whether a slot can be taken right now, leaving it free either way."""
+    if slots._semaphore.acquire(blocking=False):
+        slots._semaphore.release()
+        return True
+    return False
+
+
 def _run_in_background(target: Callable[[], None]) -> threading.Thread:
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
@@ -223,7 +231,7 @@ def test_a_native_job_waits_accepted_for_a_free_slot(persisted: dict[str, JobRec
     one_slot.release()
     runner.join(timeout=5)
     assert persisted[job.job_id].status == JobStatus.SUCCESSFUL
-    assert one_slot.acquire(should_stop=lambda: True), "the job gave its slot back"
+    assert _slot_is_free(one_slot), "the job gave its slot back"
 
 
 def test_a_native_job_cancelled_while_waiting_never_runs(persisted: dict[str, JobRecord], one_slot: JobSlots) -> None:
@@ -257,6 +265,84 @@ def test_a_native_job_still_waiting_at_shutdown_stays_accepted(
     assert not _ran.is_set()
 
 
+def test_a_stop_that_lands_during_the_wait_gives_the_slot_back(
+    one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stopping and a slot freeing in the same instant: the waiter must not keep the slot."""
+    monkeypatch.setattr(compute, "_SLOT_POLL_SECONDS", 5.0)  # one long wait, so the slot frees inside it
+    assert one_slot.acquire(should_stop=lambda: False)
+    stop = threading.Event()
+    waiting = threading.Event()
+    result: list[bool] = []
+    waiter = _run_in_background(lambda: result.append(one_slot.acquire(should_stop=stop.is_set, on_wait=waiting.set)))
+    assert waiting.wait(timeout=5)
+    time.sleep(0.05)  # inside the timed semaphore wait
+    stop.set()
+    one_slot.release()
+    waiter.join(timeout=5)
+
+    assert result == [False]
+    assert _slot_is_free(one_slot), "the slot was given back"
+
+
+def test_a_native_job_cancelled_as_its_slot_frees_never_runs(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(compute, "_SLOT_POLL_SECONDS", 5.0)
+    service = JobService()
+    job = service.submit_callable_job(func=_job_callable, label="ingestion", request={})
+    assert one_slot.acquire(should_stop=lambda: False)
+
+    runner = _run_in_background(lambda: service._execute_job(job.job_id))
+    _wait_until(lambda: persisted[job.job_id].progress.message == "Waiting for a free job slot")
+    time.sleep(0.05)
+    persisted[job.job_id] = persisted[job.job_id].model_copy(update={"cancel_requested": True})
+    one_slot.release()
+    runner.join(timeout=5)
+
+    assert persisted[job.job_id].status == JobStatus.CANCELLED
+    assert not _ran.is_set()
+    assert _slot_is_free(one_slot), "the job gave its slot back"
+
+
+def test_a_native_job_stopped_as_its_slot_frees_stays_accepted(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(compute, "_SLOT_POLL_SECONDS", 5.0)
+    service = JobService()
+    job = service.submit_callable_job(func=_job_callable, label="ingestion", request={})
+    assert one_slot.acquire(should_stop=lambda: False)
+
+    runner = _run_in_background(lambda: service._execute_job(job.job_id))
+    _wait_until(lambda: persisted[job.job_id].progress.message == "Waiting for a free job slot")
+    time.sleep(0.05)
+    service.shutdown()
+    one_slot.release()
+    runner.join(timeout=5)
+
+    assert persisted[job.job_id].status == JobStatus.ACCEPTED
+    assert not _ran.is_set()
+
+
+def test_a_cancellation_after_the_slot_is_won_still_stops_the_job(
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last check is the write that marks the job RUNNING, not the slot wait."""
+    service = JobService()
+    job = service.submit_callable_job(func=_job_callable, label="ingestion", request={})
+
+    def acquire_then_cancel(should_stop: Callable[[], bool], on_wait: Callable[[], None] | None = None) -> bool:
+        persisted[job.job_id] = persisted[job.job_id].model_copy(update={"cancel_requested": True})
+        return True
+
+    monkeypatch.setattr(one_slot, "acquire", acquire_then_cancel)
+    monkeypatch.setattr(one_slot, "release", lambda: None)
+    service._execute_job(job.job_id)
+
+    assert persisted[job.job_id].status == JobStatus.CANCELLED
+    assert not _ran.is_set()
+
+
 def _failed_once_and_backing_off(
     persisted: dict[str, JobRecord], monkeypatch: pytest.MonkeyPatch, delay: int
 ) -> tuple[JobService, JobRecord, list[str]]:
@@ -278,8 +364,7 @@ def test_a_retry_backoff_holds_neither_a_slot_nor_a_worker(
 
     # `_execute_job` returned, so the executor thread is free, and the slot with it.
     assert persisted[job.job_id].status == JobStatus.RETRYING
-    assert one_slot.acquire(should_stop=lambda: True)
-    one_slot.release()
+    assert _slot_is_free(one_slot)
     assert enqueued == []
     service.shutdown()
 
