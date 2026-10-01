@@ -82,9 +82,57 @@ from open_climate_service.streaming.store import (
 logger = logging.getLogger(__name__)
 MutationResult = TypeVar("MutationResult")
 
+
 # Per-store threading locks prevent two concurrent ingest/sync runs from writing
 # to the same Icechunk store simultaneously (which causes MVCC commit conflicts).
-_store_locks: dict[str, threading.Lock] = {}
+class StoreWriteLock:
+    """Exclusive writer lock for one Icechunk store, across threads and across processes.
+
+    The thread lock alone was invisible to a second OCS process: an overlapping restart, an
+    auto-reload, or a second worker could run a write against the same store at the same
+    time, and Icechunk then rejected one of them with a commit conflict. The file lock beside
+    the store makes the second writer refuse up front instead. The operating system releases
+    it when the holding process exits, so a crash never leaves a store locked.
+    """
+
+    def __init__(self, store_path: Path) -> None:
+        self._thread_lock = threading.Lock()
+        self._lock_path = store_path.with_name(f"{store_path.name}.lock")
+        self._handle: Any | None = None
+
+    def acquire(self, blocking: bool = True) -> bool:
+        """Take the lock; with ``blocking=False`` return False at once when another writer holds it."""
+        if not self._thread_lock.acquire(blocking=blocking):
+            return False
+        try:
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(self._lock_path, "a+", encoding="utf-8")  # noqa: SIM115 -- held until release()
+            try:
+                flags = portalocker.LOCK_EX if blocking else portalocker.LOCK_EX | portalocker.LOCK_NB
+                portalocker.lock(handle, flags)
+            except portalocker.exceptions.LockException:
+                handle.close()
+                self._thread_lock.release()
+                return False
+        except BaseException:
+            self._thread_lock.release()
+            raise
+        self._handle = handle
+        return True
+
+    def release(self) -> None:
+        handle, self._handle = self._handle, None
+        try:
+            if handle is not None:
+                try:
+                    portalocker.unlock(handle)
+                finally:
+                    handle.close()
+        finally:
+            self._thread_lock.release()
+
+
+_store_locks: dict[str, StoreWriteLock] = {}
 _store_locks_mutex = threading.Lock()
 
 # Consolidated zarr metadata cache: (store_path, snapshot_id) → metadata dict.
@@ -122,12 +170,16 @@ class _StoreNormalizationResult:
     swapped: bool = False
 
 
-def _acquire_store_lock(store_path: Path) -> threading.Lock:
-    """Return the exclusive lock for store_path, creating it if needed."""
+def _acquire_store_lock(store_path: Path) -> StoreWriteLock:
+    """Return the exclusive writer lock for store_path, creating it if needed.
+
+    Every writer of a managed Icechunk store must hold this lock, whichever path it takes:
+    ingestion, sync, or an openEO job publishing a managed dataset.
+    """
     key = str(store_path.resolve())
     with _store_locks_mutex:
         if key not in _store_locks:
-            _store_locks[key] = threading.Lock()
+            _store_locks[key] = StoreWriteLock(Path(key))
         return _store_locks[key]
 
 
@@ -367,8 +419,14 @@ def create_artifact(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, object]], None] | None = None,
     periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
 ) -> ArtifactRecord:
     """Materialize one managed dataset artifact and persist its metadata.
+
+    ``on_update_planned`` is called once the plan is known and before anything is fetched,
+    only when the ingestion will change stored data. It receives the coverage end the data
+    had before this update, or None when every period is new or rewritten. An up-to-date
+    dataset returns its existing artifact without calling it.
 
     Source dataset materialization is plugin-backed and always writes an
     Icechunk store. Sync requests may still pass `download_start` and
@@ -428,6 +486,7 @@ def create_artifact(
         is_cancel_requested=is_cancel_requested,
         save_cursor=save_cursor,
         periods=periods,
+        on_update_planned=on_update_planned,
     )
 
 
@@ -1106,6 +1165,24 @@ def _plan_streaming_materialization(
     )
 
 
+def _previous_coverage_end(dataset: dict[str, object], plan: _StreamingMaterializationPlan) -> str | None:
+    """The coverage end stored data had before an update, or None when all of it is new.
+
+    Only a forward append keeps earlier periods as they were. A new store has none, and a
+    rematerialization rewrites every period, so both report None: everything up to the new
+    end changed.
+    """
+    if plan.action != SyncAction.APPEND or not plan.has_committed_periods:
+        return None
+    try:
+        existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return None
+    return existing.coverage.temporal.end
+
+
 def _create_streaming_artifact(
     *,
     dataset: dict[str, object],
@@ -1121,6 +1198,7 @@ def _create_streaming_artifact(
     is_cancel_requested: Callable[[], bool] | None = None,
     save_cursor: Callable[[dict[str, object]], None] | None = None,
     periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
 ) -> ArtifactRecord:
     """Create or update one plugin-backed Icechunk artifact.
 
@@ -1143,7 +1221,6 @@ def _create_streaming_artifact(
     if country_code is not None:
         params["country_code"] = country_code
 
-    plugin = _load_streaming_plugin(plugin_path, params=params)
     store_path = downloader.get_icechunk_path(dataset)
 
     lock = _acquire_store_lock(store_path)
@@ -1152,6 +1229,7 @@ def _create_streaming_artifact(
             status_code=409,
             detail=f"An ingest or sync is already running for dataset '{dataset['id']}'. Wait for it to finish.",
         )
+    plugin: IngestionPlugin | None = None
     replacement_path: Path | None = None
     rollback_repo: Any | None = None
     rollback_branch: str | None = None
@@ -1161,6 +1239,7 @@ def _create_streaming_artifact(
     plugin_handed_to_orchestrator = False
     ingest_completed = False
     try:
+        plugin = _load_streaming_plugin(plugin_path, params=params)
         # First thing under the lock, before anything looks at the store. A swap killed between
         # its two renames leaves the published path missing and the data at `.retired`; ingest
         # would read that as a brand-new store and write only the requested delta into a fresh
@@ -1201,6 +1280,8 @@ def _create_streaming_artifact(
                     temporal.start,
                     temporal.end,
                 )
+        if plan.action != SyncAction.NO_OP and on_update_planned is not None:
+            on_update_planned(_previous_coverage_end(dataset, plan))
         materialization_scope = request_scope.model_copy(update={"start": plan.start, "end": plan.end})
 
         ingest_path = store_path
@@ -1353,7 +1434,7 @@ def _create_streaming_artifact(
                     published_swap_pending = False
                 except Exception:
                     logger.warning("Could not clean up retired store '%s'", store_path, exc_info=True)
-            if not plugin_handed_to_orchestrator:
+            if not plugin_handed_to_orchestrator and plugin is not None:
                 try:
                     close_ingestion_plugin(plugin)
                 except Exception:
@@ -1365,7 +1446,8 @@ def _create_streaming_artifact(
                 and rollback_snapshot is not None
             ):
                 try:
-                    if not store_committed and ingest_completed:
+                    rolled_back = not store_committed and ingest_completed
+                    if rolled_back:
                         rollback_repo.reset_branch("main", rollback_snapshot)
                     try:
                         rollback_repo.delete_branch(rollback_branch)
@@ -1375,6 +1457,13 @@ def _create_streaming_artifact(
                         # an absent cleanup ref must not mask the original failure.
                         if "ref not found" not in str(exc).lower():
                             raise
+                    if rolled_back:
+                        # The reset left every period this attempt committed unreachable.
+                        # Still under the store lock, so nothing is mid-write. The retention
+                        # window keeps the attempt's recent commits, so a later collection
+                        # is marked pending for them.
+                        collect_unreachable_objects(rollback_repo, store_path)
+                        _mark_collection_pending(store_path)
                 except Exception as exc:
                     if not store_committed:
                         rollback_error = exc
@@ -1432,6 +1521,12 @@ def recover_interrupted_swap(target: Path) -> bool:
     An interrupted rollback also leaves its rejected replacement at ``.failed``.
     Remove that copy only after the original store has been restored.
 
+    A pyramid rebuild killed part way leaves its partial copy at ``.rebuild``, which nothing
+    reads and which can be most of the store's size; it is removed here too. A rollback branch
+    left by a killed ingest means that attempt's commits were never cleaned up, so the objects
+    no branch reaches are then collected. A collection left pending by an earlier rollback runs
+    here too, once its retention window has passed.
+
     Returns True when a recovery was performed.
     """
     retired = _retired_path(target)
@@ -1441,6 +1536,8 @@ def recover_interrupted_swap(target: Path) -> bool:
         retired.rename(target)
         recovered = True
         logger.warning("Recovered '%s' from '%s' after an interrupted swap", target.name, retired.name)
+    if _remove_rebuild_leftover(target):
+        recovered = True
     # A rollback interrupted before or after restoring the retired store leaves
     # its rejected replacement here. Delete it only once a usable target exists.
     if target.exists() and failed.exists():
@@ -1457,11 +1554,161 @@ def recover_interrupted_swap(target: Path) -> bool:
             if stale_branches:
                 recovered = True
                 logger.warning("Removed %d stale ingest rollback branch(es) from '%s'", len(stale_branches), target)
+                collect_unreachable_objects(repo, target)
+                _mark_collection_pending(target)
+            collect_pending_garbage(target)
         except Exception:
             # Swap recovery must remain usable for older or partially damaged
             # repositories whose branch metadata cannot be inspected.
             logger.warning("Could not clean stale ingest rollback branches from '%s'", target, exc_info=True)
     return recovered
+
+
+def _remove_rebuild_leftover(target: Path) -> bool:
+    """Remove the partial copy a killed pyramid rebuild left at ``<store>.rebuild``.
+
+    Safe whenever no rebuild of this store is running: the build writes there and swaps it in
+    within one locked ingest, and nothing ever reads it back. Returns True when one was removed.
+    """
+    leftover = target.with_name(f"{target.name}.rebuild")
+    if not leftover.exists():
+        return False
+    try:
+        _remove_store_path(leftover)
+    except OSError:
+        logger.warning("Could not remove leftover pyramid rebuild '%s'", leftover, exc_info=True)
+        return False
+    logger.warning("Removed leftover pyramid rebuild '%s' from an interrupted build", leftover.name)
+    return True
+
+
+def remove_leftover_rebuilds() -> int:
+    """Remove every ``*.icechunk.rebuild`` left in the store directory; returns how many.
+
+    Run at startup before this process recovers jobs. An older process may still be rebuilding
+    during an overlapping restart, so remove a leftover only while holding the target store's
+    writer lock. Recovery at the start of each ingest also removes one, but a dataset that is
+    never synced again would otherwise keep a partial copy of its whole store indefinitely.
+    """
+    directory = Path(downloader.DOWNLOAD_DIR)
+    if not directory.is_dir():
+        return 0
+    removed = 0
+    for leftover in directory.glob("*.icechunk.rebuild"):
+        target = leftover.with_suffix("")
+        lock = _acquire_store_lock(target)
+        if not lock.acquire(blocking=False):
+            continue
+        try:
+            removed += _remove_rebuild_leftover(target)
+        finally:
+            lock.release()
+    return removed
+
+
+# Unreachable objects younger than this are kept. Readers take no store lock, and one that
+# opened ``main`` while an ingest was committing sits on a snapshot the rollback makes
+# unreachable. Icechunk keeps every snapshot newer than the cutoff, and all it references, so
+# such a reader can keep reading for this long after the commit it opened. It is a window, not
+# a guarantee: a reader still on that interim snapshot after it can fail with "object not
+# found". Snapshots a branch still reaches, such as the version published before the failed
+# attempt, are never collected.
+_GC_RETENTION = timedelta(hours=1)
+
+
+def collect_unreachable_objects(repo: Any, store_path: Path) -> bool:
+    """Delete the snapshots, manifests and chunks that no branch or tag reaches.
+
+    A rolled-back ingest resets ``main`` to where it was, so every period the attempt
+    committed becomes unreachable, and Icechunk keeps it until collected: on the Norway
+    instance a daily store held 44 GB of such data, two thirds of its size. Only unreachable
+    objects are removed, so every version any branch or tag can reach is kept, and so is
+    anything committed within :data:`_GC_RETENTION`, which a pending collection frees later
+    (see :func:`collect_pending_garbage`).
+
+    Call with the store's write lock held. Never raises, and returns whether it ran; a failure
+    leaves the objects for a later collection and must not mask the ingest's own outcome.
+    """
+    try:
+        summary = repo.garbage_collect(datetime.now(UTC) - _GC_RETENTION)
+    except Exception:
+        logger.warning("Could not collect unreachable objects in '%s'", store_path, exc_info=True)
+        return False
+    freed = int(getattr(summary, "bytes_deleted", 0) or 0)
+    if freed:
+        logger.info(
+            "Collected %.1f MB of unreachable data from '%s' (%d snapshots)",
+            freed / 1e6,
+            store_path.name,
+            int(getattr(summary, "snapshots_deleted", 0) or 0),
+        )
+    return True
+
+
+def _collection_marker(store_path: Path) -> Path:
+    return store_path.with_name(f"{store_path.name}.gc-pending")
+
+
+def _mark_collection_pending(store_path: Path) -> None:
+    """Record that *store_path* holds unreachable objects too recent to collect yet.
+
+    A file beside the store holding the time, so the collection survives a restart and runs
+    whether or not the dataset is ever synced again. A later rollback moves the time forward.
+    """
+    try:
+        _collection_marker(store_path).write_text(datetime.now(UTC).isoformat())
+    except OSError:
+        logger.warning("Could not mark a pending collection for '%s'", store_path, exc_info=True)
+
+
+def collect_pending_garbage(store_path: Path) -> bool:
+    """Run a collection marked pending for *store_path* once its retention window has passed.
+
+    Call with the store's write lock held. Everything the marked rollback left unreachable was
+    committed before the marker's time, so a collection at least :data:`_GC_RETENTION` later
+    frees all of it; the marker is then removed. Returns True when a collection ran.
+    """
+    marker = _collection_marker(store_path)
+    try:
+        marked = datetime.fromisoformat(marker.read_text().strip())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        logger.warning("Unreadable pending-collection marker '%s'; collecting now", marker, exc_info=True)
+        marked = datetime.min.replace(tzinfo=UTC)
+    if datetime.now(UTC) - marked < _GC_RETENTION:
+        return False
+    if not (store_path / "repo").exists():
+        marker.unlink(missing_ok=True)
+        return False
+    if not collect_unreachable_objects(open_or_create_repo(store_path), store_path):
+        return False
+    marker.unlink(missing_ok=True)
+    return True
+
+
+def collect_pending_garbage_everywhere() -> int:
+    """Run every collection that is due, skipping a store an ingest holds; returns how many ran.
+
+    Called at startup and periodically on a writable instance, which is what guarantees a
+    failed attempt's data is freed even when it was the last ingest the store will see.
+    """
+    directory = Path(downloader.DOWNLOAD_DIR)
+    if not directory.is_dir():
+        return 0
+    collected = 0
+    for marker in directory.glob("*.icechunk.gc-pending"):
+        store_path = marker.with_suffix("")
+        lock = _acquire_store_lock(store_path)
+        if not lock.acquire(blocking=False):
+            continue  # an ingest is running; its own recovery or the next sweep collects
+        try:
+            collected += collect_pending_garbage(store_path)
+        except Exception:
+            logger.warning("Pending collection failed for '%s'", store_path, exc_info=True)
+        finally:
+            lock.release()
+    return collected
 
 
 def _swap_store(staging: Path, target: Path, *, retain_previous: bool = False) -> None:
