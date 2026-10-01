@@ -94,8 +94,11 @@ async def _collect_pending_garbage_periodically() -> None:
 async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
     from open_climate_service.plugins_diagnostics import log_plugin_loading
+    from open_climate_service.shared.compute import install_shared_dask_pool
 
     log_plugin_loading()
+    # Before any job is recovered, so no computation starts a dask pool of its own.
+    install_shared_dask_pool()
     maintenance: asyncio.Task[None] | None = None
     if not api_config.is_read_only():
         # Before any job is recovered, so no pyramid rebuild can be in progress. A read-only
