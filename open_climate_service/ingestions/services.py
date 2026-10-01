@@ -395,11 +395,11 @@ def ensure_ingestable(dataset: dict[str, object]) -> None:
     raise HTTPException(
         status_code=400,
         detail=(
-            f"Dataset template '{dataset['id']}' cannot be ingested: it declares no "
+            f"Data source '{dataset['id']}' cannot be ingested: it declares no "
             "'ingestion.plugin', so there is no source to fetch from. If it is a derived "
             "product, it is published by a workflow through 'save_result' — run the workflow "
             "that produces it (see GET /process_graphs). Otherwise, add an 'ingestion.plugin' "
-            "to the template. GET /dataset-templates reports 'ingestable' for every template."
+            "to the template. GET /data-sources reports 'ingestable' for every data source."
         ),
     )
 
