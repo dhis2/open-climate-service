@@ -336,19 +336,36 @@ def test_coverage_reads_at_the_dataset_period(period_type: str, start: str, end:
     assert landing._dataset_view(record, None)["coverage"] == label
 
 
+_NOT_FETCHED = "not fetched by a provider"
+_OWNED_ELSEWHERE = "fetched by provider 'overture', but its data source now names 'fake'"
+_NO_PROVIDER = "no provider on this instance fetches it"
+
+
 @pytest.mark.parametrize(
-    ("provider", "raster_collision", "linked", "refreshable"),
+    ("provider", "owner", "raster_collision", "linked", "blocked"),
     [
-        ("fake", False, True, True),  # a provider this instance has
-        (None, False, True, False),  # providerless: a hand-registered collection
-        ("missing", False, True, False),  # names a provider this instance lacks
-        ("fake", True, False, False),  # the id is a raster data source's, which /data-sources opens
+        ("fake", "fake", False, True, None),  # the provider that fetched it, and it is installed
+        (None, None, False, True, _NO_PROVIDER),  # providerless template
+        ("missing", "missing", False, True, _NO_PROVIDER),  # names a provider this instance lacks
+        ("fake", "fake", True, False, _NO_PROVIDER),  # the id is a raster data source's
+        ("fake", None, False, True, _NOT_FETCHED),  # stored without a provider: none may overwrite it
+        ("fake", "overture", False, True, _OWNED_ELSEWHERE),  # template now names another provider
     ],
 )
-def test_a_vector_dataset_links_its_data_source_and_offers_refresh_only_where_it_works(
-    monkeypatch: pytest.MonkeyPatch, provider: str | None, raster_collision: bool, linked: bool, refreshable: bool
+def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str | None,
+    owner: str | None,
+    raster_collision: bool,
+    linked: bool,
+    blocked: str | None,
 ) -> None:
+    """The page agrees with the refresh: an installed provider, and the one that wrote the stored
+    collection, since a refresh may only overwrite what its own provider fetched."""
+    from types import SimpleNamespace
+
     from open_climate_service.features import providers as feature_providers
+    from open_climate_service.features import services as feature_services
     from open_climate_service.features import templates as feature_templates
 
     template = {"id": "districts", "name": "Districts", "license": "ODbL-1.0"}
@@ -356,6 +373,11 @@ def test_a_vector_dataset_links_its_data_source_and_offers_refresh_only_where_it
         template["provider"] = provider
     monkeypatch.setattr(feature_templates, "get_feature_template", lambda template_id: dict(template))
     monkeypatch.setattr(feature_providers, "load_feature_providers", lambda: {"fake": object()})
+    monkeypatch.setattr(
+        feature_services,
+        "registered_collections",
+        lambda: {"districts": SimpleNamespace(features=SimpleNamespace(provider=owner))},
+    )
     monkeypatch.setattr(
         registry_datasets, "get_dataset", lambda dataset_id: {"id": dataset_id} if raster_collision else None
     )
@@ -366,8 +388,9 @@ def test_a_vector_dataset_links_its_data_source_and_offers_refresh_only_where_it
     assert ('href="/ocs/data-sources/districts"' in html) is linked
     # Never claims how the collection was made: a template is no evidence it was fetched.
     assert "Fetched from" not in text
-    assert ("fetches it again from the provider" in text) is refreshable
-    assert ("cannot be refreshed here" in text) is not refreshable
+    assert ("fetches it again from the provider" in text) is (blocked is None)
+    if blocked is not None:
+        assert "cannot be refreshed here" in text and blocked in text
     assert "no source to sync from" not in text
     assert "Refresh" in text and "Status and display" not in text
     assert 'id="sync-form"' not in html

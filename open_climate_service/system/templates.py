@@ -284,7 +284,9 @@ def _record_licence_label(record: Any) -> str:
     return str(record.license)
 
 
-def _dataset_page_context(record: Any, template: dict[str, Any] | None, refreshable: bool = False) -> dict[str, Any]:
+def _dataset_page_context(
+    record: Any, template: dict[str, Any] | None, refreshable: bool = False, refresh_blocked: str = ""
+) -> dict[str, Any]:
     """Everything the dataset page shows: the managed record, plus what its template adds.
 
     Each fact is a (label, value, href) triple and is dropped when it has no value, so the
@@ -395,15 +397,38 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None, refresha
         "vector": vector,
         # Only where the data source page offers a fetch: a provider this instance has.
         "refresh_href": f"/data-sources/{template['id']}" if vector and template and refreshable else None,
+        "refresh_blocked": refresh_blocked,
     }
+
+
+def _feature_refresh_blocked(collection_id: str, template: dict[str, Any] | None) -> str:
+    """Why a refresh of *collection_id* would be refused, or "" when it would run.
+
+    The same order the refresh itself checks in: a provider this instance has, then ownership.
+    Ownership is read from the stored record, not the template, because a refresh may only
+    overwrite a collection the same provider wrote; editing `provider:` does not transfer it.
+    """
+    from open_climate_service.features.services import is_refreshable, registered_collections
+
+    if template is None or not is_refreshable(template):
+        return "no provider on this instance fetches it"
+    current = registered_collections().get(collection_id)
+    if current is None:
+        return ""
+    owner = current.features.provider if current.features is not None else None
+    if owner is None:
+        return "it was not fetched by a provider, so no provider may overwrite it"
+    if owner != template.get("provider"):
+        return f"it was fetched by provider '{owner}', but its data source now names '{template.get('provider')}'"
+    return ""
 
 
 def render_dataset_page(record: Any, mount: str) -> str:
     """Render the HTML page for one managed dataset, linked from the landing page."""
     refreshable = False
+    refresh_blocked = ""
     try:
         if record.item_type == "feature":
-            from open_climate_service.features.services import is_refreshable
             from open_climate_service.features.templates import get_feature_template
 
             source_id = record.source_dataset_id or record.dataset_id
@@ -412,7 +437,8 @@ def render_dataset_page(record: Any, mount: str) -> str:
             # refreshing the vector one is refused, so neither is linked.
             if template is not None and registry_datasets.get_dataset(source_id) is not None:
                 template = None
-            refreshable = template is not None and is_refreshable(template)
+            refresh_blocked = _feature_refresh_blocked(record.dataset_id, template)
+            refreshable = template is not None and not refresh_blocked
         else:
             template = registry_datasets.get_dataset(record.source_dataset_id) or registry_datasets.get_dataset(
                 record.dataset_id
@@ -429,7 +455,7 @@ def render_dataset_page(record: Any, mount: str) -> str:
         nav=page_nav(mount, "datasets"),
         job_script=_read_asset("ocs_jobs.js"),
         read_only=api_config.is_read_only(),
-        **_dataset_page_context(record, template, refreshable),
+        **_dataset_page_context(record, template, refreshable, refresh_blocked),
     )
 
 

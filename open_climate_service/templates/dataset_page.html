@@ -85,7 +85,7 @@
                 This collection is refreshed from <a href="{{ mount }}{{ refresh_href }}">its data source</a>, which fetches it again from the provider.
               </p>
               {% elif vector %}
-              <p class="note">This collection cannot be refreshed here: no provider on this instance fetches it.</p>
+              <p class="note">This collection cannot be refreshed here: {{ refresh_blocked or "no provider on this instance fetches it" }}.</p>
               {% elif syncable and not read_only %}
               <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
                 Checking the source for new data…
