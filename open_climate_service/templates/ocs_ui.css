@@ -653,7 +653,6 @@ button:disabled {
   font-size: var(--font-size-body);
 }
 .page-coverage .range {
-  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .page-coverage .period {
