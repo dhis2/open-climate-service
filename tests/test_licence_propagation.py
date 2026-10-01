@@ -347,7 +347,7 @@ def test_no_derived_builtin_declares_away_its_sources_obligations() -> None:
     from open_climate_service.shared.licences import refuses_publication
 
     licences = {}
-    for path in sorted(glob.glob("open_climate_service/plugins/datasets/*.yaml")):
+    for path in sorted(glob.glob("open_climate_service/plugins/rasters/*.yaml")):
         for template in yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8")):
             if isinstance(template, dict) and template.get("id"):
                 licences[template["id"]] = parse_licence(template.get("license"))
