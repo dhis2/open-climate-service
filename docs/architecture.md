@@ -119,8 +119,8 @@ has already returned `202` by that point, so its job fails with the same explana
 An openEO job that reaches managed-dataset publication while the lock is held fails before
 writing the target store, with an error explaining that another writer is active.
 
-A native job also runs in at most one process at a time. If a process that is still shutting
-down is executing a job, startup recovery in the new process leaves that job alone instead of
+A native or openEO job also runs in at most one process at a time. If a process that is still
+shutting down is executing a job, startup recovery in the new process leaves that job alone instead of
 running it a second time, and watches it. If the old process finishes the job, nothing more
 happens; if it exits without finishing, the new process takes the job over within seconds, as
 it would have at startup. The operating system releases both locks when their process exits,

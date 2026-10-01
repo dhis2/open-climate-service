@@ -120,6 +120,48 @@ independently in that pool. Bounding total workflow concurrency is a general res
 concern deferred to CLIM-845; until then the per-store lock remains the write-safety boundary for
 workflows that publish managed datasets.
 
+## Retries and restarts
+
+A triggered workflow job runs up to `max_attempts` times, the first attempt included. The
+default is 3 and the bound is 10:
+
+```yaml
+automation:
+  workflow_triggers:
+    - id: chirps-to-dhis2
+      on_update_of: chirps3_precipitation_daily
+      workflow_id: aggregate_to_dhis2_json
+      max_attempts: 3
+      arguments: { ... }
+```
+
+Every attempt runs under the same deterministic job ID, so a retry is still the one job for
+that event and trigger, and replaying the event does not create another.
+
+- **A transient failure is retried after a backoff** of 1, 2, then 4 minutes. This covers an
+  unreachable source, a timeout, a server error, or a store another writer is busy with.
+  While it waits the job is `queued`, holding no worker.
+- **A permanent error is not retried.** An invalid process graph, a bad request, or a
+  validation error such as an unknown variable fails the same way on every attempt, so the job
+  fails at once.
+- **A restart during an attempt** requeues the job if it has attempts left. The interruption
+  counts as an attempt, so a job that keeps crashing the server still stops.
+- **A job still backing off at shutdown** waits out the rest of its backoff after the next
+  start.
+- **Cancelling during a backoff** takes effect at once.
+
+When the attempts run out, the job stays `error`. Its error names the attempt, for example
+`OSError: connection reset (attempt 3 of 3)`, and `GET /jobs/{job_id}/results` answers with it.
+The job's `logs` field lists every attempt with its time and outcome.
+
+Only an attempt that finishes can deliver, so a trigger with `deliver` imports the result of
+the successful attempt, once. Re-running a failed job with `POST /jobs/{job_id}/results`
+starts a fresh attempt budget.
+
+Jobs submitted directly, not by a trigger, run once as before. A job still running in another
+OCS process, for example one that has not finished shutting down, is not marked failed at
+startup: it is left to that process, and taken over if the process exits without finishing it.
+
 ## Deliver the result to DHIS2
 
 A trigger can deliver its job's result once the job finishes. The workflow must save through a
@@ -184,6 +226,6 @@ server environment. See
 This mechanism dispatches workflows owned by the same OCS instance. It does not provide workflow
 dependency graphs, cross-service retries, webhooks, or distributed event consumption. A delivery
 that ends partial, rejected, or unknown is reported on its delivery job but does not yet notify
-anyone, and failed workflow jobs are not retried (CLIM-919). Exactly
-one writable OCS process should perform automation until the stores and leadership model become
-shared and transactional.
+anyone (CLIM-919), and a workflow job that exhausts its attempts is not reported beyond its own
+status. Exactly one writable OCS process should perform automation until the stores and
+leadership model become shared and transactional.
