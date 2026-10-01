@@ -74,7 +74,7 @@
                       aria-describedby="start-hint"
                     />
                     <span class="hint" id="start-hint">
-                      {% if defaults.direction == "future" %}Leave blank to ingest the full forecast window from now.{% elif format_hint %}Format {{ format_hint }}.{% endif %}
+                      {% if defaults.direction == "ordinal" %}Not used: this covers the reference period the template declares.{% elif defaults.direction == "future" %}Leave blank to ingest the full forecast window from now.{% elif format_hint %}Format {{ format_hint }}.{% endif %}
                     </span>
                   </div>
                   <div class="field">
