@@ -102,11 +102,27 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
 ) -> None:
     """What guarantees a failed attempt's data is freed even if the store is never synced again."""
     import asyncio
+    import threading
 
     from open_climate_service.ingestions import services
 
+    # The startup sweep returns at once. The first periodic one, which runs in a worker
+    # thread, reports that it started and then waits to be released, so the app can be
+    # stopped while it is in flight. Any later sweep only counts itself.
     sweeps: list[int] = []
-    monkeypatch.setattr(services, "collect_pending_garbage_everywhere", lambda: sweeps.append(1) or 0)
+    periodic_started = threading.Event()
+    release = threading.Event()
+    periodic_finished = threading.Event()
+
+    def sweep() -> int:
+        sweeps.append(1)
+        if len(sweeps) == 2:
+            periodic_started.set()
+            release.wait(timeout=5)
+            periodic_finished.set()
+        return 0
+
+    monkeypatch.setattr(services, "collect_pending_garbage_everywhere", sweep)
     monkeypatch.setattr(services, "remove_leftover_rebuilds", lambda: 0)
     monkeypatch.setattr(main.api_config, "is_read_only", lambda: read_only)
     monkeypatch.setattr(main, "_MAINTENANCE_INTERVAL_S", 0.01)
@@ -123,18 +139,23 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
     ):
         monkeypatch.setattr(main, factory, lambda: _Quiet())
 
-    async with main._lifespan(FastAPI()):
-        await asyncio.sleep(0.1)
-        seen = len(sweeps)
-    # A sweep runs in a worker thread, which cancelling the loop cannot interrupt, so one
-    # already in flight when the app stops may still finish. Nothing starts after that.
-    await asyncio.sleep(0.05)
-    after_stop = len(sweeps)
-    await asyncio.sleep(0.05)
+    try:
+        async with main._lifespan(FastAPI()):
+            if read_only:
+                await asyncio.sleep(0.1)
+            else:
+                assert await asyncio.to_thread(periodic_started.wait, 5), "the interval sweep never started"
+        # Stopping cancels the loop but cannot interrupt the sweep already in its thread.
+        release.set()
+        if not read_only:
+            assert await asyncio.to_thread(periodic_finished.wait, 5)
+        in_flight_done = len(sweeps)
+        await asyncio.sleep(0.1)  # ten intervals: a loop still running would sweep again
+    finally:
+        release.set()
 
     if read_only:
         assert sweeps == []  # may share its data directory with a writing instance
     else:
-        assert seen >= 2  # once at startup, then on the interval
-        assert after_stop <= seen + 1, "at most the in-flight sweep finishes after the app stops"
-        assert len(sweeps) == after_stop, "the loop stops with the app"
+        assert in_flight_done == 2  # once at startup, then on the interval
+        assert len(sweeps) == in_flight_done, "the loop stops with the app"
