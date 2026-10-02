@@ -1,19 +1,21 @@
 from datetime import date
 
-import pytest
 import numpy as np
-import xarray as xr
+import pytest
 import shapely
+import xarray as xr
 
 from open_climate_service.plugins.processes.aggregate_spatial_weighted import (
     aggregate_spatial_weighted,
 )
+
 
 def _box(xmin: float, ymin: float, xmax: float, ymax: float) -> dict:
     return {
         "type": "Polygon",
         "coordinates": [[[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]],
     }
+
 
 def _flat_grid(y_ascending: bool) -> xr.DataArray:
     """A flat 4x4 grid of unit cells centred on 0..3, where all cell values are 1."""
@@ -25,6 +27,7 @@ def _flat_grid(y_ascending: bool) -> xr.DataArray:
 
 
 # Test input geometries
+
 
 def test_aggregate_spatial_single_geometry():
     # uniform flat grid with only 1s
@@ -38,6 +41,7 @@ def test_aggregate_spatial_single_geometry():
     assert out.sizes["geometry"] == 1
     assert float(out.isel(geometry=0)) == pytest.approx(shapely.geometry.shape(geom).area / 4)
 
+
 def test_aggregate_spatial_feature_collection():
     # uniform flat grid with only 1s
     da = _flat_grid(y_ascending=True)
@@ -47,26 +51,31 @@ def test_aggregate_spatial_feature_collection():
         "type": "FeatureCollection",
         "features": [
             {
-                "type": "Feature", 
+                "type": "Feature",
                 "properties": {"coverage": "one-fourth"},
                 "geometry": _box(-0.5, -0.5, 0.5, 0.5),
             },
             {
-                "type": "Feature", 
+                "type": "Feature",
                 "properties": {"coverage": "one-half"},
                 "geometry": _box(-0.5, 0, 0.5, 1),
-            }
-        ]
+            },
+        ],
     }
 
     # weighted sum
     out = aggregate_spatial_weighted(da, collection, "sum")
     assert out.sizes["geometry"] == 2
-    assert float(out.isel(geometry=0)) == pytest.approx(shapely.geometry.shape(collection["features"][0]["geometry"]).area / 4)
-    assert float(out.isel(geometry=1)) == pytest.approx(shapely.geometry.shape(collection["features"][1]["geometry"]).area / 2)
+    assert float(out.isel(geometry=0)) == pytest.approx(
+        shapely.geometry.shape(collection["features"][0]["geometry"]).area / 4
+    )
+    assert float(out.isel(geometry=1)) == pytest.approx(
+        shapely.geometry.shape(collection["features"][1]["geometry"]).area / 2
+    )
 
 
 # Test weighted sum and mean on uniform grid of only 1s
+
 
 def test_aggregate_spatial_uniform_1x1_aligned():
     # uniform flat grid with only 1s
@@ -74,7 +83,7 @@ def test_aggregate_spatial_uniform_1x1_aligned():
 
     # exactly 1x1 pixels aligned with pixels
     geom = _box(0, 0, 1, 1)
-    
+
     # weighted sum = polygon area
     out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0)) == pytest.approx(shapely.geometry.shape(geom).area)
@@ -82,6 +91,7 @@ def test_aggregate_spatial_uniform_1x1_aligned():
     # weighted mean is always 1
     out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0)) == pytest.approx(1)
+
 
 def test_aggregate_spatial_uniform_2x2_aligned():
     # uniform flat grid with only 1s
@@ -98,6 +108,7 @@ def test_aggregate_spatial_uniform_2x2_aligned():
     out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0)) == pytest.approx(1)
 
+
 def test_aggregate_spatial_uniform_2x2_aligned_half_inside():
     # uniform flat grid with only 1s
     da = _flat_grid(y_ascending=True)
@@ -112,6 +123,7 @@ def test_aggregate_spatial_uniform_2x2_aligned_half_inside():
     # weighted mean is always 1
     out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0)) == pytest.approx(1)
+
 
 def test_aggregate_spatial_uniform_1x1_partial_half_inside():
     # uniform flat grid with only 1s
@@ -128,6 +140,7 @@ def test_aggregate_spatial_uniform_1x1_partial_half_inside():
     out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0)) == pytest.approx(1)
 
+
 def test_aggregate_spatial_uniform_1x1_partial_fourth_inside():
     # uniform flat grid with only 1s
     da = _flat_grid(y_ascending=True)
@@ -142,6 +155,7 @@ def test_aggregate_spatial_uniform_1x1_partial_fourth_inside():
     # weighted mean is always 1
     out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0)) == pytest.approx(1)
+
 
 def test_aggregate_spatial_uniform_tiny_inside_one_pixel():
     # uniform flat grid with only 1s
@@ -158,18 +172,21 @@ def test_aggregate_spatial_uniform_tiny_inside_one_pixel():
     out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0)) == pytest.approx(1)
 
+
 def test_aggregate_spatial_uniform_realistic_poly():
     # uniform flat grid with only 1s
     da = _flat_grid(y_ascending=True)
 
     # "realistic" irregular polygon that is both inside and outside
     # and covers several pixels
-    geom = shapely.geometry.Polygon([
-        (-1.2, -1.1),
-        (2.7, 0.4),
-        (1.3, 2.6),
-    ])
-    
+    geom = shapely.geometry.Polygon(
+        [
+            (-1.2, -1.1),
+            (2.7, 0.4),
+            (1.3, 2.6),
+        ]
+    )
+
     # weighted sum = intersecting polygon area
     out = aggregate_spatial_weighted(da, geom.__geo_interface__, "sum")
     raster_extent = shapely.geometry.box(*da.rio.bounds())
@@ -183,6 +200,7 @@ def test_aggregate_spatial_uniform_realistic_poly():
 
 # Test non results
 
+
 def test_aggregate_spatial_fully_outside():
     # uniform flat grid with only 1s
     da = _flat_grid(y_ascending=True)
@@ -193,7 +211,7 @@ def test_aggregate_spatial_fully_outside():
     # returns geometry even if outside
     out = aggregate_spatial_weighted(da, geom, "sum")
     assert out.sizes["geometry"] == 1
-    
+
     # weighted sum for nomatch = 0
     out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0)) == pytest.approx(0)
@@ -201,6 +219,7 @@ def test_aggregate_spatial_fully_outside():
     # weighted mean for nomatch = nan
     out = aggregate_spatial_weighted(da, geom, "mean")
     assert np.isnan(out.isel(geometry=0))
+
 
 def test_aggregate_spatial_mixed_geometry_types():
     # uniform flat grid with only 1s
@@ -211,21 +230,21 @@ def test_aggregate_spatial_mixed_geometry_types():
         "type": "FeatureCollection",
         "features": [
             {
-                "type": "Feature", 
+                "type": "Feature",
                 "properties": {},
                 "geometry": _box(-0.5, -0.5, 0.5, 0.5),  # one-fourth overlap
             },
             {
-                "type": "Feature", 
+                "type": "Feature",
                 "properties": {},
                 "geometry": {"type": "LineString", "coordinates": [(1, 1), (2, 2), (3, 1)]},
             },
             {
-                "type": "Feature", 
+                "type": "Feature",
                 "properties": {},
                 "geometry": {"type": "Point", "coordinates": (1, 1)},
-            }
-        ]
+            },
+        ],
     }
 
     # exactextract should raise error for unsupported geometry types (points, lines)
@@ -235,15 +254,17 @@ def test_aggregate_spatial_mixed_geometry_types():
 
 # Test return structure
 
+
 def test_aggregate_spatial_with_time_dimension() -> None:
-    geom = _box(-0.5, -0.5, 0.5, 0.5) # covering one-fourth pixel
+    geom = _box(-0.5, -0.5, 0.5, 0.5)  # covering one-fourth pixel
     base = _flat_grid(y_ascending=True)
     years = [2025, 2026]
     t_coords = [date(year=y, month=1, day=1) for y in years]
     ds = xr.concat([base, base + 100], dim="t").assign_coords(t=t_coords).to_dataset(name="v")
     out = aggregate_spatial_weighted(ds, geom, "sum")
     assert list(out["t"].values) == t_coords
-    np.testing.assert_allclose(out.isel(geometry=0).values, [1 / 4, (1+100) / 4])
+    np.testing.assert_allclose(out.isel(geometry=0).values, [1 / 4, (1 + 100) / 4])
+
 
 def test_aggregate_spatial_preserves_non_spatial_dimensions() -> None:
     da = xr.concat(
@@ -254,7 +275,7 @@ def test_aggregate_spatial_preserves_non_spatial_dimensions() -> None:
         ],
         dim="bands",
     ).assign_coords(bands=["r", "g", "b"])
-    geom = _box(-0.5, -0.5, 0.5, 0.5) # covering one-fourth pixel
+    geom = _box(-0.5, -0.5, 0.5, 0.5)  # covering one-fourth pixel
     out = aggregate_spatial_weighted(da, geom, "sum")
     assert list(out["bands"].values) == ["r", "g", "b"]
     assert float(out.isel(geometry=0).sel(bands="r")) == pytest.approx(0.25)

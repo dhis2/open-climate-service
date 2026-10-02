@@ -1,22 +1,24 @@
+"""aggregate_spatial_weighted — weighted zonal statistics plugin process."""
+
 import logging
 from typing import Any, Callable
 
 import geopandas as gpd
-import xarray as xr
 import shapely
+import xarray as xr
 from openeo_processes_dask.process_implementations.data_model import (
     RasterCube,
     VectorCube,
 )
-from open_climate_service.process import process
 
+from open_climate_service.process import process
 
 logger = logging.getLogger(__name__)
 
 
 @process(
-  summary="Spatially aggregate a raster data cube over vector geometries using spatially weighted statistics.",
-  description="For each geometry, pixels overlapping the geometry are spatially "
+    summary="Spatially aggregate a raster data cube over vector geometries using spatially weighted statistics.",
+    description="For each geometry, pixels overlapping the geometry are spatially "
     "aggregated using their fractional spatial overlap as weights. "
     "Multiple statistics can be calculated in a single operation.",
 )
@@ -25,6 +27,27 @@ def aggregate_spatial_weighted(
     geometries: Any,
     reducer: str | Callable,
 ) -> VectorCube:
+    """Spatially aggregate raster values over vector geometries using fractional pixel overlap as weights.
+
+    For each geometry, only the portion of each pixel covered by the
+    geometry contributes to the aggregation. The specified reducer
+    determines how the values are aggregated.
+
+    Parameters
+    ----------
+    data
+        Raster data cube to aggregate (either xr.DataArray or single-variable xr.Dataset).
+    geometries
+        Vector geometries over which to aggregate the raster values.
+    reducer
+        Statistic to calculate, or a reducer callable.
+
+    Returns:
+    -------
+    VectorCube
+        Vector data cube (xr.DataArray) containing one aggregated value per geometry,
+        with non-spatial dimensions of the input cube preserved.
+    """
     # NOTE: adapted from openeo_processes_dask.processes.aggregate_spatial to support exactextract
 
     x_dim = "x"
@@ -37,7 +60,10 @@ def aggregate_spatial_weighted(
             data = data[list(data.data_vars.keys())[0]]
 
         else:
-            raise ValueError(f"The data parameter needs to be a raster cube in the form of an xarray DataArray or a single-variable xarray Dataset, received: \n{data}")
+            raise ValueError(
+                "The data parameter needs to be a raster cube in the form of an xarray DataArray "
+                "or a single-variable xarray Dataset, received: \n{data}"
+            )
 
         assert isinstance(data, xr.DataArray)
 
@@ -63,11 +89,7 @@ def aggregate_spatial_weighted(
                 elif feature["properties"] is None:
                     feature["properties"] = {}
             if isinstance(geometries.get("crs", {}), dict):
-                DEFAULT_CRS = (
-                    geometries.get("crs", {})
-                    .get("properties", {})
-                    .get("name", DEFAULT_CRS)
-                )
+                DEFAULT_CRS = geometries.get("crs", {}).get("properties", {}).get("name", DEFAULT_CRS)
             else:
                 DEFAULT_CRS = int(geometries.get("crs", {}))
             logger.info(f"CRS in geometries: {DEFAULT_CRS}.")
