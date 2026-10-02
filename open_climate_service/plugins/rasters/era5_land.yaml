@@ -17,7 +17,7 @@
       begin: "1950-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandTempDailyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandTempDailyPlugin
     params:
       variable: t2m
   units: degC
@@ -54,7 +54,7 @@
       begin: "1950-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandPrecipDailyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipDailyPlugin
     params: {}
   # Daily precipitation as a rate (mm/day): a daily total in mm equals the mean daily
   # rate (the cell is one day), so this is a relabel, not a value change. Storing precip
@@ -93,7 +93,7 @@
       begin: "1950-01"
       resolution: P1M
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandMonthlyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandMonthlyPlugin
     params:
       variable: t2m
   units: degC
@@ -130,7 +130,7 @@
       begin: "1950-01"
       resolution: P1M
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandMonthlyPrecipitationPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandMonthlyPrecipitationPlugin
     params: {}
   # Mean daily precipitation rate (a flux), not the calendar-month total: this is the
   # dimensionally-correct input xclim drought indices (SPI/SPEI) consume directly.
@@ -170,7 +170,7 @@
       begin: "1950-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandTempDailyFromHourlyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandTempDailyFromHourlyPlugin
     params: {}
   units: degC
   cell_methods: "time: mean"
@@ -206,7 +206,7 @@
       begin: "1950-01-01"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandPrecipDailyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipDailyPlugin
     params: {}
   # Daily precipitation rate (mm/day) — see era5land_precipitation_daily.
   units: mm/d
@@ -239,7 +239,7 @@
     spatial:
       bbox: [-180, -90, 180, 90]
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandNormalsPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandNormalsPlugin
     params:
       edh_variable: t2m
       variable: t2m
@@ -274,7 +274,7 @@
     spatial:
       bbox: [-180, -90, 180, 90]
   ingestion:
-    plugin: open_climate_service.plugins.datasets.era5_land.ERA5LandNormalsPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandNormalsPlugin
     params:
       edh_variable: tp
       variable: tp
