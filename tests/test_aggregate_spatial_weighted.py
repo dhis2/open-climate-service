@@ -27,7 +27,7 @@ def test_aggregate_spatial_dataarray_lower_left_box() -> None:
     da = _grid(y_ascending=True)
     out = aggregate_spatial_weighted(da, _box(-0.4, -0.4, 1.4, 1.4), "mean")
     # values {0, 1, 10, 11}, each 0.9 x 0.9 covered -> mean 5.5
-    assert float(out["mean"].isel(feature=0)) == pytest.approx(5.5)
+    assert float(out.isel(geometry=0)) == pytest.approx(5.5)
 
 def test_aggregate_spatial_with_time_dimension() -> None:
     base = _grid(y_ascending=True)
@@ -35,5 +35,5 @@ def test_aggregate_spatial_with_time_dimension() -> None:
     t_coords = [date(year=y, month=1, day=1) for y in years]
     ds = xr.concat([base, base + 100], dim="t").assign_coords(t=t_coords).to_dataset(name="v")
     out = aggregate_spatial_weighted(ds, _box(-0.4, -0.4, 1.4, 1.4), "mean")
-    assert list(out["time"].values) == t_coords
-    np.testing.assert_allclose(out["mean"].isel(feature=0).values, [5.5, 105.5])
+    assert list(out["t"].values) == t_coords
+    np.testing.assert_allclose(out.isel(geometry=0).values, [5.5, 105.5])
