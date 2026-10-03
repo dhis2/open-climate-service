@@ -4,8 +4,10 @@ import logging
 from typing import Any, Callable
 
 import geopandas as gpd
+import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]
 import shapely
 import xarray as xr
+import xvec  # type: ignore[import-untyped]  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 from open_climate_service.process import process
 
@@ -76,6 +78,7 @@ def aggregate_spatial_weighted(
         geometries = json.loads(response.read())
 
     # Convert GeoJSON dict to GeoDataFrame
+    gdf = None
     if isinstance(geometries, dict):
         # Get crs from geometries
         if "features" in geometries:
@@ -102,10 +105,12 @@ def aggregate_spatial_weighted(
         if hasattr(geometries, "xvec"):
             gdf = geometries.xvec.to_geodataframe()
 
+    # Already provided as GeoDataFrame
     if isinstance(geometries, gpd.GeoDataFrame):
         gdf = geometries
 
-    else:
+    # Check a GeoDataFrame was created
+    if gdf is None:
         raise TypeError(f"Failed to convert geometries input value to GeoDataFrame: {geometries}")
 
     # Reproject geometries to same crs as raster cube
