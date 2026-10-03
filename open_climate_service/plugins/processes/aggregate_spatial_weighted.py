@@ -6,10 +6,6 @@ from typing import Any, Callable
 import geopandas as gpd
 import shapely
 import xarray as xr
-from openeo_processes_dask.process_implementations.data_model import (
-    RasterCube,
-    VectorCube,
-)
 
 from open_climate_service.process import process
 
@@ -23,10 +19,10 @@ logger = logging.getLogger(__name__)
     "Multiple statistics can be calculated in a single operation.",
 )
 def aggregate_spatial_weighted(
-    data: RasterCube,
+    data: xr.Dataset | xr.DataArray,
     geometries: Any,
     reducer: str | Callable,
-) -> VectorCube:
+) -> xr.DataArray:
     """Spatially aggregate raster values over vector geometries using fractional pixel overlap as weights.
 
     For each geometry, only the portion of each pixel covered by the
@@ -52,7 +48,7 @@ def aggregate_spatial_weighted(
 
     x_dim = "x"
     y_dim = "y"
-    DEFAULT_CRS = "EPSG:4326"
+    default_crs = "EPSG:4326"
 
     # Ensure raster cube is a single-variable DataArray
     if isinstance(data, xr.Dataset):
@@ -69,7 +65,7 @@ def aggregate_spatial_weighted(
 
     # Ensure raster cube has crs
     if data.rio.crs is None:
-        data = data.rio.set_crs(DEFAULT_CRS)
+        data = data.rio.set_crs(default_crs)
 
     # Allow importing geometries from url (e.g. github raw)
     if isinstance(geometries, str):
@@ -89,17 +85,17 @@ def aggregate_spatial_weighted(
                 elif feature["properties"] is None:
                     feature["properties"] = {}
             if isinstance(geometries.get("crs", {}), dict):
-                DEFAULT_CRS = geometries.get("crs", {}).get("properties", {}).get("name", DEFAULT_CRS)
+                default_crs = geometries.get("crs", {}).get("properties", {}).get("name", default_crs)
             else:
-                DEFAULT_CRS = int(geometries.get("crs", {}))
-            logger.info(f"CRS in geometries: {DEFAULT_CRS}.")
+                default_crs = str(geometries.get("crs", {}))
+            logger.info(f"CRS in geometries: {default_crs}.")
 
         if "type" in geometries and geometries["type"] == "FeatureCollection":
-            gdf = gpd.GeoDataFrame.from_features(geometries, crs=DEFAULT_CRS)
+            gdf = gpd.GeoDataFrame.from_features(geometries, crs=default_crs)
         elif "type" in geometries and geometries["type"] in ["Polygon"]:
             polygon = shapely.geometry.Polygon(geometries["coordinates"][0])
             gdf = gpd.GeoDataFrame(geometry=[polygon])
-            gdf.crs = DEFAULT_CRS
+            gdf.crs = default_crs
 
     # Convert xarray vector cube to GeoDataFrame
     if isinstance(geometries, xr.Dataset):
@@ -109,6 +105,9 @@ def aggregate_spatial_weighted(
     if isinstance(geometries, gpd.GeoDataFrame):
         gdf = geometries
 
+    else:
+        raise TypeError(f"Failed to convert geometries input value to GeoDataFrame: {geometries}")
+
     # Reproject geometries to same crs as raster cube
     gdf = gdf.to_crs(data.rio.crs)
 
@@ -116,7 +115,7 @@ def aggregate_spatial_weighted(
     geometries_series = gdf.geometry
 
     # Run xvec zonal stats with exactextract backend
-    vec_cube = data.xvec.zonal_stats(
+    vec_cube: xr.DataArray = data.xvec.zonal_stats(
         geometries_series,
         x_coords=x_dim,
         y_coords=y_dim,
