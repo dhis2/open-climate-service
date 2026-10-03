@@ -46,6 +46,7 @@ classifiers = [
 # Base install = the lightweight client. It only talks to a running instance over
 # HTTP (discover datasets, list processes/workflows, run process graphs).
 dependencies = [
+    "exactextract>=0.3.0",
     "httpx>=0.28.1",
     "pystac>=1.10,<2",
 ]
