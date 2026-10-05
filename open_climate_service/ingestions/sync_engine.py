@@ -133,7 +133,8 @@ def plan_sync(
                 action=SyncAction.NO_OP,
                 reason="no_new_period",
                 message=(
-                    f"Data already exists through {current_end}; target {target_end} does not require a new download."
+                    f"Data exists for {_existing_coverage(current_start, current_end)}; "
+                    f"target {target_end} does not require a new download."
                 ),
                 current_start=current_start,
                 current_end=current_end,
@@ -153,7 +154,10 @@ def plan_sync(
                 sync_kind=sync_kind,
                 action=SyncAction.NO_OP,
                 reason="no_new_period",
-                message=f"Data already exists through {current_end}; no new periods available from the source.",
+                message=(
+                    f"Data exists for {_existing_coverage(current_start, current_end)}; "
+                    "no new periods are available from the source."
+                ),
                 current_start=current_start,
                 current_end=current_end,
                 target_end=target_end,
@@ -175,6 +179,7 @@ def plan_sync(
             reason=reason,
             message=_sync_plan_message(
                 action=action,
+                current_start=current_start,
                 current_end=current_end,
                 target_end=target_end,
                 delta_start=next_period_start,
@@ -330,7 +335,10 @@ def plan_sync(
                 sync_kind=sync_kind,
                 action=SyncAction.NO_OP,
                 reason="no_new_release",
-                message=f"No new data is available beyond {current_end}.",
+                message=(
+                    f"Data exists for {_existing_coverage(current_start, current_end)}; "
+                    "no new periods are available from the source."
+                ),
                 current_start=current_start,
                 current_end=current_end,
                 target_end=target_end,
@@ -348,8 +356,8 @@ def plan_sync(
             action=SyncAction.NO_OP,
             reason="no_new_release",
             message=(
-                f"Data through {current_end} is already available locally; target {target_end} "
-                "does not require a new download."
+                f"Data exists for {_existing_coverage(current_start, current_end)}; "
+                f"target {target_end} does not require a new download."
             ),
             current_start=current_start,
             current_end=current_end,
@@ -364,7 +372,14 @@ def plan_sync(
         sync_kind=sync_kind,
         action=SyncAction.REMATERIALIZE,
         reason="new_release_available",
-        message=f"New data is available through {target_end}. Sync will rematerialize the dataset.",
+        message=_sync_plan_message(
+            action=SyncAction.REMATERIALIZE,
+            current_start=current_start,
+            current_end=current_end,
+            target_end=target_end,
+            delta_start=current_end,
+            delta_end=target_end,
+        ),
         current_start=current_start,
         current_end=current_end,
         target_end=target_end,
@@ -505,9 +520,22 @@ def _sync_completed_message(action: SyncAction) -> str:
     return "Managed dataset was rematerialized against the latest planned upstream state."
 
 
+def _existing_coverage(current_start: str | None, current_end: str) -> str:
+    """The range a store already holds, as the dataset page states it: "2024-01 through 2025-02".
+
+    Every plan message opens with this so the sync panel and the coverage line on the same
+    page name the same thing. A store of one period is named once, and a record with no
+    start falls back to naming the end alone.
+    """
+    if not current_start or current_start == current_end:
+        return current_end
+    return f"{current_start} through {current_end}"
+
+
 def _sync_plan_message(
     *,
     action: SyncAction,
+    current_start: str | None,
     current_end: str,
     target_end: str,
     delta_start: str,
@@ -519,10 +547,11 @@ def _sync_plan_message(
     passes `delta_end=target_end`, so naming the target as well only repeated the same month:
     "append missing periods 2026-08 through 2026-08 and extend coverage through 2026-08".
     """
+    existing = _existing_coverage(current_start, current_end)
     if action == SyncAction.APPEND:
         added = delta_start if delta_start == delta_end else f"{delta_start} through {delta_end}"
-        return f"Data exists through {current_end}. Sync will add {added}."
-    return f"Data exists through {current_end}. Sync will rematerialize the dataset through {target_end}."
+        return f"Data exists for {existing}. Sync will add {added}."
+    return f"Data exists for {existing}. Sync will rematerialize the dataset through {target_end}."
 
 
 def _query_available_periods(
