@@ -63,7 +63,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 description = "Open Climate Service instance for [context]"
 dependencies = [
-    "open-climate-service[server]==0.1.0",
+    "open-climate-service[server,dhis2]==0.1.0",  # dhis2: the DHIS2 org unit provider and delivery
 ]
 
 [tool.uv]

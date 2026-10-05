@@ -27,7 +27,9 @@ Mirrors the DHIS2 Climate Tools guides "Fetch org units from DHIS2 Web API" and
 "Importing data values", combined into a single Open Climate Service workflow.
 
 Requires:
-  pip install open-climate-service "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git"
+  pip install "open-climate-service[dhis2]"
+    or, from a checkout of this repository:
+  uv sync --group examples && uv run python examples/aggregate_and_import_to_dhis2.py
   A running Open Climate Service instance with the dataset published and the
   named export above configured.
   A DHIS2 instance whose org units have geometry, plus a target data element.

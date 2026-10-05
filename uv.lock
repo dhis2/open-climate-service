@@ -526,6 +526,18 @@ wheels = [
 ]
 
 [[package]]
+name = "convertdate"
+version = "2.5.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pymeeus" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/ae/9169c1aec7b66002b95a793c996710fd4e78abad24d1ce941b29e2c88a92/convertdate-2.5.1.tar.gz", hash = "sha256:8ade438cced7eae579e622f3f54354e52609840f597f7b09a16d7789a15d4e0a", size = 52984, upload-time = "2026-09-13T21:20:17.633Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/34/b05d803dad6234b4cd1e724c2190bfdd1fb022df20a4c00d26dcbe9ab4d5/convertdate-2.5.1-py3-none-any.whl", hash = "sha256:f78f2c06d27825e6926aa14b2824845b7aeacbfbe426e8097681f160b12bb724", size = 47934, upload-time = "2026-09-13T21:20:16.529Z" },
+]
+
+[[package]]
 name = "cycler"
 version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
@@ -589,6 +601,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/d3/8ae2869247df154b64c1884d7346d412fed0c49df84db635aab2d1c40e62/deprecation-2.1.0.tar.gz", hash = "sha256:72b3bde64e5d778694b0cf68178aed03d15e15477116add3fb773e581f9518ff", size = 173788, upload-time = "2020-04-20T14:23:38.738Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/c3/253a89ee03fc9b9682f1541728eb66db7db22148cd94f89ab22528cd1e1b/deprecation-2.1.0-py2.py3-none-any.whl", hash = "sha256:a10811591210e1fb0e768a8c25517cabeabcba6f0bf96564f8ff45189f90b14a", size = 11178, upload-time = "2020-04-20T14:23:36.581Z" },
+]
+
+[[package]]
+name = "dhis2-client"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "convertdate" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5d/6e/987a0ba36c9985c378352593be6eee268a883e1146211a4b20d532bb4e2a/dhis2_client-0.3.2.tar.gz", hash = "sha256:3693b628b4d90d1cce15de132dc19a9e92654f00da135e8f23993d47c74cb07f", size = 39023, upload-time = "2026-10-05T11:52:57.659Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/51/ee9fedf22f5db1de4f7aa5bbc19f81c4cc227b87ffcb12b9a36b1fa9ebce/dhis2_client-0.3.2-py3-none-any.whl", hash = "sha256:f556f7275d86b24de2dd48502d170be008ed004bc4c1c9a80c52a34844ce50bb", size = 31834, upload-time = "2026-10-05T11:52:56.418Z" },
 ]
 
 [[package]]
@@ -1787,6 +1812,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dhis2 = [
+    { name = "dhis2-client" },
+]
 server = [
     { name = "apscheduler" },
     { name = "dask-geopandas" },
@@ -1843,12 +1871,17 @@ dev = [
     { name = "types-shapely" },
     { name = "watchfiles" },
 ]
+examples = [
+    { name = "dhis2-client" },
+    { name = "openeo" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'xarray'", specifier = ">=3.10" },
     { name = "apscheduler", marker = "extra == 'server'", specifier = ">=3.11,<4" },
     { name = "dask-geopandas", marker = "extra == 'server'", specifier = ">=0.4" },
+    { name = "dhis2-client", marker = "extra == 'dhis2'", specifier = ">=0.3.2" },
     { name = "earthkit-meteo", marker = "extra == 'server'", specifier = ">=1.0" },
     { name = "earthkit-transforms", marker = "extra == 'server'", specifier = ">=1.0" },
     { name = "earthkit-utils", marker = "extra == 'server'", specifier = ">=1.0" },
@@ -1889,7 +1922,7 @@ requires-dist = [
     { name = "zarr", marker = "extra == 'server'", specifier = ">=3.1.6,<4" },
     { name = "zarr", marker = "extra == 'xarray'", specifier = ">=3.1.6,<4" },
 ]
-provides-extras = ["xarray", "server"]
+provides-extras = ["xarray", "dhis2", "server"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1902,10 +1935,14 @@ dev = [
     { name = "types-shapely", specifier = ">=2.1,<3" },
     { name = "watchfiles", specifier = ">=1.2.0" },
 ]
+examples = [
+    { name = "dhis2-client", specifier = ">=0.3.2" },
+    { name = "openeo", specifier = ">=0.52" },
+]
 
 [[package]]
 name = "openeo"
-version = "0.50.0"
+version = "0.52.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecated" },
@@ -1920,7 +1957,7 @@ dependencies = [
     { name = "xarray" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/8d/57ad97e820316d5b319f9514237207c41031f6227f98de92884fcbc2baab/openeo-0.50.0-py3-none-any.whl", hash = "sha256:d9b3f411828ad1e688221d7ff42664538d90ab25aad9ff517a3e56f655339d01", size = 345530, upload-time = "2026-05-18T13:16:26.716Z" },
+    { url = "https://files.pythonhosted.org/packages/07/0b/ceda0981b73b262ce6975e6844a42d119acbb757f5aacb123cc5f220fef6/openeo-0.52.0-py3-none-any.whl", hash = "sha256:ed974deac6ef028627e4b7c7e0969dca0e1a3e6d2486a3d24fc8ed3780765a35", size = 356992, upload-time = "2026-09-08T09:34:02.863Z" },
 ]
 
 [[package]]
@@ -2590,6 +2627,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
 ]
+
+[[package]]
+name = "pymeeus"
+version = "0.5.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/76/599896b37e60f43078afd8354b3802eb7ca257a7e7f6253cc21c4c672877/PyMeeus-0.5.12.tar.gz", hash = "sha256:548f7186bd8b96cbc069cf649a8e8e377dce49ac74486709849fe63a99cad684", size = 5752712, upload-time = "2022-12-11T11:37:48.504Z" }
 
 [[package]]
 name = "pyogrio"

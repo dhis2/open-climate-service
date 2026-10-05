@@ -13,13 +13,15 @@ There are two ways to get the values into DHIS2:
 
 - A running Open Climate Service instance with the dataset published (see [Accessing data](user_guide.md)).
 - A DHIS2 instance whose organisation units have geometry, plus a data element to import into. The data element referenced in the payload must already exist in DHIS2 — see the DHIS2 Climate Tools [Prepare metadata](https://climate-tools.dhis2.org/guides/import-data/prepare-metadata/) guide for creating it.
-- The two clients:
+- The two clients, installed together through the `dhis2` extra:
 
   ```bash
-  pip install open-climate-service "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git@41d696ad59f5ac09fce282ead80df32e451e7ff1"
+  pip install "open-climate-service[dhis2]"
   ```
 
-  `open-climate-service` ships the `ClimateService` client; [dhis2-python-client](https://github.com/dhis2/dhis2-python-client) handles the DHIS2 Web API calls.
+  `open-climate-service` ships the `ClimateService` client; the extra adds
+  [dhis2-client](https://pypi.org/project/dhis2-client/), which handles the DHIS2 Web API calls.
+  From a checkout of this repository, `uv sync --group examples` installs the same.
 
 ## Named connections for server-side plugins
 
@@ -49,14 +51,10 @@ section must be valid YAML before environment substitution; quote placeholders i
 other sections when necessary. Existing interpolation outside this section remains
 available.
 
-The client is optional and supplied by the deployment or integration plugin because it is not
-yet available on PyPI. The connection accessor is tested against `dhis2-python-client` revision
-`41d696ad59f5ac09fce282ead80df32e451e7ff1` (0.3.1). For an instance managed with uv, add that
-reviewed revision to the instance's project:
-
-```bash
-uv add "dhis2-client @ git+https://github.com/dhis2/dhis2-python-client.git@41d696ad59f5ac09fce282ead80df32e451e7ff1"
-```
+The client is the `dhis2` extra, `dhis2-client>=0.3.2` from PyPI. The official Docker image
+installs it. An instance managed with uv names the extra beside `server` in its dependency,
+`open-climate-service[server,dhis2]`, and re-locks; without it, named connections fail at use
+time with a `RuntimeError` naming the extra.
 
 An independently installed provider can use the public accessor without reading
 OCS configuration or handling credentials itself:
