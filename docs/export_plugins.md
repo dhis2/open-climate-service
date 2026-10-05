@@ -100,10 +100,14 @@ dataset it declares, and OCS checks it twice: at startup, from the dataset templ
 Producing the coarser data is openEO's job, not the export's, and there are two ways to do it.
 Publish a derived dataset (`load_collection`, `aggregate_temporal_period`, `save_result` as
 Zarr with a `dataset_id`) and point the export at that dataset, which then needs no
-declaration at all; this is the shape that suits automation, since the derived dataset's own
-update event can trigger the export. Or put `aggregate_temporal_period` in the graph that
-feeds the export and declare its reducer as `temporal_aggregation`. The built-in org-unit
-workflows do neither: given a dataset finer than the export's period, they are refused.
+declaration at all. Or put `aggregate_temporal_period` in the graph that feeds the export and
+declare its reducer as `temporal_aggregation`. The built-in org-unit workflows do neither:
+given a dataset finer than the export's period, they are refused.
+
+A derived dataset is published by an openEO job, and openEO jobs record no `dataset.updated`
+event, so a trigger cannot yet listen for it the way it listens for a sync. Until a derivation
+step emits that event, an export from a derived dataset is run by hand or by a workflow that
+derives and exports in one graph.
 
 The pairs that tile: hourly into daily, weekly, monthly, quarterly and yearly; daily into
 weekly, monthly, quarterly and yearly; dekadal into monthly; monthly into quarterly and
