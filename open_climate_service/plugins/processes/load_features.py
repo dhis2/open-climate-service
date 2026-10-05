@@ -122,6 +122,23 @@ def _parse_spatial_extent(spatial_extent: Any) -> tuple[tuple[float, float, floa
     return (west, south, east, north), canonical_crs
 
 
+def _json_default(value: Any) -> Any:
+    """Serialise the array and scalar types a GeoParquet read hands back for list-valued columns.
+
+    A provider may store a list under a property, as the DHIS2 provider does with an org unit's
+    `groups`; GeoParquet keeps it and geopandas reads it back as a numpy array, which the JSON
+    encoder refuses. Arrays become lists and numpy scalars their Python value, so a stored
+    collection always loads as the plain GeoJSON every downstream process expects (CLIM-1301).
+    """
+    import numpy as np
+
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _to_labeled_geojson(frame: gpd.GeoDataFrame, *, id_property: str) -> dict[str, Any]:
     """Convert a GeoDataFrame to a GeoJSON FeatureCollection, promoting id_property to top-level id.
 
@@ -131,7 +148,7 @@ def _to_labeled_geojson(frame: gpd.GeoDataFrame, *, id_property: str) -> dict[st
     lets a loaded collection feed straight into `aggregate_spatial` with meaningful labels instead
     of sequential integers.
     """
-    collection: dict[str, Any] = json.loads(frame.to_json())
+    collection: dict[str, Any] = json.loads(frame.to_json(default=_json_default))
     for feature in collection.get("features", []):
         properties = feature.get("properties")
         if isinstance(properties, dict) and id_property in properties:
