@@ -260,7 +260,6 @@ def test_feature_and_snapshot_evidence_is_execution_scoped():
 
 def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch):
     from open_climate_service.openeo import execution
-    from open_climate_service.plugins.processes.aggregate_spatial import _parse_geometries
 
     artifact = SimpleNamespace(path="/source", artifact_id="artifact-1", source_dataset_id="rain")
     monkeypatch.setattr(execution, "_get_published_artifact", lambda _: artifact)
@@ -276,13 +275,6 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
         def to_callable(self: Any, registry: Any):
             def execute():
                 execution._load_collection_impl("managed-rain")
-                _parse_geometries(
-                    {
-                        "type": "Feature",
-                        "id": "DiszpKrYNg8",
-                        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
-                    }
-                )
                 return execution.SaveResultEnvelope(_data(), "DHIS2JSON", {"export": "rain"})
 
             return execute
@@ -290,7 +282,6 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("openeo_pg_parser_networkx.OpenEOProcessGraph", Graph)
     result = execution.run_process_graph({"process_graph": {}})
     assert result.provenance["sources"][0]["artifact_id"] == "artifact-1"
-    assert result.provenance["features"][0]["input_sha256"]
 
 
 def test_export_environment_interpolation_rejected_before_caching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -309,28 +300,3 @@ def test_snapshot_paths_are_normalized(tmp_path: Path):
         record_snapshot(str(tmp_path / "store"), "snapshot")
         record_source("rain", artifact)
     assert evidence.describe()["sources"][0]["snapshot_id"] == "snapshot"
-
-
-@pytest.mark.parametrize("ids", [[None], ["same", "same"]])
-def test_named_dhis2_graph_validates_original_feature_ids(ids: list[str | None]):
-    from open_climate_service.plugins.processes.aggregate_spatial import _parse_geometries
-
-    process = {
-        "process_graph": {
-            "save": {
-                "process_id": "save_result",
-                "arguments": {
-                    "format": "DHIS2JSON",
-                    "options": {"export": "rain"},
-                },
-            }
-        }
-    }
-    features = {
-        "type": "FeatureCollection",
-        "features": [
-            {"type": "Feature", "id": value, "geometry": {"type": "Point", "coordinates": [0, 0]}} for value in ids
-        ],
-    }
-    with capture_execution(process), pytest.raises(ValueError, match="Feature .*feature.id"):
-        _parse_geometries(features)

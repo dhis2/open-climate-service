@@ -125,11 +125,8 @@ def _parse_spatial_extent(spatial_extent: Any) -> tuple[tuple[float, float, floa
 def _to_labeled_geojson(frame: gpd.GeoDataFrame, *, id_property: str) -> dict[str, Any]:
     """Convert a GeoDataFrame to a GeoJSON FeatureCollection, promoting id_property to top-level id.
 
-    `aggregate_spatial._parse_geometries` reads its geometry labels from each feature's top-level
-    `id`, not from `properties[id_property]` -- the opposite of the convention the feature store
-    itself uses for identity (`shared.features.validate_feature_ids`). Re-stamping here is what
-    lets a loaded collection feed straight into `aggregate_spatial` with meaningful labels instead
-    of sequential integers.
+    Promotes the use of more meaningful feature ids (labels instead of sequential integers) without 
+    making any assumptions about the available feature properties on the input GeoJSON.
     """
     collection: dict[str, Any] = json.loads(frame.to_json())
     for feature in collection.get("features", []):
