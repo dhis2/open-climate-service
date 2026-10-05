@@ -138,17 +138,22 @@ automation:
 Every attempt runs under the same deterministic job ID, so a retry is still the one job for
 that event and trigger, and replaying the event does not create another.
 
-- **A transient failure is retried after a backoff** of 1, 2, then 4 minutes. This covers an
-  unreachable source, a timeout, a server error, or a store another writer is busy with.
-  While it waits the job is `queued`, holding no worker.
-- **A permanent error is not retried.** An invalid process graph, a bad request, or a
-  validation error such as an unknown variable fails the same way on every attempt, so the job
-  fails at once.
+- **A failure while the workflow runs is retried after a backoff** of 1, 2, then 4 minutes.
+  This covers an unreachable source, a timeout, a server error, a store another writer is
+  busy with, and also errors such as a truncated remote response, which look like invalid
+  input but may not repeat. While it waits the job is `queued`, holding no worker, and no
+  process runs it before its backoff has passed.
+- **A permanent error is not retried**, because it fails the same way on every attempt: an
+  invalid process graph, a request a process refuses (an unknown collection, for example),
+  or invalid configuration found while saving the result, such as an unknown export or a
+  units mismatch.
 - **A restart during an attempt** requeues the job if it has attempts left. The interruption
   counts as an attempt, so a job that keeps crashing the server still stops.
 - **A job still backing off at shutdown** waits out the rest of its backoff after the next
   start.
-- **Cancelling during a backoff** takes effect at once.
+- **Cancelling during a backoff** takes effect at once, and the attempt history records it.
+  Re-running a cancelled job with `POST /jobs/{job_id}/results` runs it; the earlier
+  cancellation does not carry over.
 
 When the attempts run out, the job stays `error`. Its error names the attempt, for example
 `OSError: connection reset (attempt 3 of 3)`, and `GET /jobs/{job_id}/results` answers with it.
