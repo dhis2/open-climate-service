@@ -133,20 +133,6 @@ def test_method_selects_reducer(method: str, expected: float) -> None:
     assert ou_a_jan.tolist() == [expected]
 
 
-def test_reduce_by_method_dispatches() -> None:
-    from open_climate_service.plugins.processes.aggregate_spatial import reduce_by_method
-
-    data = np.array([0.0, 1.0, 5.0, 6.0])
-    assert reduce_by_method(data, "mean") == 3.0
-    assert reduce_by_method(data, "sum") == 12.0
-    assert reduce_by_method(data, "min") == 0.0
-    assert reduce_by_method(data, "max") == 6.0
-    assert reduce_by_method(data, "median") == 3.0
-    assert np.isnan(reduce_by_method(np.array([]), "mean"))  # empty geometry → NaN, not a crash
-    with pytest.raises(ValueError, match="Unknown reduce method"):
-        reduce_by_method(data, "bogus")
-
-
 def test_builtin_workflows_use_literal_process_ids() -> None:
     """openEO requires `process_id` to be a literal string; a `{from_parameter}` process_id
     is non-portable (standard validators reject it) even though OCS resolves it at runtime.

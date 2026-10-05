@@ -99,9 +99,9 @@ def test_the_pinned_node_executes_through_the_real_process_graph(
 def test_the_reference_is_a_node_the_executor_actually_resolves() -> None:
     """An inline `{"process_id": ...}` in an argument is *not* evaluated -- it is passed through.
 
-    The graph parser leaves such a dict untouched, so `aggregate_spatial` would receive it and try
-    to read it as GeoJSON. Only a sibling node plus `from_node` becomes a `ResultReference` the
-    executor resolves, so this asserts the wiring is that shape rather than the inline one.
+    The graph parser leaves such dictionaries untouched. A reference only becomes a ResultReference 
+    when it is represented as a sibling node with from_node, which the executor can then resolve. 
+    This verifies that _resolve_feature_references produces the expected graph wiring.
     """
     from openeo_pg_parser_networkx import OpenEOProcessGraph
     from openeo_pg_parser_networkx.pg_schema import ResultReference

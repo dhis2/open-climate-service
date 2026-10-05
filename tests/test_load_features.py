@@ -186,7 +186,7 @@ def test_a_wgs84_collection_is_not_reprojected_unnecessarily(monkeypatch: pytest
 
 
 def test_id_property_is_restamped_onto_the_top_level_id() -> None:
-    """`aggregate_spatial` reads its geometry labels from the top-level `id`, not `properties`;
+    """Some processes reads its geometry labels from the top-level `id`, not `properties`;
     load_features must re-stamp it there so a loaded collection feeds straight into it with
     meaningful labels rather than sequential integers."""
     _register(features=_collection(_box("SL-01")))

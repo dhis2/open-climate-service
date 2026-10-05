@@ -1478,8 +1478,9 @@ _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
 
 def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     """Write an xr.Dataset to disk in the requested format. Returns the output path."""
-    # aggregate_spatial returns a vector datacube. A format that carries geometry gets the real
-    # shapes written out, rather than a table that has to be joined back to a boundary file.
+    # A format that carries geometry gets the real shapes written out, rather than a table 
+    # that has to be joined back to a boundary file. E.g. `aggregate_spatial_weighted`` returns
+    # a vector datacube. 
     geom_dim = _vector_dim(ds)
     if geom_dim is not None:
         # CSV is listed as a vector format but carries no shapes, so it must not demand them: a
@@ -1508,7 +1509,7 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
         if fmt in _VECTOR_FORMATS:
             raise ValueError(
                 f"Format '{fmt}' describes vector features, but this result is a raster datacube "
-                "with no geometry dimension. Aggregate to geometries first (e.g. aggregate_spatial), "
+                "with no geometry dimension. Aggregate to geometries first (e.g. aggregate_spatial_weighted), "
                 "or request a raster format: " + ", ".join(sorted(_RASTER_FORMATS))
             )
         raise ValueError(f"Unsupported output format '{fmt}'. Supported: " + ", ".join(sorted(_RASTER_FORMATS)))
@@ -1566,12 +1567,11 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
 
 
 def _vector_dim(ds: Any) -> str | None:
-    """The dimension a vector datacube's features live on, or None for a raster cube.
+    """Return the feature dimension of a vector datacube, or ``None`` for a raster cube.
 
-    Found through the `geometry_wkt` carrier first, because `aggregate_spatial` names the
-    dimension after its `target_dimension` argument — a cube aggregated onto `regions` is just as
-    much a vector cube as one aggregated onto `geometry`. The name is the fallback for a cube from
-    elsewhere that carries shapes on `geometry` directly.
+    The ``geometry_wkt`` coordinate identifies the feature dimension when
+    present. A ``geometry`` dimension is used as a fallback for vector cubes
+    that store geometries directly on that dimension.
     """
     coords = getattr(ds, "coords", {})
     if GEOMETRY_WKT_COORD in coords:
@@ -1584,11 +1584,11 @@ def _vector_dim(ds: Any) -> str | None:
 
 
 def _vector_crs(ds: Any, geom_dim: str) -> Any:
-    """The CRS the cube's shapes are in.
+    """Return the CRS of the cube's geometries.
 
-    An xvec cube declares it on the GeometryIndex of its geometry coordinate. The `geometry_wkt`
-    carrier from `aggregate_spatial` has none to declare: its shapes are the GeoJSON the request
-    supplied, which RFC 7946 fixes to WGS 84.
+    Uses the CRS declared on the geometry coordinate's GeometryIndex when
+    available. Geometries in the ``geometry_wkt`` coordinate are assumed to
+    use WGS 84, as required for GeoJSON geometries under RFC 7946.
     """
     index = getattr(ds, "xindexes", {}).get(geom_dim)
     crs = getattr(index, "crs", None)
@@ -1596,13 +1596,11 @@ def _vector_crs(ds: Any, geom_dim: str) -> Any:
 
 
 def _vector_frame(ds: Any, geom_dim: str) -> Any:
-    """Build a GeoDataFrame from a vector datacube, keeping the feature labels as a column.
+    """Build a GeoDataFrame from a vector datacube, preserving feature IDs.
 
-    Geometry comes from the `geometry_wkt` companion coordinate that `aggregate_spatial`
-    attaches. A cube from elsewhere may instead carry WKT or shapely objects directly on the
-    geometry dimension, so that is tried second — and if neither yields geometry, this raises
-    rather than inventing an empty column, because a caller asking for GeoParquet is asking for
-    the shapes.
+    Uses the ``geometry_wkt`` coordinate when present, otherwise interprets the
+    geometry dimension itself as WKT or Shapely geometries. Repeated geometries
+    are parsed once and reused across rows. Raises if any row has no geometry.
     """
     import geopandas as gpd
     import pandas as pd

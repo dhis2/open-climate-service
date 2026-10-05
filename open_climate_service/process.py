@@ -21,17 +21,7 @@ _PYTHON_TYPE_MAP: dict[type, str] = {
 
 
 def _annotation_to_schema(ann: Any) -> dict[str, Any]:
-    """Return a JSON Schema dict for a Python type annotation.
-
-    Handles plain types (str, int, …) and nullable unions (str | None).
-    Returns {} for types with no known mapping (e.g. xr.DataArray).
-
-    A nullable annotation keeps its null: `str | None` is `{"type": ["string", "null"]}`,
-    matching how the openEO process specs express an optional parameter whose default is
-    null (`aggregate_spatial`'s `target_dimension` is exactly this). Unwrapping to a bare
-    `"string"` would publish a schema that rejects the documented default, which is worse
-    than publishing none — a client validating the graph would refuse a valid call.
-    """
+    """Convert a supported Python type annotation to JSON Schema."""
     direct = _PYTHON_TYPE_MAP.get(ann)
     if direct:
         return {"type": direct}

@@ -30,12 +30,11 @@ _registry: Any = None  # lazy singleton
 
 @xr.register_dataset_accessor("openeo")
 class _DatasetOpenEOAccessor:  # pyright: ignore[reportUnusedClass]
-    """Mirrors the DataArray openeo accessor for xr.Dataset.
+    """Minimal openEO accessor for ``xarray.Dataset``.
 
-    openeo-processes-dask only registers the accessor for DataArray.
-    Several standard processes (e.g. rename_labels) call data.openeo.temporal_dims
-    on the result of aggregate_spatial which returns a Dataset, so we register a
-    minimal compatible accessor here.
+    ``openeo-processes-dask`` registers the accessor for ``DataArray`` only,
+    while some processes operate on ``Dataset`` results and expect the same
+    accessor attributes.
     """
 
     def __init__(self, ds: xr.Dataset) -> None:
@@ -105,7 +104,6 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
     Match upstream's coordinate tolerance and align label order before requiring
     equal indexes, so temporal or location misalignment is never hidden.
 
-    ``aggregate_spatial`` returns an ``xr.Dataset`` even for one input variable.
     Distinct single-variable datasets are normalised only when starting a named
     predictor stack; ordinary Dataset merges retain upstream types and attrs.
     """
@@ -219,8 +217,9 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
                 raise ValueError("An overlap resolver is only supported on the initial named predictor merge")
             return _append_disjoint_predictors(array1, array2)
 
-        # Distinct single-variable Datasets are the aggregate_spatial predictor
-        # case. Do not promote same-variable Datasets or any ordinary merge.
+        # When both inputs are single-variable Datasets with different variable names,
+        # pass their DataArrays to the underlying implementation. Preserve Datasets
+        # for same-variable inputs and ordinary merges.
         promote_datasets = (
             isinstance(cube1, xr.Dataset)
             and isinstance(cube2, xr.Dataset)

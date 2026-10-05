@@ -41,12 +41,11 @@ def load_features(id: str, spatial_extent: Any = None, version: str | None = Non
 
     GeoJSON has no CRS of its own -- RFC 7946 fixes it to WGS 84 -- so a collection stored in a
     projected CRS is reprojected here before being handed to any downstream process such as
-    `aggregate_spatial`. This is the permanent output contract of `load_features`, not a
+    `aggregate_spatial_weighted`. This is the permanent output contract of `load_features`, not a
     temporary shim: every caller gets WGS 84 coordinates regardless of the collection's native
     storage CRS.
 
-    Each feature's `id_property` value is re-stamped onto the feature's top-level `id`, because
-    `aggregate_spatial` reads its geometry labels from there rather than from `properties`.
+    Each feature's `id_property` value is re-stamped onto the feature's top-level `id`.
 
     The parameter remains named `id` because that is the public openEO process parameter used
     by process graphs.

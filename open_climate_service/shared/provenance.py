@@ -28,8 +28,6 @@ class ExecutionEvidence:
     require_feature_ids: bool = False
     sources: list[dict[str, Any]] = field(default_factory=list)
     features: list[dict[str, Any]] = field(default_factory=list)
-    # One entry per completed aggregate_spatial call: its named method, or None when its
-    # reducer is not a single named reduction.
     spatial_aggregations: list[str | None] = field(default_factory=list)
     snapshots: dict[str, str] = field(default_factory=dict, repr=False)
 
@@ -110,32 +108,6 @@ def record_source(collection_id: str, artifact: Any) -> None:
     path = str(Path(raw_path).resolve()) if isinstance(raw_path, (str, PathLike)) else None
     observation["snapshot_id"] = evidence.snapshots.pop(path, None) if path is not None else None
     evidence.sources.append(observation)
-
-
-@contextmanager
-def observe_spatial_aggregation() -> Generator[None]:
-    """Attribute named reductions to one aggregate_spatial call and record its method.
-
-    Only reductions running inside this scope count, so a named reducer used for a
-    temporal reduction or anywhere else never reads as a spatial aggregation. The
-    call is recorded only when it completes.
-    """
-    methods: set[str] = set()
-    token = _spatial_methods.set(methods)
-    try:
-        yield
-    finally:
-        _spatial_methods.reset(token)
-    evidence = _current.get()
-    if evidence is not None:
-        evidence.spatial_aggregations.append(next(iter(methods)) if len(methods) == 1 else None)
-
-
-def record_spatial_reduction(method: str) -> None:
-    """Note a named reduction; ignored outside an aggregate_spatial call."""
-    methods = _spatial_methods.get()
-    if methods is not None:
-        methods.add(method)
 
 
 def record_features(geometries: Any) -> None:

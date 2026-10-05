@@ -1155,7 +1155,6 @@ def test_merge_cubes_wrapper_appends_third_named_predictor() -> None:
 
 
 def test_merge_cubes_wrapper_combines_three_zonal_datasets_as_chap_csv() -> None:
-    """Single-variable Datasets mirror aggregate_spatial's return type."""
     from open_climate_service.openeo.execution import _build_process_registry
 
     reg = _build_process_registry()
