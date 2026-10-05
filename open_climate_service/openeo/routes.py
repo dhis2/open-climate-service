@@ -481,6 +481,12 @@ def execute_synchronous(
 
     if isinstance(result, xr.Dataset):
         if fmt == "DHIS2JSON":
+            from open_climate_service.openeo.jobs import check_ad_hoc_period_reachability
+
+            try:
+                check_ad_hoc_period_reachability(result, options)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return _json_tabular_payload_response(result.to_dataframe().reset_index(), options)
         if fmt == "ZARR":
             raise HTTPException(

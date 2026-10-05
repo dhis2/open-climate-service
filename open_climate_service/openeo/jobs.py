@@ -1254,70 +1254,24 @@ def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None) -> Any:
 
 
 def _is_dekadal_axis(t_values: Any) -> bool:
-    """Whether every timestamp starts a dekad, at dekadal spacing.
+    """Whether every timestamp starts a dekad, at dekadal spacing; see `shared.time.is_dekadal_axis`."""
+    from open_climate_service.shared.time import is_dekadal_axis
 
-    Two conditions, and both are needed:
-
-    * **Every timestamp falls on the 1st, 11th or 21st.** Necessary because a regular 10-day
-      series on any other day of the month is not dekadal, and calling it so would attach a
-      cadence whose period strings mean something else.
-    * **Some adjacent pair is 8 to 11 days apart.** Necessary because the day-of-month test
-      alone accepts a *monthly* axis: every month starts on the 1st, and a monthly-on-the-11th
-      axis is equally a subset. The same trap is guarded in ``aggregate_dekads._dekad_dates``.
-      Tested on the minimum rather than the median so a dekadal axis with missing dekads — a
-      real state, which ``aggregate_dekads`` warns about — is still recognised.
-    """
-    import numpy as np
-    import pandas as pd
-
-    from open_climate_service.shared.time import DEKAD_START_DAYS
-
-    stamps = pd.DatetimeIndex(np.asarray(t_values, dtype="datetime64[ns]"))
-    if not set(stamps.day) <= set(DEKAD_START_DAYS):
-        return False
-    gaps = np.diff(stamps.values).astype("timedelta64[D]").astype(int)
-    return bool(gaps.size and gaps.min() <= 11)
+    return is_dekadal_axis(t_values)
 
 
 def _infer_period_type(ds: Any, t_dim: str) -> str | None:
-    """Infer period type from the median time step of a dataset."""
-    import numpy as np
+    """Infer period type from the median time step of a dataset; see `shared.time.infer_cadence`.
+
+    Kept here by name because the managed-output and export paths call it with a dataset and
+    a dimension name; the cadence rule itself lives beside the period reachability table it
+    now serves (CLIM-1302).
+    """
+    from open_climate_service.shared.time import infer_cadence
 
     if t_dim not in ds.coords or ds.sizes.get(t_dim, 0) < 2:
         return None
-
-    # Sort first: streaming/append can leave a non-monotonic time axis, and an
-    # unsorted np.diff yields negative/irregular steps that skew the median.
-    t_values = np.sort(ds[t_dim].values)
-    deltas = np.diff(t_values).astype("timedelta64[s]").astype(float)
-    median_seconds = float(np.median(deltas))
-
-    if median_seconds <= 3600:
-        return "hourly"
-    if median_seconds <= 86400:
-        return "daily"
-    # Dekads are recognised by their structure, not by their interval. A dekad *starts* on the
-    # 1st, 11th or 21st by definition, so testing that is exact where a median is a guess: it
-    # accepts a short axis across a month boundary (Feb 21 -> Mar 1, 8 days) and one with missing
-    # dekads (median 15.5 days), and it refuses unrelated 10-day data that happens to fall on
-    # other days of the month. Placed before the weekly and monthly buckets, which would
-    # otherwise claim both of those cases.
-    if _is_dekadal_axis(t_values):
-        return "dekadal"
-    if median_seconds <= 8 * 86400:
-        return "weekly"
-    if median_seconds <= 32 * 86400:
-        return "monthly"
-    # Deliberately no "quarterly" branch. It is in the STAC step map (so a store that already
-    # carries it still gets P3M) but is not implemented for ingest or coverage:
-    # `datetime_to_period_string` raises on it and `numpy_datetime_to_period_string` KeyErrors,
-    # so inferring it attached a cadence that fails the moment the artifact is written — and
-    # since it is now rejected at registration, it would fail auto-registration outright.
-    # Returning None instead is honest and legal: a managed openEO output is static, and a
-    # static template may carry no cadence. Add the branch back with quarterly support.
-    if 330 * 86400 <= median_seconds <= 370 * 86400:
-        return "yearly"
-    return None
+    return infer_cadence(ds[t_dim].values)
 
 
 def _derive_variable(ds: Any, options: dict[str, Any]) -> str:
@@ -1683,9 +1637,49 @@ def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
     return path
 
 
+def check_ad_hoc_period_reachability(ds: Any, options: dict[str, Any]) -> None:
+    """Refuse a `period_type` the result's own cadence cannot honestly be labelled with (CLIM-1139).
+
+    A coarser label would put several timestamps on one DHIS2 key, which DHIS2 resolves by
+    keeping whichever arrives last; a finer one cannot be derived at all. Both are named,
+    with the step to add for the first. The cadence the result carries, stamped at load and
+    rewritten by each temporal aggregation, is authoritative; the axis spacing is inferred
+    only for a result that carries none, and a single timestamp is accepted as is.
+    """
+    from open_climate_service.shared.time import (
+        Reachability,
+        cadence_to_openeo_period,
+        normalise_export_period,
+        period_reachability,
+    )
+
+    period_field = _optional_str_option(options, "period_field") or "t"
+    destination = normalise_export_period(_optional_str_option(options, "period_type"))
+    if destination is None or period_field not in getattr(ds, "coords", {}):
+        return
+    from open_climate_service.shared.time import cadence_of
+
+    source = cadence_of(ds) or _infer_period_type(ds, period_field)
+    if source is None:
+        return
+    outcome, reason = period_reachability(source, destination)
+    if outcome is Reachability.PASS_THROUGH:
+        return
+    if outcome is Reachability.AGGREGATE:
+        period = cadence_to_openeo_period(destination)
+        step = f"aggregate_temporal_period(period='{period}')" if period else "a temporal aggregation"
+        raise ValueError(
+            f"period_type '{destination}' is coarser than the result's {source} spacing, so each "
+            f"{destination} period would receive several values. Add {step} with the reducer you mean "
+            f"before save_result, or set period_type to '{source}'"
+        )
+    raise ValueError(f"period_type '{destination}' cannot be derived from {source} data: {reason}")
+
+
 def _write_dataset_tabular_export(ds: Any, results_dir: Any, fmt: str, options: dict[str, Any]) -> str | None:
     import pandas as pd
 
+    check_ad_hoc_period_reachability(ds, options)
     inferred_options = dict(options)
     period_field = _optional_str_option(inferred_options, "period_field") or "t"
     period_type = _optional_str_option(inferred_options, "period_type")

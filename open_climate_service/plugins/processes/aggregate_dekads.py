@@ -216,8 +216,25 @@ def aggregate_dekads(
     if not slices:
         raise ValueError("aggregate_dekads produced no target periods — the input cube has no timesteps")
 
+    # Execution evidence, as aggregate_temporal_period leaves it, so an export can verify that
+    # the period it emits came from this step with the reducer it declares and refuse or drop
+    # the target periods a `sum` only partly covered (CLIM-1302).
+    from open_climate_service.shared.provenance import (
+        observe_temporal_aggregation,
+        record_incomplete_periods,
+        record_reduction,
+    )
+    from open_climate_service.shared.time import export_period_label, stamp_cadence
+
+    cadence = {"month": "monthly", "week": "weekly"}.get(period)
+    with observe_temporal_aggregation(cadence):
+        record_reduction(method)
+        if cadence is not None:
+            record_incomplete_periods([export_period_label(np.datetime64(start), cadence) for start in incomplete])
+
     out = xr.concat(slices, dim=time_dim)
     out.attrs = dict(data.attrs)
+    stamp_cadence(out, cadence)
     # Record how this was derived: a consumer must be able to tell a day-weighted
     # aggregate from an observation, and from an unweighted mean.
     interval = "10 day"

@@ -175,6 +175,11 @@ is not configured, its mapping is invalid, or a literal `arguments.export` diffe
 `deliver.export`. A read-only instance validates the same configuration but leaves delivery
 inactive, allowing writable and serving instances to share one tracked configuration.
 
+The export delivers what exists at its period. To deliver a monthly export from a daily
+dataset, let one trigger derive and publish the monthly dataset, and a second trigger on that
+dataset's update run the export. See
+[the export's period must be reachable](export_plugins.md#the-exports-period-must-be-reachable-from-the-datasets-cadence).
+
 Delivery needs the optional `dhis2-client` package and the connection's token in the
 server environment. See
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins).
