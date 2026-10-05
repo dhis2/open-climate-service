@@ -769,6 +769,13 @@ def _normalise_temporal_arguments(func: Callable[..., Any]) -> Callable[..., Any
 # ---------------------------------------------------------------------------
 
 
+class InvalidProcessGraph(HTTPException):
+    """The process graph could not be built: unknown processes, or malformed nodes or arguments.
+
+    Distinct from an error raised while the graph runs, which a retry may not repeat.
+    """
+
+
 def run_process_graph(
     process: dict[str, Any],
     request: Request | None = None,
@@ -788,10 +795,15 @@ def run_process_graph(
     workflow_graphs = {wf.id: dict(wf.process_graph) for wf in workflow_records if wf.process_graph}
     try:
         graph = OpenEOProcessGraph(process_graph)
+        execute = graph.to_callable(registry)
+    except (TypeError, ValueError, KeyError) as exc:
+        # The graph itself is invalid: the one failure that is permanent by construction.
+        raise InvalidProcessGraph(status_code=400, detail=f"Invalid process graph: {exc}") from exc
+    try:
         from open_climate_service.shared.provenance import capture_execution
 
         with capture_execution(process, workflow_graphs) as evidence:
-            result = graph.to_callable(registry)()
+            result = execute()
             if isinstance(result, SaveResultEnvelope):
                 result.provenance = evidence.describe()
             return result
@@ -799,6 +811,9 @@ def run_process_graph(
         # A cancellation is not a failure of the graph: never report it as a 400 or 500.
         raise
     except (TypeError, ValueError, KeyError) as exc:
+        # Still a 400 for a synchronous caller, but raised while running, where a ValueError
+        # can as well be a truncated remote response as a bad argument. Batch jobs classify it
+        # by its cause, not by this status.
         raise HTTPException(status_code=400, detail=f"Invalid process graph: {exc}") from exc
     except Exception as e:
         logger.exception("Process graph execution failed")
