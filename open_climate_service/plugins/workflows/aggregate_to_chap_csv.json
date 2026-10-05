@@ -40,18 +40,12 @@
       }
     },
     "zonal": {
-      "process_id": "aggregate_spatial",
+      "process_id": "aggregate_spatial_weighted",
       "arguments": {
         "data": { "from_node": "load" },
         "geometries": { "from_parameter": "geometries" },
         "reducer": {
-          "process_graph": {
-            "reduce": {
-              "process_id": "reduce_by_method",
-              "arguments": { "data": { "from_parameter": "data" }, "method": { "from_parameter": "method" } },
-              "result": true
-            }
-          }
+          "from_parameter": "method"
         }
       }
     },

@@ -15,10 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 @process(
-    summary="Spatially aggregate a raster data cube over vector geometries using spatially weighted statistics.",
+    summary="Aggregate a raster data cube over vector geometries using spatially weighted statistics.",
     description="For each geometry, pixels overlapping the geometry are spatially "
-    "aggregated using their fractional spatial overlap as weights. "
-    "Multiple statistics can be calculated in a single operation.",
+    "aggregated using their fractional spatial overlap as weights.",
+    parameters={
+        "data": {"description": "A raster data cube."},
+        "geometries": {"description": "GeoJSON FeatureCollection, Feature, or geometry."},
+        "reducer": {"description": "A reducer to apply on the pixel values."},
+    },
 )
 def aggregate_spatial_weighted(
     data: xr.Dataset | xr.DataArray,
