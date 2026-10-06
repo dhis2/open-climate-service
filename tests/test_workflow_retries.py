@@ -255,6 +255,27 @@ def test_a_cancel_landing_before_the_retry_timer_exists_takes_effect_at_once(
     assert "cancelled during the retry backoff after attempt 1" in (record.logs or "")
 
 
+def test_a_cancelled_job_is_logged_when_dequeued(instance: dict[str, Any]) -> None:
+    """A cancellation observed before execution is visible in the attempt history."""
+    job_id = "cancelled-before-attempt"
+    openeo_jobs.store_create_job(
+        OpenEOJobRecord(
+            id=job_id,
+            status=OpenEOJobStatus.QUEUED,
+            created=utc_now(),
+            process={"process_graph": {}},
+            cancel_requested=True,
+        )
+    )
+
+    assert instance["openeo"]._execute(job_id) is None
+
+    record = openeo_jobs.store_get_job(job_id)
+    assert record is not None
+    assert record.status == OpenEOJobStatus.CANCELED
+    assert "cancelled before the next attempt started" in (record.logs or "")
+
+
 def test_cancelling_during_a_backoff_takes_effect_at_once(
     instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:

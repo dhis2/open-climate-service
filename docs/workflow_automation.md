@@ -142,7 +142,9 @@ that event and trigger, and replaying the event does not create another.
   This covers an unreachable source, a timeout, a server error, a store another writer is
   busy with, and also errors such as a truncated remote response, which look like invalid
   input but may not repeat. While it waits the job is `queued`, holding no worker, and no
-  process runs it before its backoff has passed.
+  process runs it before its backoff has passed. An invalid argument discovered only while
+  the graph runs may therefore use the full attempt budget; only graph validation and known
+  save-result configuration errors can be classified as permanent before execution.
 - **A permanent error is not retried**, because it fails the same way on every attempt: an
   invalid process graph, a request a process refuses (an unknown collection, for example),
   or invalid configuration found while saving the result, such as an unknown export or a

@@ -807,7 +807,13 @@ class OpenEOJobService:
         if record.cancel_requested:
             store_update_job(
                 job_id,
-                lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()}),
+                lambda r: r.model_copy(
+                    update={
+                        "status": OpenEOJobStatus.CANCELED,
+                        "updated": utc_now(),
+                        "logs": _append_log(r, "cancelled before the next attempt started"),
+                    }
+                ),
             )
             return None
 
