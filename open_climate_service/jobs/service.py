@@ -29,7 +29,7 @@ from open_climate_service.jobs.models import (
     JobStatus,
 )
 from open_climate_service.shared.dynamic_import import get_dynamic_function
-from open_climate_service.shared.persistence import AlreadyLocked, try_index_lock
+from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -74,19 +74,10 @@ def _execution_lease(job_id: str) -> Generator[bool]:
     A job may execute in at most one process at a time. Without this, a second process could
     recover a job that the first was still running, typically across an overlapping restart:
     both then wrote the same store, one failed on a commit conflict and marked the shared
-    record failed, and the other went on writing for hours behind that failed status. The
-    lease is a file lock, so the operating system releases it when its process exits.
+    record failed, and the other went on writing for hours behind that failed status.
     """
-    try:
-        lease = try_index_lock(_lease_path(job_id))
-        lease.__enter__()
-    except AlreadyLocked:
-        yield False
-        return
-    try:
-        yield True
-    finally:
-        lease.__exit__(None, None, None)
+    with execution_lease(_lease_path(job_id)) as won:
+        yield won
 
 
 def _supports_argument(func: Any, name: str) -> bool:

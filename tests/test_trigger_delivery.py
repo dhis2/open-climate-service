@@ -49,7 +49,7 @@ def _event(index: int = 0) -> JobEvent:
     )
 
 
-def _automation(deliver: TriggerDelivery | None = None) -> AutomationConfig:
+def _automation(deliver: TriggerDelivery | None = None, max_attempts: int = 3) -> AutomationConfig:
     return AutomationConfig(
         workflow_triggers=[
             WorkflowTrigger(
@@ -61,6 +61,7 @@ def _automation(deliver: TriggerDelivery | None = None) -> AutomationConfig:
                     "export": deliver.export if deliver is not None else _EXPORT,
                 },
                 deliver=deliver,
+                max_attempts=max_attempts,
             )
         ]
     )
@@ -70,8 +71,8 @@ def _frame() -> pd.DataFrame:
     return pd.DataFrame({"geometry": ["ImspTQPwCqd"], "t": ["202608"], "rain": [12.5]})
 
 
-@pytest.fixture
-def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
+@pytest.fixture(name="instance")
+def instance_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
     """A writable instance whose workflow jobs save a bound named DHIS2 export."""
     monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path / "data")
@@ -112,8 +113,8 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[s
         job_service_module.reset_job_service()
 
 
-@pytest.fixture
-def sent(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+@pytest.fixture(name="sent")
+def sent_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Fake DHIS2 client: record each send instead of contacting a server."""
     calls: list[dict[str, Any]] = []
 
@@ -138,8 +139,12 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return calls
 
 
-def _service(instance: dict[str, Any], deliver: TriggerDelivery | None, *, listen: bool = True) -> Any:
-    service = WorkflowAutomationService(config_loader=lambda: _automation(deliver), openeo_service=instance["openeo"])
+def _service(
+    instance: dict[str, Any], deliver: TriggerDelivery | None, *, listen: bool = True, max_attempts: int = 3
+) -> Any:
+    service = WorkflowAutomationService(
+        config_loader=lambda: _automation(deliver, max_attempts), openeo_service=instance["openeo"]
+    )
     service.start()
     # `listen=False` models a process killed after the FINISHED write (which records the
     # delivery owed) and before the listener could submit it.
@@ -364,7 +369,8 @@ def test_failed_workflow_job_produces_no_delivery(
         raise RuntimeError("aggregation failed")
 
     monkeypatch.setattr(execution, "run_process_graph", fail)
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    # A single attempt: this test is about delivery, not retries (tests/test_workflow_retries.py).
+    service = _service(instance, TriggerDelivery(export=_EXPORT), max_attempts=1)
     job_id = _triggered_job_id(service)
     assert _await_openeo(job_id).status == OpenEOJobStatus.ERROR
     service.reconcile_deliveries()
