@@ -17,6 +17,8 @@ from open_climate_service.shared.provenance import record_source
 if TYPE_CHECKING:
     import geopandas as gpd
 
+    from open_climate_service.ingestions.schemas import ArtifactRecord
+
 _BBOX_KEYS = ("west", "south", "east", "north")
 
 
@@ -66,8 +68,19 @@ def load_features(id: str, spatial_extent: Any = None, version: str | None = Non
             f"load_features: feature collection {id!r} changed after this job was submitted "
             f"(expected {version}, current {actual_version.isoformat()})"
         )
+    return load_feature_record(id, record, spatial_extent=spatial_extent)
+
+
+def load_feature_record(id: str, record: ArtifactRecord, spatial_extent: Any = None) -> dict[str, Any]:
+    """Read a feature collection's record as a GeoJSON FeatureCollection, reprojected to WGS 84.
+
+    The read shared by `load_features`, which finds the record from the collection's template,
+    and `load_collection`, which already holds the published record it advertises (CLIM-1326).
+    Reading from the record, not the template, keeps a published collection loadable after its
+    template is removed or renamed on the instance.
+    """
     detail = record.features
-    if detail is None:  # pragma: no cover -- registered_collections() already filters on this
+    if detail is None:
         raise ValueError(f"load_features: '{id}' is not a feature collection")
 
     bbox, bbox_crs = _parse_spatial_extent(spatial_extent)

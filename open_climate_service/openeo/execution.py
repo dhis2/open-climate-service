@@ -465,23 +465,28 @@ def _spatial_extent_with_crs(extent: Any) -> dict[str, Any] | None:
     return bbox
 
 
-def _load_vector_collection(id: str, spatial_extent: Any, bands: Any) -> dict[str, Any]:
+def _load_vector_collection(id: str, artifact: Any, spatial_extent: Any, bands: Any) -> dict[str, Any]:
     """Load a published feature collection, returning what `load_features` returns (CLIM-1326).
 
     `temporal_extent` is not applied: a feature collection is static geometry with no time
     dimension, and the openEO editor passes `temporal_extent: null` for a collection whose
     temporal extent is open, as a feature collection's is. `bands` is refused rather than
     ignored, because a vector collection has none and silently dropping a selection would
-    return more than was asked for.
-    """
-    from open_climate_service.plugins.processes.load_features import load_features
+    return more than was asked for. Any `bands` is refused, also an empty list or a malformed
+    value, as the process contract says to omit it.
 
-    if isinstance(bands, list) and bands:
+    The record read is the published `artifact` that `/collections` advertises, not one found
+    again from the collection's feature template, so every advertised collection stays loadable
+    also after its template is removed or renamed on the instance.
+    """
+    from open_climate_service.plugins.processes.load_features import load_feature_record
+
+    if bands is not None:
         raise HTTPException(
             status_code=400,
             detail=f"load_collection: '{id}' is a vector collection and has no bands; omit `bands`",
         )
-    return load_features(id, spatial_extent=_spatial_extent_with_crs(spatial_extent))
+    return load_feature_record(id, artifact, spatial_extent=_spatial_extent_with_crs(spatial_extent))
 
 
 def _load_collection_impl(
@@ -493,7 +498,7 @@ def _load_collection_impl(
     """Load a published dataset: a raster as a data cube, a feature collection as a vector cube."""
     artifact = _get_published_artifact(id)
     if artifact.format == ArtifactFormat.GEOPARQUET:
-        return _load_vector_collection(id, spatial_extent, bands)
+        return _load_vector_collection(id, artifact, spatial_extent, bands)
     ds = _ensure_crs(_open_artifact(artifact))
     from open_climate_service.shared.provenance import record_source
 

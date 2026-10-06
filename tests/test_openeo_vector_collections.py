@@ -203,12 +203,26 @@ def test_load_collection_narrows_a_vector_collection_by_its_spatial_extent(rain_
     assert [feature["id"] for feature in loaded["features"]] == ["WEST"]
 
 
-def test_load_collection_refuses_bands_for_a_vector_collection(rain_and_regions: None) -> None:
+@pytest.mark.parametrize("bands", [["code"], [], "code"])
+def test_load_collection_refuses_bands_for_a_vector_collection(rain_and_regions: None, bands: Any) -> None:
+    """Any `bands` is refused, also an empty list or a malformed value, not only a selection."""
     with pytest.raises(HTTPException) as refused:
-        execution._load_collection_impl("regions", bands=["code"])
+        execution._load_collection_impl("regions", bands=bands)
 
     assert refused.value.status_code == 400
     assert "has no bands" in str(refused.value.detail)
+
+
+def test_load_collection_loads_a_published_collection_whose_template_is_removed(
+    rain_and_regions: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What `/collections` advertises stays loadable after the instance drops its feature template."""
+    monkeypatch.setattr(feature_templates, "_load_builtin_feature_templates", lambda: [])
+    feature_templates.reset_feature_template_caches()
+
+    loaded = execution._load_collection_impl("regions")
+
+    assert [feature["id"] for feature in loaded["features"]] == ["WEST", "EAST"]
 
 
 def test_a_vector_collection_feeds_aggregate_spatial_through_a_process_graph(rain_and_regions: None) -> None:
