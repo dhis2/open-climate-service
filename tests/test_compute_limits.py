@@ -217,7 +217,7 @@ def _slot_is_free(slots: JobSlots) -> bool:
     return False
 
 
-def _run_in_background(target: Callable[[], None]) -> threading.Thread:
+def _run_in_background(target: Callable[[], object]) -> threading.Thread:
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
     return thread

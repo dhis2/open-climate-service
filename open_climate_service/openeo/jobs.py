@@ -195,11 +195,6 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     return data
 
 
-def _cancel_requested(job_id: str) -> bool:
-    record = store_get_job(job_id)
-    return bool(record and record.cancel_requested)
-
-
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
