@@ -266,7 +266,7 @@ def test_collections_logs_skipped_dataset_failures(client: TestClient, monkeypat
     # openEO's own gate, not STAC's: since CLIM-1066 the listing no longer reads STAC's set.
     monkeypatch.setattr(
         ingestion_services,
-        "latest_published_raster_artifacts_by_dataset",
+        "openeo_collection_artifacts_by_dataset",
         lambda: {"broken_dataset": _artifact(artifact_id="a1", dataset_id="broken_dataset")},
     )
 
@@ -493,9 +493,9 @@ def test_stac_and_openeo_gates_agree_on_rasters(monkeypatch: pytest.MonkeyPatch)
 def test_openeo_listing_does_not_follow_the_stac_gate(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """openEO advertises its own set, so a STAC-only dataset never reaches /collections.
 
-    Simulates the divergence CLIM-1069 introduces: a feature collection belongs in STAC but
-    cannot be loaded as a datacube. Before the split, openEO read STAC's set directly and
-    would have listed it.
+    Feature collections are in both sets since CLIM-1326, so this simulates a format STAC can
+    describe but `load_collection` cannot load. Before CLIM-1066 split the gates, openEO read
+    STAC's set directly and would have listed it.
     """
     raster = _artifact(artifact_id="a1")
     stac_only = _artifact(
@@ -511,7 +511,7 @@ def test_openeo_listing_does_not_follow_the_stac_gate(client: TestClient, monkey
     )
     monkeypatch.setattr(
         ingestion_services,
-        "latest_published_raster_artifacts_by_dataset",
+        "openeo_collection_artifacts_by_dataset",
         lambda: {"chirps3_precipitation_daily": raster},
     )
     monkeypatch.setattr(stac_services, "_build_collection_with_xstac", lambda **_: _minimal_xstac_payload())

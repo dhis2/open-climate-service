@@ -58,7 +58,19 @@ for c in conn.list_collections():
     print(c["id"], "—", c["title"])
 ```
 
-Each collection includes `cube:dimensions` (spatial `x`/`y`, temporal `t`, `bands`), extent, and variable metadata.
+A raster collection includes `cube:dimensions` (spatial `x`/`y`, temporal `t`, `bands`), extent, and variable metadata.
+
+Published vector datasets, such as administrative boundaries or DHIS2 org units, are collections too. Their `cube:dimensions` has a single `geometry` dimension (with its bbox, `geometry_types` and reference system, always WGS 84), and their feature properties are listed in `table:columns`. A client that only handles rasters can tell them apart by that `geometry` dimension; the map viewer leaves them out for that reason.
+
+`load_collection` loads a vector collection as a vector cube of its features, the same result as `load_features`, which stays available. It can be passed straight to `aggregate_spatial` as `geometries`:
+
+```python
+rain = conn.load_collection("chirps3_precipitation_monthly", temporal_extent=["2025-01-01", "2025-12-31"])
+districts = conn.load_collection("overture_divisions")
+zonal = rain.aggregate_spatial(geometries=districts, reducer="mean")
+```
+
+A vector collection has no time dimension and no bands: `temporal_extent` is ignored, and `bands` is refused. `spatial_extent` narrows the features loaded.
 
 ---
 

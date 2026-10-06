@@ -454,14 +454,46 @@ def _temporal_to_list(extent: Any) -> list[str | None] | None:
     return result
 
 
+def _spatial_extent_with_crs(extent: Any) -> dict[str, Any] | None:
+    """The bbox as `load_features` takes it: west/south/east/north, plus the CRS when declared."""
+    bbox: dict[str, Any] | None = _bbox_to_dict(extent)
+    if bbox is None:
+        return None
+    crs = extent.get("crs") if isinstance(extent, dict) else getattr(extent, "crs", None)
+    if crs is not None:
+        bbox["crs"] = crs
+    return bbox
+
+
+def _load_vector_collection(id: str, spatial_extent: Any, bands: Any) -> dict[str, Any]:
+    """Load a published feature collection, returning what `load_features` returns (CLIM-1326).
+
+    `temporal_extent` is not applied: a feature collection is static geometry with no time
+    dimension, and the openEO editor passes `temporal_extent: null` for a collection whose
+    temporal extent is open, as a feature collection's is. `bands` is refused rather than
+    ignored, because a vector collection has none and silently dropping a selection would
+    return more than was asked for.
+    """
+    from open_climate_service.plugins.processes.load_features import load_features
+
+    if isinstance(bands, list) and bands:
+        raise HTTPException(
+            status_code=400,
+            detail=f"load_collection: '{id}' is a vector collection and has no bands; omit `bands`",
+        )
+    return load_features(id, spatial_extent=_spatial_extent_with_crs(spatial_extent))
+
+
 def _load_collection_impl(
     id: str,
     spatial_extent: Any = None,
     temporal_extent: Any = None,
     bands: Any = None,
-) -> xr.DataArray:
-    """Load a published dataset as an openEO data cube (xr.DataArray)."""
+) -> xr.DataArray | dict[str, Any]:
+    """Load a published dataset: a raster as a data cube, a feature collection as a vector cube."""
     artifact = _get_published_artifact(id)
+    if artifact.format == ArtifactFormat.GEOPARQUET:
+        return _load_vector_collection(id, spatial_extent, bands)
     ds = _ensure_crs(_open_artifact(artifact))
     from open_climate_service.shared.provenance import record_source
 
@@ -586,9 +618,9 @@ def _get_published_artifact(collection_id: str) -> Any:
 
 
 def _eligible_artifacts() -> dict[str, Any]:
-    # The raster gate, not the STAC one: this resolves what load_collection will open as a
-    # datacube, which is a narrower question than what the catalogue describes.
-    return ingestion_services.latest_published_raster_artifacts_by_dataset()
+    # openEO's own gate: what /collections advertises is what load_collection loads, rasters
+    # as datacubes and feature collections as vector cubes (CLIM-1326).
+    return ingestion_services.openeo_collection_artifacts_by_dataset()
 
 
 def _open_artifact(artifact: Any) -> xr.Dataset:

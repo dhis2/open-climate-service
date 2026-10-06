@@ -505,12 +505,19 @@
         });
       }
 
+      function isVectorCollection(col) {
+        const dims = col?.["cube:dimensions"];
+        return dims != null && Object.values(dims).some((dim) => dim?.type === "geometry");
+      }
+
       async function loadCatalog() {
         try {
           const res = await fetch("{{ mount }}/collections");
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const body = await res.json();
-          const collections = body.collections ?? [];
+          // /collections lists vector collections too (CLIM-1326). This viewer draws rasters
+          // only, so a collection whose cube has a geometry dimension stays out of the list.
+          const collections = (body.collections ?? []).filter((col) => !isVectorCollection(col));
           if (collections.length === 0) {
             setStatus(
               "No published datasets found. Ingest and publish a dataset first."
