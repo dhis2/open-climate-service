@@ -231,11 +231,6 @@ reportMissingImports = "warning"
 reportMissingModuleSource = false
 
 [dependency-groups]
-# What the scripts under examples/ import beyond the package itself: `uv sync --group examples`.
-examples = [
-    "dhis2-client>=0.3.2",
-    "openeo>=0.52",
-]
 dev = [
     "httpx>=0.28.0",
     "mypy>=1.19.1",

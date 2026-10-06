@@ -6,7 +6,7 @@ The spatial aggregation happens via the built-in [`aggregate_to_dhis2_json`](wor
 
 There are two ways to get the values into DHIS2:
 
-- **Client import.** Run the workflow synchronously and import the returned `dataValueSet` with a DHIS2 client. The full runnable script is [`examples/aggregate_and_import_to_dhis2.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/aggregate_and_import_to_dhis2.py).
+- **Client import.** Run the workflow synchronously and import the returned `dataValueSet` with a DHIS2 client.
 - **Server delivery.** Run the workflow as a batch job and let OCS deliver the saved result. See [Automated delivery with a named export](#automated-delivery-with-a-named-export).
 
 ## Prerequisites
@@ -16,12 +16,12 @@ There are two ways to get the values into DHIS2:
 - The two clients, installed together through the `dhis2` extra:
 
   ```bash
-  pip install "open-climate-service[dhis2]"
+  pip install "open-climate-service[dhis2]>=0.1.1"
   ```
 
   `open-climate-service` ships the `ClimateService` client; the extra adds
   [dhis2-client](https://pypi.org/project/dhis2-client/), which handles the DHIS2 Web API calls.
-  From a checkout of this repository, `uv sync --group examples` installs the same.
+  From a checkout of this repository, use `uv run --extra dhis2` for a client-side script.
 
 ## Named connections for server-side plugins
 

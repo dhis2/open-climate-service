@@ -13,7 +13,7 @@ Each instance is configured for a specific country or region: it scopes all data
 ```bash
 pip install open-climate-service            # client only — talk to an instance over HTTP
 pip install open-climate-service[xarray]    # + open published datasets as xarray
-pip install open-climate-service[dhis2]     # + the DHIS2 Web API client, for importing results into DHIS2
+pip install open-climate-service[dhis2]     # + DHIS2 Web API client (available from OCS 0.1.1)
 ```
 
 The client, `[xarray]` and `[dhis2]` extras install with `pip` on any platform.

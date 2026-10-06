@@ -1871,10 +1871,6 @@ dev = [
     { name = "types-shapely" },
     { name = "watchfiles" },
 ]
-examples = [
-    { name = "dhis2-client" },
-    { name = "openeo" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -1935,14 +1931,10 @@ dev = [
     { name = "types-shapely", specifier = ">=2.1,<3" },
     { name = "watchfiles", specifier = ">=1.2.0" },
 ]
-examples = [
-    { name = "dhis2-client", specifier = ">=0.3.2" },
-    { name = "openeo", specifier = ">=0.52" },
-]
 
 [[package]]
 name = "openeo"
-version = "0.52.0"
+version = "0.50.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecated" },
@@ -1957,7 +1949,7 @@ dependencies = [
     { name = "xarray" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/07/0b/ceda0981b73b262ce6975e6844a42d119acbb757f5aacb123cc5f220fef6/openeo-0.52.0-py3-none-any.whl", hash = "sha256:ed974deac6ef028627e4b7c7e0969dca0e1a3e6d2486a3d24fc8ed3780765a35", size = 356992, upload-time = "2026-09-08T09:34:02.863Z" },
+    { url = "https://files.pythonhosted.org/packages/17/8d/57ad97e820316d5b319f9514237207c41031f6227f98de92884fcbc2baab/openeo-0.50.0-py3-none-any.whl", hash = "sha256:d9b3f411828ad1e688221d7ff42664538d90ab25aad9ff517a3e56f655339d01", size = 345530, upload-time = "2026-05-18T13:16:26.716Z" },
 ]
 
 [[package]]
