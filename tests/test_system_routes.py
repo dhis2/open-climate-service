@@ -353,6 +353,21 @@ def test_an_unpublished_dataset_in_the_address_is_reported_not_ignored(client: T
     assert "is not published, so it cannot be shown on the map" in body
 
 
+def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client: TestClient) -> None:
+    """A published vector dataset is not in the raster catalogue, and "not published" was wrong.
+
+    The page asks the dataset's own record why it is missing: a vector dataset, an unpublished
+    one, or none at all each get their own message.
+    """
+    body = client.get("/map").text
+
+    assert "fetch(`/datasets/${encodeURIComponent(requested)}`" in body
+    assert 'record?.itemType === "feature"' in body
+    assert "is a vector dataset. The map viewer shows raster datasets only for now." in body
+    assert 'record.publication?.status !== "published"' in body
+    assert "was not found." in body
+
+
 def test_a_chosen_dataset_waits_for_the_style_as_a_deep_link_does(client: TestClient) -> None:
     """`initMap` returns once the map is constructed, not once its style has loaded.
 

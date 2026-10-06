@@ -770,12 +770,39 @@
         });
       }
 
+      // A deep link to a dataset the catalogue does not list: say why. The catalogue holds only
+      // published raster datasets, so a published vector dataset is missing for a different
+      // reason than an unpublished one, and "not published" would be wrong about it.
+      async function explainMissingDataset(requested) {
+        let record = null;
+        try {
+          const res = await fetch(`{{ mount }}/datasets/${encodeURIComponent(requested)}`, {
+            headers: { Accept: "application/json" },
+          });
+          if (res.ok) record = await res.json();
+        } catch {
+          // Fall through to the generic message below.
+        }
+        if (record?.itemType === "feature") {
+          setStatus(
+            `Dataset "${requested}" is a vector dataset. The map viewer shows raster datasets only for now.`,
+            true
+          );
+        } else if (record && record.publication?.status !== "published") {
+          setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
+        } else if (record) {
+          setStatus(`Dataset "${requested}" cannot be shown on the map.`, true);
+        } else {
+          setStatus(`Dataset "${requested}" was not found.`, true);
+        }
+      }
+
       function openRequestedDataset() {
         const requested = new URLSearchParams(window.location.search).get("dataset");
         if (!requested) return;
         const option = [...selectEl.options].find((o) => o.dataset.id === requested);
         if (!option) {
-          setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
+          explainMissingDataset(requested);
           return;
         }
         selectEl.value = option.value;
