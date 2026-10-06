@@ -775,25 +775,37 @@
       // reason than an unpublished one, and "not published" would be wrong about it.
       async function explainMissingDataset(requested) {
         let record = null;
+        let lookup = "failed";
         try {
           const res = await fetch(`{{ mount }}/datasets/${encodeURIComponent(requested)}`, {
             headers: { Accept: "application/json" },
           });
-          if (res.ok) record = await res.json();
+          if (res.ok) {
+            record = await res.json();
+            lookup = "found";
+          } else if (res.status === 404) {
+            lookup = "missing";
+          }
         } catch {
-          // Fall through to the generic message below.
+          // A network failure or a body that is not JSON: the lookup failed, which says
+          // nothing about whether the dataset exists.
         }
-        if (record?.itemType === "feature") {
+        // The reader may have chosen a dataset while this was in flight; their choice's status
+        // must not be overwritten by an answer about the address they started from.
+        if (selectEl.value) return;
+        if (lookup === "missing") {
+          setStatus(`Dataset "${requested}" was not found.`, true);
+        } else if (lookup === "failed") {
+          setStatus(`Could not check dataset "${requested}"; it is not on the map.`, true);
+        } else if (record?.itemType === "feature") {
           setStatus(
             `Dataset "${requested}" is a vector dataset. The map viewer shows raster datasets only for now.`,
             true
           );
-        } else if (record && record.publication?.status !== "published") {
+        } else if (record.publication?.status !== "published") {
           setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
-        } else if (record) {
-          setStatus(`Dataset "${requested}" cannot be shown on the map.`, true);
         } else {
-          setStatus(`Dataset "${requested}" was not found.`, true);
+          setStatus(`Dataset "${requested}" cannot be shown on the map.`, true);
         }
       }
 
