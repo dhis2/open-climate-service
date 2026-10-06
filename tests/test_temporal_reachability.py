@@ -73,7 +73,7 @@ _OU_B = "O6uvpzGd5pu"
         ("daily", "daily", Reachability.PASS_THROUGH),
         ("daily", "weekly", Reachability.AGGREGATE),
         ("daily", "monthly", Reachability.AGGREGATE),
-        ("daily", "quarterly", Reachability.AGGREGATE),
+        ("daily", "quarterly", Reachability.UNREACHABLE),
         ("daily", "yearly", Reachability.AGGREGATE),
         ("dekadal", "monthly", Reachability.AGGREGATE),
         ("dekadal", "weekly", Reachability.UNREACHABLE),
@@ -83,7 +83,7 @@ _OU_B = "O6uvpzGd5pu"
         ("monthly", "monthly", Reachability.PASS_THROUGH),
         ("monthly", "weekly", Reachability.UNREACHABLE),
         ("monthly", "daily", Reachability.UNREACHABLE),
-        ("monthly", "quarterly", Reachability.AGGREGATE),
+        ("monthly", "quarterly", Reachability.UNREACHABLE),
         ("monthly", "yearly", Reachability.AGGREGATE),
         ("quarterly", "yearly", Reachability.AGGREGATE),
         ("yearly", "monthly", Reachability.UNREACHABLE),
@@ -185,6 +185,18 @@ def test_daily_dataset_with_monthly_export_and_a_declaration_resolves(monkeypatc
     validate_configured_exports()
 
 
+@pytest.mark.parametrize(
+    ("definitions", "message"),
+    [(["not-a-mapping"], "must be a mapping"), ([{"plugin": "dhis2"}], "requires an ID")],
+)
+def test_startup_rejects_malformed_export_definitions(
+    monkeypatch: pytest.MonkeyPatch, definitions: list[Any], message: str
+) -> None:
+    monkeypatch.setattr(config, "_cache", {"exports": definitions})
+    with pytest.raises(ValueError, match=message):
+        validate_configured_exports()
+
+
 def test_monthly_dataset_with_monthly_export_refuses_a_declaration(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "monthly", temporal_aggregation="mean")
     with pytest.raises(ValueError, match="remove the declaration"):
@@ -271,16 +283,17 @@ def _cube(stamps: np.ndarray, value: float = 1.0) -> xr.DataArray:
     )
 
 
-def test_aggregate_dekads_leaves_the_same_evidence() -> None:
-    """A dekads-to-months graph is verifiable too: period, reducer, and the months a sum only partly covers."""
+@pytest.mark.parametrize("method", ["sum", "mean"])
+def test_aggregate_dekads_leaves_the_same_evidence(method: str) -> None:
+    """Coverage evidence is independent of the reducer used for dekads-to-months."""
     from open_climate_service.plugins.processes.aggregate_dekads import aggregate_dekads
 
     stamps = np.array(["2025-01-01", "2025-01-11", "2025-01-21", "2025-02-01", "2025-02-11"], dtype="datetime64[ns]")
     with capture_execution({}) as evidence:
-        monthly = aggregate_dekads(_cube(stamps), period="month", method="sum")
+        monthly = aggregate_dekads(_cube(stamps), period="month", method=method)
     assert monthly.sizes["t"] == 2
     assert evidence.describe()["temporal_aggregations"] == [
-        {"period": "monthly", "method": "sum", "incomplete": ["202502"], "completeness": "checked"}
+        {"period": "monthly", "method": method, "incomplete": ["202502"], "completeness": "checked"}
     ]
 
 
@@ -304,6 +317,52 @@ def test_ad_hoc_finer_label_cannot_be_derived() -> None:
     ds = _cube(pd.date_range("2025-01-01", "2025-03-01", freq="MS").values).to_dataset()
     with pytest.raises(ValueError, match="cannot be derived"):
         check_ad_hoc_period_reachability(ds, {"period_type": "day"})
+
+
+def test_dataarray_cadence_survives_promotion_to_dataset() -> None:
+    promoted = stamp_cadence(_cube(_days("2025-01-01", "2025-01-03")), "daily").to_dataset()
+    assert cadence_of(promoted) == "daily"
+    check_ad_hoc_period_reachability(promoted, {"period_type": "day"})
+
+
+def test_dataset_with_conflicting_variable_cadences_has_no_cadence() -> None:
+    daily = stamp_cadence(_cube(_days("2025-01-01", "2025-01-03")), "daily")
+    monthly = stamp_cadence(daily.copy(), "monthly")
+    assert cadence_of(xr.Dataset({"daily": daily, "monthly": monthly})) is None
+
+
+def test_temporal_aggregation_refuses_to_make_data_finer() -> None:
+    array = stamp_cadence(
+        _cube(pd.date_range("2025-01-01", "2025-03-01", freq="MS").values),
+        "monthly",
+    )
+
+    class Cube:
+        openeo = type("OpenEOMetadata", (), {"temporal_dims": ["t"]})()
+
+        def __init__(self, data: xr.DataArray) -> None:
+            self.data = data
+            self.attrs = data.attrs
+            self.coords = data.coords
+
+        def sortby(self, dimension: str) -> Cube:
+            self.data = self.data.sortby(dimension)
+            return self
+
+        def __getitem__(self, key: str) -> xr.DataArray:
+            return self.data[key]
+
+    monthly = Cube(array)
+    called = False
+
+    def original(**_: Any) -> Cube:
+        nonlocal called
+        called = True
+        return monthly
+
+    with pytest.raises(ValueError, match="cannot derive daily data from monthly data"):
+        execution._make_sorted_atp(original)(monthly, reducer=lambda data: data, period="day")
+    assert called is False
 
 
 # --- a graph that aggregates explicitly, end to end ------------------------------------------

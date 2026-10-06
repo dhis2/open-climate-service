@@ -109,10 +109,12 @@ event, so a trigger cannot yet listen for it the way it listens for a sync. Unti
 step emits that event, an export from a derived dataset is run by hand or by a workflow that
 derives and exports in one graph.
 
-The pairs that tile: hourly into daily, weekly, monthly, quarterly and yearly; daily into
-weekly, monthly, quarterly and yearly; dekadal into monthly; monthly into quarterly and
-yearly; quarterly into yearly. Weekly data tiles nothing, because ISO weeks straddle months,
-quarters and years, and nothing can be made finer than it is stored.
+The pairs currently supported by `aggregate_temporal_period`: hourly into daily, weekly,
+monthly and yearly; daily into weekly, monthly and yearly; dekadal into monthly and yearly;
+monthly into yearly; and quarterly into yearly. Weekly data tiles nothing, because ISO weeks
+straddle months, quarters and years. Calendar-quarter destinations are refused for now: they
+tile arithmetically, but the standard process has no calendar-quarter period with which to
+produce and record them. Nothing can be made finer than it is stored.
 
 ```yaml
 exports:

@@ -28,11 +28,8 @@ class ResolvedExport:
     references: dict[str, str]
 
 
-def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
-    """Resolve and validate a mapping without rendering or resolving a target."""
-    export_id = options.get("export")
-    if not isinstance(export_id, str) or not export_id.strip() or set(options) != {"export"}:
-        raise ValueError("Named exports require options containing only a non-empty 'export' ID")
+def _configured_export_definitions() -> dict[str, dict[str, Any]]:
+    """Validate configured export definitions and index them by ID."""
     definitions = config.get_config().get("exports", [])
     if not isinstance(definitions, list):
         raise ValueError("exports must be a list of named mappings")
@@ -46,6 +43,15 @@ def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
         if identifier in by_id:
             raise ValueError(f"Duplicate export ID '{identifier}'")
         by_id[identifier] = definition
+    return by_id
+
+
+def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
+    """Resolve and validate a mapping without rendering or resolving a target."""
+    export_id = options.get("export")
+    if not isinstance(export_id, str) or not export_id.strip() or set(options) != {"export"}:
+        raise ValueError("Named exports require options containing only a non-empty 'export' ID")
+    by_id = _configured_export_definitions()
     if export_id not in by_id:
         raise ValueError(f"Unknown export '{export_id}'")
     definition = deepcopy(by_id[export_id])
@@ -81,16 +87,12 @@ def validate_configured_exports() -> None:
     Automation already resolves the exports its triggers deliver through; this covers the
     rest, so an export nobody has run yet is refused with the same message at the same time.
     """
-    definitions = config.get_config().get("exports", [])
-    if not isinstance(definitions, list):
-        raise ValueError("exports must be a list of named mappings")
-    for definition in definitions:
-        if isinstance(definition, dict) and isinstance(definition.get("id"), str):
-            plugin_id = definition.get("plugin")
-            plugin = load_export_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
-            if plugin is None:
-                raise ValueError(f"Export '{definition['id']}' names an unknown plugin {plugin_id!r}")
-            resolve_named_export(plugin.format, {"export": definition["id"]})
+    for export_id, definition in _configured_export_definitions().items():
+        plugin_id = definition.get("plugin")
+        plugin = load_export_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
+        if plugin is None:
+            raise ValueError(f"Export '{export_id}' names an unknown plugin {plugin_id!r}")
+        resolve_named_export(plugin.format, {"export": export_id})
 
 
 def declared_dataset_cadence(resolved: ResolvedExport) -> str | None:

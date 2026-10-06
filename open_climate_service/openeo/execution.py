@@ -88,10 +88,12 @@ def _make_sorted_atp(original_fn: Any) -> Any:
             record_incomplete_periods,
         )
         from open_climate_service.shared.time import (
+            Reachability,
             cadence_of,
             incomplete_destination_periods,
             infer_cadence,
             openeo_period_to_cadence,
+            period_reachability,
             stamp_cadence,
         )
 
@@ -103,6 +105,20 @@ def _make_sorted_atp(original_fn: Any) -> Any:
         # produced by this step with the declared reducer, and refuse or drop the destination
         # periods the input did not fully cover (CLIM-1302).
         destination = openeo_period_to_cadence(period)
+        source = cadence_of(data)
+        inferred_source = None
+        if t_dim is not None and t_dim in getattr(data, "coords", {}):
+            inferred_source = infer_cadence(np.asarray(data[t_dim].values))
+        # Only carried cadence is authoritative enough to reject before execution. A sparse,
+        # unstamped daily axis can resemble a weekly one; use inference for completeness
+        # evidence below, but do not turn that guess into a false reachability failure.
+        if source is not None and destination is not None:
+            reachability, reason = period_reachability(source, destination)
+            if reachability is Reachability.UNREACHABLE:
+                raise ValueError(
+                    f"aggregate_temporal_period(period={period!r}) cannot derive {destination} data "
+                    f"from {source} data: {reason}"
+                )
         with observe_temporal_aggregation(destination):
             if t_dim is None or destination is None or t_dim not in getattr(data, "coords", {}):
                 record_completeness_unknown("the aggregation has no exportable period or no time axis to count")
@@ -112,7 +128,7 @@ def _make_sorted_atp(original_fn: Any) -> Any:
                 # dataset template at load and rewritten by each temporal step. Inferring it
                 # from the axis would let missing observations redefine it, and reusing the
                 # loaded dataset's declaration would be wrong after an earlier aggregation.
-                source = cadence_of(data) or infer_cadence(t_values)
+                source = source or inferred_source
                 if source is None:
                     record_completeness_unknown(
                         "the source cadence is neither carried by the data nor inferable from its axis"

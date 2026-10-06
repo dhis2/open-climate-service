@@ -495,11 +495,14 @@ _CADENCE_TO_OPENEO_PERIOD = {cadence: period for period, cadence in _OPENEO_PERI
 # weeks straddle months, quarters and years. Dekads tile months (three per month) and so
 # everything built from months. Hours tile days, and days tile ISO weeks.
 _TILES: dict[str, frozenset[str]] = {
-    "hourly": frozenset({"daily", "weekly", "monthly", "quarterly", "yearly"}),
-    "daily": frozenset({"weekly", "monthly", "quarterly", "yearly"}),
-    "dekadal": frozenset({"monthly", "quarterly", "yearly"}),
+    # Calendar quarters are intentionally absent as destinations. The standard openEO
+    # aggregate_temporal_period vocabulary has no calendar-quarter period, so advertising
+    # those transitions would accept a declaration that no instrumented process can satisfy.
+    "hourly": frozenset({"daily", "weekly", "monthly", "yearly"}),
+    "daily": frozenset({"weekly", "monthly", "yearly"}),
+    "dekadal": frozenset({"monthly", "yearly"}),
     "weekly": frozenset(),
-    "monthly": frozenset({"quarterly", "yearly"}),
+    "monthly": frozenset({"yearly"}),
     "quarterly": frozenset({"yearly"}),
     "yearly": frozenset(),
 }
@@ -517,10 +520,21 @@ axis can do on their own.
 
 
 def cadence_of(data: Any) -> str | None:
-    """The cadence a cube says it is at, or None for data that carries none."""
+    """The consistent cadence a cube says it is at, or None when absent or ambiguous.
+
+    Converting an xarray DataArray to a Dataset keeps the array attributes on its data
+    variable. Recovering a cadence shared by all stamped variables makes that harmless while
+    refusing to guess when variables genuinely carry different cadences.
+    """
     attrs = getattr(data, "attrs", None)
     value = attrs.get(CADENCE_ATTR) if isinstance(attrs, dict) else None
-    return value if isinstance(value, str) and value else None
+    if isinstance(value, str) and value:
+        return value
+    variables = getattr(data, "data_vars", None)
+    if variables is None:
+        return None
+    cadences = {cadence for variable in variables.values() if (cadence := cadence_of(variable)) is not None}
+    return next(iter(cadences)) if len(cadences) == 1 else None
 
 
 def stamp_cadence(data: Any, cadence: str | None) -> Any:
