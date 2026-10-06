@@ -298,6 +298,27 @@ def test_a_cancel_landing_before_the_retry_timer_exists_takes_effect_at_once(
     assert "cancelled during the retry backoff after attempt 1" in (record.logs or "")
 
 
+def test_a_cancelled_job_is_logged_when_dequeued(instance: dict[str, Any]) -> None:
+    """A cancellation observed before execution is visible in the attempt history."""
+    job_id = "cancelled-before-attempt"
+    openeo_jobs.store_create_job(
+        OpenEOJobRecord(
+            id=job_id,
+            status=OpenEOJobStatus.QUEUED,
+            created=utc_now(),
+            process={"process_graph": {}},
+            cancel_requested=True,
+        )
+    )
+
+    assert instance["openeo"]._execute(job_id) is None
+
+    record = openeo_jobs.store_get_job(job_id)
+    assert record is not None
+    assert record.status == OpenEOJobStatus.CANCELED
+    assert "cancelled before the next attempt started" in (record.logs or "")
+
+
 def test_cancelling_during_a_backoff_takes_effect_at_once(
     instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -496,6 +517,35 @@ def _raised_while_handling(exc: BaseException, handled: BaseException) -> BaseEx
 )
 def test_failures_are_classified(exc: BaseException, while_saving: bool, permanent: bool) -> None:
     assert openeo_jobs._is_permanent_error(exc, while_saving=while_saving) is permanent
+
+
+@pytest.mark.parametrize("stage", ["build", "compile", "run"])
+def test_executor_distinguishes_invalid_graphs_from_runtime_value_errors(
+    monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    from unittest.mock import MagicMock
+
+    from open_climate_service.openeo import workflows
+
+    failure = JSONDecodeError("Expecting value", "", 0)
+    graph_factory = MagicMock()
+    graph = graph_factory.return_value
+    if stage == "build":
+        graph_factory.side_effect = failure
+    elif stage == "compile":
+        graph.to_callable.side_effect = failure
+    else:
+        graph.to_callable.return_value.side_effect = failure
+    monkeypatch.setattr("openeo_pg_parser_networkx.OpenEOProcessGraph", graph_factory)
+    monkeypatch.setattr(execution, "_build_process_registry", lambda: {})
+    monkeypatch.setattr(workflows, "list_workflows", lambda: MagicMock(processes=[]))
+
+    with pytest.raises(HTTPException) as raised:
+        execution.run_process_graph({"process_graph": {}})
+
+    assert raised.value.__cause__ is failure
+    assert isinstance(raised.value, execution.InvalidProcessGraph) is (stage != "run")
+    assert openeo_jobs._is_permanent_error(raised.value) is (stage != "run")
 
 
 # --- service API invariants ----------------------------------------------------------------

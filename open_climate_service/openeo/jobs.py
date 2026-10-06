@@ -821,7 +821,13 @@ class OpenEOJobService:
         if record.cancel_requested:
             store_update_job(
                 job_id,
-                lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()}),
+                lambda r: r.model_copy(
+                    update={
+                        "status": OpenEOJobStatus.CANCELED,
+                        "updated": utc_now(),
+                        "logs": _append_log(r, "cancelled before the next attempt started"),
+                    }
+                ),
             )
             return None
 
@@ -840,6 +846,13 @@ class OpenEOJobService:
 
         saving = False
         try:
+            # Each attempt owns a fresh result directory. Without this, a successful rerun in
+            # another format made files left by an earlier or cancelled attempt downloadable.
+            import shutil
+
+            results_dir = _JOBS_DIR / job_id / "results"
+            shutil.rmtree(results_dir, ignore_errors=True)
+            results_dir.mkdir(parents=True, exist_ok=True)
             # Cancellation is checked before every process and dask task, and once more,
             # atomically, at the point of no return of any publication (CLIM-1221).
             with cancellation_scope(
@@ -1179,6 +1192,9 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
 
     variable = _derive_variable(ds, options)
     source_template = _resolve_source_template(options)
+    _publish_raw = options.get("publish", True)
+    if not isinstance(_publish_raw, bool):
+        raise ValueError(f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}")
     template = _reg.get_dataset(dataset_id)
     # A template this call registers, so a cancellation before publication can remove it again.
     created_template: Path | None = None
@@ -1223,6 +1239,28 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
     store_path = downloader.DOWNLOAD_DIR / f"{dataset_id}.icechunk"
     store_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Validate the complete record before crossing the store commit's point of no return.
+    # Only its measured byte size depends on the committed store and is filled in afterwards.
+    record = ArtifactRecord(
+        artifact_id=str(uuid.uuid4()),
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        variable=variable,
+        period_type=period_type,
+        format=ArtifactFormat.ICECHUNK,
+        path=str(store_path),
+        asset_paths=[str(store_path)],
+        size_bytes=0,
+        variables=[str(v) for v in ds.data_vars],
+        request_scope=ArtifactRequestScope(
+            start=coverage.temporal.start,
+            end=coverage.temporal.end,
+        ),
+        coverage=coverage,
+        created_at=datetime.now(UTC),
+        publication=ArtifactPublication(),
+    )
+
     # The same writer lock as ingestion and sync. Publishing into a store while one of those
     # writes it would make one of them fail with an Icechunk commit conflict.
     store_lock = ingestion_services._acquire_store_lock(store_path)
@@ -1261,30 +1299,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             {**template, "id": dataset_id, "variable": variable},
         )
 
-        record = ArtifactRecord(
-            artifact_id=str(uuid.uuid4()),
-            dataset_id=dataset_id,
-            dataset_name=dataset_name,
-            variable=variable,
-            period_type=period_type,
-            format=ArtifactFormat.ICECHUNK,
-            path=str(store_path),
-            asset_paths=[str(store_path)],
-            size_bytes=stored_bytes(store_path),
-            variables=[str(v) for v in ds.data_vars],
-            request_scope=ArtifactRequestScope(
-                start=coverage.temporal.start,
-                end=coverage.temporal.end,
-            ),
-            coverage=coverage,
-            created_at=datetime.now(UTC),
-            publication=ArtifactPublication(),
-        )
-        _publish_raw = options.get("publish", True)
-        if not isinstance(_publish_raw, bool):
-            raise ValueError(
-                f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}"
-            )
+        record = record.model_copy(update={"size_bytes": stored_bytes(store_path)})
         ingestion_services.register_artifact_record(record, publish=_publish_raw)
     finally:
         store_lock.release()

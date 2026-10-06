@@ -1855,11 +1855,17 @@ def test_persist_result_reloads_template_after_concurrent_create(
 def test_persist_result_rejects_non_boolean_publish_option(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    writes: list[int] = []
     monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr(
+        "open_climate_service.data_manager.services.downloader.write_to_icechunk_store",
+        lambda *args, **kwargs: writes.append(1),
+    )
     envelope = SaveResultEnvelope(_small_dataset(), "Zarr", {"dataset_id": "ds", "publish": "false"})
     with pytest.raises(ValueError, match="'publish' option must be a boolean"):
         job_service._persist_result("job-bad-publish", envelope)
+    assert writes == []
 
 
 # ---------------------------------------------------------------------------

@@ -246,6 +246,30 @@ def test_result_files_are_served_once_the_job_finished(service: Any, client: Tes
     assert client.get(route.format(job="done")).status_code == 200
 
 
+def test_a_new_attempt_removes_files_left_by_an_earlier_attempt(
+    service: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    results = _job_with_result_files(
+        "rerun",
+        status=OpenEOJobStatus.QUEUED,
+        process={"process_graph": {}},
+    )
+    monkeypatch.setattr(
+        execution,
+        "run_process_graph",
+        lambda *args, **kwargs: SaveResultEnvelope(_cube(7.0), "GTIFF", {}),
+    )
+
+    service._execute("rerun")
+
+    record = openeo_jobs.store_get_job("rerun")
+    assert record is not None and record.status == OpenEOJobStatus.FINISHED
+    assert (results / "result.tif").exists()
+    assert not (results / "result.nc").exists()
+    assert not (results / "result.geojson").exists()
+    assert not (results / "result.zarr").exists()
+
+
 @pytest.mark.parametrize("route", _ROUTES)
 def test_result_files_of_an_unknown_job_are_not_served(service: Any, client: TestClient, route: str) -> None:
     results = openeo_jobs._JOBS_DIR / "orphan" / "results"
