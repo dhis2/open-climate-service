@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Generator
+from pathlib import Path
 from typing import Any
 
 import dask.array as da
@@ -60,9 +61,13 @@ def one_slot(monkeypatch: pytest.MonkeyPatch) -> JobSlots:
     return compute.get_job_slots()
 
 
+_REAL_ENQUEUE = JobService._enqueue_job
+
+
 @pytest.fixture
-def persisted(monkeypatch: pytest.MonkeyPatch) -> dict[str, JobRecord]:
+def persisted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, JobRecord]:
     records: dict[str, JobRecord] = {}
+    monkeypatch.setattr("open_climate_service.jobs.store.JOBS_DIR", tmp_path / "jobs")  # execution leases
     monkeypatch.setattr("open_climate_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
     monkeypatch.setattr(
         "open_climate_service.jobs.store.create_job_record", lambda record: records.setdefault(record.job_id, record)
@@ -353,7 +358,7 @@ def _failed_once_and_backing_off(
     service = JobService()
     job = service.submit_callable_job(func=_fails_once_callable, label="sync", request={}, max_attempts=2)
     enqueued.clear()
-    service._execute_job(job.job_id)
+    service._run_job(job.job_id)  # the worker entry point, which schedules the retry
     return service, job, enqueued
 
 
@@ -362,7 +367,7 @@ def test_a_retry_backoff_holds_neither_a_slot_nor_a_worker(
 ) -> None:
     service, job, enqueued = _failed_once_and_backing_off(persisted, monkeypatch, delay=60)
 
-    # `_execute_job` returned, so the executor thread is free, and the slot with it.
+    # The worker returned, so the executor thread is free, and the slot with it.
     assert persisted[job.job_id].status == JobStatus.RETRYING
     assert _slot_is_free(one_slot)
     assert enqueued == []
@@ -375,7 +380,7 @@ def test_a_job_is_requeued_once_its_backoff_has_passed(
     service, job, enqueued = _failed_once_and_backing_off(persisted, monkeypatch, delay=0)
     _wait_until(lambda: enqueued == [job.job_id])
 
-    service._execute_job(job.job_id)
+    service._run_job(job.job_id)
 
     assert persisted[job.job_id].status == JobStatus.SUCCESSFUL
     assert len(_attempts) == 2
@@ -397,7 +402,13 @@ def test_cancelling_during_a_backoff_is_recorded_at_once(
 def test_a_cancellation_that_beats_the_timer_still_ends_the_job(
     persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Cancelled after the attempt failed but before its backoff timer existed."""
+    """Cancelled after the attempt failed but before its backoff timer existed.
+
+    Through the real executor and `_enqueue_job`: the immediate requeue that records the
+    cancellation must not be refused as a duplicate of the worker that is still finishing.
+    """
+    monkeypatch.setattr(JobService, "_enqueue_job", _REAL_ENQUEUE)
+    monkeypatch.setattr("open_climate_service.jobs.service._retry_delay_seconds", lambda attempt: 60)
     original = JobService._schedule_retry
 
     def cancel_first(self: JobService, job_id: str, seconds: int) -> None:
@@ -405,12 +416,13 @@ def test_a_cancellation_that_beats_the_timer_still_ends_the_job(
         original(self, job_id, seconds)
 
     monkeypatch.setattr(JobService, "_schedule_retry", cancel_first)
-    service, job, enqueued = _failed_once_and_backing_off(persisted, monkeypatch, delay=60)
+    service = JobService()
+    job = service.submit_callable_job(func=_fails_once_callable, label="sync", request={}, max_attempts=2)
 
-    assert enqueued == [job.job_id], "requeued at once instead of after the backoff"
-    service._execute_job(job.job_id)
-    assert persisted[job.job_id].status == JobStatus.CANCELLED
+    _wait_until(lambda: persisted[job.job_id].status == JobStatus.CANCELLED)
     assert len(_attempts) == 1
+    assert not service._retry_timers, "no timer is left waiting for a cancelled job"
+    service.shutdown()
 
 
 def test_a_job_backing_off_at_shutdown_stays_retrying(
@@ -425,8 +437,22 @@ def test_a_job_backing_off_at_shutdown_stays_retrying(
     assert len(_attempts) == 1
 
 
+@pytest.fixture
+def queued_openeo_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`openeo-1` reads as QUEUED and due, so `_run_job` hands it to `_execute` under its lease."""
+    from types import SimpleNamespace
+
+    from open_climate_service.openeo.schemas import OpenEOJobStatus
+
+    monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path / "openeo_jobs")
+    monkeypatch.setattr(
+        "open_climate_service.openeo.jobs.store_get_job",
+        lambda job_id: SimpleNamespace(status=OpenEOJobStatus.QUEUED, retry_at=None, cancel_requested=False),
+    )
+
+
 def test_openeo_and_native_jobs_share_the_slots(
-    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+    persisted: dict[str, JobRecord], one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch, queued_openeo_job: None
 ) -> None:
     native = JobService()
     job = native.submit_callable_job(func=_blocking_job_callable, label="ingestion", request={})
@@ -449,7 +475,7 @@ def test_openeo_and_native_jobs_share_the_slots(
 
 
 def test_an_openeo_job_cancelled_while_waiting_is_recorded_without_a_slot(
-    one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+    one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch, queued_openeo_job: None
 ) -> None:
     monkeypatch.setattr(compute, "_SLOT_POLL_SECONDS", 0.05)
     assert one_slot.acquire(should_stop=lambda: False)
@@ -467,7 +493,7 @@ def test_an_openeo_job_cancelled_while_waiting_is_recorded_without_a_slot(
 
 
 def test_an_openeo_job_still_waiting_at_shutdown_is_left_queued(
-    one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch
+    one_slot: JobSlots, monkeypatch: pytest.MonkeyPatch, queued_openeo_job: None
 ) -> None:
     monkeypatch.setattr(compute, "_SLOT_POLL_SECONDS", 0.05)
     assert one_slot.acquire(should_stop=lambda: False)

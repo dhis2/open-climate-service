@@ -24,12 +24,23 @@
         <h2 id="datasets-title" tabindex="-1">Datasets</h2>
         <p class="lead">Data this instance holds.</p>
         {% if datasets %}
+        {% set kinds = datasets | map(attribute="kind") | unique | list %}
         <div data-list data-page-size="12" data-views="datasets">
           <div class="toolbar">
             <label
               >Search
               <input type="search" data-filter-text placeholder="Name, source or variable" />
             </label>
+            {% if kinds | length > 1 %}
+            <label
+              >Type
+              <select data-filter-field="kind">
+                <option value="">All</option>
+                <option value="raster">Raster</option>
+                <option value="vector">Vector</option>
+              </select>
+            </label>
+            {% endif %}
             <label
               >Status
               <select data-filter-field="status">
@@ -50,9 +61,10 @@
               class="panel item clickable"
               data-item
               data-status="{{ ds.status }}"
+              data-kind="{{ ds.kind }}"
               data-search="{{ [ds.name, ds.id, ds.source, ds.variable, ds.period_type] | join(' ') | lower }}"
             >
-              <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}" style="--ramp: {{ ds.ramp }}">
+              <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}"{% if ds.kind == "raster" %} style="--ramp: {{ ds.ramp }}"{% endif %}>
                 {% if ds.has_thumbnail %}
                 <img src="{{ mount }}/datasets/{{ ds.id }}/thumbnail.png" alt="" loading="lazy" />
                 {% else %}
@@ -65,6 +77,7 @@
                 {% if ds.description %}<p class="description clamp">{{ ds.description }}</p>{% endif %}
                 <div class="meta">
                   <span class="chip chip-{{ ds.status }}">{{ ds.status }}</span>
+                  {% if ds.kind == "vector" %}<span class="chip">Vector</span>{% endif %}
                   {% if ds.period_type %}<span class="chip">{{ ds.period_type }}</span>{% endif %}
                   {% if ds.coverage %}<span class="chip">{{ ds.coverage }}</span>{% endif %}
                   {% if ds.units %}<span class="chip">{{ ds.units }}</span>{% endif %}

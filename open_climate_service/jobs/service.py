@@ -29,7 +29,7 @@ from open_climate_service.jobs.models import (
 )
 from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.dynamic_import import get_dynamic_function
-from open_climate_service.shared.persistence import AlreadyLocked, try_index_lock
+from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -74,19 +74,10 @@ def _execution_lease(job_id: str) -> Generator[bool]:
     A job may execute in at most one process at a time. Without this, a second process could
     recover a job that the first was still running, typically across an overlapping restart:
     both then wrote the same store, one failed on a commit conflict and marked the shared
-    record failed, and the other went on writing for hours behind that failed status. The
-    lease is a file lock, so the operating system releases it when its process exits.
+    record failed, and the other went on writing for hours behind that failed status.
     """
-    try:
-        lease = try_index_lock(_lease_path(job_id))
-        lease.__enter__()
-    except AlreadyLocked:
-        yield False
-        return
-    try:
-        yield True
-    finally:
-        lease.__exit__(None, None, None)
+    with execution_lease(_lease_path(job_id)) as won:
+        yield won
 
 
 def _supports_argument(func: Any, name: str) -> bool:
@@ -498,6 +489,7 @@ class JobService:
 
     def _run_job(self, job_id: str) -> None:
         watch_for_takeover = False
+        retry_after: int | None = None
         try:
             with _execution_lease(job_id) as won:
                 if not won:
@@ -514,17 +506,23 @@ class JobService:
                     current = store.get_job_record(job_id)
                     if current is None or current.status not in _PENDING_STATUSES:
                         return
-                    self._execute_job(job_id)
+                    retry_after = self._execute_job(job_id)
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)
+        # Watch or schedule a retry only once this worker is neither leased nor registered as
+        # active. Otherwise a requeue from the watcher, the retry timer, or the immediate requeue
+        # that records a cancellation is refused as a duplicate, leaving the job with no worker.
         if watch_for_takeover:
-            # Start watching only after this worker is no longer registered as active.
-            # Otherwise the watcher can recover the job before this future finishes,
-            # have its enqueue rejected, and leave the job with no worker or watcher.
             self._watch_for_takeover(job_id)
+        elif retry_after is not None:
+            self._schedule_retry(job_id, retry_after)
 
-    def _execute_job(self, job_id: str) -> None:
+    def _execute_job(self, job_id: str) -> int | None:
+        """Run the job until it ends or fails retryably; return the retry delay in that case.
+
+        The caller schedules the retry, after releasing the job's lease and worker slot.
+        """
         while True:
             record = self.get_job_or_404(job_id)
             if _is_pre_execution_cancellation(record):
@@ -543,7 +541,7 @@ class JobService:
                         }
                     ),
                 )
-                return
+                return None
 
             slots = get_job_slots()
             if not slots.acquire(
@@ -551,7 +549,7 @@ class JobService:
                 on_wait=lambda: self._report_waiting_for_slot(job_id),
             ):
                 if self._stopping.is_set():
-                    return  # still accepted, so the next start recovers it
+                    return None  # still accepted, so the next start recovers it
                 continue  # cancelled while waiting; the check above records it
             cancelled = False
 
@@ -580,9 +578,7 @@ class JobService:
                 retry_after = self._run_attempt(job_id, started)
             finally:
                 slots.release()
-            if retry_after is not None:
-                self._schedule_retry(job_id, retry_after)
-            return
+            return retry_after
 
     def _cancel_requested(self, job_id: str) -> bool:
         record = store.get_job_record(job_id)
