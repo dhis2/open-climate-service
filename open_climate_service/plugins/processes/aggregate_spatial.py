@@ -8,35 +8,24 @@ import numpy as np
 import xarray as xr
 
 from open_climate_service.process import process
-from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
+from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD, attach_feature_ids, geometries_to_frame
 
 _SUPPORTED_GEOMETRY_TYPES = frozenset({"Polygon", "MultiPolygon"})
 
 
 def _parse_geometries(geometries: Any) -> tuple[list[Any], list[str]]:
-    """Extract Shapely geometries and stable string labels from GeoJSON input.
+    """Extract Shapely geometries and their feature ids from the `geometries` argument.
 
-    Labels use the feature ``id`` when present, otherwise a sequential integer.
+    GeoJSON, a GeoDataFrame or a vector cube (:func:`geometries_to_frame`). The id is the GeoJSON
+    Feature `id` or the frame's index, and a feature without one gets its position.
     """
-    from shapely.geometry import shape
-
     from open_climate_service.shared.provenance import record_features
 
     record_features(geometries)
 
-    if isinstance(geometries, dict):
-        gtype = geometries.get("type", "")
-        if gtype == "FeatureCollection":
-            features = geometries.get("features", [])
-            geoms = [shape(f["geometry"]) for f in features]
-            labels = [str(f.get("id", i)) for i, f in enumerate(features)]
-        elif gtype == "Feature":
-            geoms, labels = [shape(geometries["geometry"])], [str(geometries.get("id", 0))]
-        else:
-            geoms, labels = [shape(geometries)], ["0"]
-    else:
-        geoms = [shape(g) if isinstance(g, dict) else g for g in geometries]
-        labels = [str(i) for i in range(len(geoms))]
+    frame = geometries_to_frame(geometries)
+    geoms = frame.geometry.tolist()
+    labels = [str(label) for label in frame.index]
     _require_supported_geometry_types(geoms, labels)
     return geoms, labels
 
@@ -140,7 +129,12 @@ def _dataset_reduce_spatial(
     summary="Aggregate spatial data within geometries",
     parameters={
         "data": {"description": "A raster data cube."},
-        "geometries": {"description": "GeoJSON FeatureCollection, Feature, or geometry."},
+        "geometries": {
+            "description": (
+                "A vector data cube (a GeoDataFrame or xvec cube), or GeoJSON: a FeatureCollection, "
+                "Feature or geometry."
+            )
+        },
         "reducer": {"description": "A reducer to apply on the pixel values."},
         "target_dimension": {"description": "Name for the new geometry dimension (default: 'geometry')."},
         "context": {"description": "Optional context passed to the reducer."},
@@ -234,6 +228,10 @@ def aggregate_spatial(
     # 4 x longest-WKT x n_features. Hex-encoded WKB in a bytes array would be ~4x smaller and is
     # still null-free, so still Zarr-safe -- worth doing if a real boundary set makes this hurt.
     combined = combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in geom_shapes])})
+    # The ids also travel as `feature_id`, which is what the exports read. Here they equal the
+    # labels; an aggregation that labels the dimension with shapes, as openEO's does, still
+    # carries them there (CLIM-1355).
+    combined = attach_feature_ids(combined, geom_labels, geom_dim)
     # The cadence travels with the data: a spatial aggregation changes nothing about time.
     from open_climate_service.shared.time import cadence_of, stamp_cadence
 
