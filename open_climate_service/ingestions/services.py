@@ -2203,6 +2203,21 @@ def _build_icechunk_consolidated_metadata(session: _IcechunkSession) -> dict[str
     return result
 
 
+def _consolidated_metadata_for_group(session: _IcechunkSession, group_path: str) -> dict[str, object]:
+    """Consolidated metadata for the group at *group_path*, keyed relative to that group.
+
+    Cut from the store-wide metadata rather than traversed again, so a level group costs no
+    extra store reads and shares the root's per-snapshot cache.
+    """
+    consolidated = _build_icechunk_consolidated_metadata(session)
+    if not group_path:
+        return consolidated
+    prefix = f"{group_path}/"
+    nodes = cast(dict[str, object], consolidated["metadata"])
+    subtree = {path.removeprefix(prefix): meta for path, meta in nodes.items() if path.startswith(prefix)}
+    return {**consolidated, "metadata": subtree}
+
+
 def _normalize_zarr_relative_path(relative_path: str) -> str:
     """Normalize a requested Zarr key path and reject unsafe segments."""
     if "\\" in relative_path:
@@ -2276,12 +2291,16 @@ def _get_icechunk_store_path_or_404(
             raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
         if target.endswith("zarr.json"):
             meta = json.loads(payload.decode("utf-8"))
-            # Inject consolidated metadata into the root zarr.json so xarray can
+            # Inject consolidated metadata into every group's zarr.json so xarray can
             # enumerate variables when accessing the store over HTTP, without needing
             # directory listing or a separate consolidation step.  Result is cached
             # per snapshot so repeated requests within a snapshot lifetime are free.
-            if target == "zarr.json" and meta.get("node_type") == "group":
-                meta["consolidated_metadata"] = _build_icechunk_consolidated_metadata(session)
+            # Every group, not just the root: a pyramid level (`/zarr/{id}/0`) is the URL
+            # an analysis client opens for full-resolution data, and without its own
+            # subtree it opens as an empty dataset.
+            if meta.get("node_type") == "group":
+                group_path = target.removesuffix("zarr.json").rstrip("/")
+                meta["consolidated_metadata"] = _consolidated_metadata_for_group(session, group_path)
             return JSONResponse(content=meta)
         media_type, _ = mimetypes.guess_type(target)
         return _serve_bytes_ranged(payload, media_type or "application/octet-stream", range_header)

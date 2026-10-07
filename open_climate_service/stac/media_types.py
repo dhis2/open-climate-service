@@ -40,6 +40,9 @@ WEB_OPTIMIZED_ZARR_MEDIA_TYPE = f"{ZARR_V3_MEDIA_TYPE}; profile=multiscales"
 Byte-identical to the string web clients match on; do not reformat or reorder the parameters.
 """
 
+FULL_RESOLUTION_GROUP = "0"
+"""The pyramid level holding the data at native resolution, the one analysis reads."""
+
 MULTISCALES_CONVENTION_UUID = "d35379db-88df-4056-af3a-620245f8e347"
 """UUID of the Zarr multiscales convention (https://github.com/zarr-conventions/multiscales)."""
 
@@ -127,3 +130,15 @@ def zarr_media_type(store_path: str, *, icechunk: bool) -> str:
     if attributes_declare_multiscales(attributes):
         return WEB_OPTIMIZED_ZARR_MEDIA_TYPE
     return ZARR_V3_MEDIA_TYPE
+
+
+def data_group_open_kwargs(media_type: str) -> dict[str, str]:
+    """The ``xarray:open_kwargs`` that reach the data variables of a store with *media_type*.
+
+    A pyramided root holds only the time coordinate and ``spatial_ref``, so a client opening it
+    as-is gets a dataset with no variables and no error. Naming the full-resolution level sends
+    it to the data. Empty for a flat store, whose root is the data.
+    """
+    if media_type == WEB_OPTIMIZED_ZARR_MEDIA_TYPE:
+        return {"group": FULL_RESOLUTION_GROUP}
+    return {}

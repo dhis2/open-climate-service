@@ -65,7 +65,7 @@ from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
-from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
+from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
 _T = TypeVar("_T")
 
@@ -1808,13 +1808,16 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
                     "roles": ["metadata"],
                 }
                 # Keep the claim in step with the STAC collection's zarr asset, so a client
-                # sees the same media type from either surface. Uncached, unlike the STAC
-                # side — a job-result read is rare enough not to warrant one.
+                # sees the same media type and open arguments from either surface. Uncached,
+                # unlike the STAC side — a job-result read is rare enough not to warrant one.
                 store_path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
                 if store_path:
-                    assets["zarr"]["type"] = zarr_media_type(
-                        store_path, icechunk=artifact.format == ArtifactFormat.ICECHUNK
-                    )
+                    media_type = zarr_media_type(store_path, icechunk=artifact.format == ArtifactFormat.ICECHUNK)
+                    assets["zarr"]["type"] = media_type
+                    assets["zarr"]["xarray:open_kwargs"] = {
+                        **assets["zarr"]["xarray:open_kwargs"],
+                        **data_group_open_kwargs(media_type),
+                    }
         except Exception:
             logger.debug("Could not resolve STAC publication for managed dataset '%s'", dataset_id, exc_info=True)
         return assets
