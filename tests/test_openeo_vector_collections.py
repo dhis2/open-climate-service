@@ -136,6 +136,20 @@ def test_the_listing_and_the_detail_route_agree(client: TestClient, regions: Art
     assert listed["cube:dimensions"] == client.get("/collections/regions").json()["cube:dimensions"]
 
 
+def test_the_collection_document_is_built_from_the_record_openeo_selected(
+    client: TestClient, regions: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Looking the record up again could return a newer one mid-refresh and mix two into one document."""
+
+    def must_not_look_up(*args: Any) -> Any:
+        raise AssertionError("the openEO collection looked its record up again")
+
+    monkeypatch.setattr(stac_services, "build_collection", must_not_look_up)
+
+    assert client.get("/collections/regions").status_code == 200
+    assert client.get("/collections").json()["collections"][0]["id"] == "regions"
+
+
 def test_an_unpublished_vector_dataset_is_not_an_openeo_collection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,7 +247,8 @@ def test_a_malformed_spatial_extent_is_a_client_error_naming_the_argument(rain_a
         execution.run_process_graph(graph)
 
     assert refused.value.status_code == 400
-    assert "spatial_extent" in str(refused.value.detail)
+    assert "load_collection: spatial_extent" in str(refused.value.detail)
+    assert "load_features" not in str(refused.value.detail)
 
 
 def test_load_collection_loads_a_published_collection_whose_template_is_removed(
@@ -321,4 +336,14 @@ def test_the_map_viewer_leaves_vector_collections_out_of_its_list(client: TestCl
 
     assert "function isVectorCollection(col)" in page
     assert 'dim?.type === "geometry"' in page
-    assert ".filter((col) => !isVectorCollection(col))" in page
+    assert "all.filter((col) => !isVectorCollection(col))" in page
+
+
+def test_the_map_viewer_tells_a_vector_dataset_from_an_unpublished_one(client: TestClient) -> None:
+    """A vector-only instance, or a deep link to a vector, is not reported as nothing published."""
+    page = client.get("/map").text
+
+    assert "vectorCollectionIds = new Set(all.filter(isVectorCollection)" in page
+    assert "No published raster datasets found. The map shows raster datasets only." in page
+    assert "vectorCollectionIds.has(requested)" in page
+    assert "is a vector dataset; the map shows raster datasets only." in page
