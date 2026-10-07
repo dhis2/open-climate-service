@@ -127,11 +127,15 @@ for the instance in `climate-service.yaml`. On a read-only instance neither form
 
 ## The map viewer (`/map`)
 
-The map viewer renders **published** datasets directly in the browser from their GeoZarr
-stores (using MapLibre and zarr-layer), so only datasets ingested with publishing enabled
-appear here.
+The map viewer renders **published** datasets directly in the browser: rasters from their
+GeoZarr stores (using MapLibre and zarr-layer), vector datasets from their GeoParquet (using
+hyparquet). Only published datasets appear here.
 
-- **Dataset selector** — pick any published dataset from the dropdown.
+- **Dataset selector** — pick any published dataset from the dropdown, grouped into raster and
+  vector datasets when the instance has both.
+- **Vector datasets** — drawn as filled areas, lines or points, with the feature's name shown
+  on hover. The viewer reads the collection's simplified copy (`visual.parquet`, see the
+  [API guide](managed_data_api_guide.md)), and the full stored file when there is none.
 - **Dimension controls** — the viewer builds one control per non-spatial dimension of the
   dataset, choosing the type from the dimension's metadata: a **slider** for a continuous,
   evenly-spaced axis (time, or a regular ordinal axis like day-of-year) and a **dropdown**

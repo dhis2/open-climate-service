@@ -1,6 +1,6 @@
 """FastAPI routes for registered feature collections."""
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 from open_climate_service.features import services
@@ -81,3 +81,19 @@ def download_feature_collection(collection_id: str) -> FileResponse:
     """
     path = services.published_collection_file_or_404(collection_id)
     return FileResponse(path, media_type=PARQUET_MEDIA_TYPE, filename=f"{collection_id}.parquet")
+
+
+@router.get("/{collection_id}/visual.parquet", response_class=FileResponse)
+def download_visual_copy(collection_id: str) -> FileResponse:
+    """Serve the simplified GeoParquet a published collection is drawn from.
+
+    The same features as `data.parquet`, simplified for display and in WGS 84, with only the id
+    and name columns. Its STAC collection advertises it as the `visual` asset. 404 when the
+    collection is not published or has no simplified copy; draw `data.parquet` instead.
+    """
+    path = services.published_visual_file(collection_id)
+    if path is None:
+        raise HTTPException(
+            status_code=404, detail=f"Feature collection '{collection_id}' has no published simplified copy"
+        )
+    return FileResponse(path, media_type=PARQUET_MEDIA_TYPE, filename=f"{collection_id}.visual.parquet")

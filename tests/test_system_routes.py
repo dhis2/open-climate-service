@@ -336,7 +336,7 @@ def test_the_map_viewer_reads_and_writes_the_dataset_in_the_address(client: Test
     assert 'new URLSearchParams(window.location.search).get("dataset")' in body
     assert 'url.searchParams.set("dataset", id)' in body
     # Each option carries its collection id, which is what a deep link names.
-    assert "opt.dataset.id = col.id;" in body
+    assert "opt.dataset.id = id;" in body
 
 
 def test_the_map_panel_links_to_the_dataset_page(client: TestClient) -> None:
@@ -354,16 +354,12 @@ def test_an_unpublished_dataset_in_the_address_is_reported_not_ignored(client: T
 
 
 def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client: TestClient) -> None:
-    """A published vector dataset is not in the raster catalogue, and "not published" was wrong.
-
-    The page asks the dataset's own record why it is missing: a vector dataset, an unpublished
-    one, or none at all each get their own message.
-    """
+    """The page asks the dataset's own record why it is missing: unpublished, or not there at all."""
     body = client.get("/map").text
 
     assert "fetch(`/datasets/${encodeURIComponent(requested)}`" in body
-    assert 'record?.itemType === "feature"' in body
-    assert "is a vector dataset. The map viewer shows raster datasets only for now." in body
+    # Published vector datasets are listed now (CLIM-1234), so none is turned away as a vector.
+    assert "shows raster datasets only" not in body
     assert 'record.publication?.status !== "published"' in body
     # Only a 404 means the dataset does not exist; any other failure says nothing about it.
     assert "res.status === 404" in body
