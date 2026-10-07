@@ -22,6 +22,7 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat
+from open_climate_service.shared.cancellation import ExecutionCancelled, raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -369,8 +370,12 @@ def _build_process_registry() -> Any:
 
     # Order matters: wrap_funcs are applied left to right, so the first entry ends up
     # innermost. _normalise_temporal_arguments must sit inside wrap_fn to see arguments
-    # after ParameterReference resolution — see its docstring.
-    registry = ProcessRegistry(wrap_funcs=[_normalise_temporal_arguments, wrap_fn])
+    # after ParameterReference resolution — see its docstring. _check_cancellation is
+    # outermost, so a cancelled job stops before any of it runs.
+    registry = ProcessRegistry(wrap_funcs=[_normalise_temporal_arguments, wrap_fn, _check_cancellation])
+    from open_climate_service.shared.cancellation import install_dask_cancellation
+
+    install_dask_cancellation()
 
     for name, func in inspect.getmembers(impls_module, inspect.isfunction):
         spec: dict[str, Any] = getattr(specs_module, name, None) or {}
@@ -827,6 +832,21 @@ def _naive_temporal_scalar(value: Any) -> Any:
     return text
 
 
+def _check_cancellation(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a process so a cancelled job stops before running it (CLIM-1221).
+
+    The outermost wrapper, so the check precedes argument resolution and the process itself.
+    Throttled, and a no-op outside a job's cancellation scope.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        raise_if_cancelled()
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def _normalise_temporal_arguments(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a process so scalar date arguments arrive timezone-naive.
 
@@ -895,7 +915,8 @@ def run_process_graph(
             if isinstance(result, SaveResultEnvelope):
                 result.provenance = evidence.describe()
             return result
-    except HTTPException:
+    except (HTTPException, ExecutionCancelled):
+        # A cancellation is not a failure of the graph: never report it as a 400 or 500.
         raise
     except (TypeError, ValueError, KeyError) as exc:
         # Still a 400 for a synchronous caller, but raised while running, where a ValueError

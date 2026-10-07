@@ -1,6 +1,7 @@
 """Write raster datasets to Icechunk stores with GeoZarr conventions."""
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -549,8 +550,12 @@ def write_to_icechunk_store(
     crs: str | None = None,
     pyramid_method: str = "mean",
     commit_message: str = "Materialized dataset",
+    before_commit: Callable[[], None] | None = None,
 ) -> None:
     """Write *ds* to an Icechunk store, building a multiscale pyramid when needed.
+
+    ``before_commit`` runs after every write and immediately before the single commit. If it
+    raises, nothing is committed and the store keeps its previous state.
 
     Applies GeoZarr conventions throughout. Creates the store if it does not exist;
     overwrites any existing content in the new commit.
@@ -744,4 +749,6 @@ def write_to_icechunk_store(
         if geometry is not None:
             write_gdal_geotransform(root_flat, geometry["transform"])
 
+    if before_commit is not None:
+        before_commit()
     session.commit(commit_message)

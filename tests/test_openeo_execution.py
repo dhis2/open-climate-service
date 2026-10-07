@@ -459,10 +459,20 @@ def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyP
     assert published["stac"]["href"] == "/stac/collections/my_aggregate"
 
 
+def _store_finished_job(job_id: str) -> None:
+    """Result files are only served for a finished job (CLIM-1221)."""
+    from open_climate_service.openeo.jobs import store_create_job
+    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_climate_service.shared.time import utc_now
+
+    store_create_job(OpenEOJobRecord(id=job_id, status=OpenEOJobStatus.FINISHED, created=utc_now()))
+
+
 def test_download_result_file_serves_geojson_with_geojson_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
     geojson_path = results_dir / "result.geojson"
@@ -478,6 +488,7 @@ def test_download_result_file_serves_json_with_json_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
     json_path = results_dir / "result.json"
@@ -1844,11 +1855,17 @@ def test_persist_result_reloads_template_after_concurrent_create(
 def test_persist_result_rejects_non_boolean_publish_option(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    writes: list[int] = []
     monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr(
+        "open_climate_service.data_manager.services.downloader.write_to_icechunk_store",
+        lambda *args, **kwargs: writes.append(1),
+    )
     envelope = SaveResultEnvelope(_small_dataset(), "Zarr", {"dataset_id": "ds", "publish": "false"})
     with pytest.raises(ValueError, match="'publish' option must be a boolean"):
         job_service._persist_result("job-bad-publish", envelope)
+    assert writes == []
 
 
 # ---------------------------------------------------------------------------
