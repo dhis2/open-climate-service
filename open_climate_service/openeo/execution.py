@@ -495,7 +495,9 @@ def _load_vector_collection(id: str, artifact: Any, spatial_extent: Any, bands: 
             status_code=400,
             detail=f"load_collection: '{id}' is a vector collection and has no bands; omit `bands`",
         )
-    return load_feature_record(id, artifact, spatial_extent=_spatial_extent_with_crs(spatial_extent))
+    return load_feature_record(
+        id, artifact, spatial_extent=_spatial_extent_with_crs(spatial_extent), process="load_collection"
+    )
 
 
 def _load_collection_impl(
