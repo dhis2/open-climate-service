@@ -29,6 +29,7 @@ JavaScript.
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
 | **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
+| **Sync schedules** (`/schedules`) | When each dataset is checked for new data and synced: the file's schedules and the ones saved here, with add, edit, pause and delete |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
 The overview counts the collections and links to them rather than listing them, so the root
@@ -86,6 +87,37 @@ Selecting a process opens its page: its description, origin and categories, its 
 and return value, the workflows on this instance that use it, and its reference links. As
 with datasets, the URL still returns the openEO process description as JSON to API clients;
 a browser gets the page, and `?f=json` and `?f=html` choose explicitly.
+
+### The sync schedules page (`/schedules`)
+
+A sync schedule says when a dataset is checked for new data and synced. It moves data into the
+instance and nothing else: what happens after an update, such as a delivery to DHIS2, is the
+concern of the automation triggers and, in time, of pipelines. The page lists every schedule
+the instance runs, from two sources. Entries from `scheduler.dataset_sync` in
+`climate-service.yaml` are shown but cannot be changed here. Entries saved from this page or
+the API are stored beside the file and can be edited, paused, resumed and deleted. Saving a
+change applies it at once; the clock reloads without a restart.
+
+Only one schedule is allowed per dataset, and the file wins: a saved schedule for a dataset the
+file also configures is kept but marked shadowed, so an operator can see which entry runs and
+why theirs does nothing. It stays editable and pausable. Adding a schedule for such a dataset
+is refused. The file is read at startup, so removing its entry to let the saved one run takes
+a restart. The form offers the
+ingested datasets whose source can be synced; a static or forecast dataset is not offered, and
+the API refuses it with the reason.
+
+Each row shows the cron and timezone, where the entry comes from, its state (active, paused,
+shadowed, or not registered with the reason), the next check and the last one. Check state is
+kept in memory and resets on restart; the sync jobs a check submits are durable and linked from
+the row. The timezone is the instance's `scheduler.timezone`. When the scheduler is disabled,
+schedules can still be saved and are listed, and the page says that none fires until an operator
+enables it. If a change cannot be applied, the page shows why and the previous schedules stay
+in force.
+
+The dataset page shows the dataset's own schedule in its Sync panel, or offers to add one. The
+API offers the same: `GET /schedules` for the merged list with status, `POST /schedules` to add,
+`PUT /schedules/{dataset_id}` to change, `POST /schedules/{dataset_id}/pause` and `/resume`,
+and `DELETE /schedules/{dataset_id}`.
 
 ### The dataset page (`/datasets/{dataset_id}`)
 

@@ -35,6 +35,61 @@ does not change that pool's concurrency. An active manual ingestion or sync for 
 suppresses duplicate scheduled submission; the per-store lock remains the final write-safety
 boundary.
 
+## Manage schedules without a restart
+
+Schedules can also be added, changed, paused and removed from the **Sync schedules** page and
+the `/schedules` API. These schedules are stored beside the configuration file, under
+`<data_dir>/schedules.json`, and the clock runs the two sources merged:
+
+- File entries are listed and visible but read-only in the page and the API.
+- The file wins. A stored entry for a dataset the file also configures is kept and listed as
+  shadowed, and does not run. It stays editable and pausable, so it is ready for the day the
+  file entry goes. Creating a stored entry for a file-configured dataset is refused.
+- The configuration file is read once, at startup. A reload re-reads the store only, so a
+  change to `scheduler.dataset_sync` in the file, including removing an entry so a shadowed
+  stored one becomes effective, takes effect after a restart.
+- A stored entry has a pause switch, `enabled`. Pausing keeps the entry and stops it firing.
+- Every change reloads the clock. The reload parses the store, then resolves every effective
+  entry's dataset and builds its trigger, before any job is touched. When the store cannot be
+  read, the previous schedules stay in force and `GET /schedules` reports `reload_error` until
+  the cause is fixed. An entry whose dataset no longer resolves is taken off the clock and
+  listed with the reason, so no job keeps firing with settings the status no longer shows. If
+  the clock itself refuses a sound plan, the previous jobs are put back and the error says so;
+  should that fail too, the error says the clock may run settings the list does not show.
+- A change made through another process reaches the clock. The process that owns the clock
+  watches the store file and reloads within 30 seconds of a write from anywhere on the shared
+  data directory, so an API-only replica can pause or edit a schedule without knowing which
+  replica runs the clock. The request's own process reloads at once.
+- `effective` on a listed entry means enabled and not shadowed: the entry the clock would run.
+  `registered` means a clock job exists for it in this process now, which also needs the
+  scheduler enabled and the dataset to resolve.
+- APScheduler job ids are stable, `dataset-sync:<dataset_id>`, so a reload adds, replaces and
+  removes jobs rather than rebuilding the clock.
+- The timezone stays the instance's `scheduler.timezone`; a stored entry cannot set its own.
+- Missed fires are not replayed: the job store is in memory, so a fire that falls into a
+  restart is lost, and the next fire catches up because the sync plans from the store.
+
+The API:
+
+| Method and path | Effect |
+| --- | --- |
+| `GET /schedules` | The merged list with runtime status; the page for a browser |
+| `GET /schedules/{dataset_id}` | One dataset's effective schedule and status |
+| `POST /schedules` | Add a stored schedule: `dataset_id`, `cron`, `publish`, `max_attempts`, `enabled` |
+| `PUT /schedules/{dataset_id}` | Replace a stored schedule's settings |
+| `POST /schedules/{dataset_id}/pause`, `/resume` | Flip the pause switch |
+| `DELETE /schedules/{dataset_id}` | Remove a stored schedule |
+
+A dataset that is static, forecast-facing or has no registered data source is refused with the
+reason. The target must have been ingested for a check to submit a sync; a stored schedule for
+a dataset not yet ingested is saved and its checks finish as `not_materialized` until it is.
+
+Changing schedules changes when data moves into the instance, and a sync can trigger
+workflows and deliveries configured under `automation`. These routes are closed on a
+read-only instance, but read-only mode is not authentication: an instance that exposes the
+page must be deployed privately or behind reverse-proxy authentication until OCS has its
+own write authentication.
+
 ## Inspect status
 
 `GET /schedules` reports whether the process-local clock is running and, for each schedule,
@@ -51,7 +106,9 @@ are follow-up work for the persistent job-store implementation.
 Exactly one OCS process or replica may set `scheduler.enabled: true`. Active-job detection
 and submission are not an atomic cross-process operation, and the store write lock is
 process-local. Enabling the clock in multiple replicas could therefore submit concurrent
-writers for the same store. API-only replicas must leave scheduling disabled.
+writers for the same store. API-only replicas must leave scheduling disabled; they may still
+serve the schedules page and API, and the clock owner picks their changes up from the shared
+store file.
 
 A read-only instance never starts its scheduler. Use a separate writable operator instance
 to maintain data served by a structurally read-only public instance.
@@ -66,5 +123,4 @@ latest stored timestamp.
 
 Successful update events can drive openEO workflows through instance-owned bindings; see
 [Dataset-update workflow automation](workflow_automation.md). Cross-service orchestration,
-schedule mutation APIs, distributed leader election, and forecast-window refresh remain later
-automation phases.
+distributed leader election, and forecast-window refresh remain later automation phases.

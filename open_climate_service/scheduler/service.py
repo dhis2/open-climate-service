@@ -4,96 +4,278 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.scheduler.config import DatasetSyncSchedule, SchedulerConfig, get_scheduler_config
+from open_climate_service.scheduler.config import (
+    DatasetSyncSchedule,
+    EffectiveSchedule,
+    SchedulerConfig,
+    get_scheduler_config,
+    merge_schedules,
+)
 from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult, enqueue_sync
 from open_climate_service.scheduler.schemas import ScheduleListResponse, ScheduleStatus
+from open_climate_service.scheduler.store import StoredSchedule, list_schedules, store_stamp
 
 logger = logging.getLogger(__name__)
 
+_WATCH_JOB_ID = "scheduler:store-watch"
+WATCH_SECONDS = 30
+"""How often the clock owner looks for a store change made by another process."""
+
+
+def validate_schedule_target(template: dict[str, Any] | None, dataset_id: str) -> None:
+    """Reject a dataset the clock cannot sync, naming why.
+
+    Shared by the clock, which skips such an entry without taking down unrelated routes, and
+    by the schedule API, which refuses to save one.
+    """
+    if template is None:
+        raise ValueError(f"Scheduled dataset {dataset_id!r} has no registered data source")
+    if registry_datasets.is_future_facing(template):
+        raise ValueError(
+            f"Scheduled dataset {dataset_id!r} is future-facing; forecast refresh requires "
+            "overlapping-window rematerialization and is not supported yet"
+        )
+    sync = template.get("sync")
+    if not isinstance(sync, dict) or sync.get("kind") == "static":
+        raise ValueError(f"Scheduled dataset {dataset_id!r} is not syncable")
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """What a load resolved to, before anything is touched.
+
+    ``runnable`` holds every effective entry whose target resolved and whose trigger built,
+    with that trigger; ``refused`` holds the effective entries the clock will not run, with
+    the reason recorded for the status.
+    """
+
+    config: SchedulerConfig
+    effective: list[EffectiveSchedule]
+    runnable: list[tuple[EffectiveSchedule, CronTrigger]]
+    refused: dict[str, CheckResult]
+    stamp: tuple[int, int] | None = None
+
 
 class SchedulerService:
-    """Own the process-local clock while delegating sync decisions to OCS."""
+    """Own the process-local clock while delegating sync decisions to OCS.
+
+    The effective schedule list is the file's ``dataset_sync`` entries merged with the stored
+    ones (CLIM-1242). ``start`` registers it once; ``reload`` re-reads both sources, resolves
+    and validates the merged whole before touching anything, then reconciles the running jobs
+    by id. A load that cannot be validated leaves the previous list in force.
+    """
 
     def __init__(
         self,
         *,
         config_loader: Callable[[], SchedulerConfig] = get_scheduler_config,
+        store_loader: Callable[[], list[StoredSchedule]] = list_schedules,
         dispatcher: Callable[[DatasetSyncSchedule], CheckResult] = enqueue_sync,
-        template_loader: Callable[[str], dict[str, Any] | None] = registry_datasets.get_dataset,
+        template_loader: Callable[[str], dict[str, Any] | None] | None = None,
+        stamp_loader: Callable[[], tuple[int, int] | None] = store_stamp,
     ) -> None:
         self._config_loader = config_loader
+        self._store_loader = store_loader
+        self._stamp_loader = stamp_loader
         self._dispatcher = dispatcher
+        # Resolved at call time, so the registry the rest of the process sees is the one used.
         self._template_loader = template_loader
         self._scheduler: AsyncIOScheduler | None = None
         self._config: SchedulerConfig | None = None
+        self._effective: list[EffectiveSchedule] = []
+        self._runnable: list[tuple[EffectiveSchedule, CronTrigger]] = []
+        self._stamp: tuple[int, int] | None = None
         self._last_results: dict[str, CheckResult] = {}
+        self._reload_error: str | None = None
+        self._lock = threading.Lock()
 
-    def start(self) -> None:
-        """Validate configuration and start callbacks when this process is enabled."""
-        config = self._config_loader()
-        self._config = config
-        if not config.enabled:
-            logger.info("Dataset scheduler is disabled")
-            return
-        if api_config.is_read_only():
-            logger.info("Dataset scheduler will not start on a read-only instance")
-            return
+    # --- loading -------------------------------------------------------------------------------
 
-        scheduler = AsyncIOScheduler(timezone=config.timezone_info)
-        registered = 0
-        for schedule in config.dataset_sync:
+    def _plan(self, config: SchedulerConfig, effective: list[EffectiveSchedule]) -> _Plan:
+        """Resolve every effective entry's target and trigger without touching the clock."""
+        load_template = self._template_loader or registry_datasets.get_dataset
+        runnable: list[tuple[EffectiveSchedule, CronTrigger]] = []
+        refused: dict[str, CheckResult] = {}
+        for entry in effective:
+            if not entry.effective:
+                continue
+            schedule = entry.schedule
             try:
-                self._validate_target(schedule)
+                validate_schedule_target(load_template(schedule.dataset_id), schedule.dataset_id)
+                trigger = CronTrigger.from_crontab(schedule.cron, timezone=config.timezone_info)
             except ValueError as exc:
-                self._last_results[schedule.schedule_id] = CheckResult(
-                    schedule_id=schedule.schedule_id,
+                refused[entry.schedule_id] = CheckResult(
+                    schedule_id=entry.schedule_id,
                     dataset_id=schedule.dataset_id,
                     outcome=CheckOutcome.ERROR,
                     message=str(exc),
                 )
                 logger.error("Scheduled dataset %s was not registered: %s", schedule.dataset_id, exc)
                 continue
-            trigger = CronTrigger.from_crontab(schedule.cron, timezone=config.timezone_info)
+            runnable.append((entry, trigger))
+        return _Plan(config=config, effective=effective, runnable=runnable, refused=refused)
+
+    def _load(self) -> _Plan:
+        """Read both sources, merge and resolve them; raises when either cannot be read or validated.
+
+        The stamp is taken before the store is read, so a write that lands between the two
+        moves the stamp past what was loaded and the watch reloads once more.
+        """
+        stamp = self._stamp_loader()
+        config = self._config_loader()
+        stored = self._store_loader()
+        plan = self._plan(config, merge_schedules(config, stored))
+        return _Plan(plan.config, plan.effective, plan.runnable, plan.refused, stamp)
+
+    def _apply(
+        self, scheduler: AsyncIOScheduler, runnable: list[tuple[EffectiveSchedule, CronTrigger]], known: set[str]
+    ) -> None:
+        """Make the clock run exactly ``runnable`` among the ``known`` schedule ids."""
+        for entry, trigger in runnable:
+            self._add(scheduler, entry, trigger)
+        wanted = {entry.schedule_id for entry, _ in runnable}
+        for schedule_id in sorted(known - wanted):
+            self._remove(scheduler, schedule_id)
+
+    def _add(self, scheduler: AsyncIOScheduler, entry: EffectiveSchedule, trigger: CronTrigger) -> None:
+        scheduler.add_job(
+            self.check_now,
+            trigger=trigger,
+            args=[entry.schedule],
+            id=entry.schedule_id,
+            coalesce=True,
+            max_instances=1,
+            replace_existing=True,
+        )
+
+    @staticmethod
+    def _remove(scheduler: AsyncIOScheduler, schedule_id: str) -> None:
+        if scheduler.get_job(schedule_id) is not None:
+            scheduler.remove_job(schedule_id)
+
+    def start(self) -> None:
+        """Validate configuration and start callbacks when this process is enabled."""
+        with self._lock:
+            try:
+                plan = self._load()
+            except Exception as exc:
+                # The file is validated at startup elsewhere; an unreadable store must not
+                # take the instance down, so the clock runs the file alone and says why.
+                logger.exception("Stored schedules could not be read; running the file's schedules only")
+                config = self._config_loader()
+                plan = self._plan(config, merge_schedules(config, []))
+                self._reload_error = f"{type(exc).__name__}: {exc}"
+            self._config = plan.config
+            self._effective = plan.effective
+            self._runnable = plan.runnable
+            self._stamp = plan.stamp
+            self._last_results.update(plan.refused)
+            if not plan.config.enabled:
+                logger.info("Dataset scheduler is disabled")
+                return
+            if api_config.is_read_only():
+                logger.info("Dataset scheduler will not start on a read-only instance")
+                return
+
+            scheduler = AsyncIOScheduler(timezone=plan.config.timezone_info)
+            for entry, trigger in plan.runnable:
+                self._add(scheduler, entry, trigger)
+            # Writes from another process on the shared data directory reach this clock through
+            # the store file, not through this process's routes; watch it.
             scheduler.add_job(
-                self.check_now,
-                trigger=trigger,
-                args=[schedule],
-                id=schedule.schedule_id,
+                self.reload_if_changed,
+                trigger=IntervalTrigger(seconds=WATCH_SECONDS),
+                id=_WATCH_JOB_ID,
                 coalesce=True,
                 max_instances=1,
                 replace_existing=True,
             )
-            registered += 1
-        scheduler.start()
-        self._scheduler = scheduler
-        logger.warning(
-            "Dataset scheduler enabled in process %d with %d schedule(s); "
-            "exactly one OCS process may enable scheduling",
-            os.getpid(),
-            registered,
-        )
-
-    def _validate_target(self, schedule: DatasetSyncSchedule) -> None:
-        """Reject unsupported targets without taking down unrelated API routes."""
-        template = self._template_loader(schedule.dataset_id)
-        if template is None:
-            raise ValueError(f"Scheduled dataset {schedule.dataset_id!r} has no registered data source")
-        if registry_datasets.is_future_facing(template):
-            raise ValueError(
-                f"Scheduled dataset {schedule.dataset_id!r} is future-facing; forecast refresh requires "
-                "overlapping-window rematerialization and is not supported yet"
+            scheduler.start()
+            self._scheduler = scheduler
+            logger.warning(
+                "Dataset scheduler enabled in process %d with %d schedule(s); "
+                "exactly one OCS process may enable scheduling",
+                os.getpid(),
+                len(plan.runnable),
             )
-        sync = template.get("sync")
-        if not isinstance(sync, dict) or sync.get("kind") == "static":
-            raise ValueError(f"Scheduled dataset {schedule.dataset_id!r} is not syncable")
+
+    def reload(self) -> None:
+        """Re-read both sources, resolve the whole merged list, then reconcile the running jobs.
+
+        Nothing is touched until every entry has resolved: the store has been parsed, each
+        effective entry's target checked and its trigger built. When the load fails, the
+        previous list stays in force and ``status`` reports why. An entry whose target no
+        longer resolves is taken off the clock and reported, so a job never keeps firing with
+        a configuration the status no longer describes. When the clock is not running
+        (disabled, or a read-only instance) only the list used by ``status`` changes.
+        """
+        with self._lock:
+            try:
+                plan = self._load()
+            except Exception as exc:
+                self._reload_error = f"{type(exc).__name__}: {exc}; the previous schedules stay in force"
+                logger.error("Schedule reload refused; keeping the previous schedules: %s", exc)
+                return
+            previous = {entry.schedule_id for entry in self._effective}
+            runnable_ids = {entry.schedule_id for entry, _ in plan.runnable}
+            scheduler = self._scheduler
+            if scheduler is not None:
+                known = previous | {entry.schedule_id for entry in plan.effective}
+                try:
+                    self._apply(scheduler, plan.runnable, known)
+                except Exception as exc:
+                    # The plan was sound, so this is the clock itself refusing. Put the
+                    # previous jobs back so the status keeps describing what runs.
+                    reason = f"{type(exc).__name__}: {exc}"
+                    logger.exception("The clock refused the reloaded schedules; restoring the previous ones")
+                    try:
+                        self._apply(scheduler, self._runnable, known)
+                    except Exception as restore_exc:
+                        logger.exception("The previous schedules could not be restored either")
+                        self._reload_error = (
+                            "the clock refused the change and the previous schedules could not be restored; "
+                            f"the clock may run settings this list does not show ({reason}; then "
+                            f"{type(restore_exc).__name__}: {restore_exc})"
+                        )
+                        self._stamp = plan.stamp
+                        return
+                    self._reload_error = (
+                        f"the clock refused the change and the previous schedules were restored ({reason})"
+                    )
+                    self._stamp = plan.stamp
+                    return
+            self._reload_error = None
+            self._config = plan.config
+            self._effective = plan.effective
+            self._runnable = plan.runnable
+            self._stamp = plan.stamp
+            self._last_results = {key: value for key, value in self._last_results.items() if key in runnable_ids}
+            self._last_results.update(plan.refused)
+            logger.info("Schedules reloaded: %d runnable", len(plan.runnable))
+
+    def reload_if_changed(self) -> bool:
+        """Reload when another process changed the store since this one last loaded it.
+
+        Runs on the clock every ``WATCH_SECONDS`` in the process that owns it, so a pause or
+        an edit handled by an API-only replica reaches the clock without that replica knowing
+        where the clock is. Returns whether a reload ran.
+        """
+        if self._stamp_loader() == self._stamp:
+            return False
+        logger.info("Stored schedules changed outside this process; reloading")
+        self.reload()
+        return True
 
     def shutdown(self) -> None:
         """Stop future callbacks without waiting for submitted native jobs."""
@@ -102,6 +284,8 @@ class SchedulerService:
         self._scheduler.shutdown(wait=False)
         self._scheduler = None
         logger.info("Dataset scheduler stopped")
+
+    # --- running -------------------------------------------------------------------------------
 
     def check_now(self, schedule: DatasetSyncSchedule) -> CheckResult:
         """Run one isolated check and retain an operator-visible result."""
@@ -125,25 +309,56 @@ class SchedulerService:
         )
         return result
 
+    # --- reading -------------------------------------------------------------------------------
+
+    def effective(self) -> list[EffectiveSchedule]:
+        """The merged list the clock runs, or would run if enabled."""
+        if self._config is None:
+            plan = self._load()
+            self._config, self._effective = plan.config, plan.effective
+            self._last_results.update(plan.refused)
+        return list(self._effective)
+
+    def schedule_for(self, dataset_id: str) -> ScheduleStatus | None:
+        """The effective schedule of one dataset, with its runtime state, or None.
+
+        When the file and the store both name the dataset, this is the file's entry, the one
+        that runs.
+        """
+        return next((item for item in self.status().schedules if item.dataset_id == dataset_id), None)
+
     def status(self) -> ScheduleListResponse:
-        """Return configuration plus volatile next/last-check state."""
-        config = self._config or self._config_loader()
+        """Return configuration plus volatile next/last-check state.
+
+        Runtime state belongs to the entry that runs. A shadowed or paused entry shares its
+        id with nothing that fires, so its runtime fields are empty rather than borrowed from
+        the entry that won.
+        """
+        effective = self.effective()
+        config = self._config
+        assert config is not None
         apscheduler_jobs = {}
         if self._scheduler is not None:
             apscheduler_jobs = {job.id: job for job in self._scheduler.get_jobs()}
 
         schedules: list[ScheduleStatus] = []
-        for schedule in config.dataset_sync:
-            result = self._last_results.get(schedule.schedule_id)
-            job = apscheduler_jobs.get(schedule.schedule_id)
+        for entry in effective:
+            schedule = entry.schedule
+            result = self._last_results.get(entry.schedule_id) if entry.effective else None
+            job = apscheduler_jobs.get(entry.schedule_id) if entry.effective else None
             schedules.append(
                 ScheduleStatus(
-                    schedule_id=schedule.schedule_id,
+                    schedule_id=entry.schedule_id,
                     dataset_id=schedule.dataset_id,
                     cron=schedule.cron,
                     timezone=config.timezone,
                     publish=schedule.publish,
                     max_attempts=schedule.max_attempts,
+                    source=entry.source,
+                    enabled=entry.enabled,
+                    shadowed=entry.shadowed,
+                    effective=entry.effective,
+                    registered=job is not None,
                     next_check=getattr(job, "next_run_time", None),
                     last_check=result.checked_at if result else None,
                     last_outcome=result.outcome if result else None,
@@ -155,6 +370,7 @@ class SchedulerService:
             enabled=config.enabled,
             running=self._scheduler is not None,
             timezone=config.timezone,
+            reload_error=self._reload_error,
             schedules=schedules,
         )
 

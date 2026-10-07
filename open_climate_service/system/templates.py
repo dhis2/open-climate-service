@@ -138,6 +138,7 @@ _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
     ("workflows", "Workflows", "/workflows"),
+    ("schedules", "Sync schedules", "/schedules"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -446,7 +447,17 @@ def render_dataset_page(record: Any, mount: str) -> str:
     except Exception:
         _log.exception("Unexpected error loading the template for dataset '%s'", record.dataset_id)
         template = None
+    schedule: dict[str, Any] | None = None
+    if record.item_type != "feature":
+        try:
+            from open_climate_service.scheduler.service import get_scheduler_service
+
+            found = get_scheduler_service().schedule_for(record.dataset_id)
+            schedule = found.model_dump(mode="json") if found is not None else None
+        except Exception:
+            _log.exception("The schedule for dataset '%s' could not be read", record.dataset_id)
     return get_template("dataset_page.html").render(
+        schedule=schedule,
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
@@ -456,6 +467,43 @@ def render_dataset_page(record: Any, mount: str) -> str:
         job_script=_read_asset("ocs_jobs.js"),
         read_only=api_config.is_read_only(),
         **_dataset_page_context(record, template, refreshable, refresh_blocked),
+    )
+
+
+def render_schedules_page(
+    status: Any,
+    choices: list[dict[str, Any]],
+    mount: str,
+    *,
+    tab: str = "list",
+    error: str | None = None,
+    draft: dict[str, Any] | None = None,
+    editing: str | None = None,
+) -> str:
+    """Render the sync schedules listing, or the form for adding or editing a stored one."""
+    names: dict[str, str] = {}
+    try:
+        from open_climate_service.ingestions.services import list_datasets
+
+        names = {item.dataset_id: item.dataset_name for item in list_datasets().items}
+    except Exception:
+        _log.exception("Dataset names could not be listed for the schedules page")
+    rows = [{**item.model_dump(mode="json"), "name": names.get(item.dataset_id)} for item in status.schedules]
+    return get_template("schedules_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "schedules"),
+        read_only=api_config.is_read_only(),
+        tab=tab,
+        status=status,
+        schedules=rows,
+        choices=choices,
+        error=error,
+        draft=draft or {},
+        editing=editing,
     )
 
 
@@ -1296,7 +1344,7 @@ _API_GROUP_NOTES = {
     "STAC": "Catalogue metadata for discovery, one collection per published dataset.",
     "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
     "Extent": "The area this instance covers.",
-    "Schedules": "Scheduled dataset refreshes, as configured for this instance.",
+    "Schedules": "When each dataset is checked and synced: the file's schedules, and the ones saved here.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "System": "Health, version and the landing page's JSON form.",
 }

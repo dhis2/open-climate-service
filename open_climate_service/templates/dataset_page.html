@@ -87,6 +87,13 @@
               {% elif vector %}
               <p class="note">This collection cannot be refreshed here: {{ refresh_blocked or "no provider on this instance fetches it" }}.</p>
               {% elif syncable and not read_only %}
+              <p class="note" id="sync-schedule">
+                {% if schedule and schedule.shadowed %}Scheduled in <span class="mono">climate-service.yaml</span>; a saved schedule for it is shadowed.
+                {% elif schedule and not schedule.enabled %}Scheduled on <span class="mono">{{ schedule.cron }}</span> ({{ schedule.timezone }}), paused.
+                {% elif schedule %}Checked on <span class="mono">{{ schedule.cron }}</span> ({{ schedule.timezone }}){% if schedule.next_check %}, next {{ schedule.next_check }}{% endif %}{% if schedule.source == 'file' %}, from <span class="mono">climate-service.yaml</span>{% endif %}.
+                {% else %}Not synced on a schedule. <a href="{{ mount }}/schedules/new?dataset={{ dataset.id }}">Add one</a> to check for new data automatically.{% endif %}
+                {% if schedule %}<a href="{{ mount }}/schedules">All schedules</a>{% endif %}
+              </p>
               <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
                 Checking the source for new data…
               </p>

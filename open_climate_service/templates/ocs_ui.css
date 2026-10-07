@@ -788,7 +788,9 @@ p.note.table-title {
 .field > label {
   font-weight: var(--font-weight-medium);
 }
-.field input[type="text"] {
+.field input[type="text"],
+.field input[type="number"],
+.field select {
   font: inherit;
   color: var(--colors-grey900);
   background: var(--colors-white);
@@ -887,6 +889,85 @@ button.primary:disabled {
   background: var(--colors-green100);
 }
 
+/* Record pages: a listing tab beside an add-or-edit form tab (sync schedules). */
+.page-tabs {
+  display: flex;
+  gap: var(--spacers-dp24);
+  border-bottom: 1px solid var(--colors-grey400);
+  margin-bottom: var(--spacers-dp24);
+}
+
+.page-tabs a {
+  padding: var(--spacers-dp8) var(--spacers-dp4);
+  border-bottom: 3px solid transparent;
+  color: var(--colors-grey700);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+}
+
+.page-tabs a:hover {
+  color: var(--theme-primary800);
+}
+
+.page-tabs a[aria-current="page"] {
+  border-bottom-color: var(--theme-primary600);
+  color: var(--theme-primary800);
+}
+
+.records-table {
+  margin-bottom: var(--spacers-dp24);
+}
+
+.records-table th,
+.records-table .mono {
+  white-space: nowrap;
+}
+
+.records-table td .form-actions {
+  margin-top: 0;
+  flex-wrap: wrap;
+}
+
+.records-table td form {
+  display: inline;
+}
+
+.empty-state {
+  text-align: center;
+  padding: var(--spacers-dp32);
+  margin-bottom: var(--spacers-dp24);
+}
+
+.empty-state-action {
+  display: inline-block;
+  margin-top: var(--spacers-dp16);
+}
+
+.record-form-panel {
+  border-top: var(--spacers-dp4) solid var(--theme-primary600);
+}
+
+.record-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp24);
+  margin-top: var(--spacers-dp24);
+}
+
+.record-form .form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.record-form .field-wide {
+  grid-column: 1 / -1;
+}
+
+.record-form > .form-actions {
+  margin-top: 0;
+  padding-top: var(--spacers-dp16);
+  border-top: 1px solid var(--colors-grey300);
+}
+
 @media (max-width: 720px) {
   .dataset-page {
     grid-template-columns: minmax(0, 1fr);
@@ -919,5 +1000,8 @@ button.primary:disabled {
   /* Side by side, the facts are squeezed to one word per line before the map gives way. */
   .instance {
     flex-direction: column;
+  }
+  .record-form .form-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

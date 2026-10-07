@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,6 +32,11 @@ def _template(**updates: object) -> dict[str, object]:
     }
     values.update(updates)
     return values
+
+
+def _sync_jobs(scheduler: MagicMock) -> list[Any]:
+    """The clock jobs registered for schedules, leaving out the store watch the clock also runs."""
+    return [call for call in scheduler.add_job.call_args_list if call.kwargs["id"].startswith("dataset-sync:")]
 
 
 def _job(*, process_id: str = "scheduled-sync", status: JobStatus = JobStatus.ACCEPTED) -> JobRecord:
@@ -176,9 +182,9 @@ def test_service_registers_coalesced_non_overlapping_cron_job(monkeypatch: pytes
 
     service.start()
 
-    scheduler.add_job.assert_called_once()
-    assert scheduler.add_job.call_args.kwargs["coalesce"] is True
-    assert scheduler.add_job.call_args.kwargs["max_instances"] == 1
+    (registered,) = _sync_jobs(scheduler)
+    assert registered.kwargs["coalesce"] is True
+    assert registered.kwargs["max_instances"] == 1
     scheduler.start.assert_called_once_with()
     service.shutdown()
     scheduler.shutdown.assert_called_once_with(wait=False)
@@ -219,7 +225,7 @@ def test_service_skips_future_facing_schedule_without_failing_startup(monkeypatc
     service.start()
 
     scheduler.start.assert_called_once_with()
-    scheduler.add_job.assert_not_called()
+    assert _sync_jobs(scheduler) == []
     assert service.status().schedules[0].last_outcome == CheckOutcome.ERROR
     assert "future-facing" in (service.status().schedules[0].last_message or "")
 
@@ -237,7 +243,7 @@ def test_service_skips_static_schedule_without_failing_startup(monkeypatch: pyte
     service.start()
 
     scheduler.start.assert_called_once_with()
-    scheduler.add_job.assert_not_called()
+    assert _sync_jobs(scheduler) == []
     assert service.status().schedules[0].last_outcome == CheckOutcome.ERROR
     assert "not syncable" in (service.status().schedules[0].last_message or "")
 
@@ -257,7 +263,7 @@ def test_service_skips_missing_template_without_failing_startup(monkeypatch: pyt
     service.start()
 
     scheduler.start.assert_called_once_with()
-    scheduler.add_job.assert_not_called()
+    assert _sync_jobs(scheduler) == []
     assert service.status().schedules[0].last_outcome == CheckOutcome.ERROR
     assert "no registered data source" in (service.status().schedules[0].last_message or "")
     assert warning.call_args.args[-1] == 0
@@ -327,5 +333,6 @@ def test_schedules_endpoint_is_read_only_status(client: TestClient) -> None:
         "enabled": False,
         "running": False,
         "timezone": "UTC",
+        "reload_error": None,
         "schedules": [],
     }

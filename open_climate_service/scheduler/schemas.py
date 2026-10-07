@@ -6,6 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from open_climate_service.scheduler.config import ScheduleSource
 from open_climate_service.scheduler.dispatcher import CheckOutcome
 
 
@@ -18,6 +19,11 @@ class ScheduleStatus(BaseModel):
     timezone: str
     publish: bool
     max_attempts: int
+    source: ScheduleSource = "file"
+    enabled: bool = True
+    shadowed: bool = False
+    effective: bool = Field(default=True, description="Enabled and not shadowed: the entry the clock would run.")
+    registered: bool = Field(default=False, description="Whether a clock job exists for it in this process now.")
     next_check: datetime | None = None
     last_check: datetime | None = None
     last_outcome: CheckOutcome | None = None
@@ -31,4 +37,8 @@ class ScheduleListResponse(BaseModel):
     enabled: bool
     running: bool
     timezone: str
+    reload_error: str | None = Field(
+        default=None,
+        description="Why the last reload was refused; the previous working schedules stay in force until it is fixed.",
+    )
     schedules: list[ScheduleStatus] = Field(default_factory=list)
