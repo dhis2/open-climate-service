@@ -625,7 +625,6 @@
           activeLayer = null;
         }
         clearFeatures();
-        metaSource.title = "";
         dimControls.classList.add("hidden");
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
@@ -856,7 +855,8 @@
         }
 
         // The collection's attribution is on its feature record, not in STAC. An open licence
-        // such as ODbL requires it wherever the data is shown, so it goes on the map as well.
+        // such as ODbL requires it wherever the data is shown, so it goes on the map. The
+        // source row names the template's providers, as it does for a raster.
         const recordRequest = fetch(`{{ mount }}/features/${encodeURIComponent(collection.id)}`)
           .then((res) => (res.ok ? res.json() : null))
           .catch(() => null);
@@ -934,8 +934,7 @@
           return;
         }
 
-        metaSource.textContent = attribution ?? "—";
-        metaSource.title = attribution ?? "";
+        metaSource.textContent = providers.join(", ") || "—";
         showUnits(null);
         showLicence(collection);
         datasetMeta.classList.remove("hidden");

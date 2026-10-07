@@ -363,9 +363,10 @@ def test_the_map_viewer_lists_vector_datasets_and_reads_their_geoparquet(client:
     assert "const featureAsset = collection.assets?.data;" in body
     # MapLibre places GeoJSON as longitude and latitude, so a projected collection is refused.
     assert 'if (storedCrs !== "EPSG:4326")' in body
-    # The source is the collection's attribution, also on the map; vectors have no units.
+    # The source names the providers, the attribution goes on the map; vectors have no units.
     assert "fetch(`/features/${encodeURIComponent(collection.id)}`)" in body
     assert "...(attribution && { attribution })," in body
+    assert 'metaSource.textContent = providers.join(", ") || "—";' in body
     assert "showUnits(null);" in body
     assert 'map.on("click", id, showFeatureName);' in body
 
