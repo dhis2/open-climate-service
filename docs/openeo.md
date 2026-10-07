@@ -329,7 +329,6 @@ openEO is an additional access layer on top of the existing dataset store — th
 
 - [`examples/openeo_process_graph.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/openeo_process_graph.py) — full end-to-end walkthrough using the openEO Python client
 - [`examples/zonal_statistics.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/zonal_statistics.py) — district-level statistics with DHIS2 organisation unit IDs via `aggregate_spatial` and `rename_labels`
-- [`examples/aggregate_and_import_to_dhis2.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/aggregate_and_import_to_dhis2.py) — fetch org units from DHIS2, run the `aggregate_to_dhis2_json` workflow, and import the result back into DHIS2
 
 ---
 

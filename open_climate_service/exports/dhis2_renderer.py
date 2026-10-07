@@ -53,7 +53,15 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     poll_backoff_base: float = 1.0
 
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
-        allowed = {"series", "period_type", "org_unit_field", "period_field", "aggregation"}
+        allowed = {
+            "series",
+            "period_type",
+            "org_unit_field",
+            "period_field",
+            "aggregation",
+            "temporal_aggregation",
+            "incomplete_periods",
+        }
         if set(mapping) - allowed:
             raise ValueError("Unsupported DHIS2 mapping fields")
         period_type = mapping.get("period_type")
@@ -97,6 +105,15 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             raise ValueError("Organisation unit and period fields must be distinct")
         if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max", "median"):
             raise ValueError("aggregation must be mean, sum, min, max, or median; it declares upstream computation")
+        # Whether the dataset's cadence requires or forbids these is decided where the dataset
+        # is known, in `exports.service.check_cadence_declaration`; here only the vocabulary.
+        if "temporal_aggregation" in mapping and mapping["temporal_aggregation"] not in ("mean", "sum", "min", "max"):
+            raise ValueError(
+                "temporal_aggregation must be mean, sum, min, or max; it declares how source periods "
+                "are combined into the export's period_type"
+            )
+        if "incomplete_periods" in mapping and mapping["incomplete_periods"] not in ("reject", "drop"):
+            raise ValueError("incomplete_periods must be reject (the default) or drop")
         # Default combo UIDs belong to target metadata, which pure rendering does
         # not fetch. Avoid treating an omitted combo as distinct from an explicit
         # one when several series target the same data element.

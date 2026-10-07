@@ -63,7 +63,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 description = "Open Climate Service instance for [context]"
 dependencies = [
-    "open-climate-service[server]==0.1.0",
+    "open-climate-service[server,dhis2]==0.1.1",  # dhis2: the DHIS2 org unit provider and delivery
 ]
 
 [tool.uv]
@@ -88,7 +88,7 @@ override-dependencies = [
 ]
 ```
 
-The `package = false` setting tells uv that this repository is not itself a Python package — it only declares dependencies. It depends on the released `open-climate-service[server]` from PyPI, pinned here to `0.1.0`; bump the version to upgrade. The `override-dependencies` block is required for `uv` to resolve the `[server]` extra (see the comment above) — this is also why `pip install` is not a supported install path for `[server]`. To track the latest unreleased code instead of a release, add a `[tool.uv.sources]` entry pinning open-climate-service to git (`open-climate-service = { git = "https://github.com/dhis2/open-climate-service.git", branch = "main" }`) and change the dependency to `open-climate-service[server]`.
+The `package = false` setting tells uv that this repository is not itself a Python package — it only declares dependencies. It depends on `open-climate-service[server,dhis2]` from PyPI, pinned here to `0.1.1`; the `dhis2` extra is available from that release. Bump the version to upgrade. The `override-dependencies` block is required for uv to resolve the `[server]` extra (see the comment above) — this is also why `pip install` is not a supported install path for `[server]`. To track the latest unreleased code instead of a release, add a `[tool.uv.sources]` entry pinning open-climate-service to git (`open-climate-service = { git = "https://github.com/dhis2/open-climate-service.git", branch = "main" }`) and change the dependency to `open-climate-service[server,dhis2]`.
 
 Install dependencies:
 

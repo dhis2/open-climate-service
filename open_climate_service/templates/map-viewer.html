@@ -770,12 +770,56 @@
         });
       }
 
+      // A deep link to a dataset the catalogue does not list: say why. The catalogue holds only
+      // published raster datasets, so a published vector dataset is missing for a different
+      // reason than an unpublished one, and "not published" would be wrong about it.
+      async function explainMissingDataset(requested) {
+        // Any selection change after this point, including going back to the empty choice,
+        // moves loadGeneration on, so a late answer can tell it is about an address the reader
+        // has since left.
+        const generation = loadGeneration;
+        let record = null;
+        let lookup = "failed";
+        try {
+          const res = await fetch(`{{ mount }}/datasets/${encodeURIComponent(requested)}`, {
+            headers: { Accept: "application/json" },
+          });
+          if (res.ok) {
+            record = await res.json();
+            lookup = "found";
+          } else if (res.status === 404) {
+            lookup = "missing";
+          }
+        } catch {
+          // A network failure or a body that is not JSON: the lookup failed, which says
+          // nothing about whether the dataset exists.
+        }
+        // The reader may have chosen a dataset, or chosen one and cleared it again, while this was
+        // in flight; their status must not be overwritten by an answer about the address they
+        // started from. `selectEl.value` covers a choice whose load is still waiting for the map.
+        if (generation !== loadGeneration || selectEl.value) return;
+        if (lookup === "missing") {
+          setStatus(`Dataset "${requested}" was not found.`, true);
+        } else if (lookup === "failed") {
+          setStatus(`Could not check dataset "${requested}"; it is not on the map.`, true);
+        } else if (record?.itemType === "feature") {
+          setStatus(
+            `Dataset "${requested}" is a vector dataset. The map viewer shows raster datasets only for now.`,
+            true
+          );
+        } else if (record.publication?.status !== "published") {
+          setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
+        } else {
+          setStatus(`Dataset "${requested}" cannot be shown on the map.`, true);
+        }
+      }
+
       function openRequestedDataset() {
         const requested = new URLSearchParams(window.location.search).get("dataset");
         if (!requested) return;
         const option = [...selectEl.options].find((o) => o.dataset.id === requested);
         if (!option) {
-          setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
+          explainMissingDataset(requested);
           return;
         }
         selectEl.value = option.value;
