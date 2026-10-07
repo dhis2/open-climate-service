@@ -246,9 +246,7 @@ def test_result_files_are_served_once_the_job_finished(service: Any, client: Tes
     assert client.get(route.format(job="done")).status_code == 200
 
 
-def test_a_new_attempt_removes_files_left_by_an_earlier_attempt(
-    service: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_new_attempt_removes_files_left_by_an_earlier_attempt(service: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     results = _job_with_result_files(
         "rerun",
         status=OpenEOJobStatus.QUEUED,
