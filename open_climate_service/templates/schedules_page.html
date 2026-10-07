@@ -23,20 +23,20 @@
       <main id="content">
         <div class="page-title">
           <h2 id="schedules-title" tabindex="-1">Sync schedules</h2>
-          <span class="chip">{{ schedules | length }} configured</span>
-          <span class="chip {{ 'chip-published' if status.running else 'chip-unpublished' }}">{{ 'clock running' if status.running else ('clock disabled' if not status.enabled else 'clock not running') }}</span>
+          <span class="chip">{{ schedules | length }} schedule{{ 's' if schedules | length != 1 }}</span>
+          <span class="chip {{ 'chip-published' if status.running else 'chip-unpublished' }}">{{ 'Scheduler running' if status.running else ('Scheduler off' if not status.enabled else 'Scheduler not running') }}</span>
         </div>
-        <p class="lead">When each dataset is checked for new data and synced. A schedule moves data into this instance; what happens after an update, such as a delivery to DHIS2, is a pipeline's concern.</p>
+        <p class="lead">Set when OCS checks an ingested dataset for updates. Each check starts a sync job that adds any new data from its source.</p>
 
         {% if status.reload_error %}
         <div class="notice error" role="alert">The last reload failed: {{ status.reload_error }}.</div>
         {% endif %}
         {% if not status.enabled %}
-        <div class="notice">The scheduler is disabled on this instance (<span class="mono">scheduler.enabled: false</span>). Schedules can be saved and are listed here, but none fires until an operator enables the scheduler and restarts.</div>
+        <div class="notice">Automatic checks are off. To turn them on, set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span>, then restart OCS. You can save schedules here in the meantime.</div>
         {% endif %}
 
         <nav class="page-tabs" aria-label="Schedule views">
-          <a href="{{ mount }}/schedules" {% if tab == 'list' %}aria-current="page"{% endif %}>Configured schedules</a>
+          <a href="{{ mount }}/schedules" {% if tab == 'list' %}aria-current="page"{% endif %}>Schedules</a>
           <a href="{{ mount }}/schedules/new" {% if tab == 'create' and not editing %}aria-current="page"{% endif %}>Add schedule</a>
           {% if editing %}<a href="{{ mount }}/schedules/{{ editing }}/edit" aria-current="page">Edit {{ editing }}</a>{% endif %}
         </nav>
@@ -46,23 +46,23 @@
         <div class="panel table-wrap records-table">
           <table>
             <thead>
-              <tr><th>Dataset</th><th>Schedule</th><th>Source</th><th>State</th><th>Next check</th><th>Last check</th>{% if not read_only %}<th>Actions</th>{% endif %}</tr>
+              <tr><th>Dataset</th><th>Check schedule</th><th>Managed in</th><th>Status</th><th>Next check</th><th>Last check</th>{% if not read_only %}<th>Actions</th>{% endif %}</tr>
             </thead>
             <tbody>
               {% for s in schedules %}
               <tr>
                 <td><a href="{{ mount }}/datasets/{{ s.dataset_id }}">{{ s.name or s.dataset_id }}</a>{% if s.name %}<br /><small class="mono">{{ s.dataset_id }}</small>{% endif %}</td>
-                <td><span class="mono">{{ s.cron }}</span> ({{ s.timezone }})<br /><small>{{ 'publishes' if s.publish else 'leaves unpublished' }}, {{ s.max_attempts }} attempt{{ 's' if s.max_attempts != 1 }}</small></td>
-                <td>{% if s.source == 'file' %}<span class="chip">climate-service.yaml</span>{% else %}<span class="chip">saved here</span>{% endif %}</td>
+                <td><span class="mono">{{ s.cron }}</span> ({{ s.timezone }})<br /><small>{{ 'Publish after sync' if s.publish else 'Do not publish after sync' }}; up to {{ s.max_attempts }} attempt{{ 's' if s.max_attempts != 1 }}</small></td>
+                <td>{% if s.source == 'file' %}<span class="chip">climate-service.yaml</span>{% else %}<span class="chip">this page</span>{% endif %}</td>
                 <td>
-                  {% if s.shadowed %}<span class="chip chip-unpublished">shadowed</span><br /><small>The file configures this dataset too; the file entry runs. Remove it there and restart to make this one effective.</small>
-                  {% elif not s.enabled %}<span class="chip chip-unpublished">paused</span>
-                  {% elif s.registered %}<span class="chip chip-published">running</span>
-                  {% elif s.last_outcome == 'error' %}<span class="chip chip-unpublished">not registered</span><br /><small>{{ s.last_message }}</small>
-                  {% else %}<span class="chip">waiting for the clock</span>{% endif %}
+                  {% if s.shadowed %}<span class="chip chip-unpublished">Overridden</span><br /><small>The config file has a schedule for this dataset. Remove that entry and restart OCS to use this one.</small>
+                  {% elif not s.enabled %}<span class="chip chip-unpublished">Paused</span>
+                  {% elif s.registered %}<span class="chip chip-published">Scheduled</span>
+                  {% elif s.last_outcome == 'error' %}<span class="chip chip-unpublished">Cannot run</span><br /><small>{{ s.last_message }}</small>
+                  {% else %}<span class="chip">Not running</span>{% endif %}
                 </td>
                 <td>{{ s.next_check or '' }}</td>
-                <td>{% if s.last_check %}{{ s.last_check }}<br /><small>{{ s.last_outcome }}{% if s.last_job_id %}, <a href="{{ mount }}/jobs/{{ s.last_job_id }}">job</a>{% endif %}</small>{% else %}<span class="note">not yet</span>{% endif %}</td>
+                <td>{% if s.last_check %}{{ s.last_check }}<br /><small>{{ s.last_outcome }}{% if s.last_job_id %}, <a href="{{ mount }}/jobs/{{ s.last_job_id }}">view job</a>{% endif %}</small>{% else %}<span class="note">No checks yet</span>{% endif %}</td>
                 {% if not read_only %}
                 <td>
                   {% if s.source == 'store' %}
@@ -74,7 +74,7 @@
                     <form method="post" action="{{ mount }}/schedules/{{ s.dataset_id }}/resume"><button type="submit">Resume</button></form>
                     {% endif %}
                   </div>
-                  {% else %}<span class="note">read-only here</span>{% endif %}
+                  {% else %}<span class="note">Edit in config file</span>{% endif %}
                 </td>
                 {% endif %}
               </tr>
@@ -85,23 +85,23 @@
         {% else %}
         <div class="panel empty-state">
           <h3>No schedules yet</h3>
-          <p class="note">Add one to check a dataset for new data on a cron and sync it when there is any.</p>
+          <p class="note">Add a schedule to check an ingested dataset for updates automatically.</p>
           {% if not read_only %}<a class="button-link primary empty-state-action" href="{{ mount }}/schedules/new">Add schedule</a>{% endif %}
         </div>
         {% endif %}
-        <p class="note">Check state is kept in memory and resets when the instance restarts; submitted sync jobs are durable and listed under Jobs. The timezone is the instance's, <span class="mono">scheduler.timezone</span>.</p>
+        <p class="note">Last check details reset when OCS restarts. Submitted sync jobs remain available under Jobs. Times use {{ status.timezone }}.</p>
         {% endif %}
 
         {% if tab == 'create' %}
         <section class="panel record-form-panel" aria-labelledby="create-title">
           <h3 id="create-title">{% if editing %}Edit schedule{% else %}New schedule{% endif %}</h3>
-          <p class="note">A schedule checks the dataset's source on the cron and submits a sync job when there are new periods. Saving applies it at once; no restart is needed. Only one schedule per dataset.</p>
+          <p class="note">Choose when to check the source for new data. Each check starts a sync job; if nothing new is available, the dataset is unchanged. Only one schedule can run per dataset.</p>
           {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
           {% if read_only %}
           <p class="note">This instance is read-only, so schedules cannot be changed here.</p>
           {% else %}
           {% if not editing and not choices %}
-          <p class="note">No ingested dataset on this instance can be synced on a schedule. Ingest a dataset with a source first.</p>
+          <p class="note">No ingested datasets are available for scheduled sync. Ingest a dataset with a source that can be updated first.</p>
           {% endif %}
           <form method="post" action="{{ mount }}/schedules{% if editing %}/{{ editing }}{% endif %}" class="record-form">
             <div class="form-grid">
@@ -112,30 +112,30 @@
                 {% else %}
                 <select id="s-dataset" name="dataset_id" required>
                   {% for d in choices %}
-                  <option value="{{ d.id }}" {% if draft.dataset_id == d.id %}selected{% endif %} {% if d.configured %}disabled{% endif %}>{{ d.name }} ({{ d.cadence }}, {{ d.coverage.start }} to {{ d.coverage.end }}){% if d.configured %}, scheduled in climate-service.yaml{% endif %}</option>
+                  <option value="{{ d.id }}" {% if draft.dataset_id == d.id %}selected{% endif %} {% if d.configured %}disabled{% endif %}>{{ d.name }} ({{ d.cadence }}, {{ d.coverage.start }} to {{ d.coverage.end }}){% if d.configured %}, already scheduled in climate-service.yaml{% endif %}</option>
                   {% endfor %}
                 </select>
                 {% endif %}
-                <span class="hint">Ingested datasets with a source to sync from. A dataset the file already schedules cannot take a second schedule.</span>
+                <span class="hint">Only ingested datasets with a source that can be updated are available. Datasets scheduled in the config file cannot be selected again.</span>
               </div>
               <div class="field">
-                <label for="s-cron">Check on</label>
+                <label for="s-cron">Check schedule (cron)</label>
                 <input type="text" id="s-cron" name="cron" required placeholder="0 6 * * *" value="{{ draft.cron or '' }}" />
-                <span class="hint">Five-field cron in {{ status.timezone }}.</span>
+                <span class="hint">Minute, hour, day, month, weekday in {{ status.timezone }}. For example, 0 6 * * * checks daily at 06:00.</span>
               </div>
               <div class="field">
-                <label for="s-attempts">Sync attempts</label>
+                <label for="s-attempts">Maximum sync attempts</label>
                 <input type="number" id="s-attempts" name="max_attempts" min="1" value="{{ draft.max_attempts or 3 }}" />
               </div>
             </div>
             <div class="checks">
-              <label><input type="checkbox" name="publish" value="on" {% if draft.publish is not defined or draft.publish %}checked{% endif %} /> Publish after a successful sync</label>
-              <label><input type="checkbox" name="enabled" value="on" {% if draft.enabled is not defined or draft.enabled %}checked{% endif %} /> Enabled (uncheck to save it paused)</label>
+              <label><input type="checkbox" name="publish" value="on" {% if draft.publish is not defined or draft.publish %}checked{% endif %} /> Publish the updated dataset in OCS after sync</label>
+              <label><input type="checkbox" name="enabled" value="on" {% if draft.enabled is not defined or draft.enabled %}checked{% endif %} /> Run this schedule (uncheck to save it paused)</label>
             </div>
             <div class="form-actions">
-              <button type="submit" class="primary">Save</button>
+              <button type="submit" class="primary">{{ 'Save changes' if editing else 'Create schedule' }}</button>
               <a class="button-link" href="{{ mount }}/schedules">Cancel</a>
-              <span class="note">{% if editing %}Takes effect at once.{% else %}Starts running at once when the scheduler is enabled.{% endif %}</span>
+              <span class="note">{% if editing %}Changes apply when the scheduler is running.{% else %}The schedule starts when the scheduler is running.{% endif %}</span>
             </div>
           </form>
           {% endif %}
@@ -144,7 +144,7 @@
         {% if editing and not read_only %}
         <section class="panel" aria-labelledby="delete-title" style="margin-top: var(--spacers-dp24)">
           <h3 id="delete-title">Delete schedule</h3>
-          <p class="note">Stops checking this dataset for new data. The dataset and its sync jobs stay; a pipeline that depends on its updates will wait for a manual sync.</p>
+          <p class="note">Stops automatic checks for this dataset. Existing data and sync jobs remain available, and you can still sync it manually.</p>
           <form method="post" action="{{ mount }}/schedules/{{ editing }}/delete" class="form-actions">
             <label><input type="checkbox" name="confirm" value="yes" required /> I understand</label>
             <button type="submit">Delete schedule</button>

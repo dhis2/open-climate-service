@@ -447,7 +447,10 @@ def test_a_saved_schedule_reaches_the_running_clock(client: TestClient, monkeypa
 def test_page_lists_adds_edits_and_deletes(client: TestClient) -> None:
     page = client.get("/schedules", headers={"Accept": BROWSER})
     assert page.status_code == 200 and "Sync schedules" in page.text and "No schedules yet" in page.text
-    assert "clock disabled" in page.text
+    assert "Scheduler off" in page.text
+    assert "Each check starts a sync job" in page.text
+    assert "enabled: true" in page.text and "climate-service.yaml" in page.text
+    assert "pipeline" not in page.text.lower()
 
     form = client.get("/schedules/new?dataset=era5", headers={"Accept": BROWSER})
     assert form.status_code == 200 and "New schedule" in form.text
@@ -460,7 +463,7 @@ def test_page_lists_adds_edits_and_deletes(client: TestClient) -> None:
     )
     assert created.status_code == 303 and created.headers["location"].endswith("/schedules")
     listed = client.get("/schedules", headers={"Accept": BROWSER})
-    assert "0 6 * * *" in listed.text and "saved here" in listed.text and ">Pause<" in listed.text
+    assert "0 6 * * *" in listed.text and "this page" in listed.text and ">Pause<" in listed.text
 
     refused = client.post("/schedules", data={"dataset_id": "worldpop", "cron": "0 6 * * *"})
     assert refused.status_code == 400 and "not syncable" in refused.text and 'value="0 6 * * *"' in refused.text
@@ -488,7 +491,7 @@ def test_page_shows_file_entries_read_only_and_shadowing(client: TestClient, mon
     monkeypatch.setattr(scheduler_service, "_service", None)
     store.save_schedule(_stored("chirps", cron="0 9 * * *"), create=True)
     page = client.get("/schedules", headers={"Accept": BROWSER})
-    assert "climate-service.yaml" in page.text and "read-only here" in page.text and "shadowed" in page.text
+    assert "climate-service.yaml" in page.text and "Edit in config file" in page.text and "Overridden" in page.text
     form = client.get("/schedules/new", headers={"Accept": BROWSER})
     assert '<option value="chirps" disabled' in form.text or 'value="chirps"  disabled' in form.text
 
