@@ -29,7 +29,6 @@ from open_climate_service.exports.service import render_named_export  # noqa: E4
 from open_climate_service.openeo import execution  # noqa: E402
 from open_climate_service.openeo import jobs as openeo_jobs  # noqa: E402
 from open_climate_service.openeo.schemas import OpenEOJobStatus  # noqa: E402
-from open_climate_service.plugins.processes.aggregate_spatial import aggregate_spatial, reduce_by_method  # noqa: E402
 from open_climate_service.shared.vectors import (  # noqa: E402
     FEATURE_ID_COORD,
     attach_feature_ids,
@@ -162,37 +161,26 @@ def test_a_named_dhis2_export_reads_ids_beside_shape_labels(instance: openeo_job
     assert len(values) == 4
 
 
-def _raster() -> Any:
-    return xr.DataArray(
-        np.array([[1.0, 1.0, 3.0, 3.0], [1.0, 1.0, 3.0, 3.0]]),
-        dims=("y", "x"),
-        coords={"y": [1.5, 0.5], "x": [0.5, 1.5, 2.5, 3.5]},
-        name="rain",
-    )
-
-
-def test_a_geodataframe_is_labelled_by_its_index() -> None:
+def test_a_geodataframe_keeps_its_index_as_the_feature_ids() -> None:
     frame = gpd.GeoDataFrame(geometry=[box(0, 0, 2, 2), box(2, 0, 4, 2)], index=["WEST", "EAST"], crs=4326)
 
-    result = aggregate_spatial(_raster(), frame, lambda data: reduce_by_method(data, "mean"))
+    parsed = geometries_to_frame(frame)
 
-    assert result[FEATURE_ID_COORD].values.tolist() == ["WEST", "EAST"]
-    assert result["rain"].values.tolist() == [1.0, 3.0]
+    assert parsed.index.tolist() == ["WEST", "EAST"]
+    assert parsed.index.name == FEATURE_ID_COORD
+    assert parsed.crs == frame.crs
 
 
 def test_a_vector_cube_keeps_its_feature_ids() -> None:
     cube = xr.Dataset(coords={"geometry": [box(0, 0, 2, 2), box(2, 0, 4, 2)]})
     cube = attach_feature_ids(cube.xvec.set_geom_indexes("geometry", crs=4326), ["WEST", "EAST"], "geometry")
 
-    result = aggregate_spatial(_raster(), cube, lambda data: reduce_by_method(data, "mean"))
+    parsed = geometries_to_frame(cube)
 
-    assert result[FEATURE_ID_COORD].values.tolist() == ["WEST", "EAST"]
+    assert parsed.index.tolist() == ["WEST", "EAST"]
+    assert parsed.geometry.tolist() == [box(0, 0, 2, 2), box(2, 0, 4, 2)]
 
 
 def test_a_feature_without_an_id_gets_its_position() -> None:
-    frame = geometries_to_frame(_geometries(first_id=None) | {"features": [_geometries()["features"][1]]})
-
-    assert frame.index.tolist() == [_OU_B]
-    assert geometries_to_frame(
-        {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}
-    ).index.tolist() == ["0"]
+    assert geometries_to_frame(_geometries(first_id=None)).index.tolist() == ["0", _OU_B]
+    assert geometries_to_frame(_geometries()["features"][0]["geometry"]).index.tolist() == ["0"]

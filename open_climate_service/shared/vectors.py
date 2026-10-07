@@ -56,9 +56,9 @@ def geometries_to_frame(geometries: Any) -> gpd.GeoDataFrame:
         if kind == "FeatureCollection":
             features = geometries.get("features", [])
             shapes = [shape(feature["geometry"]) for feature in features]
-            ids = [str(feature.get("id", position)) for position, feature in enumerate(features)]
+            ids = [_feature_id(feature, position) for position, feature in enumerate(features)]
         elif kind == "Feature":
-            shapes, ids = [shape(geometries["geometry"])], [str(geometries.get("id", 0))]
+            shapes, ids = [shape(geometries["geometry"])], [_feature_id(geometries, 0)]
         else:
             shapes, ids = [shape(geometries)], ["0"]
         return _indexed(shapes, ids, "EPSG:4326")
@@ -66,6 +66,12 @@ def geometries_to_frame(geometries: Any) -> gpd.GeoDataFrame:
         shapes = [shape(item) if isinstance(item, dict) else item for item in geometries]
         return _indexed(shapes, [str(position) for position in range(len(shapes))], "EPSG:4326")
     raise ValueError(f"geometries must be GeoJSON, a GeoDataFrame or a vector cube, got {type(geometries).__name__}")
+
+
+def _feature_id(feature: dict[str, Any], position: int) -> str:
+    """A GeoJSON Feature's `id`, or its position when it has none: a null `id` is no id."""
+    value = feature.get("id")
+    return str(position) if value is None else str(value)
 
 
 def _frame_from_vector_cube(cube: xr.Dataset | xr.DataArray) -> gpd.GeoDataFrame:
