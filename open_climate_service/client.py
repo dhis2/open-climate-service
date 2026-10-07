@@ -101,10 +101,12 @@ def _open_zarr(href: str, open_kwargs: dict) -> xr.Dataset:
     import xarray as xr
 
     ds: xr.Dataset = xr.open_zarr(href, **open_kwargs)
-    # Pyramided (multiscale) stores expose data under the highest-resolution group "0".
+    # Pyramided (multiscale) stores expose data under the highest-resolution group "0". The
+    # asset names that group itself; this covers a server that does not yet.
     if not ds.data_vars:
         ds.close()
-        ds = xr.open_zarr(href, group="0", **open_kwargs)
+        without_group = {key: value for key, value in open_kwargs.items() if key != "group"}
+        ds = xr.open_zarr(href, group="0", **without_group)
     return ds
 
 

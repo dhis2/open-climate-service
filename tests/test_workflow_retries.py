@@ -186,6 +186,49 @@ def test_a_validation_type_error_while_running_is_retried(
     assert (record.status, record.attempt, len(calls)) == (OpenEOJobStatus.FINISHED, 2, 2)
 
 
+@pytest.mark.parametrize("phase", ["graph", "save"])
+def test_cooperative_cancellation_is_not_retried_or_delivered(
+    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    """The cancellation scope must survive the distinction between graph and save failures."""
+    from open_climate_service.shared.cancellation import raise_if_cancelled
+
+    openeo = instance["openeo"]
+    calls: list[str] = []
+
+    def cancel() -> None:
+        [job] = openeo_jobs.store_list_jobs()
+        openeo.cancel_job(job.id)
+        raise_if_cancelled(force=True)
+        pytest.fail("cancellation did not escape the active execution scope")
+
+    def run(*args: Any, **kwargs: Any) -> Any:
+        calls.append("graph")
+        if phase == "graph":
+            cancel()
+        return SaveResultEnvelope(_frame(), "DHIS2JSON", {"export": _EXPORT})
+
+    def save(*args: Any, **kwargs: Any) -> None:
+        calls.append("save")
+        cancel()
+
+    monkeypatch.setattr(execution, "run_process_graph", run)
+    monkeypatch.setattr(openeo, "_persist_result", save)
+    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    record = _await_done(job_id)
+    deadline = time.monotonic() + 5
+    while job_id in openeo._futures and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert (record.status, record.attempt, record.max_attempts) == (OpenEOJobStatus.CANCELED, 1, 3)
+    assert calls == (["graph"] if phase == "graph" else ["graph", "save"])
+    assert job_id not in openeo._futures
+    assert job_id not in openeo._retry_timers
+    assert record.publishing is False
+    assert _deliveries() == []
+    assert sent == []
+
+
 def test_exhausted_attempts_leave_the_job_visibly_failed(
     instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, no_backoff: None
 ) -> None:
