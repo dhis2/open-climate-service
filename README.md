@@ -13,9 +13,10 @@ Each instance is configured for a specific country or region: it scopes all data
 ```bash
 pip install open-climate-service            # client only — talk to an instance over HTTP
 pip install open-climate-service[xarray]    # + open published datasets as xarray
+pip install open-climate-service[dhis2]     # + DHIS2 Web API client (available from OCS 0.1.1)
 ```
 
-The client and `[xarray]` extras install with `pip` on any platform.
+The client, `[xarray]` and `[dhis2]` extras install with `pip` on any platform.
 
 > **Running a server?** Don't `pip install` the `[server]` extra — it depends on packages with upstream version pins (e.g. `geojson-pydantic`, `zarr`) that need dependency **overrides** to resolve, which `uv` applies but `pip` cannot. Run an instance with **uv** or **Docker** instead — see [Run a server](#run-a-server), the [quick start](https://dhis2.github.io/open-climate-service/setup_guide/) (try it locally), and the [instance guide](https://dhis2.github.io/open-climate-service/instance_guide/) (operational deployments), which give you a ready-to-use `pyproject.toml` with the required overrides.
 
