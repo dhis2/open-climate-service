@@ -165,6 +165,16 @@
         display: none !important;
       }
 
+      /* The name of a clicked vector feature: a small label in the panel's type, not
+         MapLibre's default box, whose close button sits on top of short names. */
+      .feature-popup .maplibregl-popup-content {
+        padding: 0.35rem 0.6rem;
+        border-radius: 5px;
+        font: 600 0.85rem/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #1a2332;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+      }
+
       .legend-bar {
         height: 10px;
         border-radius: 3px;
@@ -937,11 +947,19 @@
         setStatus(`${count} feature${count === 1 ? "" : "s"}. Click one to see its name.`);
       }
 
+      // Without a close button, a click elsewhere on the map (MapLibre's default) or Escape closes it.
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") featurePopup?.remove();
+      });
+
       function showFeatureName(event) {
         const label = featureLabel(event.features?.[0]?.properties ?? {});
         featurePopup?.remove();
         if (!label) return;
-        featurePopup = new maplibregl.Popup().setLngLat(event.lngLat).setText(label).addTo(map);
+        featurePopup = new maplibregl.Popup({ className: "feature-popup", closeButton: false, offset: 6 })
+          .setLngLat(event.lngLat)
+          .setText(label)
+          .addTo(map);
       }
 
       // `/map?dataset=<id>` opens the viewer on one dataset, and choosing a dataset writes the
