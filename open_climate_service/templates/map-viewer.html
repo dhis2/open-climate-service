@@ -537,6 +537,14 @@
         });
       }
 
+      // A dataset's STAC collection serves its latest *published* version, and the record offers
+      // a `stac` link exactly when there is one. Its `publication` describes the newest version
+      // instead, which after a refresh with `publish: false` is unpublished while an older one
+      // is still served, so the link is the test of whether the map can show the dataset.
+      function hasStacCollection(item) {
+        return (item.links ?? []).some((link) => link.rel === "stac");
+      }
+
       // Published vector datasets, from the dataset list: the openEO catalogue above lists
       // rasters only. Each is opened through its STAC collection, which names the GeoParquet to
       // draw. A failure here leaves the rasters usable rather than failing the whole list.
@@ -546,7 +554,7 @@
           if (!res.ok) return [];
           const body = await res.json();
           return (body.items ?? []).filter(
-            (item) => item.itemType === "feature" && item.publication?.status === "published"
+            (item) => item.itemType === "feature" && hasStacCollection(item)
           );
         } catch {
           return [];
@@ -1037,7 +1045,7 @@
           setStatus(`Dataset "${requested}" was not found.`, true);
         } else if (lookup === "failed") {
           setStatus(`Could not check dataset "${requested}"; it is not on the map.`, true);
-        } else if (record.publication?.status !== "published") {
+        } else if (!hasStacCollection(record)) {
           setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
         } else {
           setStatus(`Dataset "${requested}" cannot be shown on the map.`, true);

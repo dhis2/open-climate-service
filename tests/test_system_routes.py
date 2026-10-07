@@ -358,7 +358,10 @@ def test_the_map_viewer_lists_vector_datasets_and_reads_their_geoparquet(client:
     body = client.get("/map").text
 
     assert 'import { parquetReadObjects } from "https://esm.sh/hyparquet@' in body
-    assert 'item.itemType === "feature" && item.publication?.status === "published"' in body
+    # Listed by the `stac` link, which follows the latest published version, not by the newest
+    # version's publication status.
+    assert 'item.itemType === "feature" && hasStacCollection(item)' in body
+    assert "publication?.status" not in body
     assert "href: `/stac/collections/${encodeURIComponent(item.dataset_id)}`" in body
     assert "const featureAsset = collection.assets?.data;" in body
     # MapLibre places GeoJSON as longitude and latitude, so a projected collection is refused.
@@ -387,7 +390,7 @@ def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client:
     assert "fetch(`/datasets/${encodeURIComponent(requested)}`" in body
     # Published vector datasets are listed now (CLIM-1234), so none is turned away as a vector.
     assert "shows raster datasets only" not in body
-    assert 'record.publication?.status !== "published"' in body
+    assert "} else if (!hasStacCollection(record)) {" in body
     # Only a 404 means the dataset does not exist; any other failure says nothing about it.
     assert "res.status === 404" in body
     assert 'lookup === "missing"' in body and "was not found." in body
