@@ -29,6 +29,10 @@ class ExecutionEvidence:
     sources: list[dict[str, Any]] = field(default_factory=list)
     features: list[dict[str, Any]] = field(default_factory=list)
     spatial_aggregations: list[str | None] = field(default_factory=list)
+    # One entry per completed temporal aggregation (aggregate_temporal_period or
+    # aggregate_dekads): the cadence it produced, its single named reducer or None, and
+    # the destination periods the input did not fully cover (CLIM-1302).
+    temporal_aggregations: list[dict[str, Any]] = field(default_factory=list)
     snapshots: dict[str, str] = field(default_factory=dict, repr=False)
 
     def describe(self) -> dict[str, Any]:
@@ -51,12 +55,13 @@ class ExecutionEvidence:
             "sources": list(self.sources),
             "features": list(self.features),
             "spatial_aggregations": list(self.spatial_aggregations),
+            "temporal_aggregations": [dict(entry) for entry in self.temporal_aggregations],
             "missing": missing,
         }
 
 
 _current: ContextVar[ExecutionEvidence | None] = ContextVar("ocs_execution_evidence", default=None)
-_spatial_methods: ContextVar[set[str] | None] = ContextVar("ocs_spatial_methods", default=None)
+_temporal_scope: ContextVar[dict[str, Any] | None] = ContextVar("ocs_temporal_scope", default=None)
 
 
 @contextmanager
@@ -108,6 +113,58 @@ def record_source(collection_id: str, artifact: Any) -> None:
     path = str(Path(raw_path).resolve()) if isinstance(raw_path, (str, PathLike)) else None
     observation["snapshot_id"] = evidence.snapshots.pop(path, None) if path is not None else None
     evidence.sources.append(observation)
+
+
+def record_reduction(method: str) -> None:
+    """Note a named reduction for an open temporal aggregation scope; ignored outside one."""
+    temporal = _temporal_scope.get()
+    if temporal is not None:
+        temporal["methods"].add(method)
+
+
+@contextmanager
+def observe_temporal_aggregation(period: str | None) -> Generator[None]:
+    """Attribute named reductions to one temporal aggregation and record what it produced.
+
+    ``period`` is the cadence the aggregation produces, in the dataset vocabulary, or None
+    when it is not one an export could emit (an openEO ``season``, say). Only reductions
+    running inside this scope count, and the call is recorded only when it completes, so
+    a failed aggregation leaves no evidence of having produced anything.
+    """
+    scope: dict[str, Any] = {"methods": set(), "incomplete": [], "unknown": None}
+    token = _temporal_scope.set(scope)
+    try:
+        yield
+    finally:
+        _temporal_scope.reset(token)
+    evidence = _current.get()
+    if evidence is not None:
+        methods: set[str] = scope["methods"]
+        entry: dict[str, Any] = {
+            "period": period,
+            "method": next(iter(methods)) if len(methods) == 1 else None,
+            "incomplete": list(scope["incomplete"]),
+            # "checked" means the incomplete list is the whole truth; "unknown" means nothing
+            # could be counted, and an export must not read that as complete.
+            "completeness": "unknown" if scope["unknown"] else "checked",
+        }
+        if scope["unknown"]:
+            entry["reason"] = scope["unknown"]
+        evidence.temporal_aggregations.append(entry)
+
+
+def record_incomplete_periods(labels: Sequence[str]) -> None:
+    """Note destination periods the input did not fully cover; ignored outside a temporal scope."""
+    scope = _temporal_scope.get()
+    if scope is not None:
+        scope["incomplete"].extend(str(label) for label in labels)
+
+
+def record_completeness_unknown(reason: str) -> None:
+    """Note that destination periods could not be checked for completeness; the export refuses them."""
+    scope = _temporal_scope.get()
+    if scope is not None:
+        scope["unknown"] = reason
 
 
 def record_features(geometries: Any) -> None:

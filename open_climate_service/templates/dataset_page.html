@@ -26,13 +26,19 @@
           <h2>{{ dataset.name }}</h2>
           <span class="chip chip-{{ dataset.status }}">{{ dataset.status }}</span>
         </div>
+        {% if dataset.coverage %}
+        <p class="page-coverage">
+          {% if dataset.period_type %}<span class="period">{{ dataset.period_type | capitalize }}</span>{% endif %}
+          <span class="range">{{ dataset.coverage }}</span>
+        </p>
+        {% endif %}
 
         <div class="dataset-page">
           <div class="stack">
             <div class="panel item">
               <div
                 class="thumb{% if dataset.has_thumbnail %} has-image{% endif %}"
-                style="--ramp: {{ dataset.ramp }}"
+                {% if not vector %}style="--ramp: {{ dataset.ramp }}"{% endif %}
               >
                 {% if dataset.has_thumbnail %}
                 <img
@@ -73,8 +79,14 @@
 
           <div class="stack">
             <section class="panel" aria-labelledby="sync-title">
-              <h3 id="sync-title">Sync</h3>
-              {% if syncable and not read_only %}
+              <h3 id="sync-title">{% if vector %}Refresh{% else %}Sync{% endif %}</h3>
+              {% if refresh_href %}
+              <p class="note">
+                This collection is refreshed from <a href="{{ mount }}{{ refresh_href }}">its data source</a>, which fetches it again from the provider.
+              </p>
+              {% elif vector %}
+              <p class="note">This collection cannot be refreshed here: {{ refresh_blocked or "no provider on this instance fetches it" }}.</p>
+              {% elif syncable and not read_only %}
               <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
                 Checking the source for new data…
               </p>
@@ -112,7 +124,7 @@
             <section class="panel" aria-labelledby="access-title">
               <h3 id="access-title">Access</h3>
               <div class="actions">
-                {% if published %}
+                {% if published and not vector %}
                 <a class="button-link primary" href="{{ mount }}/map?dataset={{ dataset.id | urlencode }}">Open in map viewer</a>
                 {% endif %}
                 {% for link in links %}
@@ -122,20 +134,22 @@
               </div>
               {% if not published %}
               <p class="note" style="margin-top: var(--spacers-dp8)">
-                This dataset is not published, so it is not in the map viewer or the STAC catalog.
+                This dataset is not published, so it is not in {% if not vector %}the map viewer or {% endif %}the STAC catalog.
               </p>
               {% endif %}
             </section>
 
             <section class="panel" aria-labelledby="status-title">
-              <h3 id="status-title">Status and display</h3>
+              <h3 id="status-title">{% if vector %}Status{% else %}Status and display{% endif %}</h3>
               <dl class="facts">
                 {% for label, value, href in status_facts %}
                 <dt>{{ label }}</dt>
                 <dd>{{ value }}</dd>
                 {% endfor %}
               </dl>
+              {% if not vector %}
               <span class="ramp-bar" style="--ramp: {{ dataset.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
+              {% endif %}
             </section>
           </div>
         </div>

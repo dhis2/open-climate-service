@@ -131,5 +131,8 @@ def aggregate_spatial_weighted(
         method="exactextract",
         stats=reducer,
     )
+    # The cadence travels with the data: a spatial aggregation changes nothing about time.
+    from open_climate_service.shared.time import cadence_of, stamp_cadence
 
+    stamp_cadence(vec_cube, cadence_of(data))
     return vec_cube

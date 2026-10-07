@@ -115,6 +115,7 @@ def test_matching_update_submits_and_starts_workflow_once() -> None:
     assert openeo.create_triggered_job.call_args.kwargs == {
         "source_event_id": "native-job:0",
         "trigger_id": "chap-after-chirps",
+        "max_attempts": 3,  # the trigger default
     }
     openeo.start_triggered_job.assert_called_once_with("triggered-job")
 
