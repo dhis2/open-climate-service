@@ -27,7 +27,7 @@ override-dependencies = [
 
 [project]
 name = "open-climate-service"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.12"
 description = "Climate and Earth Observation data API"
 license = "BSD-3-Clause"
