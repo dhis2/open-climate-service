@@ -96,6 +96,12 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     from open_climate_service.plugins_diagnostics import log_plugin_loading
 
     log_plugin_loading()
+    # Every configured export is resolved here, so an export whose period cannot be produced
+    # from its dataset, or that lacks the temporal_aggregation it needs, refuses startup with
+    # the same message a job would fail with later (CLIM-1302).
+    from open_climate_service.exports.service import validate_configured_exports
+
+    validate_configured_exports()
     maintenance: asyncio.Task[None] | None = None
     if not api_config.is_read_only():
         # Before any job is recovered, so no pyramid rebuild can be in progress. A read-only
