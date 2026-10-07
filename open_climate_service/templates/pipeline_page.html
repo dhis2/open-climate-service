@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/pipelines">Pipelines</a> / {{ spec.id }}</p>
+        <div class="page-title">
+          <h2 tabindex="-1">{{ title }}</h2>
+          <span class="chip">{{ spec.delivery.mode | replace('_', ' ') }}</span>
+          {% if validation %}<span class="chip {{ 'chip-published' if validation.valid else 'chip-unpublished' }}">{{ 'valid' if validation.valid else 'invalid' }}</span>{% endif %}
+          {% if dry_run %}<span class="chip {{ 'chip-published' if dry_run_passed else 'chip-unpublished' }}">dry run {{ 'passed' if dry_run_passed else 'failed' }}</span>{% endif %}
+          {% if not read_only %}<a class="button-link" href="{{ mount }}/pipelines/{{ spec.id }}/edit">Edit</a>{% endif %}
+        </div>
+
+        <ol class="pipeline-flow" aria-label="Pipeline flow">
+          <li><span class="flow-label">Source</span><strong>{{ spec.source.dataset }}</strong></li>
+          <li><span class="flow-label">Aggregate</span><strong>{{ spec.aggregation.spatial.reducer }} by area</strong></li>
+          <li><span class="flow-label">Map</span><strong>{{ spec.destination.organisation_units.feature_collection }}</strong></li>
+          <li><span class="flow-label">Deliver</span><strong>{{ spec.destination.connection }}</strong></li>
+        </ol>
+
+        <div class="stack pipeline-detail">
+          <section class="panel" aria-labelledby="about-title">
+            <h3 id="about-title">Pipeline</h3>
+            <dl class="facts">
+              <dt>Dataset</dt><dd><a href="{{ mount }}/datasets/{{ spec.source.dataset }}">{{ spec.source.dataset }}</a></dd>
+              <dt>Source kept current</dt><dd>{{ source_schedule }}</dd>
+              <dt>Delivers</dt><dd>{{ {'on_update': 'after each dataset update', 'manual': 'only when run or delivered by hand', 'scheduled': 'at ' ~ (spec.delivery.release_cron or '?') ~ ' (not applied yet; behaves as manual)'}[spec.delivery.policy] }}</dd>
+              <dt>Organisation units</dt><dd><a href="{{ mount }}/features/{{ spec.destination.organisation_units.feature_collection }}">{{ spec.destination.organisation_units.feature_collection }}</a></dd>
+              <dt>Spatial reducer</dt><dd>{{ spec.aggregation.spatial.reducer }}</dd>
+              <dt>Export period</dt><dd>{{ period_type or 'the dataset cadence (validate to resolve)' }}</dd>
+              <dt>DHIS2 connection</dt><dd>{{ spec.destination.connection }}</dd>
+              <dt>DHIS2 data set</dt><dd class="mono">{{ spec.destination.data_set or 'not declared' }}</dd>
+              <dt>Values</dt><dd>{{ 'only the updated interval' if spec.delivery.range == 'updated' else 'complete history on every update' }}</dd>
+              {% for s in spec.destination.series %}
+              <dt>Data element</dt><dd class="mono">{{ s.data_element }}{% if s.variable %} ← {{ s.variable }}{% endif %}</dd>
+              {% endfor %}
+              <dt>Created</dt><dd>{{ created_at }}</dd>
+            </dl>
+          </section>
+
+          <section class="panel" id="validation" aria-labelledby="validation-title">
+            <h3 id="validation-title">Validation</h3>
+            <p class="note">Checked when the pipeline was saved. The dataset, the collection, the connection and DHIS2's own metadata can all move afterwards, so re-check before relying on an old result.</p>
+            {% if validation %}
+            <ul class="plain-list validation-list">
+              {% for c in validation.checks %}
+              <li class="validation-check validation-{{ c.status }}"><span class="chip {{ 'chip-published' if c.status == 'pass' else ('chip-unpublished' if c.status == 'fail' else '') }}">{{ c.status }}</span><span><strong class="mono">{{ c.id }}</strong><small>{{ c.message }}</small></span></li>
+              {% endfor %}
+            </ul>
+            <p class="note">Checked {{ validation.checked_at }}.</p>
+            {% endif %}
+            {% if not read_only %}
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/validate" class="form-actions">
+              <button type="submit">Re-check</button>
+            </form>
+            {% endif %}
+          </section>
+
+          <section class="panel" id="dry-run" aria-labelledby="dry-run-title">
+            <h3 id="dry-run-title">Dry run</h3>
+            <p class="note">Aggregates the range below over the organisation units and submits it to DHIS2 with <span class="mono">dryRun=true</span>: DHIS2 validates every value and stores nothing.</p>
+            {% if dry_run %}
+            {% if dry_run.error %}
+            <div class="notice error" role="alert">{{ dry_run.error }}</div>
+            {% else %}
+            <div class="result-stats">
+              <div><strong>{{ dry_run.values }}</strong><span>values</span></div>
+              <div><strong>{{ dry_run.org_units }}</strong><span>organisation units</span></div>
+              <div><strong>{{ dry_run.periods | length }}</strong><span>periods</span></div>
+              <div><strong>{{ dry_run.report.conflicts | length }}</strong><span>conflicts</span></div>
+            </div>
+            <dl class="facts dry-run-facts">
+              <dt>Range</dt><dd>{{ dry_run.start }} to {{ dry_run.end }}</dd>
+              <dt>DHIS2 outcome</dt><dd>{{ dry_run.report.outcome }}{% if dry_run.report.message %} — {{ dry_run.report.message }}{% endif %}</dd>
+              <dt>Counts</dt><dd>submitted {{ dry_run.report.submitted }}, would import {{ dry_run.report.imported }}, would update {{ dry_run.report.updated }}, ignored {{ dry_run.report.ignored }}</dd>
+            </dl>
+            {% if dry_run.report.conflicts %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Object</th><th>Value</th></tr></thead>
+                <tbody>{% for c in dry_run.report.conflicts %}<tr><td class="mono">{{ c.object }}</td><td>{{ c.value }}</td></tr>{% endfor %}</tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% if dry_run.sample %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>dataElement</th><th>orgUnit</th><th>period</th><th>value</th></tr></thead>
+                <tbody>{% for v in dry_run.sample %}<tr><td class="mono">{{ v.dataElement }}</td><td class="mono">{{ v.orgUnit }}</td><td>{{ v.period }}</td><td>{{ v.value }}</td></tr>{% endfor %}</tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% endif %}
+            <p class="note">Ran {{ dry_run.ran_at }}.</p>
+            {% endif %}
+            {% if not read_only %}
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/dry-run" class="form-grid">
+              <div class="field">
+                <label for="dr-start">Start</label>
+                <input type="text" id="dr-start" name="start" required value="{{ range_start }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="field">
+                <label for="dr-end">End</label>
+                <input type="text" id="dr-end" name="end" required value="{{ range_end }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="primary">Run dry run</button>
+                <span class="note">Runs synchronously; a long range takes a while.</span>
+              </div>
+            </form>
+            {% endif %}
+          </section>
+
+          <section class="panel" id="runs" aria-labelledby="runs-title">
+            <h3 id="runs-title">Run once</h3>
+            <p class="note">Submits the aggregation over the range as a batch job through this pipeline's export, then delivers it when the job finishes: as a dry run, or live after a dry run has passed. A live run writes values into DHIS2.</p>
+            {% if runs %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Submitted</th><th>Range</th><th>Mode</th><th>Job</th><th>Delivery</th></tr></thead>
+                <tbody>
+                  {% for r in runs %}
+                  <tr>
+                    <td>{{ r.submitted_at }}</td>
+                    <td>{{ r.start }} to {{ r.end }}</td>
+                    <td><span class="chip">{{ r.mode | replace('_', ' ') }}</span></td>
+                    <td><a href="{{ mount }}/jobs/{{ r.job_id }}">{{ r.job_id[:8] }}</a> <span class="chip">{{ r.job_status }}</span></td>
+                    <td>
+                      {% if r.delivery_job_id %}<a href="{{ mount }}{{ r.delivery_status_url }}">{{ r.delivery_status }}</a>{% if r.delivery_outcome %} <span class="chip {{ 'chip-published' if r.delivery_outcome in ['success', 'dry_run'] else 'chip-unpublished' }}">{{ r.delivery_outcome }}</span>{% if r.delivery_submitted is not none %} {{ r.delivery_submitted }} values, {{ r.delivery_conflicts }} conflicts{% endif %}{% endif %}
+                      {% elif r.error %}<span class="notice error">{{ r.error }}</span>
+                      {% elif r.job_status == 'finished' and not read_only %}<form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs/{{ r.job_id }}/deliver" class="form-actions"><button type="submit">Deliver</button></form>
+                      {% else %}<span class="note">after the job finishes</span>{% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% if not read_only %}
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs" class="form-grid">
+              <div class="field">
+                <label for="run-start">Start</label>
+                <input type="text" id="run-start" name="start" required value="{{ range_start }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="field">
+                <label for="run-end">End</label>
+                <input type="text" id="run-end" name="end" required value="{{ range_end }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="field">
+                <label for="run-mode">Delivery</label>
+                <select id="run-mode" name="mode">
+                  <option value="dry_run">Dry run</option>
+                  <option value="live" {% if not dry_run_passed %}disabled{% endif %}>Live{% if not dry_run_passed %} (needs a passed dry run){% endif %}</option>
+                </select>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="primary">Run once</button>
+                <span class="note">Runs in the background; this page shows the job and its delivery.</span>
+              </div>
+            </form>
+            {% endif %}
+          </section>
+
+          <section class="panel" id="config" aria-labelledby="config-title">
+            <h3 id="config-title">Generated configuration</h3>
+            <div class="notice config-notice">This is a preview for <span class="mono">climate-service.yaml</span>. Unattended delivery still requires merging these sections and restarting OCS.</div>
+            <p class="note">The fragment holds the named export and, for a pipeline that delivers after each update, the trigger that runs it. The dataset's own sync schedule is managed with the instance's schedules, not here.</p>
+            {% if not read_only %}
+            <div class="form-actions">
+              {% if spec.delivery.mode == 'dry_run' %}
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/live"><button type="submit" {% if not dry_run_passed %}disabled title="Needs a passed dry run"{% endif %}>Go live</button></form>
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/paused"><button type="submit">Pause</button></form>
+              {% elif spec.delivery.mode == 'live' %}
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/dry_run"><button type="submit">Back to dry run</button></form>
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/paused"><button type="submit">Pause</button></form>
+              {% else %}
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/dry_run"><button type="submit">Resume as dry run</button></form>
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/live"><button type="submit" {% if not dry_run_passed %}disabled title="Needs a passed dry run"{% endif %}>Resume live</button></form>
+              {% endif %}
+              <span class="note">Changes the stored mode and this preview only. Paused keeps the dataset current and sends nothing; Run once still works.</span>
+            </div>
+            {% endif %}
+            <pre class="config-code"><code>{{ compiled }}</code></pre>
+          </section>
+
+          {% if not read_only %}
+          <section class="panel" id="delete" aria-labelledby="delete-title">
+            <h3 id="delete-title">Delete</h3>
+            <p class="note">Removes this pipeline and its history from OCS. Anything already merged into <span class="mono">climate-service.yaml</span> stays until an operator removes it.</p>
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/delete" class="form-actions">
+              <label><input type="checkbox" name="confirm" value="yes" required /> I understand</label>
+              <button type="submit">Delete pipeline</button>
+            </form>
+          </section>
+          {% endif %}
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

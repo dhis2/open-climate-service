@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pipelines · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <div class="page-title">
+          <h2 id="pipelines-title" tabindex="-1">Pipelines</h2>
+          <span class="chip">{{ pipelines | length }} configured</span>
+        </div>
+        <p class="lead">Connect a managed climate dataset to DHIS2, validate every binding, then test the delivery before enabling it.</p>
+
+        <nav class="page-tabs" aria-label="Pipeline views">
+          <a href="{{ mount }}/pipelines" {% if tab == 'list' %}aria-current="page"{% endif %}>Configured pipelines</a>
+          <a href="{{ mount }}/pipelines/new" {% if tab == 'create' and not editing %}aria-current="page"{% endif %}>Create pipeline</a>
+          {% if editing %}<a href="{{ mount }}/pipelines/{{ editing }}/edit" aria-current="page">Edit {{ editing }}</a>{% endif %}
+        </nav>
+
+        {% if tab == 'list' %}
+        {% if pipelines %}
+        <div class="panel table-wrap pipeline-table">
+          <table>
+            <thead>
+              <tr><th>Pipeline</th><th>Dataset</th><th>Organisation units</th><th>Data element</th><th>Validation</th><th>Dry run</th></tr>
+            </thead>
+            <tbody>
+              {% for p in pipelines %}
+              <tr>
+                <td><a href="{{ mount }}/pipelines/{{ p.id }}">{{ p.title }}</a></td>
+                <td>{{ p.dataset }}</td>
+                <td>{{ p.collection }}</td>
+                <td class="mono">{{ p.element }}</td>
+                <td>{% if p.validation %}<span class="chip {{ 'chip-published' if p.validation == 'valid' else 'chip-unpublished' }}">{{ p.validation }}</span>{% else %}<span class="note">not yet</span>{% endif %}</td>
+                <td>{% if p.dry_run %}<span class="chip {{ 'chip-published' if p.dry_run == 'passed' else 'chip-unpublished' }}">{{ p.dry_run }}</span>{% else %}<span class="note">not yet</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="panel empty-state">
+          <h3>No pipelines yet</h3>
+          <p class="note">Create the first dataset-to-DHIS2 delivery when its source and destination are ready.</p>
+          <a class="button-link primary empty-state-action" href="{{ mount }}/pipelines/new">Create pipeline</a>
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {% if tab == 'create' %}
+        <section class="panel pipeline-create" aria-labelledby="create-title">
+          <h3 id="create-title">{% if editing %}Edit pipeline{% else %}New pipeline{% endif %}</h3>
+          <p class="note">Saving validates every binding, in OCS and in DHIS2, and refuses the pipeline when a check fails. A saved pipeline schedules nothing and sends nothing until it is dry-run and activated.</p>
+          {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+          {% if checks %}
+          <ul class="plain-list validation-list">
+            {% for c in checks.checks if c.status != 'pass' %}
+            <li class="validation-check validation-{{ c.status }}"><span class="chip {{ 'chip-unpublished' if c.status == 'fail' else '' }}">{{ c.status }}</span><span><strong class="mono">{{ c.id }}</strong><small>{{ c.message }}</small></span></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if not datasets %}
+          <p class="note">No published dataset has a cadence DHIS2 can take as is (daily, weekly, monthly or yearly). Ingest one first.</p>
+          {% endif %}
+          <form method="post" action="{{ mount }}/pipelines{% if editing %}/{{ editing }}{% endif %}" class="pipeline-form">
+            <fieldset class="form-section">
+              <legend><span>1</span> Identify the pipeline</legend>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="p-id">Id</label>
+                  <input type="text" id="p-id" name="id" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*" value="{{ draft.id or editing or '' }}" {% if editing %}readonly{% endif %} />
+                  <span class="hint">Letters, digits, dots, underscores or hyphens. Becomes the export and trigger id.</span>
+                </div>
+                <div class="field">
+                  <label for="p-name">Name</label>
+                  <input type="text" id="p-name" name="name" value="{{ draft.name or '' }}" />
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend><span>2</span> Choose source and transformation</legend>
+              <div class="form-grid">
+                <div class="field field-wide">
+                  <label for="p-dataset">Dataset</label>
+                  <select id="p-dataset" name="dataset" required>
+                    {% for d in datasets %}
+                    <option value="{{ d.id }}" {% if draft.source and draft.source.dataset == d.id %}selected{% endif %}>{{ d.name }} ({{ d.cadence }}, {{ d.coverage.start }} to {{ d.coverage.end }})</option>
+                    {% endfor %}
+                  </select>
+                  <span class="hint">Its cadence becomes the DHIS2 period. Temporal resampling belongs in the source workflow.</span>
+                </div>
+                <div class="field field-wide">
+                  <label for="p-collection">Organisation units</label>
+                  <select id="p-collection" name="feature_collection" required>
+                    {% for c in collections %}
+                    <option value="{{ c.id }}" {% if draft.destination and draft.destination.organisation_units.feature_collection == c.id %}selected{% endif %}>{{ c.name }} ({{ c.feature_count }} polygons{% if c.level %}, level {{ c.level }}{% endif %}{% if c.connection %}, {{ c.connection }}{% endif %})</option>
+                    {% endfor %}
+                  </select>
+                  <span class="hint">Its feature ids become the DHIS2 organisation unit ids.</span>
+                </div>
+                <div class="field">
+                  <label for="p-reducer">Spatial reducer</label>
+                  <select id="p-reducer" name="reducer">
+                    {% for r in reducers %}<option value="{{ r }}" {% if draft.aggregation and draft.aggregation.spatial.reducer == r %}selected{% endif %}>{{ r }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="p-variable">Variable</label>
+                  <input type="text" id="p-variable" name="variable" placeholder="Dataset's default variable" value="{{ draft.destination.series[0].variable or '' if draft.destination and draft.destination.series else '' }}" />
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend><span>3</span> Map the DHIS2 destination</legend>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="p-connection">DHIS2 connection</label>
+                  <select id="p-connection" name="connection" required>
+                    {% for c in connections %}<option value="{{ c }}" {% if draft.destination and draft.destination.connection == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="p-data-set">DHIS2 data set</label>
+                  <input type="text" id="p-data-set" name="data_set" placeholder="UID, optional" value="{{ draft.destination.data_set or '' if draft.destination else '' }}" />
+                  <span class="hint">Used to check period type and organisation unit assignment.</span>
+                </div>
+                <div class="field">
+                  <label for="p-data-element">DHIS2 data element</label>
+                  <input type="text" id="p-data-element" name="data_element" required placeholder="UID" value="{{ draft.destination.series[0].data_element if draft.destination and draft.destination.series else '' }}" />
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend><span>4</span> Decide when values go out</legend>
+              <p class="hint">The pipeline never fetches data. Keeping the dataset current is its sync schedule, managed with the instance's schedules; the pipeline reacts to updates.</p>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="p-policy">Deliver</label>
+                  <select id="p-policy" name="policy">
+                    <option value="on_update" {% if not draft.delivery or draft.delivery.policy in [none, 'on_update'] %}selected{% endif %}>After each dataset update</option>
+                    <option value="manual" {% if draft.delivery and draft.delivery.policy == 'manual' %}selected{% endif %}>Only when run or delivered by hand</option>
+                    <option value="scheduled" {% if draft.delivery and draft.delivery.policy == 'scheduled' %}selected{% endif %}>At a release time (accepted, not applied yet)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="p-release">Release time</label>
+                  <input type="text" id="p-release" name="release_cron" placeholder="0 2 5 * *" value="{{ draft.delivery.release_cron or '' if draft.delivery else '' }}" />
+                  <span class="hint">Five-field cron, only for a scheduled release.</span>
+                </div>
+                <div class="field">
+                  <label for="p-range">Values</label>
+                  <select id="p-range" name="range">
+                    <option value="updated" {% if not draft.delivery or draft.delivery.range != 'all' %}selected{% endif %}>Only the updated interval</option>
+                    <option value="all" {% if draft.delivery and draft.delivery.range == 'all' %}selected{% endif %}>Complete history on every update</option>
+                  </select>
+                </div>
+              </div>
+            </fieldset>
+            {% if editing %}<input type="hidden" name="mode" value="{{ draft.delivery.mode if draft.delivery else 'dry_run' }}" />{% endif %}
+            <div class="form-actions">
+              <button type="submit" class="primary">Save</button>
+              <span class="note">{% if editing %}A change to the bindings clears the last dry run.{% else %}The new pipeline starts in safe, dry-run mode.{% endif %}</span>
+              {% if editing %}<a class="button-link" href="{{ mount }}/pipelines/{{ editing }}">Cancel</a>{% endif %}
+            </div>
+          </form>
+        </section>
+        {% endif %}
+      </main>
+    </div>
+  </body>
+</html>

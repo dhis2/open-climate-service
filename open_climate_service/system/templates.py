@@ -138,6 +138,7 @@ _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
     ("workflows", "Workflows", "/workflows"),
+    ("pipelines", "Pipelines", "/pipelines"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -1298,6 +1299,7 @@ _API_GROUP_NOTES = {
     "Extent": "The area this instance covers.",
     "Schedules": "Scheduled dataset refreshes, as configured for this instance.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
+    "Pipelines": "A dataset aggregated to organisation units and delivered to DHIS2: save, dry-run, run, pause.",
     "System": "Health, version and the landing page's JSON form.",
 }
 
@@ -1772,3 +1774,105 @@ def render_landing(version: str, mount: str) -> str:
         # Shown on the overview, so a visitor knows why no page offers ingest or sync.
         read_only=api_config.is_read_only(),
     )
+
+
+# --- pipelines ------------------------------------------------------------------------------
+
+
+def render_pipelines_page(
+    records: list[Any],
+    choices: dict[str, Any],
+    mount: str,
+    *,
+    tab: str = "list",
+    error: str | None = None,
+    checks: Any = None,
+    draft: dict[str, Any] | None = None,
+    editing: str | None = None,
+) -> str:
+    """Render the pipeline listing, the creation tab, or the same tab prefilled for editing."""
+    from open_climate_service.pipelines.schemas import SPATIAL_REDUCERS
+
+    rows = []
+    for record in records:
+        spec = record.spec
+        rows.append(
+            {
+                "id": spec.id,
+                "title": spec.name or spec.id,
+                "dataset": spec.source.dataset,
+                "collection": spec.destination.organisation_units.feature_collection,
+                "element": ", ".join(series.data_element for series in spec.destination.series),
+                "validation": (("valid" if record.validation.valid else "invalid") if record.validation else None),
+                "dry_run": (("passed" if record.dry_run.passed else "failed") if record.dry_run else None),
+            }
+        )
+    return get_template("pipelines_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "pipelines"),
+        tab=tab,
+        pipelines=rows,
+        datasets=choices.get("datasets", []),
+        collections=choices.get("collections", []),
+        connections=choices.get("connections", []),
+        reducers=SPATIAL_REDUCERS,
+        error=error,
+        checks=checks,
+        draft=draft or {},
+        editing=editing,
+    )
+
+
+def render_pipeline_page(record: Any, compiled: str, runs: list[dict[str, Any]], mount: str) -> str:
+    """Render one pipeline: its bindings, validation, dry run, runs and generated configuration."""
+    spec = record.spec
+    period_type = record.validation.period_type if record.validation else None
+    dataset = next((d for d in _load_datasets() if d.dataset_id == spec.source.dataset), None)
+    coverage = dataset.extent.temporal if dataset is not None else None
+    range_start = _iso_day(coverage.start, first=True) if coverage and coverage.start else ""
+    range_end = _iso_day(coverage.end, first=False) if coverage and coverage.end else ""
+    return get_template("pipeline_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "pipelines"),
+        title=spec.name or spec.id,
+        spec=spec,
+        created_at=record.created_at,
+        validation=record.validation,
+        dry_run=record.dry_run,
+        dry_run_passed=bool(record.dry_run and record.dry_run.passed),
+        source_schedule=next(
+            (c.message for c in (record.validation.checks if record.validation else []) if c.id == "schedule"),
+            "not checked yet",
+        ),
+        runs=runs,
+        period_type=period_type,
+        compiled=compiled,
+        range_start=range_start,
+        range_end=range_end,
+        read_only=api_config.is_read_only(),
+    )
+
+
+def _iso_day(period: str, *, first: bool) -> str:
+    """A coverage boundary as a date: the first or last day of a month or year, or the day itself."""
+    import calendar
+
+    parts = period.split("-")
+    if len(parts) == 1 and parts[0].isdigit():
+        return f"{parts[0]}-01-01" if first else f"{parts[0]}-12-31"
+    if len(parts) == 2:
+        year, month = int(parts[0]), int(parts[1])
+        return (
+            f"{year:04d}-{month:02d}-01"
+            if first
+            else f"{year:04d}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}"
+        )
+    return period

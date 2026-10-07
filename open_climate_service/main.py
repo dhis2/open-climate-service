@@ -21,6 +21,7 @@ from open_climate_service.ingestions import routes as ingestion_routes
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.openeo import routes as openeo_routes
 from open_climate_service.openeo.jobs import get_openeo_job_service
+from open_climate_service.pipelines import routes as pipeline_routes
 from open_climate_service.read_only import read_only_middleware
 from open_climate_service.scheduler import routes as scheduler_routes
 from open_climate_service.scheduler.service import get_scheduler_service
@@ -131,7 +132,14 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # finishing during reconciliation is caught by one or the other; the deterministic
     # delivery key makes being caught by both harmless.
     openeo_service.set_delivery_due_provider(automation_service.delivery_due_for)
-    openeo_service.set_finished_listener(automation_service.on_job_finished)
+    from open_climate_service.openeo.schemas import OpenEOJobRecord
+    from open_climate_service.pipelines.service import on_job_finished as pipeline_job_finished
+
+    def _job_finished(record: OpenEOJobRecord) -> None:
+        automation_service.on_job_finished(record)
+        pipeline_job_finished(record)
+
+    openeo_service.set_finished_listener(_job_finished)
     openeo_service.recover_pending_jobs()
     try:
         automation_service.reconcile_deliveries()
@@ -270,6 +278,7 @@ def create_app() -> FastAPI:
     _app.include_router(scheduler_routes.router, prefix="/schedules", tags=["Schedules"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
     _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])
+    _app.include_router(pipeline_routes.router, prefix="/pipelines", tags=["Pipelines"])
 
     return _app
 
