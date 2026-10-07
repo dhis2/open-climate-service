@@ -116,6 +116,11 @@ straddle months, quarters and years. Calendar-quarter destinations are refused f
 tile arithmetically, but the standard process has no calendar-quarter period with which to
 produce and record them. Nothing can be made finer than it is stored.
 
+`aggregate_dekads(period="week")` is a separate, day-overlap-weighted transformation rather
+than a tiling aggregation. Its weekly result can be exported ad hoc, or published as a derived
+weekly dataset and then used by a named export. A named weekly export declared directly against
+the original dekadal dataset is still refused at startup.
+
 ```yaml
 exports:
   - id: rainfall-monthly
