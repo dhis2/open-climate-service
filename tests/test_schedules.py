@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from open_climate_service import config as api_config
@@ -59,6 +61,15 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         ingestion_services, "list_datasets", lambda: SimpleNamespace(items=[_dataset("chirps"), _dataset("era5")])
     )
+
+    def no_managed_dataset(dataset_id: str) -> None:
+        raise HTTPException(status_code=404, detail=dataset_id)
+
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_latest_artifact_for_dataset_or_404",
+        no_managed_dataset,
+    )
     monkeypatch.setattr(scheduler_service, "_service", None)
 
 
@@ -98,6 +109,18 @@ def test_store_refuses_an_unreadable_file(instance: None) -> None:
     path.write_text('{"chirps": {"dataset_id": "era5", "cron": "0 6 * * *"}}', encoding="utf-8")
     with pytest.raises(ScheduleStoreUnreadable, match="names dataset"):
         store.get_schedule("chirps")
+
+
+def test_store_stamp_detects_equal_size_replacement_with_unchanged_mtime(instance: None) -> None:
+    path = store.schedules_path()
+    path.parent.mkdir(parents=True)
+    path.write_text("a", encoding="utf-8")
+    first = store.store_stamp()
+    mtime_ns = path.stat().st_mtime_ns
+    path.write_text("b", encoding="utf-8")
+    os.utime(path, ns=(mtime_ns, mtime_ns))
+    assert path.stat().st_size == 1 and path.stat().st_mtime_ns == mtime_ns
+    assert store.store_stamp() != first
 
 
 # --- merge ---------------------------------------------------------------------------------------
@@ -406,6 +429,34 @@ def test_api_refuses_what_the_clock_could_not_run(client: TestClient, monkeypatc
     assert [(item["dataset_id"], item["source"]) for item in listed] == [("chirps", "file")]
 
 
+def test_managed_schedule_uses_its_source_template(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import open_climate_service.ingestions.services as ingestion_services
+
+    managed = _dataset("managed-era5")
+    managed.source_dataset_id = "era5"
+    monkeypatch.setattr(ingestion_services, "list_datasets", lambda: SimpleNamespace(items=[managed]))
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_latest_artifact_for_dataset_or_404",
+        lambda dataset_id: SimpleNamespace(dataset_id=dataset_id, source_dataset_id="era5"),
+    )
+    form = client.get("/schedules/new", headers={"Accept": BROWSER})
+    assert '<option value="managed-era5"' in form.text
+    created = client.post("/schedules", json={"dataset_id": "managed-era5", "cron": "0 6 * * *"})
+    assert created.status_code == 201, created.text
+    assert (
+        scheduler_service.get_scheduler_service()
+        ._plan(
+            SchedulerConfig(enabled=True),
+            merge_schedules(SchedulerConfig(enabled=True), [_stored("managed-era5")]),
+        )
+        .refused
+        == {}
+    )
+    updated = client.put("/schedules/managed-era5", json={"cron": "0 7 * * *"})
+    assert updated.status_code == 200, updated.text
+
+
 def test_a_shadowed_stored_schedule_stays_editable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         api_config,
@@ -458,7 +509,7 @@ def test_page_lists_adds_edits_and_deletes(client: TestClient) -> None:
 
     created = client.post(
         "/schedules",
-        data={"dataset_id": "era5", "cron": "0 6 * * *", "publish": "on", "max_attempts": "2"},
+        data={"dataset_id": "era5", "cron": "0 6 * * *", "publish": "on", "enabled": "on", "max_attempts": "2"},
         follow_redirects=False,
     )
     assert created.status_code == 303 and created.headers["location"].endswith("/schedules")
@@ -478,11 +529,19 @@ def test_page_lists_adds_edits_and_deletes(client: TestClient) -> None:
     saved = client.post("/schedules/era5", data={"cron": "0 7 * * *", "max_attempts": "3"}, follow_redirects=False)
     assert saved.status_code == 303 and store.get_schedule("era5").cron == "0 7 * * *"  # type: ignore[union-attr]
     assert store.get_schedule("era5").publish is False  # type: ignore[union-attr]
+    assert store.get_schedule("era5").enabled is False  # type: ignore[union-attr]
 
     unconfirmed = client.post("/schedules/era5/delete", data={}, follow_redirects=False)
     assert unconfirmed.status_code == 400 and store.get_schedule("era5") is not None
     confirmed = client.post("/schedules/era5/delete", data={"confirm": "yes"}, follow_redirects=False)
     assert confirmed.status_code == 303 and store.get_schedule("era5") is None
+
+
+def test_form_can_create_a_paused_schedule(client: TestClient) -> None:
+    created = client.post("/schedules", data={"dataset_id": "era5", "cron": "0 6 * * *"}, follow_redirects=False)
+    assert created.status_code == 303
+    saved = store.get_schedule("era5")
+    assert saved is not None and saved.enabled is False
 
 
 def test_page_shows_file_entries_read_only_and_shadowing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -512,6 +571,22 @@ def test_dataset_page_names_the_schedule_or_offers_one(instance: None) -> None:
     store.set_enabled("era5", False)
     scheduler_service.get_scheduler_service().reload()
     assert "paused" in landing.render_dataset_page(_record("era5"), "/ocs")
+
+
+def test_dataset_page_names_shadowed_stored_schedule(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.system import templates as landing
+    from tests.test_dataset_page import _record
+
+    monkeypatch.setattr(
+        api_config,
+        "_cache",
+        {"scheduler": {"enabled": False, "dataset_sync": [{"dataset_id": "era5", "cron": "0 5 * * *"}]}},
+    )
+    monkeypatch.setattr(scheduler_service, "_service", None)
+    store.save_schedule(_stored("era5", cron="0 9 * * *"), create=True)
+    html = landing.render_dataset_page(_record("era5"), "/ocs")
+    assert "0 5 * * *" in html and "overridden" in html
+    assert "0 9 * * *" not in html
 
 
 def test_stored_schedule_timestamps_are_timezone_aware(instance: None) -> None:

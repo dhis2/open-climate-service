@@ -12,6 +12,7 @@ from typing import Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from fastapi import HTTPException
 
 from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
@@ -51,6 +52,22 @@ def validate_schedule_target(template: dict[str, Any] | None, dataset_id: str) -
         raise ValueError(f"Scheduled dataset {dataset_id!r} is not syncable")
 
 
+def resolve_schedule_template(
+    dataset_id: str, template_loader: Callable[[str], dict[str, Any] | None] | None = None
+) -> dict[str, Any] | None:
+    """Resolve a managed dataset to its source template, with a direct-template fallback."""
+    from open_climate_service.ingestions.services import get_latest_artifact_for_dataset_or_404
+
+    load_template = template_loader or registry_datasets.get_dataset
+    try:
+        latest = get_latest_artifact_for_dataset_or_404(dataset_id)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return load_template(dataset_id)
+    return load_template(latest.source_dataset_id or latest.dataset_id)
+
+
 @dataclass(frozen=True)
 class _Plan:
     """What a load resolved to, before anything is touched.
@@ -64,7 +81,7 @@ class _Plan:
     effective: list[EffectiveSchedule]
     runnable: list[tuple[EffectiveSchedule, CronTrigger]]
     refused: dict[str, CheckResult]
-    stamp: tuple[int, int] | None = None
+    stamp: str | None = None
 
 
 class SchedulerService:
@@ -83,7 +100,7 @@ class SchedulerService:
         store_loader: Callable[[], list[StoredSchedule]] = list_schedules,
         dispatcher: Callable[[DatasetSyncSchedule], CheckResult] = enqueue_sync,
         template_loader: Callable[[str], dict[str, Any] | None] | None = None,
-        stamp_loader: Callable[[], tuple[int, int] | None] = store_stamp,
+        stamp_loader: Callable[[], str | None] = store_stamp,
     ) -> None:
         self._config_loader = config_loader
         self._store_loader = store_loader
@@ -95,7 +112,7 @@ class SchedulerService:
         self._config: SchedulerConfig | None = None
         self._effective: list[EffectiveSchedule] = []
         self._runnable: list[tuple[EffectiveSchedule, CronTrigger]] = []
-        self._stamp: tuple[int, int] | None = None
+        self._stamp: str | None = None
         self._last_results: dict[str, CheckResult] = {}
         self._reload_error: str | None = None
         self._lock = threading.Lock()
@@ -104,7 +121,6 @@ class SchedulerService:
 
     def _plan(self, config: SchedulerConfig, effective: list[EffectiveSchedule]) -> _Plan:
         """Resolve every effective entry's target and trigger without touching the clock."""
-        load_template = self._template_loader or registry_datasets.get_dataset
         runnable: list[tuple[EffectiveSchedule, CronTrigger]] = []
         refused: dict[str, CheckResult] = {}
         for entry in effective:
@@ -112,7 +128,9 @@ class SchedulerService:
                 continue
             schedule = entry.schedule
             try:
-                validate_schedule_target(load_template(schedule.dataset_id), schedule.dataset_id)
+                validate_schedule_target(
+                    resolve_schedule_template(schedule.dataset_id, self._template_loader), schedule.dataset_id
+                )
                 trigger = CronTrigger.from_crontab(schedule.cron, timezone=config.timezone_info)
             except ValueError as exc:
                 refused[entry.schedule_id] = CheckResult(

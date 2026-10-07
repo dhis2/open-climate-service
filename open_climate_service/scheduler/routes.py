@@ -14,10 +14,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import ValidationError
 
 from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.scheduler import store
 from open_climate_service.scheduler.schemas import ScheduleListResponse, ScheduleStatus
-from open_climate_service.scheduler.service import get_scheduler_service, validate_schedule_target
+from open_climate_service.scheduler.service import (
+    get_scheduler_service,
+    resolve_schedule_template,
+    validate_schedule_target,
+)
 from open_climate_service.scheduler.store import StoredSchedule
 from open_climate_service.shared.urls import mount_prefix
 from open_climate_service.system.templates import wants_json
@@ -91,7 +94,7 @@ async def _body(request: Request) -> dict[str, Any]:
         "dataset_id": field.get("dataset_id", ""),
         "cron": field.get("cron", ""),
         "publish": field.get("publish", "").lower() in _TRUE,
-        "enabled": field.get("enabled", "on").lower() in _TRUE,
+        "enabled": field.get("enabled", "").lower() in _TRUE,
     }
     if field.get("max_attempts"):
         body["max_attempts"] = field["max_attempts"]
@@ -131,7 +134,7 @@ def schedule_choices() -> list[dict[str, Any]]:
     for item in list_datasets().items:
         if item.item_type != "coverage":
             continue
-        template = registry_datasets.get_dataset(item.source_dataset_id or item.dataset_id)
+        template = resolve_schedule_template(item.dataset_id)
         try:
             validate_schedule_target(template, item.dataset_id)
         except ValueError:
@@ -166,7 +169,7 @@ def _check_target(schedule: StoredSchedule, request: Request, *, editing: str | 
     """
     dataset_id = schedule.dataset_id
     try:
-        validate_schedule_target(registry_datasets.get_dataset(dataset_id), dataset_id)
+        validate_schedule_target(resolve_schedule_template(dataset_id), dataset_id)
     except ValueError as exc:
         if _json_request(request):
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from hashlib import blake2b
 from pathlib import Path
 from typing import Any
 
@@ -47,17 +48,16 @@ def schedules_path() -> Path:
     return api_config.get_data_root() / "schedules.json"
 
 
-def store_stamp() -> tuple[int, int] | None:
-    """What the clock owner watches: the file's modification time and size, or None when absent.
+def store_stamp() -> str | None:
+    """A content token for the shared store, or None when the file is absent.
 
-    Every write replaces the file atomically, so a change made by any process on the shared
-    data directory moves the stamp; the process that owns the clock reloads when it does.
+    Comparing bytes detects equal-size replacements even on filesystems with coarse timestamps.
     """
     try:
-        stat = schedules_path().stat()
+        contents = schedules_path().read_bytes()
     except FileNotFoundError:
         return None
-    return (stat.st_mtime_ns, stat.st_size)
+    return blake2b(contents, digest_size=16).hexdigest()
 
 
 def _read_raw(path: Path) -> dict[str, Any]:

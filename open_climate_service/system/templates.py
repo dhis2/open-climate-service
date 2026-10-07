@@ -448,16 +448,22 @@ def render_dataset_page(record: Any, mount: str) -> str:
         _log.exception("Unexpected error loading the template for dataset '%s'", record.dataset_id)
         template = None
     schedule: dict[str, Any] | None = None
+    has_shadowed_schedule = False
     if record.item_type != "feature":
         try:
             from open_climate_service.scheduler.service import get_scheduler_service
 
-            found = get_scheduler_service().schedule_for(record.dataset_id)
+            scheduler = get_scheduler_service()
+            found = scheduler.schedule_for(record.dataset_id)
             schedule = found.model_dump(mode="json") if found is not None else None
+            has_shadowed_schedule = any(
+                row.dataset_id == record.dataset_id and row.shadowed for row in scheduler.status().schedules
+            )
         except Exception:
             _log.exception("The schedule for dataset '%s' could not be read", record.dataset_id)
     return get_template("dataset_page.html").render(
         schedule=schedule,
+        has_shadowed_schedule=has_shadowed_schedule,
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
