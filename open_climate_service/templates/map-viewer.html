@@ -428,6 +428,9 @@
       let selector = {};
 
       const selectEl = document.getElementById("dataset-select");
+      // Published vector collections, which the viewer leaves out of its list but still names
+      // when a deep link asks for one.
+      let vectorCollectionIds = new Set();
       const dimControls = document.getElementById("dim-controls");
       const datasetMeta = document.getElementById("dataset-meta");
       const metaSource = document.getElementById("meta-source");
@@ -517,10 +520,14 @@
           const body = await res.json();
           // /collections lists vector collections too (CLIM-1326). This viewer draws rasters
           // only, so a collection whose cube has a geometry dimension stays out of the list.
-          const collections = (body.collections ?? []).filter((col) => !isVectorCollection(col));
+          const all = body.collections ?? [];
+          vectorCollectionIds = new Set(all.filter(isVectorCollection).map((col) => col.id));
+          const collections = all.filter((col) => !isVectorCollection(col));
           if (collections.length === 0) {
             setStatus(
-              "No published datasets found. Ingest and publish a dataset first."
+              all.length === 0
+                ? "No published datasets found. Ingest and publish a dataset first."
+                : "No published raster datasets found. The map shows raster datasets only."
             );
             // A deep link still names a dataset, and "not published" answers that question
             // better than the generic empty-catalogue line.
@@ -782,7 +789,12 @@
         if (!requested) return;
         const option = [...selectEl.options].find((o) => o.dataset.id === requested);
         if (!option) {
-          setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
+          setStatus(
+            vectorCollectionIds.has(requested)
+              ? `Dataset "${requested}" is a vector dataset; the map shows raster datasets only.`
+              : `Dataset "${requested}" is not published, so it cannot be shown on the map.`,
+            true
+          );
           return;
         }
         selectEl.value = option.value;
