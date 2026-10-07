@@ -455,11 +455,20 @@ def _temporal_to_list(extent: Any) -> list[str | None] | None:
 
 
 def _spatial_extent_with_crs(extent: Any) -> dict[str, Any] | None:
-    """The bbox as `load_features` takes it: west/south/east/north, plus the CRS when declared."""
+    """The bbox as `load_features` takes it: west/south/east/north, plus the CRS when declared.
+
+    A plain object passes through unchanged for `load_features` to validate, so a missing or
+    non-numeric coordinate is reported against `spatial_extent`. `load_collection` is registered
+    without a process spec, so any other value can arrive here too and is refused by name.
+    """
+    if extent is None or isinstance(extent, dict):
+        return extent
+    if not all(hasattr(extent, key) for key in ("west", "south", "east", "north")):
+        raise ValueError(f"load_collection: spatial_extent must be a bounding box object, got {type(extent).__name__}")
     bbox: dict[str, Any] | None = _bbox_to_dict(extent)
     if bbox is None:
         return None
-    crs = extent.get("crs") if isinstance(extent, dict) else getattr(extent, "crs", None)
+    crs = getattr(extent, "crs", None)
     if crs is not None:
         bbox["crs"] = crs
     return bbox

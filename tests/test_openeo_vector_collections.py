@@ -213,6 +213,29 @@ def test_load_collection_refuses_bands_for_a_vector_collection(rain_and_regions:
     assert "has no bands" in str(refused.value.detail)
 
 
+@pytest.mark.parametrize(
+    "extent",
+    ["0,0,4,4", 5, [0, 0, 4, 4], {"west": "a", "south": 0, "east": 4, "north": 4}, {"west": 0}],
+)
+def test_a_malformed_spatial_extent_is_a_client_error_naming_the_argument(rain_and_regions: None, extent: Any) -> None:
+    """`load_collection` has no process spec to reject these, so the vector path must, by name."""
+    graph = {
+        "process_graph": {
+            "zones": {
+                "process_id": "load_collection",
+                "arguments": {"id": "regions", "spatial_extent": extent},
+                "result": True,
+            }
+        }
+    }
+
+    with pytest.raises(HTTPException) as refused:
+        execution.run_process_graph(graph)
+
+    assert refused.value.status_code == 400
+    assert "spatial_extent" in str(refused.value.detail)
+
+
 def test_load_collection_loads_a_published_collection_whose_template_is_removed(
     rain_and_regions: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
