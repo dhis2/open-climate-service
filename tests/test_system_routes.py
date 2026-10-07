@@ -363,6 +363,20 @@ def test_the_map_viewer_lists_vector_datasets_and_reads_their_geoparquet(client:
     assert "const featureAsset = collection.assets?.data;" in body
     # MapLibre places GeoJSON as longitude and latitude, so a projected collection is refused.
     assert 'if (storedCrs !== "EPSG:4326")' in body
+    # The source is the collection's attribution, also on the map; vectors have no units.
+    assert "fetch(`/features/${encodeURIComponent(collection.id)}`)" in body
+    assert "...(attribution && { attribution })," in body
+    assert "showUnits(null);" in body
+    assert 'map.on("click", id, showFeatureName);' in body
+
+
+def test_a_selection_made_while_tiles_load_still_runs(client: TestClient) -> None:
+    """`isStyleLoaded()` is false while basemap tiles load, long after `load` fired once."""
+    body = client.get("/map").text
+
+    assert "if (!map || mapUnavailable || mapLoaded) {" in body
+    assert "mapLoaded = true;" in body
+    assert "isStyleLoaded()" not in body.split("function whenMapReady")[1].split("}")[0]
 
 
 def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client: TestClient) -> None:

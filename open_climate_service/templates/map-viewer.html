@@ -215,7 +215,7 @@
           <dl id="dataset-meta" class="meta-grid hidden">
             <dt>Source</dt>
             <dd id="meta-source">—</dd>
-            <dt>Units</dt>
+            <dt id="meta-units-label">Units</dt>
             <dd id="meta-units">—</dd>
             <dt>Licence</dt>
             <dd id="meta-licence">—</dd>
@@ -436,6 +436,15 @@
       const datasetMeta = document.getElementById("dataset-meta");
       const metaSource = document.getElementById("meta-source");
       const metaUnits = document.getElementById("meta-units");
+      const metaUnitsLabel = document.getElementById("meta-units-label");
+
+      // Units describe raster values; a vector dataset has none, so the row is left out.
+      function showUnits(units) {
+        const shown = units !== null;
+        metaUnitsLabel.classList.toggle("hidden", !shown);
+        metaUnits.classList.toggle("hidden", !shown);
+        if (shown) metaUnits.textContent = units || "—";
+      }
       const metaDescription = document.getElementById("meta-description");
       const metaLicence = document.getElementById("meta-licence");
       const legendEl = document.getElementById("legend");
@@ -497,14 +506,16 @@
         }
 
         map.on("load", () => {
+          mapLoaded = true;
           map.setProjection({ type: "globe" });
         });
 
         // Registered once for the fixed vector layer ids; they apply to whichever vector
         // dataset is shown, and do nothing while none is.
         for (const id of FEATURE_LAYERS) {
-          map.on("mousemove", id, showFeatureName);
-          map.on("mouseleave", id, hideFeatureName);
+          map.on("click", id, showFeatureName);
+          map.on("mouseenter", id, () => (map.getCanvas().style.cursor = "pointer"));
+          map.on("mouseleave", id, () => (map.getCanvas().style.cursor = ""));
         }
 
         map.on("error", (event) => {
@@ -604,6 +615,7 @@
           activeLayer = null;
         }
         clearFeatures();
+        metaSource.title = "";
         dimControls.classList.add("hidden");
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
@@ -750,7 +762,7 @@
         );
         const units = collection["cube:variables"]?.[variable]?.unit ?? "";
         metaSource.textContent = source ?? "—";
-        metaUnits.textContent = units || "—";
+        showUnits(units);
         datasetMeta.classList.remove("hidden");
 
         // The collection description, which is where a dataset states what its values actually
@@ -833,6 +845,12 @@
           return;
         }
 
+        // The collection's attribution is on its feature record, not in STAC. An open licence
+        // such as ODbL requires it wherever the data is shown, so it goes on the map as well.
+        const recordRequest = fetch(`{{ mount }}/features/${encodeURIComponent(collection.id)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .catch(() => null);
+
         let geojson;
         try {
           const res = await fetch(asset.href);
@@ -861,8 +879,17 @@
           return;
         }
 
+        const record = await recordRequest;
+        if (superseded()) return;
+        const providers = (collection.providers ?? []).map((p) => p.name).filter(Boolean);
+        const attribution = record?.attribution ?? (providers.join(", ") || null);
+
         try {
-          map.addSource(FEATURE_SOURCE, { type: "geojson", data: geojson });
+          map.addSource(FEATURE_SOURCE, {
+            type: "geojson",
+            data: geojson,
+            ...(attribution && { attribution }),
+          });
           map.addLayer({
             id: "features-fill",
             type: "fill",
@@ -897,9 +924,9 @@
           return;
         }
 
-        const providers = (collection.providers ?? []).map((p) => p.name).filter(Boolean);
-        metaSource.textContent = providers.join(", ") || "—";
-        metaUnits.textContent = "—";
+        metaSource.textContent = attribution ?? "—";
+        metaSource.title = attribution ?? "";
+        showUnits(null);
         showLicence(collection);
         datasetMeta.classList.remove("hidden");
         const description = collection.description ?? "";
@@ -907,22 +934,14 @@
         metaDescription.classList.toggle("hidden", !description);
 
         const count = geojson.features.length;
-        setStatus(`${count} feature${count === 1 ? "" : "s"}. Hover over one to see its name.`);
+        setStatus(`${count} feature${count === 1 ? "" : "s"}. Click one to see its name.`);
       }
 
       function showFeatureName(event) {
-        const feature = event.features?.[0];
-        if (!feature) return;
-        map.getCanvas().style.cursor = "pointer";
-        const label = featureLabel(feature.properties ?? {});
-        if (!label) return;
-        featurePopup ??= new maplibregl.Popup({ closeButton: false, closeOnClick: false });
-        featurePopup.setLngLat(event.lngLat).setText(label).addTo(map);
-      }
-
-      function hideFeatureName() {
-        map.getCanvas().style.cursor = "";
+        const label = featureLabel(event.features?.[0]?.properties ?? {});
         featurePopup?.remove();
+        if (!label) return;
+        featurePopup = new maplibregl.Popup().setLngLat(event.lngLat).setText(label).addTo(map);
       }
 
       // `/map?dataset=<id>` opens the viewer on one dataset, and choosing a dataset writes the
@@ -949,8 +968,13 @@
       // showing the dataset that was not chosen, or fail on a duplicate layer.
       let pendingWhenReady = null;
 
+      // Set once on the map's `load` event. Not `map.isStyleLoaded()`: that is also false while
+      // basemap tiles are still loading, long after `load` has fired, and a selection made then
+      // waited for a `load` that never came again.
+      let mapLoaded = false;
+
       function whenMapReady(callback) {
-        if (!map || mapUnavailable || map.isStyleLoaded()) {
+        if (!map || mapUnavailable || mapLoaded) {
           callback();
           return;
         }

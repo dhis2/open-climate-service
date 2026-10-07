@@ -134,7 +134,7 @@ hyparquet). Only published datasets appear here.
 - **Dataset selector** — pick any published dataset from the dropdown, grouped into raster and
   vector datasets when the instance has both.
 - **Vector datasets** — drawn as filled areas, lines or points, with the feature's name shown
-  on hover. The viewer reads the collection's stored file (`/features/{id}/data.parquet`),
+  on click. The viewer reads the collection's stored file (`/features/{id}/data.parquet`),
   which has to be in WGS 84.
 - **Dimension controls** — the viewer builds one control per non-spatial dimension of the
   dataset, choosing the type from the dimension's metadata: a **slider** for a continuous,
