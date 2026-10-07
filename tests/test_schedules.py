@@ -464,6 +464,9 @@ def test_page_lists_adds_edits_and_deletes(client: TestClient) -> None:
     assert created.status_code == 303 and created.headers["location"].endswith("/schedules")
     listed = client.get("/schedules", headers={"Accept": BROWSER})
     assert "0 6 * * *" in listed.text and "this page" in listed.text and ">Pause<" in listed.text
+    # Delete from the list opens a confirmation; without scripts it lands on the edit view's panel.
+    assert 'data-delete="era5"' in listed.text and 'href="/schedules/era5/edit#delete"' in listed.text
+    assert '<dialog id="delete-dialog"' in listed.text and 'name="confirm" value="yes"' in listed.text
 
     refused = client.post("/schedules", data={"dataset_id": "worldpop", "cron": "0 6 * * *"})
     assert refused.status_code == 400 and "not syncable" in refused.text and 'value="0 6 * * *"' in refused.text
@@ -471,7 +474,7 @@ def test_page_lists_adds_edits_and_deletes(client: TestClient) -> None:
     assert ">Cancel<" in form.text
     edit = client.get("/schedules/era5/edit", headers={"Accept": BROWSER})
     assert edit.status_code == 200 and "Edit schedule" in edit.text and "readonly" in edit.text
-    assert "Delete schedule" in edit.text and "Delete schedule" not in listed.text
+    assert 'id="delete"' in edit.text and "I understand" in edit.text and "I understand" not in listed.text
     saved = client.post("/schedules/era5", data={"cron": "0 7 * * *", "max_attempts": "3"}, follow_redirects=False)
     assert saved.status_code == 303 and store.get_schedule("era5").cron == "0 7 * * *"  # type: ignore[union-attr]
     assert store.get_schedule("era5").publish is False  # type: ignore[union-attr]

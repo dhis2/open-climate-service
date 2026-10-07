@@ -73,6 +73,7 @@
                     {% else %}
                     <form method="post" action="{{ mount }}/schedules/{{ s.dataset_id }}/resume"><button type="submit">Resume</button></form>
                     {% endif %}
+                    <a class="button-link" href="{{ mount }}/schedules/{{ s.dataset_id }}/edit#delete" data-delete="{{ s.dataset_id }}" data-delete-name="{{ s.name or s.dataset_id }}">Delete</a>
                   </div>
                   {% else %}<span class="note">Edit in config file</span>{% endif %}
                 </td>
@@ -90,6 +91,38 @@
         </div>
         {% endif %}
         <p class="note">Last check details reset when OCS restarts. Submitted sync jobs remain available under Jobs. Times use {{ status.timezone }}.</p>
+
+        {% if not read_only %}
+        <dialog id="delete-dialog" aria-labelledby="delete-dialog-title">
+          <form method="post" action="">
+            <h3 id="delete-dialog-title">Delete this schedule?</h3>
+            <p><strong data-delete-dialog-name></strong> will no longer be checked for updates. Existing data and sync jobs remain available, and you can still sync it manually.</p>
+            <input type="hidden" name="confirm" value="yes" />
+            <div class="form-actions dialog-actions">
+              <button type="button" data-delete-dialog-cancel>Cancel</button>
+              <button type="submit" class="danger">Delete schedule</button>
+            </div>
+          </form>
+        </dialog>
+        <script>
+          (function () {
+            var dialog = document.getElementById("delete-dialog");
+            if (!dialog || typeof dialog.showModal !== "function") return;
+            var form = dialog.querySelector("form");
+            var name = dialog.querySelector("[data-delete-dialog-name]");
+            dialog.querySelector("[data-delete-dialog-cancel]").addEventListener("click", function () { dialog.close(); });
+            dialog.addEventListener("click", function (event) { if (event.target === dialog) dialog.close(); });
+            document.querySelectorAll("[data-delete]").forEach(function (link) {
+              link.addEventListener("click", function (event) {
+                event.preventDefault();
+                form.action = "{{ mount }}/schedules/" + encodeURIComponent(link.getAttribute("data-delete")) + "/delete";
+                name.textContent = link.getAttribute("data-delete-name");
+                dialog.showModal();
+              });
+            });
+          })();
+        </script>
+        {% endif %}
         {% endif %}
 
         {% if tab == 'create' %}
@@ -142,7 +175,7 @@
         </section>
 
         {% if editing and not read_only %}
-        <section class="panel" aria-labelledby="delete-title" style="margin-top: var(--spacers-dp24)">
+        <section class="panel" id="delete" aria-labelledby="delete-title" style="margin-top: var(--spacers-dp24)">
           <h3 id="delete-title">Delete schedule</h3>
           <p class="note">Stops automatic checks for this dataset. Existing data and sync jobs remain available, and you can still sync it manually.</p>
           <form method="post" action="{{ mount }}/schedules/{{ editing }}/delete" class="form-actions">

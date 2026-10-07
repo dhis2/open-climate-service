@@ -968,6 +968,47 @@ button.primary:disabled {
   border-top: 1px solid var(--colors-grey300);
 }
 
+/* A confirmation before a destructive action, styled as a panel over a dimmed page. */
+dialog {
+  /* The page reset zeroes margins; the native dialog centres itself with auto margins. */
+  margin: auto;
+  width: min(32rem, calc(100vw - 2 * var(--spacers-dp16)));
+  border: 1px solid var(--colors-grey300);
+  border-radius: var(--radius);
+  box-shadow: var(--elevations-e100);
+  padding: var(--spacers-dp24);
+  color: var(--colors-grey900);
+  background: var(--colors-white);
+}
+
+dialog::backdrop {
+  background: rgba(33, 41, 52, 0.4);
+}
+
+dialog h3 {
+  margin: 0 0 var(--spacers-dp8);
+  font-size: var(--font-size-h3);
+}
+
+dialog p {
+  margin: 0;
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+}
+
+button.danger {
+  background: var(--colors-red600);
+  border-color: var(--colors-red600);
+  color: var(--colors-white);
+  padding: var(--spacers-dp8) var(--spacers-dp16);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--colors-red800);
+}
+
 @media (max-width: 720px) {
   .dataset-page {
     grid-template-columns: minmax(0, 1fr);
