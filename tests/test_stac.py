@@ -270,10 +270,10 @@ def test_collections_logs_skipped_dataset_failures(client: TestClient, monkeypat
         lambda: {"broken_dataset": _artifact(artifact_id="a1", dataset_id="broken_dataset")},
     )
 
-    def _raise(dataset_id: str, request: object) -> dict[str, object]:
+    def _raise(dataset_id: str, artifact: object, request: object) -> dict[str, object]:
         raise stac_services.HTTPException(status_code=503, detail="store unavailable")
 
-    monkeypatch.setattr(stac_services, "build_collection", _raise)
+    monkeypatch.setattr(stac_services, "build_collection_for_artifact", _raise)
     monkeypatch.setattr(openeo_collections.logger, "warning", lambda *args: calls.append(args))
 
     response = client.get("/collections")

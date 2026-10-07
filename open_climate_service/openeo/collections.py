@@ -105,7 +105,10 @@ def _add_geometry_dimension(collection: dict[str, Any], artifact: ArtifactRecord
 
 def _openeo_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, Any]:
     """The STAC collection with openEO links and the cube dimensions `load_collection` returns."""
-    collection = _rewrite_collection_links(stac_services.build_collection(dataset_id, request), request)
+    # Built from `artifact`, not looked up again, so one record describes the whole document.
+    collection = _rewrite_collection_links(
+        stac_services.build_collection_for_artifact(dataset_id, artifact, request), request
+    )
     if artifact.format == ArtifactFormat.GEOPARQUET:
         return _add_geometry_dimension(collection, artifact)
     return _normalize_cube_dimensions(collection)
