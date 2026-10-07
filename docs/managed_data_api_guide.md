@@ -384,8 +384,8 @@ order, one space after each `;`. Reformatting it silently disables rendering.
 
 ## 9. Fetch a dataset thumbnail
 
-`GET /datasets/{dataset_id}/thumbnail.png` serves a small PNG preview of the dataset: one
-representative 2-D slice, styled with the template's `display.colormap`, longest side 512 px,
+`GET /datasets/{dataset_id}/thumbnail.png` serves a PNG preview of the dataset: one
+representative 2-D slice, styled with the template's `display.colormap`, longest side 1024 px,
 missing values transparent.
 
 ```bash

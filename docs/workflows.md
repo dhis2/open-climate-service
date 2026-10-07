@@ -90,7 +90,12 @@ the data element mapping, period type, and DHIS2 connection, so the workflow sta
 the same on every instance. When the export declares `aggregation`, the workflow's
 `method` must match it or the run fails.
 
-> The period type **formats** each native time step into a DHIS2 period — it does not re-aggregate in time. Pick a dataset whose native temporal resolution matches the period you want (e.g. a monthly dataset for monthly values).
+> The period type **formats** each native time step into a DHIS2 period; it never aggregates in
+> time, and neither do these workflows. The dataset must already be at the period you export:
+> a daily dataset behind a monthly export is refused, not resampled. Derive the monthly dataset
+> first, with `aggregate_temporal_period` in a graph that publishes it, or write a graph of your
+> own with that step before `save_result`. See
+> [the export's period must be reachable](export_plugins.md#the-exports-period-must-be-reachable-from-the-datasets-cadence).
 
 ### Example
 

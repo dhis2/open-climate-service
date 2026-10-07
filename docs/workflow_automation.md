@@ -120,6 +120,55 @@ independently in that pool. Bounding total workflow concurrency is a general res
 concern deferred to CLIM-845; until then the per-store lock remains the write-safety boundary for
 workflows that publish managed datasets.
 
+## Retries and restarts
+
+A triggered workflow job runs up to `max_attempts` times, the first attempt included. The
+default is 3 and the bound is 10:
+
+```yaml
+automation:
+  workflow_triggers:
+    - id: chirps-to-dhis2
+      on_update_of: chirps3_precipitation_daily
+      workflow_id: aggregate_to_dhis2_json
+      max_attempts: 3
+      arguments: { ... }
+```
+
+Every attempt runs under the same deterministic job ID, so a retry is still the one job for
+that event and trigger, and replaying the event does not create another.
+
+- **A failure while the workflow runs is retried after a backoff** of 1, 2, then 4 minutes.
+  This covers an unreachable source, a timeout, a server error, a store another writer is
+  busy with, and also errors such as a truncated remote response, which look like invalid
+  input but may not repeat. While it waits the job is `queued`, holding no worker, and no
+  process runs it before its backoff has passed. An invalid argument discovered only while
+  the graph runs may therefore use the full attempt budget; only graph validation and known
+  save-result configuration errors can be classified as permanent before execution.
+- **A permanent error is not retried**, because it fails the same way on every attempt: an
+  invalid process graph, a request a process refuses (an unknown collection, for example),
+  or invalid configuration found while saving the result, such as an unknown export or a
+  units mismatch.
+- **A restart during an attempt** requeues the job if it has attempts left. The interruption
+  counts as an attempt, so a job that keeps crashing the server still stops.
+- **A job still backing off at shutdown** waits out the rest of its backoff after the next
+  start.
+- **Cancelling during a backoff** takes effect at once, and the attempt history records it.
+  Re-running a cancelled job with `POST /jobs/{job_id}/results` runs it; the earlier
+  cancellation does not carry over.
+
+When the attempts run out, the job stays `error`. Its error names the attempt, for example
+`OSError: connection reset (attempt 3 of 3)`, and `GET /jobs/{job_id}/results` answers with it.
+The job's `logs` field lists every attempt with its time and outcome.
+
+Only an attempt that finishes can deliver, so a trigger with `deliver` imports the result of
+the successful attempt, once. Re-running a failed job with `POST /jobs/{job_id}/results`
+starts a fresh attempt budget.
+
+Jobs submitted directly, not by a trigger, run once as before. A job still running in another
+OCS process, for example one that has not finished shutting down, is not marked failed at
+startup: it is left to that process, and taken over if the process exits without finishing it.
+
 ## Deliver the result to DHIS2
 
 A trigger can deliver its job's result once the job finishes. The workflow must save through a
@@ -175,6 +224,11 @@ is not configured, its mapping is invalid, or a literal `arguments.export` diffe
 `deliver.export`. A read-only instance validates the same configuration but leaves delivery
 inactive, allowing writable and serving instances to share one tracked configuration.
 
+The export delivers what exists at its period. To deliver a monthly export from a daily
+dataset, let one trigger derive and publish the monthly dataset, and a second trigger on that
+dataset's update run the export. See
+[the export's period must be reachable](export_plugins.md#the-exports-period-must-be-reachable-from-the-datasets-cadence).
+
 Delivery needs the `dhis2` extra (`open-climate-service[dhis2]`) and the connection's token in
 the server environment. See
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins).
@@ -184,6 +238,6 @@ the server environment. See
 This mechanism dispatches workflows owned by the same OCS instance. It does not provide workflow
 dependency graphs, cross-service retries, webhooks, or distributed event consumption. A delivery
 that ends partial, rejected, or unknown is reported on its delivery job but does not yet notify
-anyone, and failed workflow jobs are not retried (CLIM-919). Exactly
-one writable OCS process should perform automation until the stores and leadership model become
-shared and transactional.
+anyone (CLIM-919), and a workflow job that exhausts its attempts is not reported beyond its own
+status. Exactly one writable OCS process should perform automation until the stores and
+leadership model become shared and transactional.

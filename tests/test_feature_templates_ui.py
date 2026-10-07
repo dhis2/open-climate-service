@@ -99,7 +99,7 @@ def test_the_templates_page_lists_feature_templates_with_a_type_filter(client: T
     page = client.get("/data-sources", headers=HTML).text
 
     assert 'href="/data-sources/demo_regions"' in page
-    assert 'data-kind="features"' in page and 'data-kind="raster"' in page
+    assert 'data-kind="vector"' in page and 'data-kind="raster"' in page
     assert 'data-filter-field="kind"' in page
     # A template whose provider is missing is not offered for fetching.
     assert "orphan_regions" not in page

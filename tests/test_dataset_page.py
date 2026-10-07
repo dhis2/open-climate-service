@@ -185,6 +185,22 @@ def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
         assert "items" in response.json()
 
 
+@pytest.mark.parametrize(
+    ("item_types", "filter_shown"), [(["coverage", "feature"], True), (["coverage", "coverage"], False)]
+)
+def test_the_dataset_list_filters_by_type_when_it_holds_both(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, item_types: list[str], filter_shown: bool
+) -> None:
+    records = [_record(f"ds_{i}", itemType=item_type) for i, item_type in enumerate(item_types)]
+    monkeypatch.setattr(landing, "_load_datasets", lambda: records)
+
+    body = client.get("/datasets", headers={"Accept": BROWSER_ACCEPT}).text
+
+    assert ('data-filter-field="kind"' in body) is filter_shown
+    assert body.count('data-kind="raster"') == item_types.count("coverage")
+    assert body.count('data-kind="vector"') == item_types.count("feature")
+
+
 def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
     from open_climate_service.ingestions import services
@@ -246,6 +262,152 @@ def test_the_dataset_page_lists_only_what_is_known() -> None:
     assert ("Licence", "Not specified", None) in context["data"]
     assert context["paragraphs"] == ["First line wraps here.", "Second paragraph."]
     assert [link.rel for link in context["links"]] == ["zarr"]
+
+
+def test_the_dataset_page_lists_the_identifier_first() -> None:
+    context = landing._dataset_page_context(_record("chirps_monthly"), _ingestable("chirps_monthly"))
+
+    assert context["data"][0] == ("Identifier", "chirps_monthly", None)
+
+
+def test_the_dataset_page_shows_temporal_coverage_under_the_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
+
+    html = landing.render_dataset_page(_record(), "/ocs")
+    title_end = html.index('<div class="dataset-page">')
+
+    assert '<span class="range">2020-01 – 2026-07</span>' in html[:title_end]
+    assert '<span class="period">Monthly</span>' in html[:title_end]
+    # Moved, not copied: About no longer repeats them.
+    about = _visible_text(html[title_end:])
+    assert "Temporal coverage" not in about and "Period type" not in about
+
+
+def test_a_climatology_keeps_its_period_type_in_about() -> None:
+    record = _record(
+        period_type="climatology",
+        extent={
+            "spatial": {"xmin": 80.0, "ymin": 26.0, "xmax": 88.0, "ymax": 30.0},
+            "temporal": {"start": None, "end": None},
+        },
+    )
+
+    assert ("Period type", "climatology", None) in landing._dataset_page_context(record, None)["data"]
+
+
+def test_a_dataset_without_temporal_coverage_shows_no_coverage_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
+    record = _record(
+        itemType="feature",
+        period_type=None,
+        extent={
+            "spatial": {"xmin": 80.0, "ymin": 26.0, "xmax": 88.0, "ymax": 30.0},
+            "temporal": {"start": None, "end": None},
+        },
+    )
+
+    assert 'class="page-coverage"' not in landing.render_dataset_page(record, "/ocs")
+
+
+@pytest.mark.parametrize(
+    ("period_type", "start", "end", "label"),
+    [
+        ("monthly", "2026-01-01", "2026-08-01", "2026-01 – 2026-08"),
+        ("monthly", "1990-01", "2026-08", "1990-01 – 2026-08"),
+        ("yearly", "2015-01-01", "2030-01-01", "2015 – 2030"),
+        ("weekly", "2026-09-14", "2026-09-21", "2026-W38 – 2026-W39"),
+        # ISO week-year: 2024-12-30 is in week 1 of 2025.
+        ("weekly", "2024-12-23", "2024-12-30", "2024-W52 – 2025-W01"),
+        ("climatology", "2026-01-01", "2026-12-01", "2026-01-01 – 2026-12-01"),
+        ("daily", "2026-01-01", "2026-08-31", "2026-01-01 – 2026-08-31"),
+        ("dekadal", "2026-01-01", None, "2026-01-01 – …"),
+    ],
+)
+def test_coverage_reads_at_the_dataset_period(period_type: str, start: str, end: str | None, label: str) -> None:
+    """A monthly store a workflow wrote keeps full dates; the label reads like an ingested one."""
+    record = _record(
+        period_type=period_type,
+        extent={
+            "spatial": {"xmin": 80.0, "ymin": 26.0, "xmax": 88.0, "ymax": 30.0},
+            "temporal": {"start": start, "end": end},
+        },
+    )
+
+    assert landing._dataset_view(record, None)["coverage"] == label
+
+
+_NOT_FETCHED = "not fetched by a provider"
+_OWNED_ELSEWHERE = "fetched by provider 'overture', but its data source now names 'fake'"
+_NO_PROVIDER = "no provider on this instance fetches it"
+
+
+@pytest.mark.parametrize(
+    ("provider", "owner", "raster_collision", "linked", "blocked"),
+    [
+        ("fake", "fake", False, True, None),  # the provider that fetched it, and it is installed
+        (None, None, False, True, _NO_PROVIDER),  # providerless template
+        ("missing", "missing", False, True, _NO_PROVIDER),  # names a provider this instance lacks
+        ("fake", "fake", True, False, _NO_PROVIDER),  # the id is a raster data source's
+        ("fake", None, False, True, _NOT_FETCHED),  # stored without a provider: none may overwrite it
+        ("fake", "overture", False, True, _OWNED_ELSEWHERE),  # template now names another provider
+    ],
+)
+def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str | None,
+    owner: str | None,
+    raster_collision: bool,
+    linked: bool,
+    blocked: str | None,
+) -> None:
+    """The page agrees with the refresh: an installed provider, and the one that wrote the stored
+    collection, since a refresh may only overwrite what its own provider fetched."""
+    from types import SimpleNamespace
+
+    from open_climate_service.features import providers as feature_providers
+    from open_climate_service.features import services as feature_services
+    from open_climate_service.features import templates as feature_templates
+
+    template = {"id": "districts", "name": "Districts", "license": "ODbL-1.0"}
+    if provider:
+        template["provider"] = provider
+    monkeypatch.setattr(feature_templates, "get_feature_template", lambda template_id: dict(template))
+    monkeypatch.setattr(feature_providers, "load_feature_providers", lambda: {"fake": object()})
+    monkeypatch.setattr(
+        feature_services,
+        "registered_collections",
+        lambda: {"districts": SimpleNamespace(features=SimpleNamespace(provider=owner))},
+    )
+    monkeypatch.setattr(
+        registry_datasets, "get_dataset", lambda dataset_id: {"id": dataset_id} if raster_collision else None
+    )
+
+    html = landing.render_dataset_page(_record("districts", itemType="feature", period_type=None), "/ocs")
+    text = _visible_text(html)
+
+    assert ('href="/ocs/data-sources/districts"' in html) is linked
+    # Never claims how the collection was made: a template is no evidence it was fetched.
+    assert "Fetched from" not in text
+    assert ("fetches it again from the provider" in text) is (blocked is None)
+    if blocked is not None:
+        assert "cannot be refreshed here" in text and blocked in text
+    assert "no source to sync from" not in text
+    assert "Refresh" in text and "Status and display" not in text
+    assert 'id="sync-form"' not in html
+
+
+@pytest.mark.parametrize(("item_type", "raster"), [("coverage", True), ("feature", False)])
+def test_the_dataset_page_offers_the_map_viewer_and_colour_scale_only_for_a_raster(
+    monkeypatch: pytest.MonkeyPatch, item_type: str, raster: bool
+) -> None:
+    """The map viewer draws only rasters, and a feature collection has no colour scale."""
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
+
+    html = landing.render_dataset_page(_record(itemType=item_type), "/ocs")
+
+    assert ("Open in map viewer" in html) is raster
+    assert ('class="ramp-bar"' in html) is raster
+    assert ("--ramp: linear-gradient" in html) is raster
 
 
 def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:
