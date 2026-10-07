@@ -33,7 +33,6 @@ Operational note:
 - `GET /features`
 - `GET /features/{collection_id}`
 - `GET /features/{collection_id}/data.parquet`
-- `GET /features/{collection_id}/visual.parquet`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
@@ -541,11 +540,6 @@ thousands of features, and pulling all of it should be deliberate.
 collection, as `application/x-parquet`. It is the href the collection's STAC `data` asset
 advertises, and it resolves through the registered record — an unregistered file in the store
 directory is not reachable through it.
-
-`GET /features/{collection_id}/visual.parquet` serves a simplified copy for the map viewer:
-WGS 84, only the id and `name` columns, simplified to 250 m (or the template's
-`display.simplify_tolerance`, in metres). It is written at each refresh, advertised as the STAC
-`visual` asset, and returns 404 when the collection has none.
 
 ## 12. `/sync`
 

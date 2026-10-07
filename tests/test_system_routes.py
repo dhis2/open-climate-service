@@ -353,6 +353,18 @@ def test_an_unpublished_dataset_in_the_address_is_reported_not_ignored(client: T
     assert "is not published, so it cannot be shown on the map" in body
 
 
+def test_the_map_viewer_lists_vector_datasets_and_reads_their_geoparquet(client: TestClient) -> None:
+    """Published vector datasets are drawn from the GeoParquet their STAC `data` asset names (CLIM-1234)."""
+    body = client.get("/map").text
+
+    assert 'import { parquetReadObjects } from "https://esm.sh/hyparquet@' in body
+    assert 'item.itemType === "feature" && item.publication?.status === "published"' in body
+    assert "href: `/stac/collections/${encodeURIComponent(item.dataset_id)}`" in body
+    assert "const featureAsset = collection.assets?.data;" in body
+    # MapLibre places GeoJSON as longitude and latitude, so a projected collection is refused.
+    assert 'if (storedCrs !== "EPSG:4326")' in body
+
+
 def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client: TestClient) -> None:
     """The page asks the dataset's own record why it is missing: unpublished, or not there at all."""
     body = client.get("/map").text

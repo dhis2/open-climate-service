@@ -21,7 +21,6 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim, get_x_y_dims
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.features import templates as feature_templates
-from open_climate_service.features.store import visual_path
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord, FeatureDetail
 from open_climate_service.shared import geoparquet
@@ -320,20 +319,6 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             roles=["data"],
         ),
     )
-    # The simplified copy a browser draws, as Portolan's `visual` derivative: what a client
-    # renders when the collection is too detailed to draw from `data`. Only when the file is
-    # there, like the thumbnail.
-    stored = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
-    if stored is not None and visual_path(Path(stored)).is_file():
-        collection.add_asset(
-            "visual",
-            pystac.Asset(
-                href=absolute_url(request, f"/features/{path_segment(dataset_id)}/visual.parquet"),
-                media_type=PARQUET_MEDIA_TYPE,
-                title="Simplified GeoParquet for display (WGS 84)",
-                roles=["visual"],
-            ),
-        )
     # As for a raster collection: only when the file is there, so a client never follows a
     # thumbnail href to a 404.
     if thumbnail_path(dataset_id).is_file():

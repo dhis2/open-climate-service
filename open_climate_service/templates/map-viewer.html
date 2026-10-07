@@ -639,7 +639,7 @@
           return;
         }
 
-        const featureAsset = collection.assets?.visual ?? collection.assets?.data;
+        const featureAsset = collection.assets?.data;
         if (featureAsset?.type === "application/x-parquet") {
           await loadFeatures(collection, featureAsset, superseded);
           return;
@@ -824,14 +824,12 @@
         return text ?? "";
       }
 
-      // The `visual` asset when the collection has one: the same features simplified for
-      // display and in WGS 84. Otherwise the stored file, which is drawn only when it is itself
-      // in WGS 84, since MapLibre places GeoJSON coordinates as longitude and latitude.
+      // The stored GeoParquet, read whole. Drawn only when it is in WGS 84, the default for a
+      // collection, since MapLibre places GeoJSON coordinates as longitude and latitude.
       async function loadFeatures(collection, asset, superseded) {
-        const isVisual = asset === collection.assets?.visual;
         const storedCrs = collection["proj:code"] ?? "EPSG:4326";
-        if (!isVisual && storedCrs !== "EPSG:4326") {
-          setStatus(`This vector dataset is stored in ${storedCrs} and has no copy in WGS 84 to draw.`, true);
+        if (storedCrs !== "EPSG:4326") {
+          setStatus(`This vector dataset is stored in ${storedCrs}; the map viewer draws WGS 84 only.`, true);
           return;
         }
 

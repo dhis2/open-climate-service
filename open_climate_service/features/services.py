@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from open_climate_service import config as api_config
 from open_climate_service.features import providers as feature_providers
-from open_climate_service.features import store, visual
+from open_climate_service.features import store
 from open_climate_service.features import templates as feature_templates
 from open_climate_service.features.schemas import FeatureCollectionListResponse, FeatureCollectionRecord
 from open_climate_service.ingestions import services as ingestion_services
@@ -165,7 +165,6 @@ def _refresh_feature_collection_locked(
     store.prune_superseded_files(dataset_id, keep=written)
     # Last, and never raising: a collection that cannot be drawn is still registered.
     write_feature_thumbnail(written, dataset_id)
-    visual.write_visual_copy(written, template=template, id_property=id_property)
     return record
 
 
@@ -534,23 +533,6 @@ def published_collection_file_or_404(collection_id: str) -> Path:
             status_code=404, detail=f"Feature collection '{collection_id}' is registered but its file is missing"
         )
     return path
-
-
-def published_visual_file(collection_id: str) -> Path | None:
-    """Return the simplified copy of the collection `data.parquet` serves, or None if it has none.
-
-    Resolved from the same published record, so the copy and the full file are always the same
-    version of the collection. None for an unknown or unpublished collection, as for one whose
-    copy could not be written.
-    """
-    record = ingestion_services.stac_eligible_artifacts_by_dataset().get(collection_id)
-    if record is None or record.format != ArtifactFormat.GEOPARQUET:
-        return None
-    raw = record.path or (record.asset_paths[0] if record.asset_paths else None)
-    if raw is None:
-        return None
-    path = store.visual_path(Path(raw))
-    return path if path.is_file() else None
 
 
 def _build_record(collection_id: str, record: ArtifactRecord, template: dict[str, Any]) -> FeatureCollectionRecord:

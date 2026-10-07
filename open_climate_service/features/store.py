@@ -102,19 +102,6 @@ def new_collection_file(dataset_id: str) -> Path:
     return _collection_root(dataset_id) / f"{dataset_id}.{uuid4().hex}.parquet"
 
 
-_VISUAL_SUFFIX = ".visual.parquet"
-
-
-def visual_path(collection_path: Path) -> Path:
-    """Return where the simplified copy of the collection version at *collection_path* lives.
-
-    One per version, beside it, so the copy always describes the bytes its record points at and
-    is removed with them. The name cannot be mistaken for a collection version: those end in a
-    32-character uuid and `.parquet`, and this ends in `.visual.parquet`.
-    """
-    return collection_path.with_name(collection_path.name.removesuffix(".parquet") + _VISUAL_SUFFIX)
-
-
 def superseded_collection_files(dataset_id: str, *, keep: Path | None) -> list[Path]:
     """Return this collection's stored files other than *keep*, current and not-yet-pruned alike.
 
@@ -217,7 +204,6 @@ def prune_superseded_files(dataset_id: str, *, keep: Path | None) -> None:
             continue
         try:
             stale.unlink()
-            visual_path(stale).unlink(missing_ok=True)
             marker.unlink(missing_ok=True)
         except OSError:
             logger.warning("Could not remove the superseded feature collection file '%s'", stale, exc_info=True)
@@ -225,28 +211,22 @@ def prune_superseded_files(dataset_id: str, *, keep: Path | None) -> None:
 
 
 def _prune_orphaned_markers(dataset_id: str) -> None:
-    """Remove a marker or a simplified copy whose Parquet file is already gone.
+    """Remove a marker whose Parquet file is already gone.
 
-    Reachable only if a previous prune deleted the file but then failed to delete what sits
-    beside it — the unlinks above are not atomic with each other. Harmless to leave (nothing
-    reads a marker or a copy for a file no record names), but there is no reason to let them
-    accumulate forever either.
+    Reachable only if a previous prune deleted the file but then failed to delete its marker —
+    the two unlinks above are not atomic with each other. Harmless to leave (nothing reads a
+    marker for a file that is not also returned by `superseded_collection_files`), but there is
+    no reason to let them accumulate forever either.
     """
     root = _collection_root(dataset_id)
     if not root.is_dir():
         return
-    version = rf"{re.escape(dataset_id)}\.[0-9a-f]{{32}}"
-    marker_pattern = re.compile(rf"^{version}\.parquet{re.escape(_SUPERSEDED_MARKER_SUFFIX)}$")
-    visual_pattern = re.compile(rf"^{version}{re.escape(_VISUAL_SUFFIX)}$")
-    for candidate in root.iterdir():
-        if marker_pattern.fullmatch(candidate.name):
-            source = candidate.with_name(candidate.name.removesuffix(_SUPERSEDED_MARKER_SUFFIX))
-        elif visual_pattern.fullmatch(candidate.name):
-            source = candidate.with_name(candidate.name.removesuffix(_VISUAL_SUFFIX) + ".parquet")
-        else:
+    pattern = re.compile(rf"^{re.escape(dataset_id)}\.[0-9a-f]{{32}}\.parquet{re.escape(_SUPERSEDED_MARKER_SUFFIX)}$")
+    for marker in root.iterdir():
+        if not pattern.fullmatch(marker.name):
             continue
-        if not source.exists():
-            candidate.unlink(missing_ok=True)
+        if not marker.with_name(marker.name.removesuffix(_SUPERSEDED_MARKER_SUFFIX)).exists():
+            marker.unlink(missing_ok=True)
 
 
 def _collection_root(dataset_id: str) -> Path:

@@ -163,7 +163,7 @@ def test_no_datacube_or_zarr_fields_are_emitted_for_a_feature_collection(
     assert ZARR_EXTENSION not in doc["stac_extensions"]
     for field in DATACUBE_FIELDS:
         assert field not in doc
-    assert set(doc["assets"]) <= {"data", "thumbnail", "visual"}
+    assert set(doc["assets"]) <= {"data", "thumbnail"}
     assert "zarr" not in doc["assets"] and "icechunk" not in doc["assets"]
     assert "renders" not in doc
 
