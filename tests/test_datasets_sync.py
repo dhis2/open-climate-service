@@ -854,7 +854,7 @@ def test_release_planner_reports_version_decoupled_from_period_type(monkeypatch:
 @pytest.mark.parametrize(
     ("available", "expected_action", "expected_message"),
     [
-        ([], SyncAction.NO_OP, "; no new periods are available from the source."),
+        ([], SyncAction.NO_OP, "; no new release is available from the source."),
         (["2025"], SyncAction.REMATERIALIZE, ". Sync will rematerialize the dataset through 2025."),
     ],
 )
@@ -1589,6 +1589,12 @@ def test_plan_sync_marks_default_target_end_source(monkeypatch: pytest.MonkeyPat
     assert result.target_end_source == "default_today"
     assert result.delta_start == "2024-03-01"
     assert result.delta_end == "2026-04-20"
+
+
+def test_existing_coverage_uses_the_dataset_period_and_names_edge_cases_once() -> None:
+    assert sync_engine._existing_coverage("2026-01-01", "2026-08-01", "monthly") == "2026-01 through 2026-08"
+    assert sync_engine._existing_coverage("2026-01-01", "2026-01-31", "monthly") == "2026-01"
+    assert sync_engine._existing_coverage(None, "2026-08-01", "monthly") == "2026-08"
 
 
 def test_run_sync_raises_clear_error_when_append_invariants_are_missing(monkeypatch: pytest.MonkeyPatch) -> None:
