@@ -369,8 +369,10 @@ def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client:
     assert "res.status === 404" in body
     assert 'lookup === "missing"' in body and "was not found." in body
     assert "Could not check dataset" in body
-    # A late answer must not overwrite the status of a dataset the reader has since chosen.
-    assert "if (selectEl.value) return;" in body
+    # A late answer must not overwrite the status the reader has since moved to: a dataset they
+    # chose, or the empty choice after one (which moves loadGeneration on, as every change does).
+    assert "const generation = loadGeneration;" in body
+    assert "if (generation !== loadGeneration || selectEl.value) return;" in body
 
 
 def test_a_chosen_dataset_waits_for_the_style_as_a_deep_link_does(client: TestClient) -> None:

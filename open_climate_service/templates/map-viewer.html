@@ -774,6 +774,10 @@
       // published raster datasets, so a published vector dataset is missing for a different
       // reason than an unpublished one, and "not published" would be wrong about it.
       async function explainMissingDataset(requested) {
+        // Any selection change after this point, including going back to the empty choice,
+        // moves loadGeneration on, so a late answer can tell it is about an address the reader
+        // has since left.
+        const generation = loadGeneration;
         let record = null;
         let lookup = "failed";
         try {
@@ -790,9 +794,10 @@
           // A network failure or a body that is not JSON: the lookup failed, which says
           // nothing about whether the dataset exists.
         }
-        // The reader may have chosen a dataset while this was in flight; their choice's status
-        // must not be overwritten by an answer about the address they started from.
-        if (selectEl.value) return;
+        // The reader may have chosen a dataset, or chosen one and cleared it again, while this was
+        // in flight; their status must not be overwritten by an answer about the address they
+        // started from. `selectEl.value` covers a choice whose load is still waiting for the map.
+        if (generation !== loadGeneration || selectEl.value) return;
         if (lookup === "missing") {
           setStatus(`Dataset "${requested}" was not found.`, true);
         } else if (lookup === "failed") {
