@@ -90,21 +90,25 @@ def pyramid_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def live_server() -> Generator[str, None, None]:
-    """The app served by uvicorn on a free port: xarray needs a real HTTP origin."""
+    """The app served by uvicorn on a free port: xarray needs a real HTTP origin.
+
+    The socket stays bound and is handed to uvicorn, so no other process can claim the port
+    between choosing it and serving on it.
+    """
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        if time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    yield f"http://127.0.0.1:{port}"
-    server.should_exit = True
-    thread.join(timeout=10)
+        server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 10
+        while not server.started:
+            if time.monotonic() > deadline:
+                raise RuntimeError("uvicorn did not start")
+            time.sleep(0.05)
+        yield f"http://127.0.0.1:{port}"
+        server.should_exit = True
+        thread.join(timeout=10)
 
 
 @pytest.fixture
