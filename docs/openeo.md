@@ -172,6 +172,27 @@ curl -s http://127.0.0.1:9000/jobs/{job_id}/results
 
 Completed batch jobs write their output to disk and expose it as an asset link at `GET /jobs/{id}/results/{filename}`. The output format is controlled by the `format` argument of `save_result` — see [Export formats](#export-formats) below.
 
+### Cancelling a running job
+
+`DELETE /jobs/{job_id}/results` cancels a queued or running job. A running job checks for
+cancellation before each process in its graph and before each dask task of a computation,
+so it stops within about a second of its next task rather than when the whole graph is done.
+It then reports `canceled`, never `finished`.
+
+A cancelled job publishes nothing. A graph that saves into a managed dataset
+(`save_result` with `format: ZARR` and a `dataset_id`) checks once more, atomically, just
+before the store is committed:
+
+- If the cancellation arrives first, the store keeps its previous data, no dataset record
+  changes, and a template the job registered for a new dataset is removed again.
+- If publication has already begun, the job finishes, and the cancel request is refused with
+  `409`: a result is never left half-published.
+
+Result files are only served for a job that has finished, by every result route, including
+the GeoJSON and Zarr ones. Files a job wrote before it was cancelled, or while it is still
+running or stopping after a cancel request, are kept for inspection and replaced by its next
+run, but never served as its results.
+
 ---
 
 ## Available processes
@@ -341,7 +362,6 @@ openEO is an additional access layer on top of the existing dataset store — th
 
 - [`examples/openeo_process_graph.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/openeo_process_graph.py) — full end-to-end walkthrough using the openEO Python client
 - [`examples/zonal_statistics.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/zonal_statistics.py) — district-level statistics with DHIS2 organisation unit IDs via `aggregate_spatial` and `rename_labels`
-- [`examples/aggregate_and_import_to_dhis2.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/aggregate_and_import_to_dhis2.py) — fetch org units from DHIS2, run the `aggregate_to_dhis2_json` workflow, and import the result back into DHIS2
 
 ---
 

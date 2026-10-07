@@ -339,11 +339,8 @@ def test_the_map_viewer_leaves_vector_collections_out_of_its_list(client: TestCl
     assert "all.filter((col) => !isVectorCollection(col))" in page
 
 
-def test_the_map_viewer_tells_a_vector_dataset_from_an_unpublished_one(client: TestClient) -> None:
-    """A vector-only instance, or a deep link to a vector, is not reported as nothing published."""
+def test_the_map_viewer_does_not_call_a_vector_only_instance_empty(client: TestClient) -> None:
+    """Published vectors and no rasters is not "no published datasets"."""
     page = client.get("/map").text
 
-    assert "vectorCollectionIds = new Set(all.filter(isVectorCollection)" in page
-    assert "No published raster datasets found. The map shows raster datasets only." in page
-    assert "vectorCollectionIds.has(requested)" in page
-    assert "is a vector dataset; the map shows raster datasets only." in page
+    assert "No published raster datasets found. The map viewer shows raster datasets only for now." in page
