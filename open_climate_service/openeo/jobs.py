@@ -52,6 +52,7 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobUpdate,
 )
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.storage_size import stored_bytes
@@ -725,7 +726,7 @@ class OpenEOJobService:
                             # after a takeover: wait out the rest instead of retrying early.
                             retry_after = wait
                         else:
-                            retry_after = self._execute(job_id)
+                            retry_after = self._execute_in_slot(job_id)
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)
@@ -735,6 +736,21 @@ class OpenEOJobService:
             self._watch_for_takeover(job_id)
         elif retry_after is not None:
             self._schedule_retry(job_id, retry_after)
+
+    def _execute_in_slot(self, job_id: str) -> float | None:
+        """Run one attempt holding a shared job slot, so ingests and openEO jobs share one limit.
+
+        The job waits QUEUED for the slot. One cancelled meanwhile is still handed to `_execute`,
+        which records the cancellation without computing; one still waiting at shutdown stays
+        QUEUED for the next start to re-enqueue.
+        """
+        slots = get_job_slots()
+        if not slots.acquire(should_stop=lambda: self._stopping.is_set() or _cancel_requested(job_id)):
+            return None if self._stopping.is_set() else self._execute(job_id)
+        try:
+            return self._execute(job_id)
+        finally:
+            slots.release()
 
     def _schedule_retry(self, job_id: str, seconds: float) -> None:
         """Requeue a job once its retry backoff has passed, holding no worker meanwhile.

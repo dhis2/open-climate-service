@@ -94,8 +94,11 @@ async def _collect_pending_garbage_periodically() -> None:
 async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
     from open_climate_service.plugins_diagnostics import log_plugin_loading
+    from open_climate_service.shared.compute import install_shared_dask_pool
 
     log_plugin_loading()
+    # Before any job is recovered, so no computation starts a dask pool of its own.
+    install_shared_dask_pool()
     # Every configured export is resolved here, so an export whose period cannot be produced
     # from its dataset, or that lacks the temporal_aggregation it needs, refuses startup with
     # the same message a job would fail with later (CLIM-1302).
