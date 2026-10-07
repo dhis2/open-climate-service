@@ -128,8 +128,7 @@ for the instance in `climate-service.yaml`. On a read-only instance neither form
 ## The map viewer (`/map`)
 
 The map viewer renders **published** datasets directly in the browser: rasters from their
-GeoZarr stores (using MapLibre and zarr-layer), vector datasets from their GeoParquet (using
-hyparquet). Only published datasets appear here.
+GeoZarr stores, vector datasets from their GeoParquet. Only published datasets appear here.
 
 - **Dataset selector** — pick any published dataset from the dropdown, grouped into raster and
   vector datasets when the instance has both.
