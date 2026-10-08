@@ -27,6 +27,9 @@
     pinned release is the collection's version.
   license: ODbL-1.0
   attribution: © OpenStreetMap contributors, © Overture Maps Foundation
+  providers:
+    - name: Overture Maps
+      url: https://overturemaps.org
   id_property: id
   provider: overture
   params:

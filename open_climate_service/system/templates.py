@@ -20,11 +20,24 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
+from open_climate_service.scheduler.presets import form_values, schedule_description, suggested_frequency
 from open_climate_service.shared.time import datetime_to_period_string
 
 from .schemas import Link, RootResponse
 
-_env = jinja2.Environment(loader=jinja2.BaseLoader(), autoescape=True)
+
+def _template_source(name: str) -> str:
+    """The bundled template of that name, for `{% include %}` of shared fragments."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+\.html", name):
+        raise jinja2.TemplateNotFound(name)
+    resource = importlib.resources.files("open_climate_service") / "templates" / name
+    try:
+        return resource.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise jinja2.TemplateNotFound(name) from exc
+
+
+_env = jinja2.Environment(loader=jinja2.FunctionLoader(_template_source), autoescape=True)
 
 _cache: dict[str, jinja2.Template] = {}
 
@@ -62,6 +75,8 @@ def root_json(base: str) -> RootResponse:
 
 def get_template(name: str) -> jinja2.Template:
     """Load and cache a Jinja2 template from the bundled templates/ directory."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+\.html", name):
+        raise jinja2.TemplateNotFound(name)
     if name not in _cache:
         resource = importlib.resources.files("open_climate_service") / "templates" / name
         _cache[name] = _env.from_string(resource.read_text(encoding="utf-8"))
@@ -138,6 +153,7 @@ _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
     ("workflows", "Workflows", "/workflows"),
+    ("schedules", "Schedules", "/schedules"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -423,8 +439,18 @@ def _feature_refresh_blocked(collection_id: str, template: dict[str, Any] | None
     return ""
 
 
-def render_dataset_page(record: Any, mount: str) -> str:
-    """Render the HTML page for one managed dataset, linked from the landing page."""
+def render_dataset_page(
+    record: Any,
+    mount: str,
+    *,
+    schedule_error: str | None = None,
+    schedule_draft: dict[str, Any] | None = None,
+) -> str:
+    """Render the HTML page for one managed dataset, linked from the landing page.
+
+    The Sync panel is where a dataset's sync schedule is set up and edited; a refused save
+    renders the page again with the reason and the draft kept.
+    """
     refreshable = False
     refresh_blocked = ""
     try:
@@ -446,7 +472,35 @@ def render_dataset_page(record: Any, mount: str) -> str:
     except Exception:
         _log.exception("Unexpected error loading the template for dataset '%s'", record.dataset_id)
         template = None
+    schedule: dict[str, Any] | None = None
+    stored_schedule: dict[str, Any] | None = None
+    scheduler_status: dict[str, Any] = {}
+    scheduler_reload_error: str | None = None
+    if record.item_type != "feature":
+        try:
+            from open_climate_service.scheduler.service import get_scheduler_service
+
+            status = get_scheduler_service().status()
+            scheduler_status = {"enabled": status.enabled, "running": status.running, "timezone": status.timezone}
+            scheduler_reload_error = status.reload_error
+            matching = next((row for row in status.schedules if row.dataset_id == record.dataset_id), None)
+            schedule = matching.model_dump(mode="json") if matching is not None else None
+            stored_schedule = schedule
+        except Exception:
+            _log.exception("The schedule for dataset '%s' could not be read", record.dataset_id)
     return get_template("dataset_page.html").render(
+        schedule=schedule,
+        stored_schedule=stored_schedule,
+        scheduler_status=scheduler_status,
+        scheduler_reload_error=scheduler_reload_error,
+        schedule_error=schedule_error,
+        schedule_draft=schedule_draft,
+        schedule_form=form_values(
+            str((schedule_draft or stored_schedule or {}).get("cron") or "") or None,
+            str(record.period_type or ""),
+            schedule_draft,
+        ),
+        suggested_schedule_frequency=suggested_frequency(str(record.period_type or "")),
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
@@ -456,6 +510,51 @@ def render_dataset_page(record: Any, mount: str) -> str:
         job_script=_read_asset("ocs_jobs.js"),
         read_only=api_config.is_read_only(),
         **_dataset_page_context(record, template, refreshable, refresh_blocked),
+    )
+
+
+def render_schedules_page(status: Any, mount: str, *, change_warning: str | None = None) -> str:
+    """Render every stored sync schedule with its runtime state."""
+    names: dict[str, str] = {}
+    try:
+        from open_climate_service.ingestions.services import list_datasets
+
+        names = {item.dataset_id: item.dataset_name for item in list_datasets().items}
+    except Exception:
+        _log.exception("Dataset names could not be listed for the schedules page")
+    rows = [
+        {
+            **item.model_dump(mode="json"),
+            "name": names.get(item.dataset_id),
+            "dataset_exists": item.dataset_id in names,
+            "run_description": schedule_description(item.cron, item.timezone),
+        }
+        for item in status.schedules
+    ]
+    return get_template("schedules_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "schedules"),
+        read_only=api_config.is_read_only(),
+        status=status,
+        schedules=rows,
+        change_warning=change_warning,
+    )
+
+
+def render_schedule_delete_page(dataset_id: str, mount: str) -> str:
+    """Render a no-JavaScript confirmation for deleting a stored sync schedule."""
+    return get_template("schedule_delete_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "schedules"),
+        dataset_id=dataset_id,
     )
 
 
@@ -1296,7 +1395,7 @@ _API_GROUP_NOTES = {
     "STAC": "Catalogue metadata for discovery, one collection per published dataset.",
     "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
     "Extent": "The area this instance covers.",
-    "Schedules": "Scheduled dataset refreshes, as configured for this instance.",
+    "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "System": "Health, version and the landing page's JSON form.",
 }

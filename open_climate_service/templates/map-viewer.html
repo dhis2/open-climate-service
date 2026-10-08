@@ -165,6 +165,16 @@
         display: none !important;
       }
 
+      /* The name of a clicked vector feature: a small label in the panel's type, not
+         MapLibre's default box, whose close button sits on top of short names. */
+      .feature-popup .maplibregl-popup-content {
+        padding: 0.35rem 0.6rem;
+        border-radius: 5px;
+        font: 600 0.85rem/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #1a2332;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+      }
+
       .legend-bar {
         height: 10px;
         border-radius: 3px;
@@ -215,7 +225,7 @@
           <dl id="dataset-meta" class="meta-grid hidden">
             <dt>Source</dt>
             <dd id="meta-source">—</dd>
-            <dt>Units</dt>
+            <dt id="meta-units-label">Units</dt>
             <dd id="meta-units">—</dd>
             <dt>Licence</dt>
             <dd id="meta-licence">—</dd>
@@ -271,6 +281,10 @@
       // fault and still open.
       import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.9.1";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
+      // Vector datasets are GeoParquet, read here rather than converted on the server
+      // (CLIM-1234). hyparquet is plain JavaScript with no dependencies, about 20 KB gzipped,
+      // and decodes GeoParquet geometry to GeoJSON itself, which MapLibre draws as it is.
+      import { parquetReadObjects } from "https://esm.sh/hyparquet@1.31.2";
 
       // Suffix _r means the scale is reversed (matplotlib convention).
       // chroma-js resolves ColorBrewer/D3 scale names case-insensitively.
@@ -432,6 +446,15 @@
       const datasetMeta = document.getElementById("dataset-meta");
       const metaSource = document.getElementById("meta-source");
       const metaUnits = document.getElementById("meta-units");
+      const metaUnitsLabel = document.getElementById("meta-units-label");
+
+      // Units describe raster values; a vector dataset has none, so the row is left out.
+      function showUnits(units) {
+        const shown = units !== null;
+        metaUnitsLabel.classList.toggle("hidden", !shown);
+        metaUnits.classList.toggle("hidden", !shown);
+        if (shown) metaUnits.textContent = units || "—";
+      }
       const metaDescription = document.getElementById("meta-description");
       const metaLicence = document.getElementById("meta-licence");
       const legendEl = document.getElementById("legend");
@@ -493,8 +516,17 @@
         }
 
         map.on("load", () => {
+          mapLoaded = true;
           map.setProjection({ type: "globe" });
         });
+
+        // Registered once for the fixed vector layer ids; they apply to whichever vector
+        // dataset is shown, and do nothing while none is.
+        for (const id of FEATURE_LAYERS) {
+          map.on("click", id, showFeatureName);
+          map.on("mouseenter", id, () => (map.getCanvas().style.cursor = "pointer"));
+          map.on("mouseleave", id, () => (map.getCanvas().style.cursor = ""));
+        }
 
         map.on("error", (event) => {
           const message = event?.error?.message ?? "";
@@ -505,9 +537,28 @@
         });
       }
 
+      // A dataset's STAC collection serves its latest *published* version, and the dataset record
+      // offers a `stac` link exactly when there is one. Its `publication` describes the newest
+      // version instead, which after a refresh with `publish: false` is unpublished while an
+      // older one is still served, so the link is the test of whether the map can show it.
+      function hasStacCollection(item) {
+        return (item.links ?? []).some((link) => link.rel === "stac");
+      }
+
+      // /collections lists vector datasets too (CLIM-1326): a cube with a geometry dimension.
       function isVectorCollection(col) {
         const dims = col?.["cube:dimensions"];
         return dims != null && Object.values(dims).some((dim) => dim?.type === "geometry");
+      }
+
+      function addOptions(parent, entries) {
+        for (const col of entries) {
+          const opt = document.createElement("option");
+          opt.value = `{{ mount }}/collections/${col.id}`;
+          opt.dataset.id = col.id;
+          opt.textContent = col.title ?? col.id;
+          parent.appendChild(opt);
+        }
       }
 
       async function loadCatalog() {
@@ -515,28 +566,28 @@
           const res = await fetch("{{ mount }}/collections");
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const body = await res.json();
-          // /collections lists vector collections too (CLIM-1326). This viewer draws rasters
-          // only, so a collection whose cube has a geometry dimension stays out of the list.
           const all = body.collections ?? [];
-          const collections = all.filter((col) => !isVectorCollection(col));
-          if (collections.length === 0) {
+          const rasters = all.filter((col) => !isVectorCollection(col));
+          const features = all.filter(isVectorCollection);
+          if (all.length === 0) {
             setStatus(
-              all.length === 0
-                ? "No published datasets found. Ingest and publish a dataset first."
-                : "No published raster datasets found. The map viewer shows raster datasets only for now."
+              "No published datasets found. Ingest and publish a dataset first."
             );
             // A deep link still names a dataset, and "not published" answers that question
             // better than the generic empty-catalogue line.
             openRequestedDataset();
             return;
           }
-          for (const col of collections) {
-            const href = `{{ mount }}/collections/${col.id}`;
-            const opt = document.createElement("option");
-            opt.value = href;
-            opt.dataset.id = col.id;
-            opt.textContent = col.title ?? col.id;
-            selectEl.appendChild(opt);
+          // Grouped only when there are both, so an instance with rasters alone looks as before.
+          if (rasters.length && features.length) {
+            for (const [label, entries] of [["Raster", rasters], ["Vector", features]]) {
+              const group = document.createElement("optgroup");
+              group.label = label;
+              addOptions(group, entries);
+              selectEl.appendChild(group);
+            }
+          } else {
+            addOptions(selectEl, rasters.length ? rasters : features);
           }
           setStatus(
             mapUnavailable
@@ -561,6 +612,7 @@
           } catch {}
           activeLayer = null;
         }
+        clearFeatures();
         dimControls.classList.add("hidden");
         dimControls.replaceChildren();
         datasetMeta.classList.add("hidden");
@@ -593,6 +645,12 @@
         } catch (err) {
           if (superseded()) return;
           setStatus(`Failed to load collection: ${err.message}`, true);
+          return;
+        }
+
+        const featureAsset = collection.assets?.data;
+        if (featureAsset?.type === "application/x-parquet") {
+          await loadFeatures(collection, featureAsset, superseded);
           return;
         }
 
@@ -701,7 +759,7 @@
         );
         const units = collection["cube:variables"]?.[variable]?.unit ?? "";
         metaSource.textContent = source ?? "—";
-        metaUnits.textContent = units || "—";
+        showUnits(units);
         datasetMeta.classList.remove("hidden");
 
         // The collection description, which is where a dataset states what its values actually
@@ -713,9 +771,22 @@
         // fallback is built from, so a real description that happens to open with those words
         // ("Published GeoZarr dataset for X - use only within one country") is kept rather
         // than mistaken for the generated one.
-        // A user who can see a layer should be able to see what they may do with it
-        // (CLIM-946). `other` is what an undeclared licence publishes, so say "not declared"
-        // rather than showing a word that reads like the name of a licence.
+        showLicence(collection);
+
+        const description = collection.description ?? "";
+        const generated = description === `Published GeoZarr dataset for ${collection.title}`;
+        metaDescription.textContent = description;
+        metaDescription.classList.toggle("hidden", !description || generated);
+
+        updateLegend(cm, clim, units);
+
+        setStatus("");
+      }
+
+      // A user who can see a layer should be able to see what they may do with it
+      // (CLIM-946). `other` is what an undeclared licence publishes, so say "not declared"
+      // rather than showing a word that reads like the name of a licence.
+      function showLicence(collection) {
         const licenceLink = (collection.links ?? []).find((l) => l.rel === "license");
         const licence = collection.license;
         const licenceLabel =
@@ -730,15 +801,181 @@
         } else {
           metaLicence.textContent = licenceLabel;
         }
+      }
 
+      // A vector dataset: one GeoJSON source and a fill, outline and point layer over it. The
+      // ids are fixed, so taking them down is one place and a second dataset never collides.
+      const FEATURE_SOURCE = "features";
+      const FEATURE_LAYERS = ["features-fill", "features-line", "features-point"];
+      // Both spellings: MapLibre reports a multi-part feature as `MultiPolygon` and so on.
+      const AREA_TYPES = ["Polygon", "MultiPolygon"];
+      const LINE_TYPES = ["LineString", "MultiLineString"];
+      const POINT_TYPES = ["Point", "MultiPoint"];
+      let featurePopup = null;
+
+      function clearFeatures() {
+        if (!map) return;
+        for (const id of FEATURE_LAYERS) {
+          if (map.getLayer(id)) map.removeLayer(id);
+        }
+        if (map.getSource(FEATURE_SOURCE)) map.removeSource(FEATURE_SOURCE);
+        featurePopup?.remove();
+      }
+
+      // Parquet integers arrive as BigInt, which MapLibre's expressions and JSON cannot use. One
+      // within the safe integer range becomes a number; a larger one, such as a 64-bit id, a
+      // string, so it is shown exactly rather than rounded.
+      function plainValue(value) {
+        if (typeof value !== "bigint") return value;
+        const safe = value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER);
+        return safe ? Number(value) : value.toString();
+      }
+
+      function featureLabel(properties) {
+        if (properties.name) return String(properties.name);
+        const text = Object.values(properties).find((v) => typeof v === "string" && v);
+        return text ?? "";
+      }
+
+      // The largest GeoParquet file the viewer reads. The file is read and decoded whole in the
+      // browser, which holds several times its size while it does, so a large collection would
+      // stall the tab. About twice the largest boundary set in use (Norway's municipalities,
+      // 11.6 MB); a bigger collection needs vector tiles (CLIM-1177) or a filtered read.
+      const MAX_FEATURE_BYTES = 25 * 1024 * 1024;
+
+      // The stored GeoParquet, read whole. Drawn only when it is in WGS 84, the default for a
+      // collection, since MapLibre places GeoJSON coordinates as longitude and latitude.
+      async function loadFeatures(collection, asset, superseded) {
+        const storedCrs = collection["proj:code"] ?? "EPSG:4326";
+        if (storedCrs !== "EPSG:4326") {
+          setStatus(`This vector dataset is stored in ${storedCrs}; the map viewer draws WGS 84 only.`, true);
+          return;
+        }
+
+        // The collection's attribution is on its feature record, not in STAC. An open licence
+        // such as ODbL requires it wherever the data is shown, so it goes on the map. The
+        // source row names the template's providers, as it does for a raster.
+        const recordRequest = fetch(`{{ mount }}/features/${encodeURIComponent(collection.id)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .catch(() => null);
+
+        let geojson;
+        try {
+          const download = new AbortController();
+          const res = await fetch(asset.href, { signal: download.signal });
+          if (superseded()) return;
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          // The size is known from the headers, before the body is read, so a file over the
+          // limit is never downloaded.
+          const size = Number(res.headers.get("Content-Length"));
+          if (size > MAX_FEATURE_BYTES) {
+            download.abort();
+            const megabytes = (bytes) => Math.round(bytes / (1024 * 1024));
+            setStatus(
+              `This vector dataset is ${megabytes(size)} MB, more than the ${megabytes(MAX_FEATURE_BYTES)} MB ` +
+                "the map viewer reads. ",
+              true,
+            );
+            const link = document.createElement("a");
+            link.href = asset.href;
+            link.download = "";
+            link.textContent = "Download it to open in a GIS application.";
+            statusEl.append(link);
+            return;
+          }
+          const buffer = await res.arrayBuffer();
+          if (superseded()) return;
+          const rows = await parquetReadObjects({ file: buffer });
+          if (superseded()) return;
+          const geometryColumn = collection["table:primary_geometry"] ?? "geometry";
+          geojson = {
+            type: "FeatureCollection",
+            features: rows
+              .filter((row) => row[geometryColumn])
+              .map((row) => {
+                const properties = {};
+                for (const [key, value] of Object.entries(row)) {
+                  if (key !== geometryColumn && key !== "bbox") properties[key] = plainValue(value);
+                }
+                return { type: "Feature", geometry: row[geometryColumn], properties };
+              }),
+          };
+        } catch (err) {
+          if (superseded()) return;
+          setStatus(`Failed to load features: ${err.message}`, true);
+          return;
+        }
+
+        const record = await recordRequest;
+        if (superseded()) return;
+        const providers = (collection.providers ?? []).map((p) => p.name).filter(Boolean);
+        const attribution = record?.attribution ?? (providers.join(", ") || null);
+
+        try {
+          map.addSource(FEATURE_SOURCE, {
+            type: "geojson",
+            data: geojson,
+            ...(attribution && { attribution }),
+          });
+          map.addLayer({
+            id: "features-fill",
+            type: "fill",
+            source: FEATURE_SOURCE,
+            filter: ["in", ["geometry-type"], ["literal", AREA_TYPES]],
+            paint: { "fill-color": "#0066cc", "fill-opacity": 0.15 },
+          });
+          map.addLayer({
+            id: "features-line",
+            type: "line",
+            source: FEATURE_SOURCE,
+            filter: ["in", ["geometry-type"], ["literal", [...AREA_TYPES, ...LINE_TYPES]]],
+            paint: { "line-color": "#1e3a5f", "line-width": 1 },
+          });
+          map.addLayer({
+            id: "features-point",
+            type: "circle",
+            source: FEATURE_SOURCE,
+            filter: ["in", ["geometry-type"], ["literal", POINT_TYPES]],
+            paint: {
+              "circle-radius": 4,
+              "circle-color": "#0066cc",
+              "circle-stroke-color": "#fff",
+              "circle-stroke-width": 1,
+            },
+          });
+          for (const layer of map.getStyle().layers) {
+            if (layer.type === "symbol") map.moveLayer(layer.id);
+          }
+        } catch (err) {
+          setStatus(`Failed to create layer: ${err.message}`, true);
+          return;
+        }
+
+        metaSource.textContent = providers.join(", ") || "—";
+        showUnits(null);
+        showLicence(collection);
+        datasetMeta.classList.remove("hidden");
         const description = collection.description ?? "";
-        const generated = description === `Published GeoZarr dataset for ${collection.title}`;
         metaDescription.textContent = description;
-        metaDescription.classList.toggle("hidden", !description || generated);
+        metaDescription.classList.toggle("hidden", !description);
 
-        updateLegend(cm, clim, units);
+        const count = geojson.features.length;
+        setStatus(`${count} feature${count === 1 ? "" : "s"}. Click one to see its name.`);
+      }
 
-        setStatus("");
+      // Without a close button, a click elsewhere on the map (MapLibre's default) or Escape closes it.
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") featurePopup?.remove();
+      });
+
+      function showFeatureName(event) {
+        const label = featureLabel(event.features?.[0]?.properties ?? {});
+        featurePopup?.remove();
+        if (!label) return;
+        featurePopup = new maplibregl.Popup({ className: "feature-popup", closeButton: false, offset: 6 })
+          .setLngLat(event.lngLat)
+          .setText(label)
+          .addTo(map);
       }
 
       // `/map?dataset=<id>` opens the viewer on one dataset, and choosing a dataset writes the
@@ -765,8 +1002,13 @@
       // showing the dataset that was not chosen, or fail on a duplicate layer.
       let pendingWhenReady = null;
 
+      // Set once on the map's `load` event. Not `map.isStyleLoaded()`: that is also false while
+      // basemap tiles are still loading, long after `load` has fired, and a selection made then
+      // waited for a `load` that never came again.
+      let mapLoaded = false;
+
       function whenMapReady(callback) {
-        if (!map || mapUnavailable || map.isStyleLoaded()) {
+        if (!map || mapUnavailable || mapLoaded) {
           callback();
           return;
         }
@@ -780,9 +1022,9 @@
         });
       }
 
-      // A deep link to a dataset the catalogue does not list: say why. The catalogue holds only
-      // published raster datasets, so a published vector dataset is missing for a different
-      // reason than an unpublished one, and "not published" would be wrong about it.
+      // A deep link to a dataset the list does not hold: say why. The list holds every published
+      // dataset, raster and vector, so the dataset's own record tells an unpublished one from
+      // one that does not exist.
       async function explainMissingDataset(requested) {
         // Any selection change after this point, including going back to the empty choice,
         // moves loadGeneration on, so a late answer can tell it is about an address the reader
@@ -812,12 +1054,7 @@
           setStatus(`Dataset "${requested}" was not found.`, true);
         } else if (lookup === "failed") {
           setStatus(`Could not check dataset "${requested}"; it is not on the map.`, true);
-        } else if (record?.itemType === "feature") {
-          setStatus(
-            `Dataset "${requested}" is a vector dataset. The map viewer shows raster datasets only for now.`,
-            true
-          );
-        } else if (record.publication?.status !== "published") {
+        } else if (!hasStacCollection(record)) {
           setStatus(`Dataset "${requested}" is not published, so it cannot be shown on the map.`, true);
         } else {
           setStatus(`Dataset "${requested}" cannot be shown on the map.`, true);
