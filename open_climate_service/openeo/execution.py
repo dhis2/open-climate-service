@@ -354,8 +354,9 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
             )
         if shapes1.crs is not None and shapes2.crs is not None and shapes1.crs != shapes2.crs:
             shapes2 = shapes2.to_crs(shapes1.crs)
-        shapes = shapes1.combine_first(shapes2)
-        shapes.name = shapes1.name
+        import geopandas as gpd
+
+        shapes = gpd.GeoSeries(shapes1.combine_first(shapes2), crs=shapes1.crs, name=shapes1.name)
         merged = _merge_labelled(cube1, cube2, overlap_resolver, context, **kwargs)
         return with_shapes(merged, shapes)
 
