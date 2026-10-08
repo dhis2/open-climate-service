@@ -247,15 +247,11 @@ pass the mapping as `save_result` options:
     "arguments": {"id": "era5land_precipitation_monthly", "temporal_extent": ["2025-01-01", "2025-12-31"]}
   },
   "zonal": {
-    "process_id": "aggregate_spatial",
+    "process_id": "aggregate_spatial_weighted",
     "arguments": {
       "data": {"from_node": "load"},
       "geometries": {"type": "FeatureCollection", "features": ["...org units..."]},
-      "reducer": {
-        "process_graph": {
-          "mean": {"process_id": "mean", "arguments": {"data": {"from_parameter": "data"}}, "result": true}
-        }
-      }
+      "reducer": "mean"
     }
   },
   "save": {
@@ -270,7 +266,10 @@ pass the mapping as `save_result` options:
 }
 ```
 
-This is a lower-level escape hatch for experiments and one-off imports. The payload
+This is the aggregation the built-in workflows run: each cell is weighted by the share of it
+an org unit covers. openEO's standard `aggregate_spatial`, with a reducer process such as
+`mean`, counts a cell wholly or not at all instead. This is a lower-level escape hatch for
+experiments and one-off imports. The payload
 is downloadable but has no delivery manifest, so OCS cannot deliver it.
 
 ## Producing a CHAP CSV instead

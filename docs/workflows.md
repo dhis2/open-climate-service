@@ -72,7 +72,7 @@ Open Climate Service ships with ready-to-use workflows for aggregating **any pub
 | `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a [named export](export_plugins.md), with a delivery manifest |
 | `aggregate_to_chap_csv` | CHAP wide CSV (`time_period`, `location`, one column per variable) |
 
-Both run `load_collection → aggregate_spatial → save_result`: they load the dataset over a time range, compute a spatial statistic of the variable within each feature, and emit one value per feature per time step. Each feature's GeoJSON `id` becomes the DHIS2 `orgUnit` (CHAP `location`), and each time step becomes the DHIS2 `period` (CHAP `time_period`).
+Both run `load_collection → aggregate_spatial_weighted → save_result`: they load the dataset over a time range, compute a spatial statistic of the variable within each feature, with each cell weighted by the share of it the feature covers, and emit one value per feature per time step. Each feature's GeoJSON `id` becomes the DHIS2 `orgUnit` (CHAP `location`), and each time step becomes the DHIS2 `period` (CHAP `time_period`).
 
 ### Parameters
 
