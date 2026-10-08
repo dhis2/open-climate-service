@@ -188,11 +188,17 @@ def vector_result(
 
     if dim != GEOMETRY_FIELD:
         result = result.rename({GEOMETRY_FIELD: dim})
-    if type(result.xindexes.get(dim)).__name__ != "GeometryIndex":
-        # The shapes are in the raster's CRS, which the features were reprojected to.
+    index = result.xindexes.get(dim)
+    if type(index).__name__ != "GeometryIndex" or getattr(index, "crs", None) is None:
+        # The shapes are in the raster's CRS, which the features were reprojected to. openEO's
+        # built-in hands xvec a plain list of shapes, so its index has no CRS to carry.
         import xvec  # type: ignore[import-untyped]  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
         result = result.xvec.set_geom_indexes(dim, crs=data.rio.crs)
+    # Scalar coordinates describe the raster's grid (its grid mapping, `spatial_ref`), not the
+    # features; left on, a table gets a column per grid mapping and the exports, which find
+    # their value column by elimination, take it for a second value.
+    result = result.drop_vars([name for name, coord in result.coords.items() if coord.ndim == 0])
     named = attach_feature_ids(result, ids, dim).rename(str(data.name or "data"))
     stamp_cadence(named, cadence_of(data))
     return named

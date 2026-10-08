@@ -324,3 +324,38 @@ def test_a_named_dhis2_export_still_refuses_positional_ids() -> None:
 
     with capture_execution(_NAMED_DHIS2_EXPORT), pytest.raises(ValueError, match="explicit feature identifiers"):
         aggregate_spatial_weighted(_grid(), _frame(pd.RangeIndex(2)), "mean")
+
+
+# --- the built-in aggregate_spatial, on a projected raster ------------------------------------
+
+
+def _projected_grid() -> xr.DataArray:
+    """A UTM 33N raster with a scalar grid-mapping coordinate, as a seNorge store has one."""
+    raster = _grid().t2m.assign_coords(
+        x=500000 + _grid().x.values * 1000, y=6000000 + _grid().y.values * 1000, UTM_Zone_33=0
+    )
+    return raster.rio.write_crs("EPSG:32633")
+
+
+def test_the_builtin_keeps_the_crs_and_drops_the_grid_mapping() -> None:
+    """openEO's own aggregate_spatial hands xvec a bare list of shapes, so its index had no CRS
+    (GeoParquet then claimed WGS 84 for UTM metres), and it kept the raster's scalar grid-mapping
+    coordinate, which the DHIS2 export then took for a second value column."""
+    from open_climate_service.openeo import execution
+
+    aggregate_spatial = execution._build_process_registry()["aggregate_spatial"].implementation
+    districts = gpd.GeoDataFrame(
+        geometry=[box(500000, 6002000, 504000, 6004000), box(500000, 6000000, 504000, 6002000)],
+        index=pd.Index(["MW.N", "MW.S"]),
+        crs="EPSG:32633",
+    )
+
+    def mean(data: Any, axis: Any = None, **_: Any) -> Any:
+        return np.nanmean(data, axis=axis)
+
+    result = aggregate_spatial(data=_projected_grid(), geometries=districts, reducer=mean)
+
+    assert getattr(result.xindexes["geometry"], "crs").to_epsg() == 32633
+    assert "UTM_Zone_33" not in result.coords and "spatial_ref" not in result.coords
+    frame = result.to_dataset().to_dataframe().reset_index()
+    assert jobs._select_dhis2_value_field(frame, "geometry", "time") == "t2m"
