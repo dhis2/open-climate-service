@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -182,7 +183,12 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     template_links = [_link_to_dict(link) for link in template.links]
     period_type = source_dataset.get("period_type")
 
-    collection_payload = _build_collection_with_xstac(artifact=artifact, template=template, period_type=period_type)
+    # Resolved once and used twice: the payload builder needs it to tell a sparse time axis
+    # from a dense one, and `_override_time_step` below publishes it.
+    iso_step = resolve_iso_period_step(source_dataset) or period_type_to_iso_step(period_type)
+    collection_payload = _build_collection_with_xstac(
+        artifact=artifact, template=template, period_type=period_type, iso_step=iso_step
+    )
     collection_payload["id"] = dataset_id
     collection_payload["type"] = "Collection"
     collection_payload["stac_version"] = STAC_VERSION
@@ -257,11 +263,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     # Prefer an explicit extents.temporal.resolution; fall back to the dataset's
     # period_type so openEO save_result outputs (which omit the extents block) still
     # get a temporal step — the map viewer needs it to build the time slider.
-    _override_time_step(
-        collection_payload,
-        resolve_iso_period_step(source_dataset) or period_type_to_iso_step(period_type),
-        cadence=period_cadence(period_type),
-    )
+    _override_time_step(collection_payload, iso_step, cadence=period_cadence(period_type))
     # Spatial extent comes from the live store (set in _build_collection_with_xstac),
     # not the artifact coverage — see _wgs84_extent_from_store. Temporal still tracks the
     # artifact's materialized coverage.
@@ -671,11 +673,20 @@ def _wgs84_extent_from_store(ds: xr.Dataset, store_crs: str, x_dim: str, y_dim: 
 
 
 def _build_collection_with_xstac(
-    *, artifact: ArtifactRecord, template: pystac.Collection, period_type: Any = None
+    *,
+    artifact: ArtifactRecord,
+    template: pystac.Collection,
+    period_type: Any = None,
+    iso_step: str | None = None,
 ) -> dict[str, Any]:
-    # Keyed on period_type as well as the artifact: correcting a template's cadence
-    # changes the payload (an irregular one gains `values`) without producing a new artifact.
-    cache_key = f"{artifact.artifact_id}:{period_type}"
+    # `iso_step` is passed in rather than read back from the payload: `_override_time_step`
+    # runs later, in `build_collection`, so at this point the temporal dimension has no
+    # `step` yet and a sparse axis would look regular.
+    #
+    # Keyed on period_type and the step as well as the artifact: correcting a template's
+    # cadence or resolution changes the payload (an irregular or sparse axis gains `values`)
+    # without producing a new artifact.
+    cache_key = f"{artifact.artifact_id}:{period_type}:{iso_step}"
     cached_payload = _xstac_collection_cache.get(cache_key)
     if cached_payload is not None:
         return deepcopy(cached_payload)
@@ -744,7 +755,7 @@ def _build_collection_with_xstac(
         extent_bbox = _wgs84_extent_from_store(ds, store_crs or "EPSG:4326", x_dimension, y_dimension)
         if extent_bbox is not None:
             payload.setdefault("extent", {}).setdefault("spatial", {})["bbox"] = [extent_bbox]
-        if time_dimension is not None and period_cadence(period_type) is Cadence.IRREGULAR:
+        if time_dimension is not None and _temporal_values_needed(ds, time_dimension, period_type, iso_step):
             _add_temporal_values(payload, ds, time_dimension)
         _cache_xstac_collection_payload(cache_key, payload)
         return deepcopy(payload)
@@ -877,18 +888,90 @@ def _override_time_step(collection: dict[str, Any], step: str | None, *, cadence
             return
 
 
+# Single-unit ISO durations, matching what `generateDateRange` in map-viewer.html parses.
+# Kept deliberately narrow: a client that cannot walk a compound duration would build the
+# wrong number of positions, and this is the check that catches exactly that.
+_SIMPLE_ISO_STEP_RE = re.compile(r"^P(?:T(\d+)H|(\d+)D|(\d+)M|(\d+)Y)$")
+
+
+def _expected_time_walk(start: pd.Timestamp, end: pd.Timestamp, step: str) -> pd.DatetimeIndex | None:
+    """The timestamps a client builds by walking *step* from *start* to *end*.
+
+    Mirrors ``generateDateRange`` in map-viewer.html, including its calendar handling for
+    months and years — an approximation in fixed days drifts and overcounts.
+
+    The whole sequence rather than only its length: a count alone cannot tell a dense axis
+    from one that merely happens to have the same number of slices. A daily store holding
+    ``[Jan 1 00:00, Jan 2 12:00, Jan 3 00:00]`` implies three positions and has three, so a
+    count check passes while the middle label is wrong by twelve hours.
+
+    Returns None for a duration this cannot walk, which the caller must treat as "cannot
+    reconstruct" rather than as agreement.
+    """
+    match = _SIMPLE_ISO_STEP_RE.match(step)
+    if match is None:
+        return None
+    hours, days, months, years = match.groups()
+    if months is not None or years is not None:
+        n = int(months or years)
+        offset = pd.DateOffset(months=n) if months is not None else pd.DateOffset(years=n)
+        span = (end.year - start.year) * 12 + (end.month - start.month) if months is not None else end.year - start.year
+        count = max(1, span // n + 1)
+        return pd.DatetimeIndex([start + offset * i for i in range(count)])
+    inc = timedelta(hours=int(hours)) if hours is not None else timedelta(days=int(days))
+    # Via seconds rather than dividing the two deltas directly: `end - start` is a pandas
+    # Timedelta, and dividing that by a stdlib timedelta has no typed overload.
+    count = max(1, int((end - start).total_seconds() // inc.total_seconds()) + 1)
+    return pd.DatetimeIndex([start + inc * i for i in range(count)])
+
+
+def _temporal_values_needed(ds: xr.Dataset, time_dimension: str, period_type: Any, iso_step: str | None) -> bool:
+    """Whether the temporal dimension must list its timestamps rather than imply them.
+
+    Two cases need it, for the same underlying reason — a client cannot reconstruct the
+    store's time axis from ``extent`` plus ``step`` alone:
+
+    * An irregular cadence has no step to walk at all.
+    * A *sparse* axis has a step, but the store holds only some of the periods it implies.
+      An event-scoped dataset is the clear case: two daily acquisitions three months apart
+      publish ``P1D``, from which a client builds 92 positions for a 2-slice store. It then
+      indexes past the end and renders nothing, with the failure surfacing as an out-of-
+      bounds selection rather than anything naming the cause (CLIM-950).
+
+    A dense regular store still implies its axis exactly, so it keeps publishing extent plus
+    duration and does not grow by one ISO string per period — thousands for a multi-year
+    daily store, on a cached response.
+    """
+    if period_cadence(period_type) is Cadence.IRREGULAR:
+        return True
+    if time_dimension not in ds.dims:
+        return False
+    stamps = pd.DatetimeIndex(np.asarray(ds[time_dimension].values, dtype="datetime64[ns]"))
+    # One slice implies one position, so there is nothing for a client to get wrong.
+    if len(stamps) <= 1:
+        return False
+    # No step, or one no client can walk (P1W, PT30M, a compound duration): a consumer
+    # stepping `extent` gets a single position and every slice past the first is unreachable.
+    # Listing the timestamps is the only way the axis survives, so default to publishing them
+    # rather than staying silent — being unable to check is not the same as agreeing.
+    if not isinstance(iso_step, str):
+        return True
+    # The store's own endpoints rather than the published extent strings: they are the same
+    # instants, and using them avoids re-parsing timezone-suffixed ISO text to compare.
+    expected = _expected_time_walk(stamps[0], stamps[-1], iso_step)
+    if expected is None:
+        return True
+    return not expected.equals(stamps)
+
+
 def _add_temporal_values(collection: dict[str, Any], ds: xr.Dataset, time_dimension: str) -> None:
     """List the temporal dimension's actual timestamps as ``values``.
 
-    Required for an irregular cadence, not decorative. A client builds its time control
-    either from explicit ``values`` or by stepping ``extent`` by ``step``; with an
-    irregular cadence there is no step to walk, so omitting ``values`` leaves a consumer
-    with a single position and no slider. This mirrors ``_build_ordinal_dimensions``,
-    which lists values for the same reason on a day-of-year axis.
+    A client builds its time control either from explicit ``values`` or by stepping
+    ``extent`` by ``step``. This mirrors ``_build_ordinal_dimensions``, which lists values
+    for the same reason on a day-of-year axis.
 
-    Only emitted for irregular cadences. A regular one is fully described by extent plus
-    duration, and listing every timestamp would add one ISO string per period to a cached
-    response for no gain — thousands of entries for a multi-year daily store.
+    See :func:`_temporal_values_needed` for when this is emitted.
     """
     dimensions = collection.get("cube:dimensions") or {}
     dim = dimensions.get(time_dimension)
