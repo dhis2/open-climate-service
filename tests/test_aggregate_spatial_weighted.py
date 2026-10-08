@@ -284,3 +284,40 @@ def test_aggregate_spatial_preserves_non_spatial_dimensions() -> None:
     assert float(out.isel(geometry=0).sel(bands="r").item()) == pytest.approx(0.25)
     assert float(out.isel(geometry=0).sel(bands="g").item()) == pytest.approx(0.5)
     assert float(out.isel(geometry=0).sel(bands="b").item()) == pytest.approx(0.75)
+
+
+def _series(steps: int = 6) -> xr.DataArray:
+    """A 4x4 raster over `steps` days, each day a different constant, chunked two days deep."""
+    data = np.arange(steps, dtype="float64")[:, None, None] * np.ones((steps, 4, 4))
+    da = xr.DataArray(
+        data,
+        dims=("t", "y", "x"),
+        coords={"t": np.arange(steps), "y": np.arange(3.5, -0.5, -1), "x": np.arange(0.5, 4.5, 1)},
+        name="tg",
+    )
+    return da.rio.write_crs("EPSG:4326").chunk({"t": 2})
+
+
+def test_a_long_series_is_read_in_blocks_and_gives_the_same_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.plugins.processes import aggregate_spatial_weighted as module
+
+    geom = _box(0.0, 0.0, 2.0, 2.0)
+    whole = aggregate_spatial_weighted(_series(), geom, "mean")
+    # One day is 128 bytes; a 300-byte bound reads two days at a time, one chunk per block.
+    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 300)
+    assert module._blocks(_series())[1] == [slice(0, 2), slice(2, 4), slice(4, 6)]
+
+    blocked = aggregate_spatial_weighted(_series(), geom, "mean")
+    assert blocked.sizes["t"] == 6
+    assert blocked.isel(geometry=0).values.tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    xr.testing.assert_identical(blocked, whole)
+
+
+def test_blocks_group_chunks_and_split_one_that_is_too_large(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.plugins.processes import aggregate_spatial_weighted as module
+
+    # A day is 128 bytes, so 700 bytes holds five days.
+    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 700)
+    assert module._blocks(_series(12).chunk({"t": 2}))[1] == [slice(0, 4), slice(4, 8), slice(8, 12)]
+    assert module._blocks(_series(12).chunk({"t": 12}))[1] == [slice(0, 5), slice(5, 10), slice(10, 12)]
+    assert module._blocks(_series().isel(t=0))[1] == [slice(None)]
