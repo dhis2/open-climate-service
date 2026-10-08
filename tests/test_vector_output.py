@@ -359,3 +359,31 @@ def test_the_builtin_keeps_the_crs_and_drops_the_grid_mapping() -> None:
     assert "UTM_Zone_33" not in result.coords and "spatial_ref" not in result.coords
     frame = result.to_dataset().to_dataframe().reset_index()
     assert jobs._select_dhis2_value_field(frame, "geometry", "time") == "t2m"
+
+
+def test_two_aggregations_merge_on_their_feature_ids() -> None:
+    """openEO's merge_cubes takes set differences of the labels, and shapes cannot be sorted
+    ("'<' not supported between instances of 'Polygon'"). The cubes are merged on `feature_id`
+    and keep their shapes and CRS, so a CHAP export of two predictors works."""
+    from open_climate_service.openeo import execution
+
+    merge_cubes = execution._build_process_registry()["merge_cubes"].implementation
+    rain = _grid().t2m.rename("tp") * 2
+    merged = merge_cubes(
+        cube1=aggregate_spatial_weighted(_grid(), _districts(), "mean"),
+        cube2=aggregate_spatial_weighted(rain, _districts(), "mean"),
+    )
+
+    assert list(merged.feature_id.values) == ["MW.N", "MW.S"]
+    assert getattr(merged.xindexes["geometry"], "crs").to_epsg() == 4326
+    assert list(merged["__cubes__"].values) == ["t2m", "tp"]
+    frame = merged.to_dataset(name="value").to_dataframe().reset_index()
+    assert jobs._select_chap_value_fields(frame, "geometry", "time") == ["value"]
+
+
+def test_a_vector_cube_does_not_merge_with_a_raster() -> None:
+    from open_climate_service.openeo import execution
+
+    merge_cubes = execution._build_process_registry()["merge_cubes"].implementation
+    with pytest.raises(ValueError, match="only be merged with another vector cube"):
+        merge_cubes(cube1=aggregate_spatial_weighted(_grid(), _districts(), "mean"), cube2=_grid().t2m)
