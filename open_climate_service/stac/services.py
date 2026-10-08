@@ -137,6 +137,15 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
     artifact = _eligible_artifacts_by_dataset().get(dataset_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail=f"STAC collection '{dataset_id}' not found")
+    return build_collection_for_artifact(dataset_id, artifact, request)
+
+
+def build_collection_for_artifact(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
+    """Build the collection document from a record the caller already holds.
+
+    For a caller that selected the record itself, as openEO does: looking it up again could
+    return a newer record after a concurrent refresh, and the document would then mix the two.
+    """
     if artifact.format == ArtifactFormat.GEOPARQUET:
         return _build_feature_collection(dataset_id, artifact, request)
     return _build_raster_collection(dataset_id, artifact, request)
