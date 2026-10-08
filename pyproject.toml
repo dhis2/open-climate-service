@@ -46,7 +46,6 @@ classifiers = [
 # Base install = the lightweight client. It only talks to a running instance over
 # HTTP (discover datasets, list processes/workflows, run process graphs).
 dependencies = [
-    "exactextract>=0.3.0",
     "httpx>=0.28.1",
     "pystac>=1.10,<2",
 ]
@@ -65,6 +64,8 @@ xarray = [
 dhis2 = ["dhis2-client>=0.3.2"]
 # Full server stack — required to run your own Open Climate Service instance.
 server = [
+    # Overlap-weighted zonal statistics for `aggregate_spatial_weighted`, through xvec.
+    "exactextract>=0.3.0",
     "fastapi>=0.100.0",
     # The SPDX register, for validating and canonicalising a template's declared `license`.
     # Vendoring the identifier list instead would avoid the dependency but go stale silently;

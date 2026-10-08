@@ -1881,7 +1881,6 @@ name = "open-climate-service"
 version = "0.1.1"
 source = { editable = "." }
 dependencies = [
-    { name = "exactextract" },
     { name = "httpx" },
     { name = "pystac" },
 ]
@@ -1897,6 +1896,7 @@ server = [
     { name = "earthkit-transforms" },
     { name = "earthkit-utils" },
     { name = "ecmwf-datastores-client" },
+    { name = "exactextract" },
     { name = "fastapi" },
     { name = "geojson-pydantic" },
     { name = "geozarr-toolkit" },
@@ -1958,7 +1958,7 @@ requires-dist = [
     { name = "earthkit-transforms", marker = "extra == 'server'", specifier = ">=1.0" },
     { name = "earthkit-utils", marker = "extra == 'server'", specifier = ">=1.0" },
     { name = "ecmwf-datastores-client", marker = "extra == 'server'", specifier = ">=0.4" },
-    { name = "exactextract", specifier = ">=0.3.0" },
+    { name = "exactextract", marker = "extra == 'server'", specifier = ">=0.3.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100.0" },
     { name = "fsspec", marker = "extra == 'xarray'", specifier = ">=2024.6.0" },
     { name = "geojson-pydantic", marker = "extra == 'server'", specifier = ">=2.1.0" },

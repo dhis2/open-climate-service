@@ -62,7 +62,8 @@ def aggregate_spatial_weighted(
     geometries
         Vector geometries over which to aggregate the raster values.
     reducer
-        Statistic to calculate, or a reducer callable.
+        The statistic to calculate, by name: one of mean, sum, min, max or median. A reducer
+        process is refused, since exactextract weights by overlap only for named statistics.
 
     Returns:
     -------
@@ -85,6 +86,13 @@ def aggregate_spatial_weighted(
     frame = features_in_crs(geometries, raster.rio.crs)
 
     # Run xvec zonal stats with exactextract backend.
+    # The cube's own spatial axes may be x/y, lon/lat or longitude/latitude. exactextract finds
+    # only x and y, so they are renamed; the aggregation consumes them, so no name reaches the result.
+    from open_climate_service.data_manager.services.utils import get_x_y_dims
+
+    x_dim, y_dim = get_x_y_dims(raster)
+    if (x_dim, y_dim) != ("x", "y"):
+        raster = raster.rename({x_dim: "x", y_dim: "y"}).rio.set_spatial_dims(x_dim="x", y_dim="y")
     vec_cube: xr.DataArray = raster.xvec.zonal_stats(
         frame.geometry,
         x_coords="x",

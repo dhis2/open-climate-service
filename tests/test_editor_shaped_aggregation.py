@@ -95,15 +95,24 @@ def test_aggregate_spatial_takes_the_editors_optional_parameters(
     assert _org_units(instance, f"core-{target_dimension}", graph) == {_OU_A, _OU_B}
 
 
-def test_aggregate_spatial_refuses_a_context_it_cannot_pass_on(
-    instance: openeo_jobs.OpenEOJobService,  # noqa: F811
-) -> None:
-    """The editor's null is fine; an actual context would be silently dropped, so it is refused."""
-    graph = _graph("aggregate_spatial", _MEAN_CALLBACK, context={"threshold": 1})
-    record = _run(instance, "core-context", graph)
+def _values(service: openeo_jobs.OpenEOJobService, job_id: str, graph: dict[str, Any]) -> dict[tuple[str, str], float]:
+    record = _run(service, job_id, graph)
+    assert record.status == OpenEOJobStatus.FINISHED, record.error_message
+    values = json.loads(Path(str((record.usage or {})["output_path"])).read_text())["dataValues"]
+    return {(value["orgUnit"], value["period"]): float(value["value"]) for value in values}
 
-    assert record.status == OpenEOJobStatus.ERROR
-    assert "`context` is not supported" in str(record.error_message)
+
+def test_aggregate_spatial_accepts_a_context(instance: openeo_jobs.OpenEOJobService) -> None:  # noqa: F811
+    """openEO's `aggregate_spatial` takes a `context`, and a graph that gives one runs, as on main.
+
+    It is bound to the reducer the way openeo-processes-dask's own reducers receive it. That a
+    callback cannot read it with `from_parameter` is a limitation of the process graph parser,
+    which upstream's `reduce_dimension` shares.
+    """
+    plain = _values(instance, "core-plain", _graph("aggregate_spatial", _MEAN_CALLBACK))
+    with_context = _values(instance, "core-context", _graph("aggregate_spatial", _MEAN_CALLBACK, context={"k": 1}))
+
+    assert with_context == plain
 
 
 _SUM_CALLBACK = {

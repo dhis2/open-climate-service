@@ -182,25 +182,32 @@ def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
         data: Any, geometries: Any, reducer: Any, target_dimension: Any = None, context: Any = None, **kwargs: Any
     ) -> Any:
         # `target_dimension` and `context` are openEO parameters the upstream function does not
-        # take; a graph from the openEO editor passes both, as null. The dimension is named here.
-        # A context could not reach the reducer, so one that is actually given is refused rather
-        # than silently dropped.
-        if context is not None:
-            raise ValueError(
-                "aggregate_spatial: `context` is not supported; the reducer cannot receive it. Leave it null."
-            )
-        import joblib  # type: ignore[import-untyped]
+        # take; a graph from the openEO editor passes both, as null. The dimension is named here,
+        # and a context is bound to the reducer, so a callback reading `context` receives it.
+        import functools
+
+        import numpy as np
 
         from open_climate_service.shared.provenance import record_features, spatial_aggregation_scope
         from open_climate_service.shared.vectors import GEOMETRY_FIELD, features_in_crs, single_raster, vector_result
 
+        if context is not None:
+            # Callback parameters come from `named_parameters`, as openEO's own reducers pass it.
+            reducer = functools.partial(reducer, named_parameters={"context": context})
         record_features(geometries)
         raster = single_raster(data)
         frame = features_in_crs(geometries, raster.rio.crs)
-        # xvec runs the reducer through joblib, by default in loky worker processes, where the
-        # scope's ContextVar is not set; threads do not inherit it either. Run it in this thread
-        # so the named reduction is recorded and a DHIS2 export can check its declared method.
-        with spatial_aggregation_scope(), joblib.parallel_config(backend="sequential"):
+        with spatial_aggregation_scope():
+            # The reducer runs in joblib workers, by default other processes, where the scope's
+            # ContextVar is not set. One call here on a tiny array, the way xvec calls it, records
+            # its named reduction so a DHIS2 export can check its declared method, and leaves the
+            # aggregation itself on joblib's parallel backend.
+            try:
+                xr.DataArray(np.array([[1.0, 2.0]]), dims=("y", "x")).reduce(
+                    reducer, dim=("y", "x"), positional_parameters={"data": 0}
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Could not probe the aggregate_spatial reducer for its method", exc_info=True)
             result = original_fn(data=raster, geometries=frame, reducer=reducer, **kwargs)
         return vector_result(result, raster, frame.index, target_dimension or GEOMETRY_FIELD)
 

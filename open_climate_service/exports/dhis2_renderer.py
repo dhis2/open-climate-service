@@ -144,12 +144,13 @@ class Dhis2ExportPlugin(BaseExportPlugin):
 
         residual_dims: list[str] = []
         if value_columns is not None:
+            excluded = non_value_fields(frame)
             residual_dims = [
                 str(column)
                 for column in frame.columns
                 if column not in {org_field, period_field}
                 and str(column) not in value_columns
-                and str(column) not in non_value_fields(frame)
+                and str(column) not in excluded
             ]
 
         data_values: list[dict[str, str]] = []

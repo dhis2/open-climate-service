@@ -359,3 +359,34 @@ def test_the_builtin_keeps_the_crs_and_drops_the_grid_mapping() -> None:
     assert "UTM_Zone_33" not in result.coords and "spatial_ref" not in result.coords
     frame = result.to_dataset().to_dataframe().reset_index()
     assert jobs._select_dhis2_value_field(frame, "geometry", "time") == "t2m"
+
+
+def test_weighted_reprojects_wgs84_features_onto_a_projected_raster() -> None:
+    """GeoJSON is WGS 84; the raster here is UTM 33N. Without reprojection every value is NaN."""
+    utm = gpd.GeoDataFrame(
+        geometry=[box(500000, 6002000, 504000, 6004000), box(500000, 6000000, 504000, 6002000)],
+        index=pd.Index(["MW.N", "MW.S"]),
+        crs="EPSG:32633",
+    ).to_crs("EPSG:4326")
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "id": label, "properties": {}, "geometry": shape.__geo_interface__}
+            for label, shape in zip(utm.index, utm.geometry, strict=True)
+        ],
+    }
+
+    result = aggregate_spatial_weighted(_projected_grid(), geojson, "mean")
+
+    by_id = dict(zip(result.feature_id.values, result.isel(time=0).values.tolist(), strict=True))
+    assert by_id == pytest.approx({"MW.N": 25.0, "MW.S": 5.0}, abs=0.5)
+    assert getattr(result.xindexes["geometry"], "crs").to_epsg() == 32633
+
+
+def test_weighted_takes_a_raster_on_lon_lat_axes() -> None:
+    raster = _grid().t2m.rename({"x": "lon", "y": "lat"}).rio.set_spatial_dims(x_dim="lon", y_dim="lat")
+
+    result = aggregate_spatial_weighted(raster, _districts(), "mean")
+
+    by_id = dict(zip(result.feature_id.values, result.isel(time=0).values.tolist(), strict=True))
+    assert by_id == {"MW.N": 25.0, "MW.S": 5.0}

@@ -23,12 +23,20 @@ def non_value_fields(frame: Any) -> set[str]:
     A vector cube's features keep their dimension's name, which openEO's `target_dimension` can
     set to anything, so its shapes are recognised by what they hold rather than by name.
     """
-    shapes = {
-        str(column)
-        for column in frame.columns
-        if len(frame[column]) and all(hasattr(value, "geom_type") for value in frame[column])
-    }
+    shapes = {str(column) for column in frame.columns if _holds_shapes(frame[column])}
     return {*_NON_VALUE_FIELDS, *shapes}
+
+
+def _holds_shapes(column: Any) -> bool:
+    """Whether a column holds geometries, judged by its first value.
+
+    An object column is all one kind here, and a flattened vector cube repeats each shape once
+    per time step, so scanning every row would cost millions of checks for one answer.
+    """
+    if column.dtype != object or not len(column):
+        return False
+    first = column.iloc[0]
+    return hasattr(first, "geom_type")
 
 
 def _build_dhis2_json_payload(df: Any, options: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
