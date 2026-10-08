@@ -258,3 +258,33 @@ def encode_vector_cube(ds: xr.Dataset) -> xr.Dataset:
 
     encoded: xr.Dataset = ds.xvec.encode_cf()
     return encoded
+
+
+def labelled_by_feature_id(cube: Any) -> tuple[Any, gpd.GeoSeries | None]:
+    """*cube* with its features labelled by `feature_id` instead of their shapes, and the shapes.
+
+    For operations that compare or sort labels, which shapes do not support (openEO's
+    `merge_cubes` takes set differences of them). :func:`with_shapes` puts the shapes back. A
+    cube that is not a vector cube with ids comes back unchanged, with None.
+    """
+    import geopandas as gpd
+
+    dim = vector_dim(cube)
+    if dim is None or not holds_shapes(cube, dim) or FEATURE_ID_COORD not in cube.coords:
+        return cube, None
+    ids = [str(value) for value in cube[FEATURE_ID_COORD].values]
+    crs = getattr(cube.xindexes.get(dim), "crs", None)
+    shapes = gpd.GeoSeries(list(cube[dim].values), index=ids, crs=crs, name=dim)
+    return cube.drop_indexes(dim).assign_coords({dim: ids}), shapes
+
+
+def with_shapes(cube: Any, shapes: gpd.GeoSeries) -> Any:
+    """Undo :func:`labelled_by_feature_id`: shapes back on the dimension, under xvec's index."""
+    import xvec  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+    dim = str(shapes.name)
+    if dim not in getattr(cube, "dims", ()):
+        return cube
+    ids = [str(value) for value in cube[dim].values]
+    restored = cube.assign_coords({dim: [shapes[label] for label in ids], FEATURE_ID_COORD: (dim, ids)})
+    return restored.xvec.set_geom_indexes(dim, crs=shapes.crs)

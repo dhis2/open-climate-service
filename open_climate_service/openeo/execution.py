@@ -336,6 +336,30 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
         context: Any = None,
         **kwargs: Any,
     ) -> Any:
+        # Vector cubes are merged on their feature ids: upstream takes set differences of the
+        # labels, and shapes cannot be ordered. The shapes go back on afterwards, in the CRS of
+        # the first cube, which the second cube's are reprojected to.
+        from open_climate_service.shared.vectors import labelled_by_feature_id, with_shapes
+
+        cube1, shapes1 = labelled_by_feature_id(cube1)
+        cube2, shapes2 = labelled_by_feature_id(cube2)
+        if shapes1 is None and shapes2 is None:
+            return _merge_labelled(cube1, cube2, overlap_resolver, context, **kwargs)
+        if shapes1 is None or shapes2 is None:
+            raise ValueError("merge_cubes: a vector cube can only be merged with another vector cube")
+        if shapes1.name != shapes2.name:
+            raise ValueError(
+                f"merge_cubes: the vector cubes have their features on different dimensions, "
+                f"'{shapes1.name}' and '{shapes2.name}'"
+            )
+        if shapes1.crs is not None and shapes2.crs is not None and shapes1.crs != shapes2.crs:
+            shapes2 = shapes2.to_crs(shapes1.crs)
+        shapes = shapes1.combine_first(shapes2)
+        shapes.name = shapes1.name
+        merged = _merge_labelled(cube1, cube2, overlap_resolver, context, **kwargs)
+        return with_shapes(merged, shapes)
+
+    def _merge_labelled(cube1: Any, cube2: Any, overlap_resolver: Any, context: Any, **kwargs: Any) -> Any:
         array1 = _as_named_array(cube1)
         array2 = _as_named_array(cube2)
         if array1 is not None and array2 is not None and (cube_axis in array1.dims or cube_axis in array2.dims):
