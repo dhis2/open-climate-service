@@ -132,13 +132,14 @@ def _job_stream(work: Any, finished_message: str) -> StreamingResponse:
 
 @router.post("/manage/ingest", include_in_schema=False)
 async def manage_ingest(request: Request) -> Response:
-    """Ingest a dataset template from its page's form, streaming progress via SSE."""
+    """Ingest a data source from its page's form, streaming progress via SSE."""
     from fastapi import HTTPException
 
     from open_climate_service.data_registry.services import datasets as registry_datasets
     from open_climate_service.data_registry.services.datasets import get_dataset
     from open_climate_service.extents.services import get_extent_or_404
-    from open_climate_service.ingestions.services import create_artifact, ensure_ingestable
+    from open_climate_service.ingestions.processes import ingest_dataset, record_inline_update
+    from open_climate_service.ingestions.services import ensure_ingestable
 
     try:
         form = await request.form()
@@ -151,7 +152,7 @@ async def manage_ingest(request: Request) -> Response:
 
         template = get_dataset(dataset_id)
         if template is None:
-            return _refusal(404, f"Dataset template '{dataset_id}' not found")
+            return _refusal(404, f"Data source '{dataset_id}' not found")
 
         # Both checks belong here rather than inside create_artifact: the work below runs in an
         # event stream, where a refusal arrives as an event after a 200 instead of as the
@@ -165,27 +166,38 @@ async def manage_ingest(request: Request) -> Response:
         if start is None and dated and not future:
             return _refusal(400, f"Start period is required for '{dataset_id}': its periods are not in the future")
 
-        extent = get_extent_or_404()
-        resolved_bbox = list(extent["bbox"])
-        country_code = extent.get("country_code")
+        get_extent_or_404()
     except HTTPException as exc:
         return _refusal(exc.status_code, str(exc.detail))
     except Exception as exc:
         return _refusal(400, str(exc))
 
-    return _job_stream(
-        lambda on_progress: create_artifact(
+    def ingest(on_progress: Any) -> None:
+        artifact, events = ingest_dataset(
             dataset=template,
             start=start,
             end=end,
-            bbox=resolved_bbox,
-            country_code=country_code,
             overwrite=overwrite,
             publish=publish,
             on_progress=on_progress,
-        ),
-        f"Ingested {template.get('name', dataset_id)}",
-    )
+        )
+        # Inline, like the HTTP route without `respond-async`: recorded as a completed job
+        # so the update reaches workflow automation.
+        if events:
+            record_inline_update(
+                label="ingestion",
+                request={
+                    "dataset_id": dataset_id,
+                    "start": start,
+                    "end": end,
+                    "overwrite": overwrite,
+                    "publish": publish,
+                },
+                result={"artifact_id": artifact.artifact_id, "dataset_id": dataset_id},
+                events=events,
+            )
+
+    return _job_stream(ingest, f"Ingested {template.get('name', dataset_id)}")
 
 
 @router.post("/manage/sync", include_in_schema=False)
@@ -193,6 +205,7 @@ async def manage_sync(request: Request) -> Response:
     """Sync a dataset from its page's form, streaming progress via SSE."""
     from fastapi import HTTPException
 
+    from open_climate_service.ingestions.processes import record_inline_update, sync_update_events
     from open_climate_service.ingestions.services import get_latest_artifact_for_dataset_or_404, sync_dataset
 
     try:
@@ -211,9 +224,42 @@ async def manage_sync(request: Request) -> Response:
     except Exception as exc:
         return _refusal(400, str(exc))
 
+    def sync(on_progress: Any) -> None:
+        result = sync_dataset(dataset_id=dataset_id, end=end, publish=publish, on_progress=on_progress)
+        record_inline_update(
+            label="sync",
+            request={"dataset_id": dataset_id, "end": end, "publish": publish},
+            result=result.model_dump(mode="json"),
+            events=sync_update_events(dataset_id, result),
+        )
+
+    return _job_stream(sync, "Sync completed")
+
+
+@router.post("/manage/features/refresh", include_in_schema=False)
+async def manage_feature_refresh(request: Request) -> Response:
+    """Fetch a feature collection from its template page's form, streaming progress via SSE."""
+    from fastapi import HTTPException
+
+    from open_climate_service.features.services import execute_feature_refresh, refreshable_feature_template_or_error
+
+    try:
+        form = await request.form()
+        collection_id = str(form.get("collection_id", "")).strip()
+        publish = "publish" in form
+        # Checked before the stream starts, as for ingest: a refusal inside the stream would
+        # arrive as an event after a 200 instead of as the refusal it is.
+        template = refreshable_feature_template_or_error(collection_id)
+    except HTTPException as exc:
+        return _refusal(exc.status_code, str(exc.detail))
+    except Exception as exc:
+        return _refusal(400, str(exc))
+
     return _job_stream(
-        lambda on_progress: sync_dataset(dataset_id=dataset_id, end=end, publish=publish, on_progress=on_progress),
-        "Sync completed",
+        lambda on_progress: execute_feature_refresh(
+            collection_id=collection_id, publish=publish, on_progress=on_progress
+        ),
+        f"Fetched {template.get('name', collection_id)}",
     )
 
 

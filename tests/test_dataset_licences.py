@@ -25,7 +25,7 @@ from open_climate_service.shared.licences import (
     parse_licence,
 )
 
-_BUILTIN_TEMPLATES = sorted(glob.glob("open_climate_service/plugins/datasets/*.yaml"))
+_BUILTIN_TEMPLATES = sorted(glob.glob("open_climate_service/plugins/rasters/*.yaml"))
 
 
 # -- parsing ----------------------------------------------------------------------------
@@ -144,6 +144,7 @@ _REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
     "chirps3.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
     "era5_land.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
+    "copdem30.yaml": frozenset({ATTRIBUTION}),  # License to Use Copernicus DEM
 }
 
 

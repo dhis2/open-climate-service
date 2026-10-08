@@ -264,11 +264,13 @@ def test_the_records_this_release_actually_writes_are_accepted() -> None:
 
 
 def _tmp_record_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    import geopandas as gpd
+
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
     monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
     store_path = tmp_path / "districts.parquet"
-    store_path.write_bytes(b"PAR1")
+    gpd.GeoDataFrame({"orgUnitCode": ["SL-W"]}, geometry=[Point(-13.5, 6.9)], crs="EPSG:4326").to_parquet(store_path)
     return store_path
 
 
@@ -559,19 +561,47 @@ def test_create_feature_artifact_refuses_a_directory_in_place_of_the_file(
         )
 
 
-def test_create_feature_artifact_refuses_a_reprojected_store_it_cannot_describe(
+def test_create_feature_artifact_records_a_projected_store_with_both_extents(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The extent comes from GeoJSON, which is WGS 84; recording it against a projected store
-    is the silent mismatch ADR 0002 decision 9 exists to prevent."""
+    """A projected store was refused until CLIM-1068 gave it a CRS-correct reader; now it registers.
+
+    The record keeps the raster convention: `spatial` is the extent in the store's own CRS and
+    `spatial_wgs84` is the WGS 84 one the GeoJSON gave. Recording the WGS 84 extent as `spatial`
+    is the silent mismatch ADR 0002 decision 9 exists to prevent.
+    """
+    store_path = _tmp_record_store(monkeypatch, tmp_path)
+    import geopandas as gpd
+
+    gpd.read_parquet(store_path).to_crs("EPSG:3857").to_parquet(store_path)
+
+    record = services.create_feature_artifact(
+        template=DISTRICTS_TEMPLATE,
+        features=_feature_collection(),
+        store_path=store_path,
+        crs="EPSG:3857",
+    )
+
+    assert record.features is not None
+    assert record.features.crs == "EPSG:3857"
+    assert record.coverage.spatial_wgs84 == CoverageSpatial(xmin=-13.5, ymin=6.9, xmax=-10.1, ymax=10.0)
+    # Web Mercator metres, so the projected extent is far outside the degree range it came from.
+    assert record.coverage.spatial.xmin < -1_000_000
+    assert record.coverage.spatial.ymax > 1_000_000
+
+
+def test_create_feature_artifact_still_refuses_a_crs_that_is_not_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Widening which CRSs are accepted did not stop the field being required and checked."""
     store_path = _tmp_record_store(monkeypatch, tmp_path)
 
-    with pytest.raises(ValueError, match="CLIM-1068"):
+    with pytest.raises(ValueError, match="authority code"):
         services.create_feature_artifact(
             template=DISTRICTS_TEMPLATE,
             features=_feature_collection(),
             store_path=store_path,
-            crs="EPSG:3857",
+            crs="WGS 84",
         )
 
 
@@ -758,11 +788,13 @@ def test_raster_overwrite_does_not_replace_feature_with_same_dataset_and_scope(
 # --- the gates ---------------------------------------------------------------------------
 
 
-def test_neither_catalogue_admits_a_feature_collection_yet(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Exposure lands atomically with the collection document in CLIM-1069, not before.
+def test_stac_admits_a_feature_collection_and_the_raster_gate_still_refuses_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The divergence the gates were split for, now that STAC has a document for both formats.
 
-    The record exists, is published, and is listed under `/datasets` — but STAC would have to
-    advertise a collection URL whose document this build cannot render, so the gate stays shut.
+    STAC describes what exists; openEO advertises what `load_collection` can consume. A feature
+    collection is the first artifact where those differ.
     """
     monkeypatch.setattr(
         services,
@@ -770,9 +802,10 @@ def test_neither_catalogue_admits_a_feature_collection_yet(monkeypatch: pytest.M
         lambda: SimpleNamespace(items=[_raster_artifact(), _feature_artifact()]),
     )
 
-    assert list(services.stac_eligible_artifacts_by_dataset()) == ["chirps3_precipitation_daily"]
+    assert sorted(services.stac_eligible_artifacts_by_dataset()) == ["chirps3_precipitation_daily", "districts"]
     assert list(services.latest_published_raster_artifacts_by_dataset()) == ["chirps3_precipitation_daily"]
     assert ArtifactFormat.GEOPARQUET not in services.LOADABLE_RASTER_FORMATS
+    assert ArtifactFormat.GEOPARQUET in services.CATALOGUED_FORMATS
 
 
 def test_an_unpublished_feature_collection_reaches_neither_catalogue(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -785,32 +818,59 @@ def test_an_unpublished_feature_collection_reaches_neither_catalogue(monkeypatch
     assert services.stac_eligible_artifacts_by_dataset() == {}
 
 
-def test_no_surface_advertises_a_collection_url_that_would_not_resolve(
+def test_the_catalogue_and_openeo_both_advertise_a_feature_collection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The catalogue, the openEO listing and the dataset links all agree it is not there."""
+    """Every surface agrees: in STAC, `/datasets` and openEO, which loads it as a vector cube (CLIM-1326)."""
     monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
 
     catalog = client.get("/stac/catalog.json").json()
     dataset = client.get("/datasets/districts").json()
 
+    assert any(link["href"].endswith("/stac/collections/districts") for link in catalog["links"])
+    assert {link["rel"] for link in dataset["links"]} == {"self", "stac", "features"}
+    assert [collection["id"] for collection in client.get("/collections").json()["collections"]] == ["districts"]
+
+
+def test_an_unpublished_feature_collection_is_advertised_nowhere(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Widening the gate did not weaken the publication check it sits behind."""
+    monkeypatch.setattr(
+        services,
+        "list_artifacts",
+        lambda: SimpleNamespace(items=[_feature_artifact(status=PublicationStatus.UNPUBLISHED)]),
+    )
+
+    catalog = client.get("/stac/catalog.json").json()
+
     assert all("districts" not in link["href"] for link in catalog["links"])
     assert client.get("/stac/collections/districts").status_code == 404
-    assert client.get("/collections/districts").status_code == 404
-    assert client.get("/collections").json()["collections"] == []
-    assert {link["rel"] for link in dataset["links"]} == {"self"}
+    assert {link["rel"] for link in client.get("/datasets/districts").json()["links"]} == {"self"}
 
 
 # --- the format branches -----------------------------------------------------------------
 
 
-def test_stac_collection_builder_is_never_reached_for_a_feature_collection(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A plain 404, which is true, rather than a 501 behind a link the catalogue advertised."""
-    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
+def test_the_feature_builder_needs_no_datacube_machinery(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dispatched by format: the xstac path is not merely unused for a collection, it is unreachable.
 
-    assert client.get("/stac/collections/districts").status_code == 404
+    Every raster helper is replaced with something that raises, so a collection document that
+    still touched one would fail loudly rather than quietly produce datacube fields.
+    """
+
+    def unreachable(*_: object, **__: object) -> object:
+        raise AssertionError("the raster builder must not be reached for a feature collection")
+
+    monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
+    monkeypatch.setattr(stac_services, "_build_collection_with_xstac", unreachable)
+    monkeypatch.setattr(stac_services, "_open_published_store", unreachable)
+    monkeypatch.setattr(stac_services, "_zarr_media_type", unreachable)
+
+    response = client.get("/stac/collections/districts")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "districts"
 
 
 def test_openeo_refuses_to_open_a_feature_collection_as_a_datacube() -> None:
@@ -972,11 +1032,14 @@ def test_dataset_detail_omits_variable_and_period_type_for_a_feature_collection(
     assert [version["format"] for version in payload["versions"]] == ["geoparquet"]
 
 
-def test_dataset_links_offer_neither_zarr_nor_stac_for_a_feature_collection() -> None:
-    """The links track the gates exactly, so `/datasets` never points at a 404."""
-    links = services._dataset_links("districts", _feature_artifact())
+def test_dataset_links_offer_stac_and_features_but_not_zarr_for_a_feature_collection() -> None:
+    """The links track the gates exactly, so `/datasets` never points at a 404 nor withholds a URL."""
+    published = _feature_artifact()
+    links = services._dataset_links("districts", published, published=published)
 
-    assert [link.rel for link in links] == ["self"]
+    assert {link.rel for link in links} == {"self", "stac", "features"}
+    assert any(link.rel == "stac" and link.href == "/stac/collections/districts" for link in links)
+    assert any(link.rel == "features" and link.href == "/features/districts" for link in links)
 
 
 def test_stac_collection_builder_still_serves_a_raster(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,6 +15,7 @@ from open_climate_service import config
 from open_climate_service.exports.delivery_input import lease_export_input
 from open_climate_service.exports.manifest import ExportManifest
 from open_climate_service.exports.service import write_named_export
+from open_climate_service.ingestions.schemas import ArtifactFormat
 from open_climate_service.openeo import jobs
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus, OpenEOJobUpdate
 from open_climate_service.shared.provenance import (
@@ -262,12 +263,14 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
     from open_climate_service.openeo import execution
     from open_climate_service.plugins.processes.aggregate_spatial import _parse_geometries
 
-    artifact = SimpleNamespace(path="/source", artifact_id="artifact-1", source_dataset_id="rain")
+    artifact = SimpleNamespace(
+        path="/source", artifact_id="artifact-1", source_dataset_id="rain", format=ArtifactFormat.ICECHUNK
+    )
     monkeypatch.setattr(execution, "_get_published_artifact", lambda _: artifact)
     monkeypatch.setattr(execution, "_open_artifact", lambda _: xr.Dataset({"rain": ("t", [1])}))
     monkeypatch.setattr(execution, "_ensure_crs", lambda data: data)
     monkeypatch.setattr(execution, "_build_process_registry", lambda: {})
-    monkeypatch.setattr(execution, "_augment_with_workflows", lambda registry: registry)
+    monkeypatch.setattr(execution, "_augment_with_workflows", lambda registry, *_: registry)
 
     class Graph:
         def __init__(self: Any, graph: Any):
@@ -277,7 +280,11 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
             def execute():
                 execution._load_collection_impl("managed-rain")
                 _parse_geometries(
-                    {"type": "Feature", "id": "DiszpKrYNg8", "geometry": {"type": "Point", "coordinates": [0, 0]}}
+                    {
+                        "type": "Feature",
+                        "id": "DiszpKrYNg8",
+                        "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                    }
                 )
                 return execution.SaveResultEnvelope(_data(), "DHIS2JSON", {"export": "rain"})
 

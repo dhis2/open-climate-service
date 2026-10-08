@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ source.name }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/data-sources">Data sources</a> / {{ source.id }}</p>
+        <div class="page-title">
+          <h2>{{ source.name }}</h2>
+          <span class="chip">Vector</span>
+          {% if fetched %}<span class="chip chip-{{ fetched.status }}">fetched</span>{% endif %}
+        </div>
+
+        <div class="dataset-page">
+          <div class="stack">
+            <section class="panel" aria-labelledby="description-title">
+              <h3 id="description-title">Description</h3>
+              {% if paragraphs %}
+              <div class="prose">
+                {% for paragraph in paragraphs %}
+                <p>{{ paragraph }}</p>
+                {% endfor %}
+              </div>
+              {% else %}
+              <p class="note">No description has been provided for this data source.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="fetch-title">
+              <h3 id="fetch-title">Fetch</h3>
+              {% if fetched %}
+              <p class="note">
+                Already fetched. <a href="{{ mount }}/datasets/{{ fetched.id }}">View the collection</a>.
+                Fetching again replaces it with what the provider returns now.
+              </p>
+              {% endif %}
+              {% if can_fetch %}
+              <form
+                id="fetch-form"
+                method="post"
+                action="{{ mount }}/manage/features/refresh"
+                data-dataset-url="{{ mount }}/datasets/{{ source.id }}"
+              >
+                <input type="hidden" name="collection_id" value="{{ source.id }}" />
+                <div class="checks">
+                  <label><input type="checkbox" name="publish" checked /> Publish after fetching</label>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="primary" id="fetch-button">{% if fetched %}Refresh{% else %}Fetch{% endif %}</button>
+                  <span class="note">The provider decides what it fetches, for example the instance's extent.</span>
+                </div>
+                <div class="progress" data-job-progress hidden>
+                  <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
+                  <span class="progress-label" aria-live="polite">Starting…</span>
+                </div>
+                <div class="notice error" data-job-error role="alert" hidden></div>
+              </form>
+              {% elif not refreshable %}
+              <p class="note">This data source names no provider this instance has, so it cannot be fetched here.</p>
+              {% elif read_only %}
+              <p class="note">This instance is read-only, so collections cannot be fetched here.</p>
+              {% endif %}
+            </section>
+
+            <section class="panel" aria-labelledby="about-title">
+              <h3 id="about-title">About</h3>
+              <dl class="facts">
+                {% for label, value, href in facts %}
+                <dt>{{ label }}</dt>
+                <dd>{{ value }}</dd>
+                {% endfor %}
+              </dl>
+            </section>
+          </div>
+
+          <div class="stack">
+            {% if licence %}
+            <section class="panel" aria-labelledby="licence-title">
+              <h3 id="licence-title">Licence</h3>
+              <p><strong>{{ licence }}</strong></p>
+              {% if obligations %}
+              <p class="note">Serving or sharing this collection requires {{ obligations | join(" and ") }}.</p>
+              {% endif %}
+            </section>
+            {% endif %}
+
+            <section class="panel" aria-labelledby="links-title">
+              <h3 id="links-title">Links</h3>
+              <div class="actions">
+                {% if fetched %}
+                <a class="button-link" href="{{ mount }}/datasets/{{ fetched.id }}">Fetched collection</a>
+                {% endif %}
+                <a class="button-link" href="{{ mount }}/data-sources/{{ source.id }}?f=json">Metadata (JSON)</a>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    {% if can_fetch %}
+    <script>
+{{ job_script | safe }}
+      // Stays on this page: progress and failures are shown here, success opens the collection.
+      runJobForm(document.getElementById("fetch-form"), {
+        startLabel: "Starting…",
+        onDone: function (form) {
+          window.location.href = form.getAttribute("data-dataset-url");
+        },
+      });
+    </script>
+    {% endif %}
+  </body>
+</html>

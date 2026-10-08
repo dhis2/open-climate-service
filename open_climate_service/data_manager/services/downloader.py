@@ -1,6 +1,7 @@
 """Write raster datasets to Icechunk stores with GeoZarr conventions."""
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -200,18 +201,66 @@ def _overwrite_native_resampled_levels(
     """
     root = zarr.open_group(store, mode="a")
     spatial_vars = [str(name) for name, da in ds.data_vars.items() if {x_dim, y_dim} <= set(da.dims)]
-    for lvl in range(1, levels):
-        factor = 2**lvl
-        level_group = cast(zarr.Group, root[str(lvl)])
-        for name in spatial_vars:
-            da = ds[name]
-            coarsened = _coarsen_native(da, x_dim, y_dim, factor, method).transpose(*da.dims)
-            target = cast(zarr.Array, level_group[name])
-            values = coarsened.values
-            if values.shape != target.shape:
-                # Defensive: clip to the level array's shape if trimming disagrees by a cell.
-                values = values[tuple(slice(0, s) for s in target.shape)]
-            target[:] = values.astype(target.dtype, copy=False)
+    for name in spatial_vars:
+        da = ds[name]
+        t_dim = next((str(d) for d in da.dims if d not in (x_dim, y_dim)), None)
+        for window in _native_batches(da, t_dim):
+            # Loaded a batch at a time: the source is lazy, and scipy's mode cannot take a
+            # dask array.
+            native = da.isel(window).load()
+            for lvl in range(1, levels):
+                target = cast(zarr.Array, cast(zarr.Group, root[str(lvl)])[name])
+                _write_native_resampled(native, target, window, x_dim, y_dim, lvl, method)
+
+
+def _record_resampling_method(store: Any, method: str) -> None:
+    """Replace topozarr's placeholder method in the multiscales metadata with the one used.
+
+    A ``mode`` build passes ``max`` to topozarr, which records ``max``. Left that way, a
+    reader would take the levels for maxima, and a template changed between ``mode`` and
+    ``max`` would look unchanged to ``append_pyramid_levels``.
+    """
+    root = zarr.open_group(store, mode="a")
+    multiscales = root.attrs.get("multiscales")
+    if not isinstance(multiscales, dict):
+        return
+    multiscales = dict(multiscales)
+    multiscales["resampling_method"] = method
+    layout = multiscales.get("layout")
+    if isinstance(layout, list):
+        multiscales["layout"] = [
+            {**entry, "resampling_method": method}
+            if isinstance(entry, dict) and "resampling_method" in entry
+            else entry
+            for entry in layout
+        ]
+    root.attrs["multiscales"] = multiscales
+
+
+def _native_batches(da: xr.DataArray, t_dim: str | None, start: int = 0) -> list[dict[str, slice]]:
+    """Slices of *da* along its leading non-spatial dim, sized to the pyramid region budget."""
+    if t_dim is None:
+        return [{}]
+    step_bytes = max(1, int(da.size // max(1, da.sizes[t_dim])) * da.dtype.itemsize)
+    batch = max(1, _PYRAMID_MAX_REGION_BYTES // step_bytes)
+    return [{t_dim: slice(a, min(a + batch, da.sizes[t_dim]))} for a in range(start, da.sizes[t_dim], batch)]
+
+
+def _write_native_resampled(
+    native: xr.DataArray,
+    target: zarr.Array,
+    window: dict[str, slice],
+    x_dim: str,
+    y_dim: str,
+    level: int,
+    method: str,
+) -> None:
+    """Write level *level* of the loaded *native* slice into its window of *target*."""
+    values = _coarsen_native(native, x_dim, y_dim, 2**level, method).transpose(*native.dims).values
+    # Defensive: clip to the level array's shape if trimming disagrees by a cell.
+    region = tuple(window.get(str(d), slice(0, s)) for d, s in zip(native.dims, target.shape, strict=True))
+    values = values[tuple(slice(0, r.stop - r.start) for r in region)]
+    target[region] = values.astype(target.dtype, copy=False)
 
 
 def _write_root_time_coordinate(zarr_store: "Path | Any", ds: xr.Dataset, *, time_dim: str) -> None:
@@ -242,6 +291,170 @@ def _write_root_time_coordinate(zarr_store: "Path | Any", ds: xr.Dataset, *, tim
     )
     root = zarr.open_group(store_arg, mode="a", zarr_format=3)
     root.attrs.update(root_attrs)
+
+
+def _dimension_names(arr: zarr.Array) -> tuple[str, ...]:
+    return tuple(str(d) for d in (arr.metadata.dimension_names or ()))  # type: ignore[union-attr]
+
+
+def append_pyramid_levels(
+    store_path: Path,
+    *,
+    pyramid_method: str = "mean",
+    t_dim: str | None = None,
+    x_dim: str = "x",
+    y_dim: str = "y",
+) -> int | None:
+    """Extend every coarser level of a pyramid store to the periods level 0 has gained.
+
+    A streaming sync appends new periods to level 0 only, and rebuilding the pyramid to cover
+    them rewrites every period ever stored (CLIM-1237). Each level is reduced from the level
+    above in space only, never along time, so a new period's coarser levels depend on nothing
+    but that period's own slice of level 0. They are computed here as
+    ``write_to_icechunk_store`` computes them (topozarr's kernel from the level above, or a
+    resample from native for ``mode``) and committed in one commit, so the store matches a
+    full rebuild.
+
+    ``t_dim`` defaults to the leading dim of level 0's data variables: publication renames
+    time aliases to ``t``, but a climatology keeps its own (``dayofyear``).
+
+    Returns the number of periods appended, 0 when the levels are already current, or None
+    when the store is not a pyramid that level 0 has simply grown past. The caller rebuilds
+    then.
+    """
+    import icechunk
+    import numpy as np
+    from topozarr_core import block_reduce
+
+    from open_climate_service.stac.media_types import attributes_declare_multiscales
+
+    method = _normalize_resampling_method(pyramid_method)
+    native_resample = method in _NATIVE_RESAMPLE_METHODS
+    composable_method = "max" if native_resample else method
+
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
+    session = repo.writable_session("main")
+    root = zarr.open_group(session.store, mode="r+")
+    root_attrs = dict(root.attrs)
+    if not attributes_declare_multiscales(root_attrs):
+        return None
+    multiscales: Any = root_attrs["multiscales"]
+    if multiscales.get("resampling_method") != method:
+        # The template's method changed since the pyramid was built. Levels reduced one way
+        # must not be extended another, so the rebuild redoes them all.
+        return None
+    level_names = sorted((k for k in root.group_keys() if k.isdigit()), key=int)
+    if level_names != [str(i) for i in range(len(level_names))] or len(level_names) != len(multiscales["layout"]):
+        return None
+    groups = [cast(zarr.Group, root[name]) for name in level_names]
+    base = groups[0]
+    if t_dim is None:
+        leading = {
+            _dimension_names(arr)[0]
+            for _, arr in base.arrays()
+            if {x_dim, y_dim} <= set(_dimension_names(arr)) and len(_dimension_names(arr)) > 2
+        }
+        if len(leading) != 1:
+            return None
+        t_dim = leading.pop()
+    if t_dim not in base:
+        return None
+    base_t = np.asarray(cast(zarr.Array, base[t_dim])[:])
+    total = int(base_t.shape[0])
+
+    def timed_arrays(group: zarr.Group) -> dict[str, zarr.Array]:
+        # Every array along time, the level's own time coordinate included.
+        return {str(name): arr for name, arr in group.arrays() if _dimension_names(arr)[:1] == (t_dim,)}
+
+    base_arrays = timed_arrays(base)
+    if any(arr.shape[0] != total for arr in base_arrays.values()):
+        return None
+    start: int | None = None
+    for group in groups[1:]:
+        arrays = timed_arrays(group)
+        if set(arrays) != set(base_arrays):
+            return None
+        lengths = {arr.shape[0] for arr in arrays.values()}
+        level_start = lengths.pop()
+        if lengths or level_start > total or (start is not None and level_start != start):
+            return None
+        start = level_start
+        level_t = cast(zarr.Array, group[t_dim])
+        if dict(level_t.attrs) != dict(cast(zarr.Array, base[t_dim]).attrs):
+            return None
+        if not np.array_equal(np.asarray(level_t[:]), base_t[:level_start]):
+            return None
+    if start is None:
+        return None
+    # The root coordinate is encoded on its own (its units start at its first period), so
+    # it is compared and rewritten decoded.
+    with xr.open_zarr(session.store, group="0", zarr_format=3) as level0:
+        base_times = level0[t_dim].values
+    root_times = None
+    if t_dim in root:
+        with xr.open_zarr(session.store, zarr_format=3) as root_ds:
+            root_times = root_ds[t_dim].values
+    if root_times is not None and not np.array_equal(root_times, base_times[: len(root_times)]):
+        return None
+    if start > 0 and not bool(np.all(np.diff(base_t[start - 1 :]) > 0)):
+        # A forward append only. The rebuild sorts by time; this would not.
+        return None
+    appended = total - start
+    if appended == 0 and (root_times is None or len(root_times) == total):
+        return 0
+
+    spatial = {
+        name
+        for name, arr in base_arrays.items()
+        if {x_dim, y_dim} & set(_dimension_names(arr)) and np.issubdtype(arr.dtype, np.number)
+    }
+    for group in groups[1:]:
+        for arr in timed_arrays(group).values():
+            arr.resize((total, *arr.shape[1:]))
+
+    base_ds = xr.open_zarr(session.store, group="0", zarr_format=3) if native_resample and spatial else None
+    # Whole periods per batch, as many as fit the pyramid build's own region budget. One
+    # period always goes, however large.
+    step_bytes = max(
+        (int(np.prod(base_arrays[name].shape[1:])) * base_arrays[name].dtype.itemsize for name in spatial),
+        default=1,
+    )
+    batch = max(1, _PYRAMID_MAX_REGION_BYTES // step_bytes)
+    try:
+        for a in range(start, total, batch):
+            b = min(a + batch, total)
+            for name, base_arr in base_arrays.items():
+                if name not in spatial:
+                    values = base_arr[a:b]
+                    for group in groups[1:]:
+                        cast(zarr.Array, group[name])[a:b] = values
+                    continue
+                if base_ds is not None:
+                    # As _overwrite_native_resampled_levels: from native, not the level above.
+                    window = {t_dim: slice(a, b)}
+                    native = base_ds[name].isel(window).load()
+                    for level, group in enumerate(groups[1:], start=1):
+                        target = cast(zarr.Array, group[name])
+                        _write_native_resampled(native, target, window, x_dim, y_dim, level, method)
+                    continue
+                # As topozarr's downsample_level: each level from the stored level above.
+                stride = tuple(2 if d in (x_dim, y_dim) else 1 for d in _dimension_names(base_arr))
+                values = np.ascontiguousarray(base_arr[a:b])
+                for group in groups[1:]:
+                    target = cast(zarr.Array, group[name])
+                    reduced = block_reduce(values, stride, composable_method, target.fill_value, True)
+                    reduced = reduced[(slice(None), *(slice(0, s) for s in target.shape[1:]))]
+                    values = np.ascontiguousarray(reduced.astype(target.dtype, copy=False))
+                    target[a:b] = values
+    finally:
+        if base_ds is not None:
+            base_ds.close()
+
+    if root_times is not None:
+        _write_root_time_coordinate(session.store, xr.Dataset(coords={t_dim: base_times}), time_dim=t_dim)
+    session.commit(f"Appended {appended} period(s) to every pyramid level")
+    logger.info("Appended %d period(s) to the pyramid levels of '%s'", appended, store_path.name)
+    return appended
 
 
 def _get_cache_prefix(dataset: dict[str, Any]) -> str:
@@ -337,8 +550,12 @@ def write_to_icechunk_store(
     crs: str | None = None,
     pyramid_method: str = "mean",
     commit_message: str = "Materialized dataset",
+    before_commit: Callable[[], None] | None = None,
 ) -> None:
     """Write *ds* to an Icechunk store, building a multiscale pyramid when needed.
+
+    ``before_commit`` runs after every write and immediately before the single commit. If it
+    raises, nothing is committed and the store keeps its previous state.
 
     Applies GeoZarr conventions throughout. Creates the store if it does not exist;
     overwrites any existing content in the new commit.
@@ -467,6 +684,7 @@ def write_to_icechunk_store(
             # masks aren't averaged (topozarr wrote them composably above; replace in place).
             logger.info("Resampling pyramid levels of '%s' from native (%s)", store_path.name, pyramid_method)
             _overwrite_native_resampled_levels(session.store, ds, x_dim, y_dim, levels, pyramid_method)
+            _record_resampling_method(session.store, pyramid_method)
 
         # topozarr demotes spatial_ref from coordinate to data variable in the pyramid.
         # Patch the root and each level group: add CRS to multiscales datasets entries so
@@ -531,4 +749,6 @@ def write_to_icechunk_store(
         if geometry is not None:
             write_gdal_geotransform(root_flat, geometry["transform"])
 
+    if before_commit is not None:
+        before_commit()
     session.commit(commit_message)

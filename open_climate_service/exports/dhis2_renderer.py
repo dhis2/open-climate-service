@@ -18,6 +18,7 @@ from open_climate_service.exports.tabular import (
     _to_dhis2_period_string,
     _to_dhis2_value_string,
 )
+from open_climate_service.shared.vectors import feature_id_field
 
 
 class _RetryableTransportError(Exception):
@@ -53,7 +54,15 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     poll_backoff_base: float = 1.0
 
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
-        allowed = {"series", "period_type", "org_unit_field", "period_field", "aggregation"}
+        allowed = {
+            "series",
+            "period_type",
+            "org_unit_field",
+            "period_field",
+            "aggregation",
+            "temporal_aggregation",
+            "incomplete_periods",
+        }
         if set(mapping) - allowed:
             raise ValueError("Unsupported DHIS2 mapping fields")
         period_type = mapping.get("period_type")
@@ -95,8 +104,17 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 raise ValueError(f"{field} must be a non-empty field name")
         if mapping.get("org_unit_field", "geometry") == mapping.get("period_field", "t"):
             raise ValueError("Organisation unit and period fields must be distinct")
-        if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max"):
-            raise ValueError("aggregation must be mean, sum, min, or max; it declares upstream computation")
+        if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max", "median"):
+            raise ValueError("aggregation must be mean, sum, min, max, or median; it declares upstream computation")
+        # Whether the dataset's cadence requires or forbids these is decided where the dataset
+        # is known, in `exports.service.check_cadence_declaration`; here only the vocabulary.
+        if "temporal_aggregation" in mapping and mapping["temporal_aggregation"] not in ("mean", "sum", "min", "max"):
+            raise ValueError(
+                "temporal_aggregation must be mean, sum, min, or max; it declares how source periods "
+                "are combined into the export's period_type"
+            )
+        if "incomplete_periods" in mapping and mapping["incomplete_periods"] not in ("reject", "drop"):
+            raise ValueError("incomplete_periods must be reject (the default) or drop")
         # Default combo UIDs belong to target metadata, which pure rendering does
         # not fetch. Avoid treating an omitted combo as distinct from an explicit
         # one when several series target the same data element.
@@ -118,6 +136,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         kind = mapping["period_type"]
 
         frame, value_columns = self._to_frame(data, org_field, period_field, kind)
+        org_field = feature_id_field(frame.columns, org_field)
         if org_field not in frame.columns or period_field not in frame.columns:
             raise ValueError("DHIS2 result is missing organisation-unit or period fields")
         if not frame.columns.is_unique:
@@ -823,7 +842,9 @@ def _response_json(response: Any) -> dict[str, Any]:
 
 
 def _uid(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{10}", value):
+    from open_climate_service.shared.features import is_dhis2_uid
+
+    if not is_dhis2_uid(value):
         raise ValueError(f"{field} must be a DHIS2 UID; supply real feature IDs instead of positional labels")
     return value
 

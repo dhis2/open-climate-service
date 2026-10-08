@@ -30,9 +30,11 @@ my-climate-service/
 ├── .env.example            # committed template for environment variables
 ├── .gitignore
 ├── plugins/
-│   ├── datasets/           # dataset templates (.yaml) + plugin classes (.py)
+│   ├── rasters/           # raster dataset templates (.yaml) + plugin classes (.py)
 │   │   ├── enacts_rainfall.yaml
 │   │   └── enacts.py
+│   ├── vectors/           # vector dataset templates (.yaml) + feature providers (.py)
+│   │   └── districts.yaml
 │   ├── processes/          # @process-decorated functions (.py)
 │   │   └── my_process.py
 │   └── workflows/          # reusable process graph compositions (.json)
@@ -61,7 +63,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 description = "Open Climate Service instance for [context]"
 dependencies = [
-    "open-climate-service[server]==0.1.0",
+    "open-climate-service[server,dhis2]==0.1.1",  # dhis2: the DHIS2 org unit provider and delivery
 ]
 
 [tool.uv]
@@ -86,7 +88,7 @@ override-dependencies = [
 ]
 ```
 
-The `package = false` setting tells uv that this repository is not itself a Python package — it only declares dependencies. It depends on the released `open-climate-service[server]` from PyPI, pinned here to `0.1.0`; bump the version to upgrade. The `override-dependencies` block is required for `uv` to resolve the `[server]` extra (see the comment above) — this is also why `pip install` is not a supported install path for `[server]`. To track the latest unreleased code instead of a release, add a `[tool.uv.sources]` entry pinning open-climate-service to git (`open-climate-service = { git = "https://github.com/dhis2/open-climate-service.git", branch = "main" }`) and change the dependency to `open-climate-service[server]`.
+The `package = false` setting tells uv that this repository is not itself a Python package — it only declares dependencies. It depends on `open-climate-service[server,dhis2]` from PyPI, pinned here to `0.1.1`; the `dhis2` extra is available from that release. Bump the version to upgrade. The `override-dependencies` block is required for uv to resolve the `[server]` extra (see the comment above) — this is also why `pip install` is not a supported install path for `[server]`. To track the latest unreleased code instead of a release, add a `[tool.uv.sources]` entry pinning open-climate-service to git (`open-climate-service = { git = "https://github.com/dhis2/open-climate-service.git", branch = "main" }`) and change the dependency to `open-climate-service[server,dhis2]`.
 
 Install dependencies:
 
@@ -137,7 +139,7 @@ plugins_dir: ./plugins/
 | `extent.name` | No | Human-readable label shown in API responses |
 | `extent.country_code` | No | ISO 3166-1 alpha-3 — required for WorldPop downloads |
 | `data_dir` | Yes | Directory for downloaded files and Zarr stores, resolved relative to the config file |
-| `plugins_dir` | No | Directory containing `datasets/`, `processes/`, and `workflows/` plugin subdirectories |
+| `plugins_dir` | No | Directory containing `rasters/`, `vectors/`, `processes/` and `workflows/` plugin subdirectories |
 | `read_only` | No | Set `true` to refuse all state-changing requests — see [Read-only instances](#read-only-instances). Defaults to `false` |
 | `scheduler` | No | Instance-level scheduled dataset-sync configuration. See [Scheduled dataset synchronization](scheduled_sync.md) |
 | `automation` | No | Event-driven workflow bindings for successful dataset updates. See [Dataset-update workflow automation](workflow_automation.md) |
@@ -182,20 +184,22 @@ The `/extent` endpoint should return your configured bounding box.
 
 ## Adding plugins
 
-Plugins extend the instance with custom datasets, processes, and workflows. They live in `plugins_dir` and are loaded automatically. The `plugins_dir` is added to `sys.path`, so Python modules placed directly inside it are importable.
+Plugins extend the instance with custom raster and vector datasets, processes, and workflows. They live in `plugins_dir` and are loaded automatically. The `plugins_dir` is added to `sys.path`, so Python modules placed directly inside it are importable.
 
 ```
 plugins/
-├── datasets/
-│   ├── enacts_rainfall.yaml    # custom dataset template
+├── rasters/
+│   ├── enacts_rainfall.yaml    # raster dataset template
 │   └── enacts.py               # streaming plugin class
+├── vectors/
+│   └── districts.yaml          # vector dataset template
 ├── processes/
 │   └── spatial_stats.py        # @process-decorated functions
 └── workflows/
     └── aggregate_for_dhis2.json
 ```
 
-See [Extensibility](extensibility.md) for the three plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the dataset template field reference and streaming plugin contract.
+See [Extensibility](extensibility.md) for the plugin types, and [Adding custom datasets](adding_custom_datasets.md) for the dataset template field reference and streaming plugin contract.
 
 ---
 
@@ -258,6 +262,33 @@ make run
 For containerised deployment, the core open-climate-service repository ships a `Dockerfile`
 and a `compose.yml` that can serve as a starting point for packaging an instance. A
 dedicated instance Docker guide is planned.
+
+### Compute limits
+
+Background jobs share the machine with the web server, and usually with the rest of a
+laptop, so OCS bounds how much of it they take. The defaults are chosen for a laptop.
+
+| Setting | Default | Bounds |
+| --- | --- | --- |
+| `DASK_NUM_WORKERS` | half the cores | Threads for all dask computation in the process, shared by every job and request |
+| `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` | 2 | Ingestion, sync, feature refresh, export delivery and openEO batch jobs running at once, together |
+| `TOKIO_WORKER_THREADS` | cores | Worker threads of Icechunk's storage runtime |
+
+A job beyond the limit waits queued (`accepted` for ingestion jobs, with the message
+"Waiting for a free job slot"; `queued` for openEO jobs) and starts when another finishes.
+Synchronous requests such as `POST /result` are not counted as jobs, but their computation
+uses the same dask threads.
+
+Memory runs out before CPU does: a zonal statistics job over a country can peak at about
+3 GB. On a machine with 8 GB or less, keep `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` at 1 or 2.
+Docker Desktop gives its VM only part of the machine's memory, and `compose.yml` sets no
+limit of its own, so size the limit to what the VM has. A dedicated server can raise both
+settings; more dask threads than half the cores rarely makes reads faster.
+
+Icechunk also starts short-lived I/O threads while it reads and writes files. Their number
+follows the amount of concurrent reading, so `DASK_NUM_WORKERS` is what bounds them.
+`TOKIO_WORKER_THREADS` is read once, when the process starts: set it in `.env` or the
+environment, not at runtime.
 
 ### Read-only instances
 

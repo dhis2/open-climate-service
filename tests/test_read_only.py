@@ -21,13 +21,22 @@ _MUTATING_ROUTES = [
     ("POST", "/ingestions"),
     ("DELETE", "/ingestions/jobs/{job_id}"),
     ("POST", "/exports/{export_id}"),
+    ("POST", "/features/{collection_id}/refresh"),
     ("POST", "/jobs"),
     ("PATCH", "/jobs/{job_id}"),
     ("DELETE", "/jobs/{job_id}"),
     ("POST", "/jobs/{job_id}/results"),
     ("DELETE", "/jobs/{job_id}/results"),
+    ("POST", "/manage/features/refresh"),
     ("POST", "/manage/ingest"),
     ("POST", "/manage/sync"),
+    ("POST", "/schedules/sync"),
+    ("PUT", "/schedules/sync/{dataset_id}"),
+    ("POST", "/schedules/sync/{dataset_id}"),
+    ("POST", "/schedules/sync/{dataset_id}/pause"),
+    ("POST", "/schedules/sync/{dataset_id}/resume"),
+    ("DELETE", "/schedules/sync/{dataset_id}"),
+    ("POST", "/schedules/sync/{dataset_id}/delete"),
     ("PUT", "/process_graphs/{process_graph_id}"),
     ("DELETE", "/process_graphs/{process_graph_id}"),
     ("POST", "/sync/{dataset_id}"),
@@ -252,12 +261,12 @@ def test_writable_instance_does_not_refuse(client: TestClient) -> None:
 
 
 def test_writable_instance_offers_ingest_on_the_template_page(client: TestClient) -> None:
-    page = client.get("/dataset-templates/chirps3_precipitation_daily?f=html").text
+    page = client.get("/data-sources/chirps3_precipitation_daily?f=html").text
     assert 'action="/manage/ingest"' in page
 
 
 def test_read_only_template_page_is_served_without_the_form(ro_client: TestClient) -> None:
-    response = ro_client.get("/dataset-templates/chirps3_precipitation_daily?f=html")
+    response = ro_client.get("/data-sources/chirps3_precipitation_daily?f=html")
     assert response.status_code == 200
     assert "/manage" not in response.text
 

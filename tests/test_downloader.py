@@ -22,14 +22,14 @@ def test_resolve_download_dir_uses_data_dir_from_config(monkeypatch: pytest.Monk
     config_file.write_text("data_dir: ./data\nextent:\n  id: test\n", encoding="utf-8")
     monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    assert downloader._resolve_download_dir() == tmp_path / "data" / "downloads"
+    assert downloader._resolve_download_dir() == tmp_path / "data" / "rasters"
 
 
 def test_resolve_download_dir_uses_xdg_when_no_config(monkeypatch: pytest.MonkeyPatch) -> None:
     with tempfile.TemporaryDirectory() as xdg:
         monkeypatch.delenv("CLIMATE_SERVICE_CONFIG", raising=False)
         monkeypatch.setenv("XDG_DATA_HOME", xdg)
-        assert downloader._resolve_download_dir() == Path(xdg) / "climate-service" / "downloads"
+        assert downloader._resolve_download_dir() == Path(xdg) / "climate-service" / "rasters"
 
 
 def test_resolve_artifacts_dir_uses_data_dir_from_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -149,6 +149,107 @@ def test_open_icechunk_dataset_with_root_time_still_opens_level_0(tmp_path: Path
     try:
         assert "pop_total" in result.data_vars
         assert result.sizes["t"] == 2
+    finally:
+        result.close()
+
+
+def _daily_store(path: Path, *, days: int = 20, encoding: dict | None = None, group: str | None = None) -> xr.Dataset:
+    """A daily float32 cube on a 16x16 grid, stored one day per chunk unless told otherwise."""
+    ds = xr.Dataset(
+        {"tg": (["t", "y", "x"], np.arange(days * 256, dtype="float32").reshape(days, 16, 16))},
+        coords={"t": pd.date_range("2020-01-01", periods=days, freq="D"), "y": np.arange(16.0), "x": np.arange(16.0)},
+    )
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(path)))
+    session = repo.writable_session("main")
+    chunking = {"tg": encoding or {"chunks": (1, 8, 8)}}
+    ds.to_zarr(session.store, group=group, mode="w", zarr_format=3, encoding=chunking)
+    session.commit("seed")
+    return ds
+
+
+def _dask_chunks(ds: xr.Dataset) -> tuple[int, int, int]:
+    chunks = ds["tg"].chunks
+    assert chunks is not None
+    return (chunks[0][0], chunks[1][0], chunks[2][0])
+
+
+def test_open_icechunk_dataset_merges_stored_chunks_along_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One stored day per chunk becomes several per dask chunk; space keeps the stored chunks."""
+    from open_climate_service.data_accessor.services import accessor
+
+    # 5 stored chunks of 8x8 float32 (256 bytes each) per dask chunk
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 5 * 256)
+    written = _daily_store(tmp_path / "daily.icechunk")
+    result = open_icechunk_dataset(tmp_path / "daily.icechunk")
+    try:
+        assert _dask_chunks(result) == (5, 8, 8)
+        np.testing.assert_array_equal(result["tg"].values, written["tg"].values)
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_keeps_whole_shards_along_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sharded store's time chunk is a multiple of the shard, sized from its inner chunks."""
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 5 * 256)
+    _daily_store(tmp_path / "sharded.icechunk", encoding={"chunks": (1, 8, 8), "shards": (2, 16, 16)})
+    result = open_icechunk_dataset(tmp_path / "sharded.icechunk")
+    try:
+        # 5 steps fit the target; rounded down to whole two-day shards
+        assert _dask_chunks(result) == (4, 8, 8)
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_merges_a_pyramid_level_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 5 * 256)
+    _daily_store(tmp_path / "pyramid.icechunk", group="0")
+    result = open_icechunk_dataset(tmp_path / "pyramid.icechunk")
+    try:
+        assert _dask_chunks(result) == (5, 8, 8)
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_caps_the_time_chunk_at_the_series(tmp_path: Path) -> None:
+    """The default target (16 MiB) far exceeds this tiny store, so one chunk holds every day."""
+    _daily_store(tmp_path / "short.icechunk", days=3)
+    result = open_icechunk_dataset(tmp_path / "short.icechunk")
+    try:
+        assert _dask_chunks(result) == (3, 8, 8)
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_leaves_chunks_that_reach_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 256)
+    _daily_store(tmp_path / "large.icechunk")
+    result = open_icechunk_dataset(tmp_path / "large.icechunk")
+    try:
+        assert _dask_chunks(result) == (1, 8, 8)
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_without_time_keeps_stored_chunks(tmp_path: Path) -> None:
+    """A store with no time axis (an elevation layer, say) still opens dask-backed, as stored."""
+    ds = xr.Dataset(
+        {"elev": (["y", "x"], np.ones((16, 16), dtype="float32"))}, coords={"y": np.arange(16.0), "x": np.arange(16.0)}
+    )
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(tmp_path / "static.icechunk")))
+    session = repo.writable_session("main")
+    ds.to_zarr(session.store, mode="w", zarr_format=3, encoding={"elev": {"chunks": (8, 8)}})
+    session.commit("seed")
+    result = open_icechunk_dataset(tmp_path / "static.icechunk")
+    try:
+        assert result["elev"].chunks == ((8, 8), (8, 8))
     finally:
         result.close()
 
@@ -398,3 +499,82 @@ def test_uniform_chunks_leaves_a_legal_trailing_remainder_alone() -> None:
     reversed_ds = ds.isel(y=slice(None, None, -1))
     assert reversed_ds["v"].chunks == ((5, 10, 10), (8,)), "precondition: leading short chunk"
     assert downloader._uniform_chunks(reversed_ds)["v"].chunks == ((10, 10, 5), (8,))
+
+
+def test_open_icechunk_dataset_caps_the_steps_for_a_small_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tiny grid would fit years in one chunk by size; the step cap keeps it parallel."""
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_MAX_STEPS", 7)
+    # 256-byte chunks against the default 16 MiB target: bytes alone would allow every day
+    _daily_store(tmp_path / "small.icechunk", days=20)
+    result = open_icechunk_dataset(tmp_path / "small.icechunk")
+    try:
+        assert _dask_chunks(result) == (7, 8, 8)
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_step_cap_keeps_whole_shards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_MAX_STEPS", 7)
+    _daily_store(tmp_path / "sharded.icechunk", encoding={"chunks": (1, 8, 8), "shards": (2, 16, 16)})
+    result = open_icechunk_dataset(tmp_path / "sharded.icechunk")
+    try:
+        assert _dask_chunks(result) == (6, 8, 8)
+    finally:
+        result.close()
+
+
+def _two_variable_store(path: Path, shards: tuple[int, int]) -> None:
+    """Two daily variables whose time shards differ, as a merged store might have."""
+    days = 24
+    coords = {"t": pd.date_range("2020-01-01", periods=days, freq="D"), "y": np.arange(16.0), "x": np.arange(16.0)}
+    ds = xr.Dataset(
+        {
+            "a": (["t", "y", "x"], np.zeros((days, 16, 16), dtype="float32")),
+            "b": (["t", "y", "x"], np.ones((days, 16, 16), dtype="float32")),
+        },
+        coords=coords,
+    )
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(path)))
+    session = repo.writable_session("main")
+    encoding = {
+        "a": {"chunks": (1, 8, 8), "shards": (shards[0], 16, 16)},
+        "b": {"chunks": (1, 8, 8), "shards": (shards[1], 16, 16)},
+    }
+    ds.to_zarr(session.store, mode="w", zarr_format=3, encoding=encoding)
+    session.commit("seed")
+
+
+def test_open_icechunk_dataset_keeps_every_variables_shards_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shards of 2 and 3 days: the one time chunk is a multiple of both, 6."""
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 10 * 256)
+    _two_variable_store(tmp_path / "merged.icechunk", shards=(2, 3))
+    result = open_icechunk_dataset(tmp_path / "merged.icechunk")
+    try:
+        for name in ("a", "b"):
+            chunks = result[name].chunks
+            assert chunks is not None and chunks[0][0] == 6
+    finally:
+        result.close()
+
+
+def test_open_icechunk_dataset_keeps_stored_chunks_when_no_common_multiple_fits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.data_accessor.services import accessor
+
+    monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 10 * 256)
+    _two_variable_store(tmp_path / "merged.icechunk", shards=(4, 3))  # common multiple 12 > 10 steps
+    result = open_icechunk_dataset(tmp_path / "merged.icechunk")
+    try:
+        chunks = result["a"].chunks
+        assert chunks is not None and chunks[0][0] == 1
+    finally:
+        result.close()

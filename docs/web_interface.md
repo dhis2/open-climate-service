@@ -25,28 +25,29 @@ JavaScript.
 
 | Page                      | What it shows                                                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, dataset templates and workflows, the size of everything stored, plus access mode and version |
+| **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, data sources and workflows, the size of everything stored, plus access mode and version |
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
-| **Dataset templates** (`/dataset-templates`) | Data the instance can fetch from outside providers, titled by dataset with the provider beneath                 |
+| **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
+| **Schedules** (`/schedules`) | Everything on the instance's clock: each dataset's sync schedule, with pause, resume and delete; set up and edited on the dataset page |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
 The overview counts the collections and links to them rather than listing them, so the root
 stays small however much the instance holds.
 
-The Datasets and Dataset templates lists can be searched and filtered, and are shown a page at a
+The Datasets and Data sources lists can be searched and filtered, and are shown a page at a
 time. Without JavaScript each list is complete.
 
-Datasets and dataset templates can be shown as **tiles** or as a **list**; the choice is
-remembered in the browser. Templates show their provider, description and details, with no
+Datasets and data sources can be shown as **tiles** or as a **list**; the choice is
+remembered in the browser. Data sources show their provider, description and details, with no
 preview, since they hold no data yet.
 Each dataset shows its thumbnail, source, a short description, publication status, period,
 temporal coverage and units. A dataset ingested before thumbnails existed shows its colour
 scale instead, until its next sync renders one.
 
-### The dataset template page (`/dataset-templates/{dataset_id}`)
+### The data source page (`/data-sources/{dataset_id}`)
 
-Selecting a dataset template opens its page: the description, what the data is (variable, units,
+Selecting a data source opens its page: the description, what the data is (variable, units,
 period, available range, resolution and coverage), the provider and licence, how it updates,
 and its colour scale. If it has already been ingested, the page links to that dataset.
 
@@ -56,6 +57,13 @@ and the full declared range for a source that runs into the future. Progress is 
 page; when ingestion finishes the dataset page opens, and an error is shown in place. Data is
 always fetched for the instance's configured extent. The form is not shown on a read-only
 instance or when no extent is configured.
+
+A **feature collection template** (boundaries or points, labelled *Features* in the list) has a
+page of its own: the provider, the pinned release, any filters such as the administrative level,
+and the licence with what it requires when the data is served. Its form has no date range, since
+a collection has no time axis: **Fetch** runs the provider and opens the collection when it
+finishes, and fetching again replaces it. A template whose provider this instance lacks is not
+listed.
 
 ### The API page (`/api`)
 
@@ -80,6 +88,33 @@ and return value, the workflows on this instance that use it, and its reference 
 with datasets, the URL still returns the openEO process description as JSON to API clients;
 a browser gets the page, and `?f=json` and `?f=html` choose explicitly.
 
+### The Schedules page (`/schedules`)
+
+The Schedules page lists everything on the instance's clock. Today that is one kind, a sync
+schedule: at each check time OCS submits a sync job, which adds new source data if any is
+available. Each row names its kind in the first column, so the list can carry other kinds later.
+
+A sync schedule belongs to exactly one dataset, so it is set up and edited on the dataset page,
+next to the manual sync it automates (see below). The Schedules page is where they are seen
+together, and it covers what a dataset page cannot: a saved schedule whose
+dataset is no longer on the instance, which can still be paused or deleted; and the
+instance-wide reload error. Each saved row offers Edit, which opens the dataset page, Pause or
+Resume, and Delete, which asks for confirmation in a dialog.
+
+Only one schedule is allowed per dataset. All schedules are stored in one file,
+`<data_dir>/schedules.json`, and can be managed from the UI or API. The instance-wide
+clock switch and timezone remain in `climate-service.yaml`. A static or forecast
+dataset cannot take a schedule, and the API refuses it with the reason.
+
+Each row shows a readable check time (or cron for a custom schedule) and timezone,
+its status (scheduled, paused, or unable to run
+with the reason), the next check and the last one. Check
+state is kept in memory and resets on restart; the sync jobs a check submits are durable and
+linked from the row. The timezone is the instance's `scheduler.timezone`. When the scheduler is
+disabled, schedules can still be saved and are listed, and the page explains that an operator
+enables checks by setting `enabled: true` under `scheduler:` in `climate-service.yaml` and
+restarting OCS. If a change cannot be applied, the page shows why.
+
 ### The dataset page (`/datasets/{dataset_id}`)
 
 Selecting a dataset opens its page: a larger preview, the full description, and everything
@@ -91,8 +126,8 @@ Zarr store, the STAC collection and the JSON metadata.
 The same URL still returns JSON to API clients. A browser, which asks for HTML first, gets the
 page; `?f=json` and `?f=html` choose explicitly.
 
-Dataset templates and Workflows together cover every template registered on the instance:
-one that can be ingested is listed under Dataset templates, and one that a workflow writes is
+Data sources and Workflows together cover every data source registered on the instance:
+one that can be ingested is listed under Data sources, and one that a workflow writes is
 listed under that workflow (see [Templates that are produced, not
 ingested](adding_custom_datasets.md#templates-that-are-produced-not-ingested)).
 
@@ -102,14 +137,25 @@ ingested](adding_custom_datasets.md#templates-that-are-produced-not-ingested)).
 
 There is no separate console: data is added from the page of the thing it concerns.
 
-- **Ingest** from a dataset template page (`/dataset-templates/{dataset_id}`): enter a start and an
+- **Ingest** from a data source page (`/data-sources/{dataset_id}`): enter a start and an
   optional end, choose whether to publish and whether to overwrite an existing store, and
   start. Progress streams on the page; the dataset page opens when it finishes.
+- **Fetch** a feature collection from its data source page: choose whether to publish and start.
+  Progress streams on the page; the collection opens when it finishes.
 - **Sync** from a dataset page (`/datasets/{dataset_id}`): the page shows what the source
   has published since the last sync, and **Start sync** fetches it, optionally only up to a
   cutoff date. The page reloads with the new coverage when it finishes. A sync keeps the
   dataset's current publication state — a published dataset stays published — because an
   incremental sync appends to the store the published version already points at.
+- **Schedule** the sync on the same dataset page: **Sync now** and **Schedule** are tabs in
+  one card, with Sync now shown first. On Schedule, choose daily, weekly or monthly checks,
+  a time, and up to how many attempts a sync job may make. Custom cron is available for
+  advanced needs. The suggested check frequency reflects the data's period type, but the
+  operator should choose a time after the source normally publishes; period type does not
+  tell OCS that release time. A schedule can be saved paused. Once saved, it shows the next
+  and last check and offers Edit, Pause or Resume, and Delete behind a confirmation.
+  Editing does not silently change its publication setting. Every schedule on the
+  instance is listed on the [Schedules page](#the-schedules-page-schedules).
 
 You do **not** enter a bounding box — ingestion always uses the spatial extent configured
 for the instance in `climate-service.yaml`. On a read-only instance neither form is shown.
@@ -118,11 +164,14 @@ for the instance in `climate-service.yaml`. On a read-only instance neither form
 
 ## The map viewer (`/map`)
 
-The map viewer renders **published** datasets directly in the browser from their GeoZarr
-stores (using MapLibre and zarr-layer), so only datasets ingested with publishing enabled
-appear here.
+The map viewer renders **published** datasets directly in the browser: rasters from their
+GeoZarr stores, vector datasets from their GeoParquet. Only published datasets appear here.
 
-- **Dataset selector** — pick any published dataset from the dropdown.
+- **Dataset selector** — pick any published dataset from the dropdown, grouped into raster and
+  vector datasets when the instance has both.
+- **Vector datasets** — drawn as filled areas, lines or points, with the feature's name shown
+  on click. The viewer reads the collection's stored file (`/features/{id}/data.parquet`),
+  which has to be in WGS 84.
 - **Dimension controls** — the viewer builds one control per non-spatial dimension of the
   dataset, choosing the type from the dimension's metadata: a **slider** for a continuous,
   evenly-spaced axis (time, or a regular ordinal axis like day-of-year) and a **dropdown**

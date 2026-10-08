@@ -1,7 +1,7 @@
 # Installable plugins
 
-There are two ways to add datasets, processes, workflows, and export renderers to an instance, and they
-complement each other:
+There are two ways to add datasets, processes, workflows, export renderers, and feature
+collections to an instance, and they complement each other:
 
 - **`plugins_dir`** — drop files into the instance's local plugins folder. Ideal for
   instance-specific customisation, one-off datasets, or overriding a built-in. No packaging.
@@ -15,15 +15,16 @@ keeps working exactly as before, and still takes precedence (see [Precedence](#p
 
 ## Package layout
 
-An importable package can ship any combination of these extension points — **datasets,
-processes, workflows, and exports are auto-discovered** when the package is installed. `datasets/`,
-`processes/`, and `exports/` hold importable Python, so each needs an `__init__.py` (`workflows/` is plain
-JSON and does not):
+An importable package can ship any combination of these extension points — **raster and vector
+data sources, processes, workflows and exports are auto-discovered** when the package is
+installed. `rasters/`, `vectors/`, `processes/` and `exports/` hold importable Python (with the
+templates alongside it in `rasters/` and `vectors/`), so each needs an `__init__.py` (`workflows/` is plain JSON and does
+not):
 
 ```
 osc_example_plugin/
   __init__.py
-  datasets/
+  rasters/
     __init__.py
     example.py           # your BaseDatasetPlugin subclass
     example.yaml         # dataset templates
@@ -35,7 +36,18 @@ osc_example_plugin/
   exports/               # optional: pure export renderers
     __init__.py
     my_export.py         # exposes plugin = BaseExportPlugin subclass instance
+  vectors/               # optional: vector templates and their providers
+    __init__.py
+    example.yaml         # feature templates (id, name, id_property, optional provider + params)
+    my_provider.py       # @feature_provider-decorated callables
 ```
+
+A feature template declares `id`, `name`, an optional `license`/`attribution`, and the
+`id_property` naming its identifier column. One with no `provider` is metadata only — it
+describes a collection an operator registers by hand, and nothing refreshes it. One with a
+`provider` names a registered `@feature_provider` callable and the `params` to call it with. A
+registered collection is served under `GET /features` and can be loaded inside a process graph by
+id with the `load_features` process.
 
 The layout mirrors `plugins_dir`, so migrating a `plugins_dir`-based plugin to a distributable
 package is mostly moving the files into a package and adding the entry point below.
@@ -62,7 +74,7 @@ The `ingestion.plugin` in a dataset template uses the class's **full dotted path
 
 ```yaml
 ingestion:
-  plugin: osc_example_plugin.datasets.example.ExamplePlugin
+  plugin: osc_example_plugin.rasters.example.ExamplePlugin
 ```
 
 ## Install and discover
@@ -74,11 +86,11 @@ uv add osc-example-plugin
 ```
 
 OCS auto-discovers every installed package in the `open_climate_service.plugins` group and loads
-its `datasets/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
-`workflows/*.json` (openEO UDPs), and its `exports/` renderers (see [Export plugins](export_plugins.md)).
-The ingestion plugin class is importable by dotted path because
-the package is installed. The datasets then appear in `/datasets` and can be ingested like any
-built-in.
+its `rasters/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
+`workflows/*.json` (openEO UDPs), its `exports/` renderers (see [Export plugins](export_plugins.md)),
+and its `vectors/*.yaml` templates and `@feature_provider`-decorated callables. The ingestion
+plugin class is importable by dotted path because the package is installed. The datasets then
+appear in `/datasets` and can be ingested like any built-in.
 
 ## Precedence
 
@@ -86,8 +98,8 @@ Templates are merged in increasing order of precedence, per extension point:
 
 **built-in → installed plugins → instance `plugins_dir`**
 
-So `plugins_dir` always wins on an id conflict — an operator can drop a YAML into their local
-`plugins/datasets/` to override an installed plugin's dataset. Overrides are logged at load time.
+So `plugins_dir` always wins on an id conflict — an operator can drop a dataset template into their local
+`plugins/rasters/` or `plugins/vectors/` to override an installed plugin's dataset. Overrides are logged at load time.
 
 ## Naming convention
 

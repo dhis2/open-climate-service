@@ -349,6 +349,38 @@ class FeatureDetail(BaseModel):
             "are stored in the one spelling every consumer compares against."
         ),
     )
+    provider: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Stable registry name of the feature provider that owns this collection. The same "
+            "provider may refresh it in place; a different one, or an unowned collection, "
+            "must not be silently overwritten. None means no feature provider owns the "
+            "collection — a hand-registered file, or one promoted from some other origin — so "
+            "no provider may claim it without an explicit adoption step. Set from the "
+            "orchestration layer's own selected registry name (CLIM-926), never from a "
+            "provider's returned payload, so a provider cannot claim an identity that is not "
+            "its own."
+        ),
+    )
+
+    @field_validator("provider")
+    @classmethod
+    def _names_a_real_provider(cls, value: str | None) -> str | None:
+        """Reject a blank or padded provider name; leave None (unowned) untouched.
+
+        Compared exactly against the name a future refresh presents, following the same rule
+        as `id_property` and `primary_geometry`: a padded name would never match the same
+        provider declaring itself again, so ownership would look like it changed on every
+        refresh even though nothing did.
+        """
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("provider must name a real provider, not blank space")
+        if value != value.strip():
+            raise ValueError(f"provider {value!r} has leading or trailing whitespace; declare it without padding")
+        return value
 
     @field_validator("id_property", "primary_geometry")
     @classmethod
@@ -433,6 +465,15 @@ class ArtifactRecord(BaseModel):
     format: ArtifactFormat
     path: str | None = None
     asset_paths: list[str] = Field(default_factory=list)
+    size_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Bytes on disk at `path` when this record was written, measured once at the end of "
+            "the ingest, sync, publish or refresh that wrote it. None on records written before "
+            "sizes were recorded, which count as nothing towards the stored total until re-ingested."
+        ),
+    )
     variables: list[str] = Field(default_factory=list)
     request_scope: ArtifactRequestScope
     coverage: ArtifactCoverage
@@ -489,7 +530,7 @@ class ArtifactRecord(BaseModel):
 class CreateIngestionRequest(BaseModel):
     """Request payload for creating or updating a managed dataset."""
 
-    dataset_id: str = Field(description="Source dataset template id from the Open Climate Service registry.")
+    dataset_id: str = Field(description="Id of the data source to ingest from, as listed at GET /data-sources.")
     start: str | None = Field(
         default=None,
         description=(
@@ -544,7 +585,7 @@ class DatasetRecord(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     dataset_id: str = Field(description="Stable public identifier for the managed dataset.")
-    source_dataset_id: str = Field(description="Dataset template id from which this managed dataset was created.")
+    source_dataset_id: str = Field(description="Id of the data source this managed dataset was created from.")
     dataset_name: str = Field(description="Full display name of the dataset.")
     short_name: str | None = Field(default=None, description="Short display name of the dataset.")
     description: str | None = Field(
@@ -708,8 +749,8 @@ class SyncDetail(BaseModel):
     strings alone.
     """
 
-    source_dataset_id: str = Field(description="Source dataset template id used to plan the sync.")
-    sync_kind: SyncKind = Field(description="Sync planning mode declared by the dataset template.")
+    source_dataset_id: str = Field(description="Id of the data source used to plan the sync.")
+    sync_kind: SyncKind = Field(description="Sync planning mode the data source declares.")
     action: SyncAction = Field(description="Planner-selected sync action.")
     reason: str = Field(description="Stable machine-readable reason for the selected action.")
     message: str = Field(description="Human-readable summary of the planned sync outcome.")

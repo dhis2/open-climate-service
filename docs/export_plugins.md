@@ -21,6 +21,9 @@ exports:
 ```
 
 Replace the data-element UID with the destination defined in your DHIS2 instance.
+`org_unit_field: geometry` reads each value's organisation unit from the feature ids:
+the `feature_id` coordinate when the spatial aggregation carries one, otherwise the
+labels of its geometry dimension. CHAP CSV's `location_field: geometry` does the same.
 Pass the prepared aggregate to `save_result`:
 
 ```json
@@ -36,10 +39,14 @@ Pass the prepared aggregate to `save_result`:
 ```
 
 This is a graph node; `aggregate` must be a preceding node in the full graph.
+The built-in `aggregate_to_dhis2_json` workflow wraps this aggregation and
+`save_result` call, taking the export ID as its `export` parameter. See
+[Importing data to DHIS2](importing_to_dhis2.md#automated-delivery-with-a-named-export).
 Named exports accept only the `export` option. Change the configured mapping to
-change its destination or fields; per-request overrides are rejected. Existing
-`DHIS2JSON` calls using `data_element_id`, `org_unit_field`, and `period_type`
-continue to work without a named export.
+change its destination or fields; per-request overrides are rejected. Hand-written
+`DHIS2JSON` graphs using `data_element_id`, `org_unit_field`, and `period_type`
+still render an ad-hoc payload without a named export, but that payload cannot be
+delivered by the server.
 
 Each series mapping selects one value series. `select: {}` requires
 an unambiguous value column. To select a variable from a result with several
@@ -66,13 +73,81 @@ monthly, since they would produce duplicate destination keys. Explicit incompati
 renderer cannot prove that an arbitrary input value was aggregated correctly.
 
 The optional `dataset`, `org_units`, and `connection` references, and the optional
-`aggregation` declaration, describe intended input/delivery configuration. They
-do not trigger any work. Batch exports bind these declarations to a manifest and
-check an observed dataset reference when execution provenance contains one. A
+`aggregation` declaration (`mean`, `sum`, `min`, `max`, or `median`), describe
+intended input/delivery configuration. They do not trigger any work. Synchronous
+and batch renders check them against execution provenance where it contains an
+observation, and batch exports bind them to a manifest. The dataset must match an
+observed source. The aggregation is checked when exactly one `aggregate_spatial`
+ran and it reduced with `reduce_by_method`, as the built-in workflow does. With
+no spatial aggregation, several, or another reducer, the aggregation cannot be
+attributed to the result; it remains an unverified declaration and the manifest
+lists `spatial_aggregation_method` as missing. A
 connection is not required to render or download a payload, but a bound connection
 is required for later server-side delivery. Use
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)
 for that binding.
+
+### The export's period must be reachable from the dataset's cadence
+
+An export exports what exists. `period_type` labels; it never aggregates, and neither does
+anything else on the export path. So the export has to say how its period relates to the
+dataset it declares, and OCS checks it twice: at startup, from the dataset template's
+`period_type`, and at render time, from the spacing of the data actually being exported.
+
+| Dataset cadence | Export `period_type` | Outcome |
+| --- | --- | --- |
+| the same | the same | Pass-through. No `temporal_aggregation`; declaring one is refused. |
+| finer, and tiling the period | coarser | Exportable only after an explicit aggregation. `temporal_aggregation: sum \| mean \| min \| max` declares which, and the export verifies that it ran. |
+| anything else | | Refused, with the reason. |
+
+Producing the coarser data is openEO's job, not the export's, and there are two ways to do it.
+Publish a derived dataset (`load_collection`, `aggregate_temporal_period`, `save_result` as
+Zarr with a `dataset_id`) and point the export at that dataset, which then needs no
+declaration at all. Or put `aggregate_temporal_period` in the graph that feeds the export and
+declare its reducer as `temporal_aggregation`. The built-in org-unit workflows do neither:
+given a dataset finer than the export's period, they are refused.
+
+A derived dataset is published by an openEO job, and openEO jobs record no `dataset.updated`
+event, so a trigger cannot yet listen for it the way it listens for a sync. Until a derivation
+step emits that event, an export from a derived dataset is run by hand or by a workflow that
+derives and exports in one graph.
+
+The pairs currently supported by `aggregate_temporal_period`: hourly into daily, weekly,
+monthly and yearly; daily into weekly, monthly and yearly; dekadal into monthly and yearly;
+monthly into yearly; and quarterly into yearly. Weekly data tiles nothing, because ISO weeks
+straddle months, quarters and years. Calendar-quarter destinations are refused for now: they
+tile arithmetically, but the standard process has no calendar-quarter period with which to
+produce and record them. Nothing can be made finer than it is stored.
+
+`aggregate_dekads(period="week")` is a separate, day-overlap-weighted transformation rather
+than a tiling aggregation. Its weekly result can be exported ad hoc, or published as a derived
+weekly dataset and then used by a named export. A named weekly export declared directly against
+the original dekadal dataset is still refused at startup.
+
+```yaml
+exports:
+  - id: rainfall-monthly
+    plugin: dhis2
+    dataset: chirps3_precipitation_daily
+    period_type: monthly
+    temporal_aggregation: sum       # required: the dataset is daily
+    incomplete_periods: reject      # the default; or drop
+    series:
+      - select: {}
+        data_element: BXgDHhPdFVU
+```
+
+When the graph aggregates, a destination period counts only when every source period inside
+it is present. A sync that ends on the 14th does not produce that month: the job fails naming
+the period, unless the export says `incomplete_periods: drop`, in which case the period is
+left out and the rest is delivered. Execution provenance records each temporal aggregation
+(its period, reducer and incomplete periods), so a declared `temporal_aggregation` is verified
+against what ran, the way the spatial `aggregation` is. A derived dataset carries no such
+record; its completeness is the derivation's concern.
+
+A hand-written graph gets the same guard at `save_result`: a `period_type` coarser than the
+result's spacing is refused with the `aggregate_temporal_period` step to add, instead of
+collapsing several values onto one DHIS2 key.
 
 ## Write a render-only plugin
 
@@ -142,8 +217,8 @@ payload and manifest are both exposed as job result assets. Synchronous renderin
 still returns the payload directly and remains available in read-only mode.
 
 Execution provenance records observed managed artifacts, Icechunk snapshot IDs,
-and hashes of inline spatial features where those inputs pass through native OCS
-processes. The manifest explicitly lists evidence that is unavailable; declarations
+hashes of inline spatial features, and the method of each `aggregate_spatial` call
+where those inputs pass through native OCS processes. The manifest explicitly lists evidence that is unavailable; declarations
 alone do not prove aggregation semantics or per-output lineage.
 
 The delivery-input validator accepts only completed jobs with intact payloads and
@@ -206,6 +281,7 @@ series:
 
 Replace these example UIDs with target metadata. Wide DataFrames, multi-variable
 xarray aggregates and merged aggregate cubes are supported. Zero is retained and
-missing values are counted separately per series. Direct named DHIS2 graphs check
-original GeoJSON feature IDs before spatial aggregation; the renderer also rejects
-invalid organisation-unit UIDs and duplicate destination keys.
+missing values are counted separately per series. Named DHIS2 graphs, including
+workflow calls, check that original GeoJSON feature IDs are unique DHIS2 UIDs before
+spatial aggregation. The renderer also rejects invalid organisation-unit UIDs and
+duplicate destination keys.

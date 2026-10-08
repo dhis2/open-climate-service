@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dataset templates · {{ name }}</title>
+    <title>Data sources · {{ name }}</title>
     <style>
 {{ styles | safe }}
     </style>
@@ -21,16 +21,27 @@
       {{ nav }}
 
       <main id="content">
-        <h2 id="data-sources-title" tabindex="-1">Dataset templates</h2>
-        <p class="lead">Data this instance can fetch from outside providers.</p>
+        <h2 id="data-sources-title" tabindex="-1">Data sources</h2>
+        <p class="lead">Data this instance can fetch from outside providers: raster and vector data.</p>
         {% if sources %}
         {% set periods = sources | map(attribute="period_type") | reject("equalto", "") | unique | sort | list %}
+        {% set kinds = sources | map(attribute="kind") | unique | sort | list %}
         <div data-list data-page-size="12" data-views="sources">
           <div class="toolbar">
             <label
               >Search
               <input type="search" data-filter-text placeholder="Name, provider or variable" />
             </label>
+            {% if kinds | length > 1 %}
+            <label
+              >Type
+              <select data-filter-field="kind">
+                <option value="">All</option>
+                <option value="raster">Raster</option>
+                <option value="vector">Vector</option>
+              </select>
+            </label>
+            {% endif %}
             {% if periods | length > 1 %}
             <label
               >Period
@@ -54,13 +65,16 @@
               class="panel item clickable"
               data-item
               data-period="{{ s.period_type }}"
+              data-kind="{{ s.kind }}"
               data-search="{{ [s.name, s.id, s.provider, s.variable] | join(' ') | lower }}"
             >
               <div class="body">
-                <h3><a class="item-link" href="{{ mount }}/dataset-templates/{{ s.id }}">{{ s.name }}</a></h3>
+                <h3><a class="item-link" href="{{ mount }}/data-sources/{{ s.id }}">{{ s.name }}</a></h3>
                 <span class="provider clamp" title="{{ s.provider }}">{{ s.provider or "Unknown provider" }}</span>
                 {% if s.description %}<p class="description clamp">{{ s.description }}</p>{% endif %}
                 <div class="meta">
+                  {% if s.kind == "vector" %}<span class="chip">Vector</span>{% endif %}
+                  {% if s.level %}<span class="chip">{{ s.level }}</span>{% endif %}
                   {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
                   {% if s.units %}<span class="chip">{{ s.units }}</span>{% endif %}
                   {% if s.resolution %}<span class="chip">{{ s.resolution }}</span>{% endif %}
@@ -70,14 +84,14 @@
             </article>
             {% endfor %}
           </div>
-          <p class="note" data-empty hidden>No dataset templates match.</p>
+          <p class="note" data-empty hidden>No data sources match.</p>
           <div class="pager" data-pager>
             <button type="button" data-prev>Previous</button>
             <button type="button" data-next>Next</button>
           </div>
         </div>
         {% else %}
-        <p class="note">No dataset templates are configured.</p>
+        <p class="note">No data sources are configured.</p>
         {% endif %}
 
       </main>

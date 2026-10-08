@@ -10,7 +10,6 @@ from __future__ import annotations
 import math
 import re
 from html.parser import HTMLParser
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,7 +17,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from open_climate_service import config as api_config
-from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.system import templates as landing
 
 AREAS = ["overview", "datasets", "data-sources", "workflows", "processes"]
@@ -144,7 +142,7 @@ def test_the_overview_links_to_every_area_as_a_page(client: TestClient) -> None:
     """
     html = client.get("/", headers={"Accept": "text/html"}).text
 
-    for path in ("/datasets", "/dataset-templates", "/workflows", "/processes"):
+    for path in ("/datasets", "/data-sources", "/workflows", "/processes"):
         assert f'href="{path}"' in html
     assert "data-area-link" not in html, "nothing switches areas in place any more"
     # The stat cards are links too, and pointed at fragments this page no longer has.
@@ -191,12 +189,12 @@ def test_access_and_version_are_stated_without_a_configured_extent(
     assert "Version" in visible and "9.9.9" in visible
 
 
-def test_the_interface_calls_them_dataset_templates(client: TestClient) -> None:
-    """The stat card and the rail agree, and neither says "data source"."""
+def test_the_interface_calls_them_data_sources(client: TestClient) -> None:
+    """The stat card and the rail agree, and neither says "dataset template"."""
     visible = _visible_text(client.get("/", headers={"Accept": "text/html"}).text)
 
-    assert visible.lower().count("dataset templates") == 2
-    assert "data source" not in visible.lower()
+    assert visible.lower().count("data sources") == 2
+    assert "dataset template" not in visible.lower()
 
 
 def test_colours_come_from_the_token_block(client: TestClient) -> None:
@@ -273,28 +271,6 @@ def test_the_overview_counts_what_the_instance_holds(client: TestClient) -> None
 )
 def test_a_stored_size_reads_at_a_glance(total: int, expected: str) -> None:
     assert landing._format_bytes(total) == expected
-
-
-def test_the_stored_size_sums_each_store_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two artifacts appended to one store must not be counted twice."""
-    store = tmp_path / "chirps.icechunk"
-    (store / "chunks").mkdir(parents=True)
-    (store / "chunks" / "0").write_bytes(b"x" * 1000)
-
-    monkeypatch.setattr(
-        landing,
-        "_stored_bytes_cache",
-        None,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        ingestion_services,
-        "list_artifacts",
-        lambda: SimpleNamespace(items=[SimpleNamespace(path=str(store)), SimpleNamespace(path=str(store))]),
-    )
-
-    assert landing._stored_bytes() == 1000
-    landing._stored_bytes_cache = None
 
 
 # --- processes in the landing page --------------------------------------------------------

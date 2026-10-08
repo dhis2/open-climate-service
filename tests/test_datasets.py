@@ -19,7 +19,7 @@ from open_climate_service.ingestions.schemas import (
     DatasetPublication,
     PublicationStatus,
 )
-from open_climate_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin
+from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
 from open_climate_service.publications.services import managed_dataset_id_for
 from open_climate_service.shared.time import daily_period_ids
 
@@ -44,6 +44,7 @@ class _TransactionRepo:
         self.created: list[tuple[str, str]] = []
         self.reset: list[tuple[str, str]] = []
         self.deleted: list[str] = []
+        self.calls: list[str] = []
 
     def lookup_branch(self, branch: str) -> str:
         assert branch == "main"
@@ -54,9 +55,15 @@ class _TransactionRepo:
 
     def reset_branch(self, branch: str, snapshot: str) -> None:
         self.reset.append((branch, snapshot))
+        self.calls.append("reset")
 
     def delete_branch(self, branch: str) -> None:
         self.deleted.append(branch)
+        self.calls.append("delete")
+
+    def garbage_collect(self, older_than: object) -> object:
+        self.calls.append("collect")
+        return type("Summary", (), {"bytes_deleted": 0, "snapshots_deleted": 0})()
 
 
 @pytest.fixture(autouse=True)
@@ -160,7 +167,9 @@ def test_list_datasets_groups_artifacts_by_managed_dataset_id(monkeypatch: pytes
 
 
 def test_dataset_links_include_stac_for_published_icechunk() -> None:
-    links = services._dataset_links("chirps3_precipitation_daily", _artifact(artifact_id="a1"))
+    links = services._dataset_links(
+        "chirps3_precipitation_daily", _artifact(artifact_id="a1"), published=_artifact(artifact_id="a1")
+    )
 
     assert any(link.rel == "stac" and link.href == "/stac/collections/chirps3_precipitation_daily" for link in links)
 
@@ -171,8 +180,10 @@ def test_dataset_links_omit_catalogue_links_for_unpublished_or_netcdf() -> None:
     netcdf = _artifact(artifact_id="a2")
     netcdf.format = ArtifactFormat.NETCDF
 
-    unpublished_links = services._dataset_links("chirps3_precipitation_daily", unpublished)
-    netcdf_links = services._dataset_links("chirps3_precipitation_daily", netcdf)
+    # `published=None` is what "this dataset has no published artifact" looks like, which is the
+    # state an unpublished-only dataset is actually in.
+    unpublished_links = services._dataset_links("chirps3_precipitation_daily", unpublished, published=None)
+    netcdf_links = services._dataset_links("chirps3_precipitation_daily", netcdf, published=netcdf)
 
     for links in (unpublished_links, netcdf_links):
         assert all(link.rel not in {"zarr", "stac"} for link in links)
@@ -181,7 +192,7 @@ def test_dataset_links_omit_catalogue_links_for_unpublished_or_netcdf() -> None:
 def test_dataset_links_include_zarr_and_stac_for_icechunk() -> None:
     artifact = _artifact(artifact_id="a3")
 
-    links = services._dataset_links("chirps3_precipitation_daily", artifact)
+    links = services._dataset_links("chirps3_precipitation_daily", artifact, published=artifact)
 
     assert any(link.rel == "zarr" for link in links)
     assert any(link.rel == "stac" for link in links)
@@ -192,7 +203,7 @@ def test_dataset_links_include_zarr_and_stac_for_plain_zarr() -> None:
     artifact = _artifact(artifact_id="a4")
     artifact.format = ArtifactFormat.ZARR
 
-    links = services._dataset_links("chirps3_precipitation_daily", artifact)
+    links = services._dataset_links("chirps3_precipitation_daily", artifact, published=artifact)
 
     assert any(link.rel == "zarr" for link in links)
     assert any(link.rel == "stac" for link in links)
@@ -996,7 +1007,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
             "params": {"stage": "final"},
         },
     }
@@ -1051,7 +1062,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
         publish=False,
     )
 
-    assert captured["plugin_path"] == "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin"
+    assert captured["plugin_path"] == "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"
     assert captured["params"] == {"stage": "final"}
     assert captured["dataset_id"] == "chirps3_precipitation_daily"
     assert captured["zarr_path"] is None
@@ -1087,7 +1098,7 @@ def test_create_artifact_uses_streaming_plugin_for_store_based_sync(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
             "params": {"stage": "final"},
         },
     }
@@ -1285,6 +1296,11 @@ def test_create_artifact_rolls_back_append_when_pyramid_rebuild_fails(
 
     assert transaction_repo.reset == [("main", "before-ingest")]
     assert transaction_repo.deleted == [transaction_repo.created[0][0]]
+    # The attempt's commits are unreachable after the reset, and are collected once the
+    # rollback branch no longer pins them.
+    assert transaction_repo.calls == ["reset", "delete", "collect"]
+    # The retention window kept the attempt's recent commits, so a later collection is pending.
+    assert store_path.with_name(f"{store_path.name}.gc-pending").exists()
     assert stored_records == []
 
 
@@ -1336,7 +1352,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
         "variable": "pop_total",
         "period_type": "yearly",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.worldpop.WorldPopYearlyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin",
             "params": {"version": "global2"},
         },
     }
@@ -1378,7 +1394,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
         publish=False,
     )
 
-    assert captured["plugin_path"] == "open_climate_service.plugins.datasets.worldpop.WorldPopYearlyPlugin"
+    assert captured["plugin_path"] == "open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin"
     assert captured["params"] == {"version": "global2", "country_code": "SLE"}
     run_kwargs = captured["run"]
     assert isinstance(run_kwargs, dict)
@@ -1416,7 +1432,7 @@ def test_load_streaming_plugin_rejects_symbol_outside_plugin_protocol(monkeypatc
 
 def test_load_streaming_plugin_filters_runtime_only_params_for_constructor() -> None:
     plugin = services._load_streaming_plugin(
-        "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+        "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         params={"stage": "final", "country_code": "SLE"},
     )
 
@@ -1435,7 +1451,7 @@ def test_create_artifact_allows_streaming_coverage_clamped_to_source_availabilit
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1501,7 +1517,7 @@ def test_create_artifact_rejects_streaming_coverage_with_late_start(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1552,7 +1568,7 @@ def test_create_artifact_returns_409_when_streaming_plugin_has_no_periods(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1587,7 +1603,7 @@ def test_create_artifact_overwrite_replaces_existing_icechunk_store_on_success(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1662,7 +1678,7 @@ def test_create_artifact_overwrite_restores_store_when_record_write_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1954,7 +1970,7 @@ def test_create_artifact_overwrite_keeps_existing_store_when_fetch_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2004,7 +2020,7 @@ def test_create_artifact_overwrite_releases_lock_when_replacement_cleanup_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2068,7 +2084,7 @@ def test_create_artifact_overwrite_keeps_existing_store_when_replacement_is_inva
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2149,7 +2165,7 @@ def test_create_artifact_rejects_partial_download_scope(monkeypatch: pytest.Monk
         "period_type": "daily",
         # An ingestable template: the scope validation under test runs after the check that
         # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
-        "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3"},
+        "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:
@@ -2179,7 +2195,7 @@ def test_create_artifact_rejects_download_scope_outside_request_scope(monkeypatc
         "period_type": "daily",
         # An ingestable template: the scope validation under test runs after the check that
         # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
-        "ingestion": {"plugin": "open_climate_service.plugins.datasets.chirps3"},
+        "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:

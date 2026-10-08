@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import xarray as xr
+import zarr
 
 from open_climate_service.shared.cf import apply_cf_metadata, cf_attrs_from_template
 from open_climate_service.shared.raster_contract import (
@@ -301,12 +302,21 @@ async def run_streaming_ingest(
                         # only happens between syncs.
                         append_group = committed_data_group(store_path)
                         axes_checked = True
+                    # xarray replaces the group's attrs with the period's on append. At the root
+                    # write_geozarr_attrs restores them below; a pyramid level's are its own.
+                    level_attrs = (
+                        dict(zarr.open_group(session.store, path=append_group, mode="r").attrs)
+                        if append_group is not None
+                        else None
+                    )
                     ds.to_zarr(
                         session.store,
                         group=append_group,
                         append_dim=spec.time_dim,
                         zarr_format=3,
                     )
+                    if level_attrs is not None:
+                        zarr.open_group(session.store, path=append_group, mode="r+").attrs.update(level_attrs)
                 # Root attrs are rewritten on every commit so later append sessions
                 # preserve GeoZarr metadata even if the underlying store layer only
                 # touches array content for the new period.

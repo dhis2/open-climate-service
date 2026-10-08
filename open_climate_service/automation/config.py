@@ -7,6 +7,17 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from open_climate_service import config as api_config
+from open_climate_service.openeo.jobs import MAX_TRIGGERED_ATTEMPTS
+
+
+class TriggerDelivery(BaseModel):
+    """Deliver a triggered job's named export once the job finishes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    export: str = Field(min_length=1)
+    # Writing to a production DHIS2 is an explicit opt-in.
+    dry_run: bool = True
 
 
 class WorkflowTrigger(BaseModel):
@@ -19,6 +30,10 @@ class WorkflowTrigger(BaseModel):
     workflow_id: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
     replay_existing: bool = False
+    deliver: TriggerDelivery | None = None
+    # Attempts per triggered job, the first included. A transient failure or a restart during
+    # execution is retried up to this bound; a permanent error is not retried at all.
+    max_attempts: int = Field(default=3, ge=1, le=MAX_TRIGGERED_ATTEMPTS)
 
 
 class AutomationConfig(BaseModel):

@@ -209,7 +209,7 @@ def test_missing_optional_dependency_is_actionable(connection_file: Path, monkey
         return original(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", missing_client)
-    with pytest.raises(RuntimeError, match="optional dhis2-client"):
+    with pytest.raises(RuntimeError, match=r"optional dhis2-client package: install the dhis2 extra"):
         get_connection("national-hmis")
 
 

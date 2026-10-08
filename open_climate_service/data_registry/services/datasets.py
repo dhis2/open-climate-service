@@ -14,6 +14,7 @@ import yaml
 from open_climate_service import config as api_config
 from open_climate_service.ingestions.schemas import parse_declared_artifact_version
 from open_climate_service.shared.time import SUPPORTED_PERIOD_TYPES
+from open_climate_service.shared.urls import is_segment_safe_id
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def list_datasets() -> list[dict[str, Any]]:
 
     Templates are merged in increasing order of precedence:
 
-    1. Built-in templates from open_climate_service/plugins/datasets/.
+    1. Built-in templates from open_climate_service/plugins/rasters/.
     2. Installed plugin packages that declare an ``open_climate_service.plugins``
        entry point (auto-discovered — no config change beyond installing them, #118).
     3. The instance ``plugins_dir`` from CLIMATE_SERVICE_CONFIG.
@@ -126,7 +127,7 @@ def list_datasets() -> list[dict[str, Any]]:
         if not root.is_dir():
             # Startup already warns about this (plugins_diagnostics.log_plugin_loading) and lets the
             # service run, so raising here made the two disagree: the instance reported healthy and
-            # served /datasets, /collections and /processes while /dataset-templates returned 500 —
+            # served /datasets, /collections and /processes while /data-sources returned 500 —
             # the one route the ingest form needs. A configured-but-absent plugins_dir is a
             # deployment slip, not a reason to refuse service, so degrade to the built-in and
             # entry-point templates instead. Debug rather than warning because startup has already
@@ -136,7 +137,7 @@ def list_datasets() -> list[dict[str, Any]]:
         root_str = str(root)
         if root_str not in sys.path:
             sys.path.append(root_str)
-        datasets_subdir = root / "datasets"
+        datasets_subdir = root / "rasters"
         if datasets_subdir.is_dir():
             for dataset in _load_from_dir(datasets_subdir):
                 ds_id = dataset["id"]
@@ -168,7 +169,7 @@ def is_ingestable(dataset: dict[str, Any]) -> bool:
 
 
 def get_dataset(dataset_id: str) -> dict[str, Any] | None:
-    """Get dataset dict for a given id."""
+    """Get a raster dataset template for a given id."""
     datasets_lookup = {d["id"]: d for d in list_datasets()}
     return datasets_lookup.get(dataset_id)
 
@@ -177,7 +178,7 @@ def get_instance_datasets_dir(*, create: bool = False) -> Path:
     """Return the writable directory for instance dataset templates.
 
     When CONFIGS_DIR is set (tests), that directory is used directly. Otherwise,
-    templates are written to ``plugins_dir/datasets`` resolved relative to the
+    templates are written to ``plugins_dir/rasters`` resolved relative to the
     instance config file.
     """
     if CONFIGS_DIR is not None:
@@ -204,7 +205,7 @@ def get_instance_datasets_dir(*, create: bool = False) -> Path:
     if not root.is_dir():
         raise ValueError(f"plugins_dir '{root}' does not exist or is not a directory")
 
-    datasets_dir = root / "datasets"
+    datasets_dir = root / "rasters"
     if create:
         datasets_dir.mkdir(parents=True, exist_ok=True)
     if not datasets_dir.is_dir():
@@ -229,7 +230,14 @@ def write_dataset_template(dataset: dict[str, Any], *, overwrite: bool = False) 
 
     _validate_dataset_template(dataset, source=str(destination))
     payload = yaml.safe_dump([dataset], sort_keys=False, allow_unicode=False)
-    destination.write_text(payload, encoding="utf-8")
+    if overwrite:
+        destination.write_text(payload, encoding="utf-8")
+    else:
+        # Exclusive creation makes the caller that receives this path the only owner of the
+        # new template. A concurrent publisher gets FileExistsError and reloads the winner;
+        # it can never also believe it created the file and later remove the winner's template.
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(payload)
     return destination
 
 
@@ -274,7 +282,7 @@ def _parse_builtin_datasets() -> list[dict[str, Any]]:
     package lives inside site-packages with no guarantee that the project root
     directory (and its data/ folder) is accessible.
     """
-    pkg = importlib.resources.files("open_climate_service") / "plugins" / "datasets"
+    pkg = importlib.resources.files("open_climate_service") / "plugins" / "rasters"
     datasets: list[dict[str, Any]] = []
     for resource in pkg.iterdir():
         if not resource.name.endswith((".yaml", ".yml")):
@@ -308,7 +316,7 @@ def _load_entry_point_datasets() -> list[tuple[str, dict[str, Any]]]:
 def _parse_entry_point_datasets() -> list[tuple[str, dict[str, Any]]]:
     """Read and validate dataset templates contributed by installed plugin packages (#118).
 
-    A plugin's ``datasets/*.yaml`` templates are loaded here; the package's Python —
+    A plugin's ``rasters/*.yaml`` templates are loaded here; the package's Python —
     the ``ingestion.plugin`` class — is importable by dotted path because the package
     is installed, so no ``sys.path`` handling is needed.
 
@@ -317,7 +325,7 @@ def _parse_entry_point_datasets() -> list[tuple[str, dict[str, Any]]]:
     from open_climate_service.plugin_discovery import iter_plugin_subdirs
 
     results: list[tuple[str, dict[str, Any]]] = []
-    for plugin_name, _package, datasets_res in iter_plugin_subdirs("datasets"):
+    for plugin_name, _package, datasets_res in iter_plugin_subdirs("rasters"):
         try:
             for resource in datasets_res.iterdir():
                 if not resource.name.endswith((".yaml", ".yml")):
@@ -393,6 +401,17 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
     dataset_id = dataset.get("id")
     if not isinstance(dataset_id, str) or not dataset_id:
         raise ValueError(f"{source} contains a dataset template with a missing or invalid id")
+    # The id becomes a path segment in every catalogue link this dataset gets —
+    # `/stac/collections/{id}`, `/zarr/{id}`, `/datasets/{id}` — so an id outside this shape
+    # publishes links that do not resolve. A `/` is the unfixable case: ASGI decodes the path
+    # before routing, so escaping it does not help and no single-segment route matches.
+    # Rejected at registration, where a template author sees it, rather than discovered later
+    # as a catalogue full of 404s.
+    if not is_segment_safe_id(dataset_id):
+        raise ValueError(
+            f"Dataset template id '{dataset_id}' in {source} cannot be used in a URL; it must "
+            "start with a letter or digit and carry only letters, digits, '.', '_' or '-'"
+        )
     sync_block = dataset.get("sync", {})
     sync_kind = sync_block.get("kind") if isinstance(sync_block, dict) else None
     if not isinstance(sync_kind, str) or not sync_kind:
