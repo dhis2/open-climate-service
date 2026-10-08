@@ -11,12 +11,6 @@ from open_climate_service.plugins.processes.aggregate_spatial_weighted import (
 )
 
 
-def _aggregate(*args: Any) -> xr.DataArray:
-    """The aggregated values: the process returns a Dataset named after the input variable."""
-    result = aggregate_spatial_weighted(*args)
-    return result[next(iter(result.data_vars))]
-
-
 def _box(xmin: float, ymin: float, xmax: float, ymax: float) -> dict:
     return {
         "type": "Polygon",
@@ -44,7 +38,7 @@ def test_aggregate_spatial_single_geometry():
     geom = _box(-0.5, -0.5, 0.5, 0.5)
 
     # weighted sum = polygon area / 4
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert out.sizes["geometry"] == 1
     assert float(out.isel(geometry=0).item()) == pytest.approx(shapely.geometry.shape(geom).area / 4)
 
@@ -71,7 +65,7 @@ def test_aggregate_spatial_feature_collection():
     }
 
     # weighted sum
-    out = _aggregate(da, collection, "sum")
+    out = aggregate_spatial_weighted(da, collection, "sum")
     assert out.sizes["geometry"] == 2
     assert float(out.isel(geometry=0).item()) == pytest.approx(
         shapely.geometry.shape(collection["features"][0]["geometry"]).area / 4
@@ -92,11 +86,11 @@ def test_aggregate_spatial_uniform_1x1_aligned():
     geom = _box(0, 0, 1, 1)
 
     # weighted sum = polygon area
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0).item()) == pytest.approx(shapely.geometry.shape(geom).area)
 
     # weighted mean is always 1
-    out = _aggregate(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0).item()) == pytest.approx(1)
 
 
@@ -108,11 +102,11 @@ def test_aggregate_spatial_uniform_2x2_aligned():
     geom = _box(0, 0, 2, 2)
 
     # weighted sum = polygon area
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0).item()) == pytest.approx(shapely.geometry.shape(geom).area)
 
     # weighted mean is always 1
-    out = _aggregate(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0).item()) == pytest.approx(1)
 
 
@@ -124,11 +118,11 @@ def test_aggregate_spatial_uniform_2x2_aligned_half_inside():
     geom = _box(-1, 0, 1, 2)
 
     # weighted sum = polygon area / 2
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0).item()) == pytest.approx(shapely.geometry.shape(geom).area / 2)
 
     # weighted mean is always 1
-    out = _aggregate(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0).item()) == pytest.approx(1)
 
 
@@ -140,11 +134,11 @@ def test_aggregate_spatial_uniform_1x1_partial_half_inside():
     geom = _box(-0.5, 0, 0.5, 1)
 
     # weighted sum = polygon area / 2
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0).item()) == pytest.approx(shapely.geometry.shape(geom).area / 2)
 
     # weighted mean is always 1
-    out = _aggregate(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0).item()) == pytest.approx(1)
 
 
@@ -156,11 +150,11 @@ def test_aggregate_spatial_uniform_1x1_partial_fourth_inside():
     geom = _box(-0.5, -0.5, 0.5, 0.5)
 
     # weighted sum = polygon area / 4
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0).item()) == pytest.approx(shapely.geometry.shape(geom).area / 4)
 
     # weighted mean is always 1
-    out = _aggregate(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0).item()) == pytest.approx(1)
 
 
@@ -172,11 +166,11 @@ def test_aggregate_spatial_uniform_tiny_inside_one_pixel():
     geom = _box(0.1, 0.1, 0.2, 0.2)
 
     # weighted sum = polygon area
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0).item()) == pytest.approx(shapely.geometry.shape(geom).area)
 
     # weighted mean is always 1
-    out = _aggregate(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geom, "mean")
     assert float(out.isel(geometry=0).item()) == pytest.approx(1)
 
 
@@ -195,13 +189,13 @@ def test_aggregate_spatial_uniform_realistic_poly():
     )
 
     # weighted sum = intersecting polygon area
-    out = _aggregate(da, geom.__geo_interface__, "sum")
+    out = aggregate_spatial_weighted(da, geom.__geo_interface__, "sum")
     raster_extent = shapely.geometry.box(*da.rio.bounds())
     expected = geom.intersection(raster_extent).area
     assert float(out.isel(geometry=0).item()) == pytest.approx(expected)
 
     # weighted mean is always 1
-    out = _aggregate(da, geom.__geo_interface__, "mean")
+    out = aggregate_spatial_weighted(da, geom.__geo_interface__, "mean")
     assert float(out.isel(geometry=0).item()) == pytest.approx(1)
 
 
@@ -216,15 +210,15 @@ def test_aggregate_spatial_fully_outside():
     geom = _box(-2, -2, -1, -1)
 
     # returns geometry even if outside
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert out.sizes["geometry"] == 1
 
     # weighted sum for nomatch = 0
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert float(out.isel(geometry=0).item()) == pytest.approx(0)
 
     # weighted mean for nomatch = nan
-    out = _aggregate(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geom, "mean")
     assert np.isnan(out.isel(geometry=0))
 
 
@@ -268,7 +262,7 @@ def test_aggregate_spatial_with_time_dimension() -> None:
     years = [2025, 2026]
     t_coords = [date(year=y, month=1, day=1) for y in years]
     ds = xr.concat([base, base + 100], dim="t").assign_coords(t=t_coords).to_dataset(name="v")
-    out = _aggregate(ds, geom, "sum")
+    out = aggregate_spatial_weighted(ds, geom, "sum")
     assert isinstance(out, xr.DataArray)
     assert list(out["t"].values) == t_coords
     np.testing.assert_allclose(out.isel(geometry=0).values, [1 / 4, (1 + 100) / 4])
@@ -284,7 +278,7 @@ def test_aggregate_spatial_preserves_non_spatial_dimensions() -> None:
         dim="bands",
     ).assign_coords(bands=["r", "g", "b"])
     geom = _box(-0.5, -0.5, 0.5, 0.5)  # covering one-fourth pixel
-    out = _aggregate(da, geom, "sum")
+    out = aggregate_spatial_weighted(da, geom, "sum")
     assert isinstance(out, xr.DataArray)
     assert list(out["bands"].values) == ["r", "g", "b"]
     assert float(out.isel(geometry=0).sel(bands="r").item()) == pytest.approx(0.25)

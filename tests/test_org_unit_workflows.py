@@ -97,7 +97,7 @@ def test_aggregate_to_org_units_dhis2json() -> None:
     assert envelope.format == "DHIS2JSON"
     assert envelope.options == {"export": "rain-monthly"}
     frame = envelope.data.to_dataframe().reset_index()
-    assert set(frame["geometry"]) == {"OU_A", "OU_B"}
+    assert set(frame["feature_id"]) == {"OU_A", "OU_B"}
     assert len(frame) == 4
 
 
@@ -129,7 +129,7 @@ def test_method_selects_reducer(method: str, expected: float) -> None:
         method=method,
     )
     frame = envelope.data.to_dataframe().reset_index()
-    ou_a_jan = frame[(frame["geometry"] == "OU_A") & (frame["t"] == np.datetime64("2025-01-01"))]["tp"]
+    ou_a_jan = frame[(frame["feature_id"] == "OU_A") & (frame["t"] == np.datetime64("2025-01-01"))]["tp"]
     assert ou_a_jan.tolist() == [expected]
 
 

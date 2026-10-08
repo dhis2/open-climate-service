@@ -12,11 +12,11 @@ from typing import Any
 from open_climate_service.exports.base import BaseExportPlugin, DeliveryContext, RenderedExport
 from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
 from open_climate_service.exports.tabular import (
-    _NON_VALUE_FIELDS,
     _is_nullish,
     _normalise_period_type,
     _to_dhis2_period_string,
     _to_dhis2_value_string,
+    non_value_fields,
 )
 from open_climate_service.shared.vectors import feature_id_field
 
@@ -136,7 +136,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         kind = mapping["period_type"]
 
         frame, value_columns = self._to_frame(data, org_field, period_field, kind)
-        org_field = feature_id_field(frame.columns, org_field)
+        org_field = feature_id_field(frame, org_field)
         if org_field not in frame.columns or period_field not in frame.columns:
             raise ValueError("DHIS2 result is missing organisation-unit or period fields")
         if not frame.columns.is_unique:
@@ -149,7 +149,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 for column in frame.columns
                 if column not in {org_field, period_field}
                 and str(column) not in value_columns
-                and str(column) not in _NON_VALUE_FIELDS
+                and str(column) not in non_value_fields(frame)
             ]
 
         data_values: list[dict[str, str]] = []
@@ -292,7 +292,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     ) -> list[str]:
         if value_columns is not None:
             return [column for column in value_columns if column in frame.columns]
-        excluded = {org_field, period_field, *_NON_VALUE_FIELDS, "quantile"}
+        excluded = {org_field, period_field, *non_value_fields(frame), "quantile"}
         return [
             str(column) for column in frame.columns if column not in excluded and not str(column).startswith("level_")
         ]

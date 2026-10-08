@@ -48,7 +48,7 @@ def aggregate_spatial_weighted(
     data: xr.Dataset | xr.DataArray,
     geometries: Any,
     reducer: str | Callable,
-) -> xr.Dataset:
+) -> xr.DataArray:
     """Spatially aggregate raster values over vector geometries using fractional pixel overlap as weights.
 
     For each geometry, only the portion of each pixel covered by the
@@ -67,13 +67,13 @@ def aggregate_spatial_weighted(
     Returns:
     -------
     VectorCube
-        Vector data cube (xr.Dataset named after the input variable) containing one aggregated
-        value per geometry, with each feature's id as `feature_id` and the non-spatial dimensions
-        of the input cube preserved.
+        Vector data cube (xr.DataArray named after the input variable) containing one aggregated
+        value per geometry, with the geometries on `geometry`, each feature's id as `feature_id`
+        and the non-spatial dimensions of the input cube preserved.
     """
     # NOTE: adapted from openeo_processes_dask.processes.aggregate_spatial to support exactextract
-    from open_climate_service.shared.provenance import observe_spatial_aggregation, record_features, record_reduction
-    from open_climate_service.shared.vectors import raster_and_features, vector_result
+    from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
+    from open_climate_service.shared.vectors import features_in_crs, single_raster, vector_result
 
     if not isinstance(reducer, str) or reducer not in REDUCERS:
         raise ValueError(
@@ -81,17 +81,17 @@ def aggregate_spatial_weighted(
             "a reducer process cannot be weighted by pixel overlap. Use aggregate_spatial for one."
         )
     record_features(geometries)
-    raster, frame = raster_and_features(data, geometries)
+    raster = single_raster(data)
+    frame = features_in_crs(geometries, raster.rio.crs)
 
-    # Run xvec zonal stats with exactextract backend. A named method is recorded, so a DHIS2
-    # export can check the aggregation it declares against the one that ran.
-    with observe_spatial_aggregation():
-        record_reduction(reducer)
-        vec_cube: xr.DataArray = raster.xvec.zonal_stats(
-            frame.geometry,
-            x_coords="x",
-            y_coords="y",
-            method="exactextract",
-            stats=reducer,
-        )
+    # Run xvec zonal stats with exactextract backend.
+    vec_cube: xr.DataArray = raster.xvec.zonal_stats(
+        frame.geometry,
+        x_coords="x",
+        y_coords="y",
+        method="exactextract",
+        stats=reducer,
+    )
+    # The named method, so a DHIS2 export can check the aggregation it declares against this one.
+    record_spatial_aggregation(reducer)
     return vector_result(vec_cube, raster, frame.index)

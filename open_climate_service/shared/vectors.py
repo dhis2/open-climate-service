@@ -11,13 +11,6 @@ if TYPE_CHECKING:
 
 _Cube = TypeVar("_Cube", "xr.Dataset", "xr.DataArray")
 
-GEOMETRY_WKT_COORD = "geometry_wkt"
-"""Coordinate containing each feature's geometry as WKT.
-
-The vector cube's geometry dimension carries feature labels/IDs; this coordinate
-stores the corresponding geometry without replacing those labels.
-"""
-
 FEATURE_ID_COORD = "feature_id"
 """Companion coordinate on a vector cube's geometry dimension, holding each feature's id.
 
@@ -98,65 +91,123 @@ def attach_feature_ids(result: _Cube, ids: Iterable[Any], dim: str) -> _Cube:
     return result.assign_coords({FEATURE_ID_COORD: (dim, [str(value) for value in ids])})
 
 
-def feature_id_field(columns: Iterable[Any], requested: str) -> str:
-    """The column an export reads feature ids from, when it asked for *requested*.
+def feature_id_field(frame: Any, requested: str) -> str:
+    """The column of *frame* an export reads feature ids from, when it asked for *requested*.
 
-    `geometry` is the exports' default location field, and means the feature's identity. When the
-    result carries `feature_id`, that is where the identity is, whatever the geometry labels
-    hold: an aggregation that labels its dimension with shapes (as openEO does) still exports
-    org-unit ids. Any other field name is taken as given.
+    `geometry` is the exports' default location field, and means the feature's identity, as does
+    any column of shapes: the features' dimension after an aggregation, whatever openEO's
+    `target_dimension` named it. When the result carries `feature_id`, that is where the identity
+    is. Any other field name is taken as given.
     """
-    if requested == GEOMETRY_FIELD and FEATURE_ID_COORD in {str(column) for column in columns}:
+    columns = {str(column) for column in frame.columns}
+    if FEATURE_ID_COORD not in columns:
+        return requested
+    if requested == GEOMETRY_FIELD:
         return FEATURE_ID_COORD
+    if requested in columns:
+        values = frame[requested]
+        if len(values) and all(hasattr(value, "geom_type") for value in values):
+            return FEATURE_ID_COORD
     return requested
 
 
-def raster_and_features(data: Any, geometries: Any) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
-    """The inputs of a spatial aggregation, ready for xvec: one named raster, features in its CRS.
+def single_raster(data: Any) -> xr.DataArray:
+    """*data* as one raster DataArray with a CRS, for a process that works on a single variable.
 
-    A single-variable Dataset becomes its variable. A raster without a CRS is taken as WGS 84,
-    the CRS of GeoJSON, which is what a grid without one has always been compared against. The
-    features are indexed by feature id (:func:`geometries_to_frame`), and a frame without a CRS
-    is WGS 84 too.
+    A single-variable Dataset becomes its variable; more than one is refused. A raster without
+    a CRS is taken as WGS 84, the CRS of GeoJSON, which is what a grid without one has always
+    been compared against.
     """
     import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
     import xarray as xr
 
     if isinstance(data, xr.Dataset):
         if len(data.data_vars) != 1:
-            raise ValueError(f"spatial aggregation needs a single-variable raster, got {list(data.data_vars)}")
+            raise ValueError(f"expected a single-variable raster, got {list(data.data_vars)}")
         data = data[next(iter(data.data_vars))]
-    if data.rio.crs is None:
-        data = data.rio.write_crs("EPSG:4326")
+    raster: xr.DataArray = data
+    if raster.rio.crs is None:
+        raster = raster.rio.write_crs("EPSG:4326")
+    return raster
+
+
+def features_in_crs(geometries: Any, crs: Any) -> gpd.GeoDataFrame:
+    """The features of a `geometries` argument, indexed by feature id, reprojected to *crs*.
+
+    See :func:`geometries_to_frame` for what is accepted. Features without a CRS are WGS 84.
+    """
     frame = geometries_to_frame(geometries)
     if frame.crs is None:
         frame = frame.set_crs("EPSG:4326")
-    return data, frame.to_crs(data.rio.crs)
+    return frame.to_crs(crs)
 
 
 def vector_result(
     result: xr.DataArray, data: xr.DataArray, ids: Iterable[Any], dim: str = GEOMETRY_FIELD
-) -> xr.Dataset:
-    """An aggregation's output in OCS's vector cube form: named, labelled by feature id.
+) -> xr.DataArray:
+    """An aggregation's output as a vector cube: the shapes on *dim*, each feature's id beside them.
 
-    *result* is xvec's, with its features on `geometry`; *dim* is the dimension they end up on.
-
-    xvec returns an unnamed DataArray whose geometry dimension holds shapely objects, which Zarr
-    and NetCDF cannot encode. This relabels the dimension with the feature ids, keeps the shapes
-    as WKT in `geometry_wkt` and the ids in `feature_id`, names the result after the input
-    variable so tabular exports get a value column, and keeps the input's cadence, since a
-    spatial aggregation changes nothing about time.
+    *result* is xvec's, with the shapes on `geometry` under xvec's geometry index (which carries
+    their CRS), as openEO describes a vector cube. Three things are added: the dimension takes
+    *dim*'s name (openEO's `target_dimension`), the feature ids ride along as `feature_id`, which
+    the DHIS2 and CHAP exports key on, and the result is named after the input variable, so a
+    tabular export has a value column. The input's cadence is kept, since a spatial aggregation
+    changes nothing about time. Writers encode the shapes for formats that cannot hold them
+    (:func:`encode_vector_cube`).
     """
     from open_climate_service.shared.time import cadence_of, stamp_cadence
 
-    labels = [str(value) for value in ids]
-    wkt = [shape.wkt for shape in result[GEOMETRY_FIELD].values]
-    plain = (
-        result.drop_vars(GEOMETRY_FIELD).rename({GEOMETRY_FIELD: dim})
-        if dim != GEOMETRY_FIELD
-        else result.drop_vars(dim)
-    )
-    plain = plain.assign_coords({dim: labels, GEOMETRY_WKT_COORD: (dim, wkt)})
-    named = attach_feature_ids(plain, labels, dim).to_dataset(name=str(data.name or "data"))
+    if dim != GEOMETRY_FIELD:
+        result = result.rename({GEOMETRY_FIELD: dim})
+    if type(result.xindexes.get(dim)).__name__ != "GeometryIndex":
+        # The shapes are in the raster's CRS, which the features were reprojected to.
+        import xvec  # type: ignore[import-untyped]  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+        result = result.xvec.set_geom_indexes(dim, crs=data.rio.crs)
+    named = attach_feature_ids(result, ids, dim).rename(str(data.name or "data"))
     stamp_cadence(named, cadence_of(data))
     return named
+
+
+def vector_dim(cube: Any) -> str | None:
+    """The dimension a vector cube's features live on, or None for a raster cube.
+
+    The dimension under xvec's geometry index, whatever it is called (openEO's
+    `target_dimension` can rename it); otherwise one whose labels are all shapes; otherwise a
+    dimension named `geometry`, so a cube that says it is vector but carries no usable shapes
+    is refused as such rather than written as a raster.
+    """
+    indexes = getattr(cube, "xindexes", {})
+    dims = getattr(cube, "dims", ())
+    for name in dims:
+        if type(indexes.get(name)).__name__ == "GeometryIndex":
+            return str(name)
+    for name in dims:
+        if holds_shapes(cube, str(name)):
+            return str(name)
+    return GEOMETRY_FIELD if GEOMETRY_FIELD in dims else None
+
+
+def holds_shapes(cube: Any, dim: str) -> bool:
+    """Whether *dim*'s labels are all geometries, as on an xvec cube."""
+    if dim not in getattr(cube, "coords", {}):
+        return False
+    values = cube[dim].values
+    return bool(len(values)) and all(hasattr(value, "geom_type") for value in values)
+
+
+def encode_vector_cube(ds: xr.Dataset) -> xr.Dataset:
+    """*ds* with its shapes encoded as CF geometry, for writers that cannot hold shapely objects.
+
+    Zarr and NetCDF store arrays of numbers and strings, not geometry objects. xvec's CF encoding
+    turns the shapes into the CF conventions' geometry container, which xvec, and any CF-aware
+    reader, decodes back; the feature ids stay as `feature_id`. A cube with no geometry index is
+    returned unchanged.
+    """
+    dim = vector_dim(ds)
+    if dim is None or type(ds.xindexes.get(dim)).__name__ != "GeometryIndex":
+        return ds
+    import xvec  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+    encoded: xr.Dataset = ds.xvec.encode_cf()
+    return encoded
