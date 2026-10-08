@@ -78,7 +78,7 @@ def aggregate_spatial_weighted(
     if not isinstance(reducer, str) or reducer not in REDUCERS:
         raise ValueError(
             f"aggregate_spatial_weighted: reducer must be one of {', '.join(REDUCERS)}, by name; "
-            "a reducer process cannot be weighted by pixel overlap. Use aggregate_spatial for one."
+            "to aggregate with an openEO reducer process, use aggregate_spatial instead"
         )
     record_features(geometries)
     raster = single_raster(data)
