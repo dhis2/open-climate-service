@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Delete schedule · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+    <div class="layout">
+      {{ nav }}
+      <main id="content">
+        <div class="page-title"><h2>Delete sync schedule?</h2></div>
+        <div class="panel">
+          <p>The schedule for <strong class="mono">{{ dataset_id }}</strong> will be removed. Existing data and sync jobs remain available.</p>
+          <form method="post" action="{{ mount }}/schedules/sync/{{ dataset_id }}/delete">
+            <input type="hidden" name="confirm" value="yes" />
+            <div class="form-actions">
+              <button type="submit" class="danger">Delete schedule</button>
+              <a class="button-link" href="{{ mount }}/schedules">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
