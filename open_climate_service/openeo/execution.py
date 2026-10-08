@@ -168,6 +168,45 @@ def _recording_reducer(name: str, func: Any) -> Any:
     return wrapper
 
 
+def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
+    """Wrap openEO's aggregate_spatial so a feature's id and the variable's name survive.
+
+    The upstream implementation drops each GeoJSON Feature's `id`, labels the geometry dimension
+    with the shapes and returns an unnamed DataArray, so a DHIS2 or CHAP export has neither
+    org units nor a value column (openeo-processes-dask#434). It also refuses a raster without
+    a CRS. The features are parsed here instead, with their ids, and the result is named and
+    carries them as `feature_id`, the same as `aggregate_spatial_weighted`.
+    """
+
+    def _aggregate_spatial(
+        data: Any, geometries: Any, reducer: Any, target_dimension: Any = None, context: Any = None, **kwargs: Any
+    ) -> Any:
+        # `target_dimension` and `context` are openEO parameters the upstream function does not
+        # take; a graph from the openEO editor passes both, as null. The dimension is named here.
+        # A context could not reach the reducer, so one that is actually given is refused rather
+        # than silently dropped.
+        if context is not None:
+            raise ValueError(
+                "aggregate_spatial: `context` is not supported; the reducer cannot receive it. Leave it null."
+            )
+        import joblib  # type: ignore[import-untyped]
+
+        from open_climate_service.shared.provenance import record_features, spatial_aggregation_scope
+        from open_climate_service.shared.vectors import GEOMETRY_FIELD, features_in_crs, single_raster, vector_result
+
+        record_features(geometries)
+        raster = single_raster(data)
+        frame = features_in_crs(geometries, raster.rio.crs)
+        # xvec runs the reducer through joblib, by default in loky worker processes, where the
+        # scope's ContextVar is not set; threads do not inherit it either. Run it in this thread
+        # so the named reduction is recorded and a DHIS2 export can check its declared method.
+        with spatial_aggregation_scope(), joblib.parallel_config(backend="sequential"):
+            result = original_fn(data=raster, geometries=frame, reducer=reducer, **kwargs)
+        return vector_result(result, raster, frame.index, target_dimension or GEOMETRY_FIELD)
+
+    return _aggregate_spatial
+
+
 def _make_named_merge_cubes(original_fn: Any) -> Any:
     """Wrap merge_cubes to preserve and extend named predictor cubes.
 
@@ -391,6 +430,10 @@ def _build_process_registry() -> Any:
     registry["aggregate_temporal_period"] = Process(
         spec=getattr(specs_module, "aggregate_temporal_period", {}),
         implementation=_make_sorted_atp(impls_module.aggregate_temporal_period),
+    )
+    registry["aggregate_spatial"] = Process(
+        spec=getattr(specs_module, "aggregate_spatial", {}),
+        implementation=_make_feature_aware_aggregate_spatial(impls_module.aggregate_spatial),
     )
     registry["merge_cubes"] = Process(
         spec=getattr(specs_module, "merge_cubes", {}),

@@ -114,6 +114,7 @@ server = [
     "pystac-client>=0.6.1",
     "stac-validator>=3.3.1",
     "xvec>=0.3",
+    "joblib>=1.3",
     "python-multipart>=0.0.29",
     "xclim>=0.61.1",
     # ECMWF's earthkit is a core scientific library here, on the same footing as xclim:

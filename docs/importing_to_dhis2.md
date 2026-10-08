@@ -263,7 +263,7 @@ pass the mapping as `save_result` options:
     "arguments": {
       "data": {"from_node": "zonal"},
       "format": "DHIS2JSON",
-      "options": {"data_element_id": "BXgDHhPdFVU", "org_unit_field": "geometry", "period_type": "month"}
+      "options": {"data_element_id": "BXgDHhPdFVU", "org_unit_field": "feature_id", "period_type": "month"}
     },
     "result": true
   }

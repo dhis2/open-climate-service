@@ -13,7 +13,7 @@ exports:
   - id: rainfall-monthly
     plugin: dhis2
     period_type: monthly
-    org_unit_field: geometry
+    org_unit_field: feature_id
     period_field: t
     series:
       - select: {}
@@ -21,9 +21,10 @@ exports:
 ```
 
 Replace the data-element UID with the destination defined in your DHIS2 instance.
-`org_unit_field: geometry` reads each value's organisation unit from the feature ids:
-the `feature_id` coordinate when the spatial aggregation carries one, otherwise the
-labels of its geometry dimension. CHAP CSV's `location_field: geometry` does the same.
+`org_unit_field: feature_id`, the default, reads each value's organisation unit from the
+feature ids a spatial aggregation keeps beside its geometries. CHAP CSV's `location_field`
+defaults to `feature_id` too. Geometries are never used as ids: a result that has shapes but
+no `feature_id` is refused, so give each GeoJSON Feature an `id`.
 Pass the prepared aggregate to `save_result`:
 
 ```json
