@@ -336,7 +336,7 @@ def test_the_map_viewer_reads_and_writes_the_dataset_in_the_address(client: Test
     assert 'new URLSearchParams(window.location.search).get("dataset")' in body
     assert 'url.searchParams.set("dataset", id)' in body
     # Each option carries its collection id, which is what a deep link names.
-    assert "opt.dataset.id = id;" in body
+    assert "opt.dataset.id = col.id;" in body
 
 
 def test_the_map_panel_links_to_the_dataset_page(client: TestClient) -> None:
@@ -358,11 +358,9 @@ def test_the_map_viewer_lists_vector_datasets_and_reads_their_geoparquet(client:
     body = client.get("/map").text
 
     assert 'import { parquetReadObjects } from "https://esm.sh/hyparquet@' in body
-    # Listed by the `stac` link, which follows the latest published version, not by the newest
-    # version's publication status.
-    assert 'item.itemType === "feature" && hasStacCollection(item)' in body
+    # Listed from /collections like the rasters, so the same publication gate applies to both.
+    assert 'fetch("/datasets"' not in body
     assert "publication?.status" not in body
-    assert "href: `/stac/collections/${encodeURIComponent(item.dataset_id)}`" in body
     assert "const featureAsset = collection.assets?.data;" in body
     # MapLibre places GeoJSON as longitude and latitude, so a projected collection is refused.
     assert 'if (storedCrs !== "EPSG:4326")' in body

@@ -13,10 +13,14 @@ _BACKEND_PROCESSES: list[dict[str, Any]] = [
         "id": "load_collection",
         "summary": "Load a collection",
         "description": (
-            "Loads a collection from the current back-end by its id and returns it as a processable data cube."
+            "Loads a collection from the current back-end by its id and returns it as a processable data cube. "
+            "A raster collection loads as a raster data cube. A vector collection (one whose `cube:dimensions` "
+            "has a `geometry` dimension, such as administrative boundaries) loads as a vector cube of its "
+            "features in WGS 84, the same result as `load_features`; it has no temporal dimension, so "
+            "`temporal_extent` does not apply, and no bands, so `bands` must be omitted."
         ),
         "parameters": [
-            {"name": "id", "description": "Collection ID", "schema": {"type": "string"}},
+            {"name": "id", "description": "Collection ID, raster or vector", "schema": {"type": "string"}},
             {
                 "name": "spatial_extent",
                 "description": "Bounding box filter",
@@ -39,7 +43,11 @@ _BACKEND_PROCESSES: list[dict[str, Any]] = [
                 "schema": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
             },
         ],
-        "returns": {"description": "A data cube for further processing.", "schema": {"type": "object"}},
+        "returns": {
+            "description": "A data cube for further processing: a raster data cube, or a vector cube for a vector "
+            "collection.",
+            "schema": {"type": "object"},
+        },
         "links": [{"rel": "about", "href": "https://processes.openeo.org/#load_collection"}],
     },
     {

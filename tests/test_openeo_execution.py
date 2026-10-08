@@ -6,6 +6,7 @@ import csv
 import json
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -41,6 +42,9 @@ from open_climate_service.openeo.jobs import (
 )
 from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.time import utc_now
+
+_RASTER_ARTIFACT = SimpleNamespace(format=ArtifactFormat.ICECHUNK)
+"""A stub published artifact: `load_collection` reads only its format before opening it."""
 
 # ---------------------------------------------------------------------------
 # _bbox_to_dict
@@ -171,10 +175,11 @@ def test_ensure_crs_is_idempotent_and_preserves_existing_crs() -> None:
 def test_load_collection_returns_georegistered_cube(monkeypatch: pytest.MonkeyPatch) -> None:
     import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: object())
+    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
     monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     cube = _load_collection_impl("pop_collection")
+    assert isinstance(cube, xr.DataArray), "a raster collection loads as a datacube"
 
     # The returned DataArray must carry a CRS so odc-based processes
     # (resample_cube_spatial) can georegister it.
@@ -184,7 +189,7 @@ def test_load_collection_returns_georegistered_cube(monkeypatch: pytest.MonkeyPa
 
 def test_load_collection_empty_temporal_extent_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     # The mock cube only covers 2021; a 2030 extent selects zero timesteps.
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: object())
+    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
     monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     with pytest.raises(HTTPException) as excinfo:
@@ -200,11 +205,12 @@ def test_load_collection_empty_temporal_extent_raises_clear_error(monkeypatch: p
 
 
 def test_load_collection_overlapping_temporal_extent_returns_data(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: object())
+    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
     monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     cube = _load_collection_impl("pop_collection", temporal_extent=["2021-01-01", "2021-12-31"])
 
+    assert isinstance(cube, xr.DataArray)
     assert cube.sizes["t"] == 1
 
 

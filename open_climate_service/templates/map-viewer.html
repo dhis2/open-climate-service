@@ -537,59 +537,39 @@
         });
       }
 
-      // A dataset's STAC collection serves its latest *published* version, and the record offers
-      // a `stac` link exactly when there is one. Its `publication` describes the newest version
-      // instead, which after a refresh with `publish: false` is unpublished while an older one
-      // is still served, so the link is the test of whether the map can show the dataset.
+      // A dataset's STAC collection serves its latest *published* version, and the dataset record
+      // offers a `stac` link exactly when there is one. Its `publication` describes the newest
+      // version instead, which after a refresh with `publish: false` is unpublished while an
+      // older one is still served, so the link is the test of whether the map can show it.
       function hasStacCollection(item) {
         return (item.links ?? []).some((link) => link.rel === "stac");
       }
 
-      // Published vector datasets, from the dataset list: the openEO catalogue above lists
-      // rasters only. Each is opened through its STAC collection, which names the GeoParquet to
-      // draw. A failure here leaves the rasters usable rather than failing the whole list.
-      async function publishedVectorDatasets() {
-        try {
-          const res = await fetch("{{ mount }}/datasets", { headers: { Accept: "application/json" } });
-          if (!res.ok) return [];
-          const body = await res.json();
-          return (body.items ?? []).filter(
-            (item) => item.itemType === "feature" && hasStacCollection(item)
-          );
-        } catch {
-          return [];
-        }
+      // /collections lists vector datasets too (CLIM-1326): a cube with a geometry dimension.
+      function isVectorCollection(col) {
+        const dims = col?.["cube:dimensions"];
+        return dims != null && Object.values(dims).some((dim) => dim?.type === "geometry");
       }
 
       function addOptions(parent, entries) {
-        for (const { id, title, href } of entries) {
+        for (const col of entries) {
           const opt = document.createElement("option");
-          opt.value = href;
-          opt.dataset.id = id;
-          opt.textContent = title ?? id;
+          opt.value = `{{ mount }}/collections/${col.id}`;
+          opt.dataset.id = col.id;
+          opt.textContent = col.title ?? col.id;
           parent.appendChild(opt);
         }
       }
 
       async function loadCatalog() {
         try {
-          const [res, vectors] = await Promise.all([
-            fetch("{{ mount }}/collections"),
-            publishedVectorDatasets(),
-          ]);
+          const res = await fetch("{{ mount }}/collections");
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const body = await res.json();
-          const rasters = (body.collections ?? []).map((col) => ({
-            id: col.id,
-            title: col.title,
-            href: `{{ mount }}/collections/${col.id}`,
-          }));
-          const features = vectors.map((item) => ({
-            id: item.dataset_id,
-            title: item.dataset_name,
-            href: `{{ mount }}/stac/collections/${encodeURIComponent(item.dataset_id)}`,
-          }));
-          if (rasters.length === 0 && features.length === 0) {
+          const all = body.collections ?? [];
+          const rasters = all.filter((col) => !isVectorCollection(col));
+          const features = all.filter(isVectorCollection);
+          if (all.length === 0) {
             setStatus(
               "No published datasets found. Ingest and publish a dataset first."
             );

@@ -286,13 +286,12 @@ def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
 
 
 CATALOGUED_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
-"""Stored formats the STAC catalogue describes.
+"""Stored formats the STAC catalogue and openEO `/collections` describe.
 
-Wider than `LOADABLE_RASTER_FORMATS` because STAC describes what *exists* while openEO
-advertises what `load_collection` can *consume*. A feature collection genuinely is a STAC
-collection — it has a licence, an attribution, a spatial extent and a table schema — and
-genuinely is not an openEO datacube. That divergence is the whole reason CLIM-1066 split the
-two gates, and this is the value that makes them differ.
+Wider than `LOADABLE_RASTER_FORMATS`, which is what can be opened as a raster datacube. A
+feature collection is a STAC collection (licence, attribution, extent, table schema) and,
+since CLIM-1326, an openEO collection too: `load_collection` loads it as a vector cube, the
+same thing `load_features` returns.
 """
 
 
@@ -306,13 +305,32 @@ def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     GEOPARQUET here never advertises a child the catalogue cannot serve.
 
     Deliberately not an alias for the raster gate, and the raster gate is deliberately not
-    widened: `load_collection` still cannot consume a feature collection, so openEO must keep
-    answering this question for itself.
+    widened: the Zarr and Icechunk routes and the raster branch of `load_collection` still
+    open only datacubes, so they keep asking the raster question.
     """
     return {
         dataset_id: artifact
         for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
         if artifact.format in CATALOGUED_FORMATS
+    }
+
+
+OPENEO_COLLECTION_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
+"""Stored formats `load_collection` can load: rasters as datacubes, GeoParquet as vector cubes."""
+
+
+def openeo_collection_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the artifacts openEO `/collections` advertises and `load_collection` loads.
+
+    Every published raster, loaded as a raster datacube, plus every published feature
+    collection, loaded as a vector cube (CLIM-1326). The same formats STAC describes today, but
+    a separate gate: openEO advertises what `load_collection` can consume, so a format STAC can
+    describe but `load_collection` cannot load must not reach openEO by following STAC's set.
+    """
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in OPENEO_COLLECTION_FORMATS
     }
 
 
