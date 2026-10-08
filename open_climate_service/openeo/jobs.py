@@ -2167,16 +2167,16 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
     import pandas as pd
 
     period_field = _optional_str_option(options, "period_field") or "t"
-    location_field = _optional_str_option(options, "location_field") or "geometry"
+    location_field = _optional_str_option(options, "location_field") or FEATURE_ID_COORD
     period_type = _optional_str_option(options, "period_type")
     cube_labels_raw = options.get("cube_labels")
 
     frame = pd.DataFrame(df).copy()
     location_field = feature_id_field(frame, location_field)
     if location_field not in frame.columns:
-        if location_field == "geometry":
+        if location_field == FEATURE_ID_COORD:
             raise ValueError(
-                "Missing location field 'geometry' in aggregated result; "
+                f"Missing location field '{FEATURE_ID_COORD}' in aggregated result; "
                 "for GeoDataFrame inputs set save_result option 'location_field' explicitly"
             )
         raise ValueError(f"Missing location field '{location_field}' in aggregated result")

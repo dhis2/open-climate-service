@@ -123,21 +123,33 @@ def attach_feature_ids(result: _Cube, ids: Iterable[Any], dim: str) -> _Cube:
 def feature_id_field(frame: Any, requested: str) -> str:
     """The column of *frame* an export reads feature ids from, when it asked for *requested*.
 
-    `geometry` is the exports' default location field, and means the feature's identity, as does
-    any column of shapes: the features' dimension after an aggregation, whatever openEO's
-    `target_dimension` named it. When the result carries `feature_id`, that is where the identity
-    is. Any other field name is taken as given.
+    `feature_id` is the exports' default location field. Asking for `geometry`, or for any column
+    of shapes (the features' dimension after an aggregation, whatever openEO's `target_dimension`
+    named it), means the feature's identity too, and reads `feature_id` when the result has it.
+    Shapes are never used as ids: a time series repeats every shape once per period, which bloats
+    the output, so a result with shapes and no `feature_id` is refused. A result without
+    `feature_id` whose `geometry` holds plain labels still keys on them. Any other field name is
+    taken as given.
     """
     columns = {str(column) for column in frame.columns}
-    if FEATURE_ID_COORD not in columns:
-        return requested
-    if requested == GEOMETRY_FIELD:
+    if FEATURE_ID_COORD in columns and (requested == GEOMETRY_FIELD or _column_holds_shapes(frame, requested)):
         return FEATURE_ID_COORD
-    if requested in columns:
-        values = frame[requested]
-        if len(values) and all(hasattr(value, "geom_type") for value in values):
-            return FEATURE_ID_COORD
-    return requested
+    field = requested
+    if requested == FEATURE_ID_COORD and FEATURE_ID_COORD not in columns and GEOMETRY_FIELD in columns:
+        field = GEOMETRY_FIELD
+    if _column_holds_shapes(frame, field):
+        raise ValueError(
+            f"'{field}' holds geometries, not feature ids, and the result carries no `{FEATURE_ID_COORD}`; "
+            "give each feature an id (a GeoJSON Feature `id`) so the export can key on it"
+        )
+    return field
+
+
+def _column_holds_shapes(frame: Any, column: str) -> bool:
+    if column not in frame.columns:
+        return False
+    values = frame[column]
+    return bool(len(values)) and all(hasattr(value, "geom_type") for value in values)
 
 
 def single_raster(data: Any) -> xr.DataArray:

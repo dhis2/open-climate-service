@@ -55,7 +55,7 @@
         "data": { "from_node": "zonal" },
         "format": "CHAPCSV",
         "options": {
-          "location_field": "geometry",
+          "location_field": "feature_id",
           "period_type": { "from_parameter": "period_type" }
         }
       },

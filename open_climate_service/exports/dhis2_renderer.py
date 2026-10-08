@@ -18,7 +18,7 @@ from open_climate_service.exports.tabular import (
     _to_dhis2_value_string,
     non_value_fields,
 )
-from open_climate_service.shared.vectors import feature_id_field
+from open_climate_service.shared.vectors import FEATURE_ID_COORD, feature_id_field
 
 
 class _RetryableTransportError(Exception):
@@ -98,11 +98,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 if field in entry:
                     validated[field] = _uid(entry[field], f"{prefix}.{field}")
             validated_series.append(validated)
-        for field, default in (("org_unit_field", "geometry"), ("period_field", "t")):
+        for field, default in (("org_unit_field", FEATURE_ID_COORD), ("period_field", "t")):
             value = mapping.get(field, default)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field} must be a non-empty field name")
-        if mapping.get("org_unit_field", "geometry") == mapping.get("period_field", "t"):
+        if mapping.get("org_unit_field", FEATURE_ID_COORD) == mapping.get("period_field", "t"):
             raise ValueError("Organisation unit and period fields must be distinct")
         if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max", "median"):
             raise ValueError("aggregation must be mean, sum, min, max, or median; it declares upstream computation")
@@ -131,7 +131,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         import numpy as np
 
         entries = mapping["series"]
-        org_field = mapping.get("org_unit_field", "geometry")
+        org_field = mapping.get("org_unit_field", FEATURE_ID_COORD)
         period_field = mapping.get("period_field", "t")
         kind = mapping["period_type"]
 

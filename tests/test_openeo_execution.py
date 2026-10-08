@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from fastapi import HTTPException
@@ -998,9 +999,53 @@ def test_dhis2_value_string_formats_boolean_scalars() -> None:
 
 
 def test_build_chap_csv_frame_requires_location_field() -> None:
-    with pytest.raises(ValueError, match="Missing location field 'geometry' in aggregated result"):
+    with pytest.raises(ValueError, match="Missing location field 'feature_id' in aggregated result"):
         _build_chap_csv_frame(
             [{"t": "2024-01-01", "temperature": 1.5}],
+            {"period_type": "daily"},
+        )
+
+
+@pytest.mark.parametrize("requested", ["feature_id", "geometry"])
+def test_feature_id_field_reads_feature_ids_beside_shapes(requested: str) -> None:
+    from shapely.geometry import Point
+
+    from open_climate_service.shared.vectors import feature_id_field
+
+    frame = pd.DataFrame({"geometry": [Point(0, 0)], "feature_id": ["OU_A"], "t": ["2024-01"]})
+
+    assert feature_id_field(frame, requested) == "feature_id"
+
+
+@pytest.mark.parametrize("requested", ["feature_id", "geometry", "regions"])
+def test_feature_id_field_refuses_shapes_as_ids(requested: str) -> None:
+    """A time series repeats each shape per period; shapes are never written out as ids."""
+    from shapely.geometry import Point
+
+    from open_climate_service.shared.vectors import feature_id_field
+
+    shapes = [Point(0, 0), Point(1, 1)]
+    column = "regions" if requested == "regions" else "geometry"
+    frame = pd.DataFrame({column: shapes, "t": ["2024-01", "2024-01"]})
+
+    with pytest.raises(ValueError, match="holds geometries, not feature ids"):
+        feature_id_field(frame, requested)
+
+
+def test_feature_id_field_keys_on_plain_geometry_labels_without_feature_ids() -> None:
+    from open_climate_service.shared.vectors import feature_id_field
+
+    frame = pd.DataFrame({"geometry": ["OU_A", "OU_B"], "t": ["2024-01", "2024-01"]})
+
+    assert feature_id_field(frame, "feature_id") == "geometry"
+
+
+def test_chap_csv_refuses_shapes_without_feature_ids() -> None:
+    from shapely.geometry import Point
+
+    with pytest.raises(ValueError, match="holds geometries, not feature ids"):
+        _build_chap_csv_frame(
+            [{"geometry": Point(0, 0), "t": "2024-01-01", "temperature": 1.5}],
             {"period_type": "daily"},
         )
 
