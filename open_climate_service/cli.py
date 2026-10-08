@@ -1,7 +1,6 @@
 """Command-line entry point for running the Open Climate Service with uvicorn."""
 
 import os
-import sys
 
 import uvicorn
 
@@ -24,12 +23,6 @@ def main() -> None:
     ignored. `load_dotenv` does not overwrite variables already set, so compose and the shell
     still win over the file.
     """
-    if sys.argv[1:] == ["migrate-schedules"]:
-        from open_climate_service.scheduler.migration import main as migrate_schedules
-
-        migrate_schedules()
-        return
-
     host = os.environ.get("HOST", DEFAULT_HOST)
     port = int(os.environ.get("PORT", DEFAULT_PORT))
     forwarded_allow_ips = os.environ.get("FORWARDED_ALLOW_IPS")

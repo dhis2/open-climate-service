@@ -65,21 +65,3 @@ def test_the_entry_point_does_not_own_the_root_path(
     main()
 
     assert "root_path" not in uvicorn_kwargs
-
-
-def test_migrate_schedules_command_does_not_start_the_server(
-    monkeypatch: pytest.MonkeyPatch, uvicorn_kwargs: dict[str, Any]
-) -> None:
-    import sys
-
-    from open_climate_service.cli import main
-    from open_climate_service.scheduler import migration
-
-    called: list[bool] = []
-    monkeypatch.setattr(sys, "argv", ["climate-service", "migrate-schedules"])
-    monkeypatch.setattr(migration, "main", lambda: called.append(True))
-
-    main()
-
-    assert called == [True]
-    assert uvicorn_kwargs == {}

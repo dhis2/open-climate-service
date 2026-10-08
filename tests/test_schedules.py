@@ -23,7 +23,6 @@ from open_climate_service.scheduler.config import (
     effective_schedules,
     get_scheduler_config,
 )
-from open_climate_service.scheduler.migration import migrate_legacy_schedules
 from open_climate_service.scheduler.presets import (
     cron_from_form,
     form_values,
@@ -135,54 +134,12 @@ def test_store_stamp_detects_equal_size_replacement_with_unchanged_mtime(instanc
     assert store.store_stamp() != first
 
 
-def test_legacy_yaml_migration_is_atomic_and_idempotent(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_config, "get_config_path", lambda: Path("/tmp/instance.yaml"))
-    monkeypatch.setattr(
-        api_config,
-        "_cache",
-        {
-            "scheduler": {
-                "enabled": False,
-                "dataset_sync": [
-                    {"dataset_id": "chirps", "cron": "0 5 * * *", "publish": False},
-                    {"dataset_id": "era5", "cron": "0 6 * * *"},
-                ],
-            }
-        },
-    )
-    assert migrate_legacy_schedules() == 2
-    assert migrate_legacy_schedules() == 0
-    assert store.schedules_path().is_file()
-    assert [item.dataset_id for item in store.list_schedules()] == ["chirps", "era5"]
-    assert store.get_schedule("chirps").publish is False  # type: ignore[union-attr]
-
-    store.save_schedule(_stored("chirps", cron="0 7 * * *"), create=False)
-    before = store.schedules_path().read_bytes()
-    with pytest.raises(ValueError, match="different settings"):
-        migrate_legacy_schedules()
-    assert store.schedules_path().read_bytes() == before
-
-
-def test_legacy_yaml_is_rejected_at_runtime_with_migration_instruction(
+def test_legacy_yaml_is_rejected_at_runtime_with_recreation_instruction(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(api_config, "_cache", {"scheduler": {"dataset_sync": []}})
-    with pytest.raises(ValueError, match="migrate-schedules"):
+    with pytest.raises(ValueError, match="recreate schedules"):
         get_scheduler_config()
-
-
-def test_migration_rejects_duplicate_yaml_entries_without_writing(
-    instance: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(api_config, "get_config_path", lambda: Path("/tmp/instance.yaml"))
-    monkeypatch.setattr(
-        api_config,
-        "_cache",
-        {"scheduler": {"dataset_sync": [{"dataset_id": "chirps", "cron": "0 5 * * *"}] * 2}},
-    )
-    with pytest.raises(ValueError, match="duplicate dataset ids"):
-        migrate_legacy_schedules()
-    assert not store.schedules_path().exists()
 
 
 # --- effective store entries ---------------------------------------------------------------------

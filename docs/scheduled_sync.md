@@ -49,14 +49,12 @@ true; the second example stays paused until an operator resumes it. When editing
 the JSON outside the UI, stop OCS or replace the complete file atomically so the
 clock never reads a partial write.
 
-If upgrading an instance with `scheduler.dataset_sync` in YAML, stop OCS and run
-`climate-service migrate-schedules` with `CLIMATE_SERVICE_CONFIG` set to that
-instance's YAML file. The command imports the entries atomically into the one
-JSON file, skips identical entries if rerun, and refuses conflicting saved entries
-without overwriting them. Verify the store, remove `dataset_sync` from YAML, and
-restart OCS. The upgraded server rejects a leftover YAML schedule list with a
-migration instruction; it never silently ignores or runs a second copy. Keep
-`scheduler.enabled` and `scheduler.timezone` in YAML.
+For a development instance with `scheduler.dataset_sync` in YAML, remove that block
+before starting the updated server. Those entries are not imported automatically:
+recreate them from each dataset's Schedule tab or through `POST /schedules/sync`
+after startup. To provision schedules before startup instead, use the single JSON
+file format above. A leftover YAML schedule block is rejected explicitly rather
+than silently ignored. Keep `scheduler.enabled` and `scheduler.timezone` in YAML.
 
 The target dataset must already have been ingested. When a schedule becomes due, APScheduler
 queues work through the same native job path as an asynchronous `POST /sync/{dataset_id}` request

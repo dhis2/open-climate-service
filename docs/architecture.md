@@ -110,8 +110,7 @@ clock switch and timezone remain in `climate-service.yaml`. See
 [Scheduled dataset synchronization](scheduled_sync.md) for configuration, the
 schedule API and the reload rules.
 
-The CLI starts the server and has a one-time legacy schedule migration command.
-Commands for ingestion, job inspection,
+The current CLI starts the server. Commands for ingestion, job inspection,
 and maintenance of read-only deployments are planned. Such commands must use the
 shared domain services and may call them directly while the HTTP server is stopped.
 

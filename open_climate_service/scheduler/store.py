@@ -101,37 +101,6 @@ def _write(schedules: dict[str, StoredSchedule], path: Path) -> None:
     atomic_json(path, {key: schedules[key].model_dump(mode="json") for key in sorted(schedules)})
 
 
-def import_legacy_schedules(legacy: list[DatasetSyncSchedule]) -> int:
-    """Atomically import old YAML schedules without replacing operator edits.
-
-    Identical entries are already migrated; any conflicting entry aborts the entire import.
-    This lets an operator rerun the command safely before removing the old YAML block.
-    """
-    path = schedules_path()
-    with index_lock(path):
-        schedules = _parse(_read_raw(path), path)
-        conflicts = [
-            item.dataset_id
-            for item in legacy
-            if (existing := schedules.get(item.dataset_id)) is not None
-            and (existing.cron, existing.publish, existing.max_attempts) != (item.cron, item.publish, item.max_attempts)
-        ]
-        if conflicts:
-            raise ValueError(
-                "Schedules already exist with different settings for: "
-                + ", ".join(sorted(conflicts))
-                + "; resolve them before importing; no schedules were changed"
-            )
-        count = 0
-        for item in legacy:
-            if item.dataset_id not in schedules:
-                schedules[item.dataset_id] = StoredSchedule.model_validate(item.model_dump())
-                count += 1
-        if count:
-            _write(schedules, path)
-    return count
-
-
 def save_schedule(schedule: StoredSchedule, *, create: bool) -> StoredSchedule:
     """Create or replace one stored schedule under the store lock.
 

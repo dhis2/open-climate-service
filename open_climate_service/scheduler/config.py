@@ -109,7 +109,8 @@ def get_scheduler_config() -> SchedulerConfig:
         raise ValueError("scheduler in CLIMATE_SERVICE_CONFIG must be a mapping")
     if "dataset_sync" in raw:
         raise ValueError(
-            "scheduler.dataset_sync is no longer supported; run 'climate-service migrate-schedules' "
-            "to copy entries to <data_dir>/schedules.json, then remove dataset_sync from climate-service.yaml"
+            "scheduler.dataset_sync is no longer supported; remove this block from climate-service.yaml, "
+            "then recreate schedules in the dataset Schedule tab or through POST /schedules/sync. "
+            "Legacy entries are not imported automatically"
         )
     return SchedulerConfig.model_validate(raw)
