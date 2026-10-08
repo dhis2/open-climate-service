@@ -842,9 +842,13 @@
         featurePopup?.remove();
       }
 
-      // Parquet integers arrive as BigInt, which MapLibre's expressions and JSON cannot use.
+      // Parquet integers arrive as BigInt, which MapLibre's expressions and JSON cannot use. One
+      // within the safe integer range becomes a number; a larger one, such as a 64-bit id, a
+      // string, so it is shown exactly rather than rounded.
       function plainValue(value) {
-        return typeof value === "bigint" ? Number(value) : value;
+        if (typeof value !== "bigint") return value;
+        const safe = value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER);
+        return safe ? Number(value) : value.toString();
       }
 
       function featureLabel(properties) {
@@ -852,6 +856,12 @@
         const text = Object.values(properties).find((v) => typeof v === "string" && v);
         return text ?? "";
       }
+
+      // The largest GeoParquet file the viewer reads. The file is read and decoded whole in the
+      // browser, which holds several times its size while it does, so a large collection would
+      // stall the tab. About twice the largest boundary set in use (Norway's municipalities,
+      // 11.6 MB); a bigger collection needs vector tiles (CLIM-1177) or a filtered read.
+      const MAX_FEATURE_BYTES = 25 * 1024 * 1024;
 
       // The stored GeoParquet, read whole. Drawn only when it is in WGS 84, the default for a
       // collection, since MapLibre places GeoJSON coordinates as longitude and latitude.
@@ -871,9 +881,28 @@
 
         let geojson;
         try {
-          const res = await fetch(asset.href);
+          const download = new AbortController();
+          const res = await fetch(asset.href, { signal: download.signal });
           if (superseded()) return;
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          // The size is known from the headers, before the body is read, so a file over the
+          // limit is never downloaded.
+          const size = Number(res.headers.get("Content-Length"));
+          if (size > MAX_FEATURE_BYTES) {
+            download.abort();
+            const megabytes = (bytes) => Math.round(bytes / (1024 * 1024));
+            setStatus(
+              `This vector dataset is ${megabytes(size)} MB, more than the ${megabytes(MAX_FEATURE_BYTES)} MB ` +
+                "the map viewer reads. ",
+              true,
+            );
+            const link = document.createElement("a");
+            link.href = asset.href;
+            link.download = "";
+            link.textContent = "Download it to open in a GIS application.";
+            statusEl.append(link);
+            return;
+          }
           const buffer = await res.arrayBuffer();
           if (superseded()) return;
           const rows = await parquetReadObjects({ file: buffer });

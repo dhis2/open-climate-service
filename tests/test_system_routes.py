@@ -374,6 +374,24 @@ def test_the_map_viewer_lists_vector_datasets_and_reads_their_geoparquet(client:
     assert 'map.on("click", id, showFeatureName);' in body
 
 
+def test_the_map_viewer_keeps_64_bit_integers_exact(client: TestClient) -> None:
+    """A Parquet integer outside JavaScript's safe range is kept as a string, not rounded."""
+    body = client.get("/map").text
+
+    assert "value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)" in body
+    assert "return safe ? Number(value) : value.toString();" in body
+
+
+def test_the_map_viewer_refuses_a_geoparquet_over_its_size_limit(client: TestClient) -> None:
+    """The size is read from the headers and an oversized file is not downloaded."""
+    body = client.get("/map").text
+
+    assert "const MAX_FEATURE_BYTES = 25 * 1024 * 1024;" in body
+    assert 'const size = Number(res.headers.get("Content-Length"));' in body
+    assert "if (size > MAX_FEATURE_BYTES) {\n            download.abort();" in body
+    assert "link.href = asset.href;" in body
+
+
 def test_a_selection_made_while_tiles_load_still_runs(client: TestClient) -> None:
     """`isStyleLoaded()` is false while basemap tiles load, long after `load` fired once."""
     body = client.get("/map").text
