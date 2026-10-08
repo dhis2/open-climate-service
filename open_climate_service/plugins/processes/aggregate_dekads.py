@@ -184,10 +184,11 @@ def aggregate_dekads(
     for start in sorted(contributions):
         indices = [i for i, _ in contributions[start]]
         weights = [w for _, w in contributions[start]]
-        # Only `sum` is misread when a period is short of dekads: it yields a partial total
-        # that looks like a whole one. A `mean` over fewer dekads is still a valid mean.
+        # Coverage is independent of the reducer. A mean over fewer dekads is numerically
+        # meaningful, but it still does not represent a complete destination period and must
+        # be visible to an export's completeness gate.
         period_days = (_target_end(start, period) - start).days + 1
-        if method == "sum" and sum(weights) < period_days:
+        if sum(weights) < period_days:
             incomplete.append(start.isoformat())
         subset = data.isel({time_dim: indices})
         lengths = [(spans[i][1] - spans[i][0]).days + 1 for i in indices]
@@ -202,11 +203,11 @@ def aggregate_dekads(
         aggregated = aggregated.where(effective > 0)
         slices.append(aggregated.assign_coords({time_dim: np.datetime64(start, "ns")}).expand_dims(time_dim))
 
-    if incomplete:
+    if incomplete and method == "sum":
         logger.warning(
             "aggregate_dekads: %d of %d target period(s) are not fully covered by the loaded "
             "dekads, so method='sum' reports a partial total for them (%s%s). Widen "
-            "temporal_extent to cover whole periods, or use method='mean'.",
+            "temporal_extent to cover whole periods.",
             len(incomplete),
             len(contributions),
             ", ".join(incomplete[:5]),
@@ -216,8 +217,25 @@ def aggregate_dekads(
     if not slices:
         raise ValueError("aggregate_dekads produced no target periods — the input cube has no timesteps")
 
+    # Execution evidence, as aggregate_temporal_period leaves it, so an export can verify that
+    # the period it emits came from this step with the reducer it declares and refuse or drop
+    # the target periods the input only partly covered (CLIM-1302), for every reducer.
+    from open_climate_service.shared.provenance import (
+        observe_temporal_aggregation,
+        record_incomplete_periods,
+        record_reduction,
+    )
+    from open_climate_service.shared.time import export_period_label, stamp_cadence
+
+    cadence = {"month": "monthly", "week": "weekly"}.get(period)
+    with observe_temporal_aggregation(cadence):
+        record_reduction(method)
+        if cadence is not None:
+            record_incomplete_periods([export_period_label(np.datetime64(start), cadence) for start in incomplete])
+
     out = xr.concat(slices, dim=time_dim)
     out.attrs = dict(data.attrs)
+    stamp_cadence(out, cadence)
     # Record how this was derived: a consumer must be able to tell a day-weighted
     # aggregate from an observation, and from an unweighted mean.
     interval = "10 day"

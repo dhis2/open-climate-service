@@ -44,8 +44,8 @@ def get_connection(connection_id: str) -> DHIS2Client:
         if exc.name != "dhis2_client":
             raise
         raise RuntimeError(
-            "Named DHIS2 connections require the optional dhis2-client package. "
-            "See docs/importing_to_dhis2.md for the tested installation command."
+            "Named DHIS2 connections require the optional dhis2-client package: install the "
+            "dhis2 extra, open-climate-service[dhis2]. See docs/importing_to_dhis2.md."
         ) from None
 
     return DHIS2Client(

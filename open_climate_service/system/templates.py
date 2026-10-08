@@ -197,10 +197,21 @@ def _colormap_ramp(name: str | None) -> str:
     return f"linear-gradient(90deg, {stops})"
 
 
-def _coverage_label(start: object, end: object) -> str:
+def _coverage_label(start: object, end: object, period_type: object = None) -> str:
+    """A coverage range in the dataset's own periods.
+
+    A store a workflow wrote keeps full dates ("2026-01-01"), so its bounds go through the same
+    converter as the ingest form: monthly reads `2026-01`, weekly `2026-W38`, as an ingested
+    store does. Period types the converter does not know (climatology) stay as stored.
+    """
     if not start and not end:
         return ""
-    return f"{start or '…'} – {end or '…'}"
+    period = str(period_type) if period_type in _PERIOD_FORMAT_HINTS else ""
+
+    def label(value: object) -> str:
+        return _period_value(str(value), period) if value else "…"
+
+    return f"{label(start)} – {label(end)}"
 
 
 def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, Any]:
@@ -228,10 +239,11 @@ def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, An
         "variable": dataset.variable,
         "units": dataset.units or "",
         "period_type": dataset.period_type,
-        "coverage": _coverage_label(dataset.extent.temporal.start, dataset.extent.temporal.end),
+        "coverage": _coverage_label(dataset.extent.temporal.start, dataset.extent.temporal.end, dataset.period_type),
         "status": status,
         "has_thumbnail": has_thumbnail,
         "ramp": _colormap_ramp(colormap if isinstance(colormap, str) else None),
+        "kind": "vector" if dataset.item_type == "feature" else "raster",
     }
 
 
@@ -272,7 +284,9 @@ def _record_licence_label(record: Any) -> str:
     return str(record.license)
 
 
-def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[str, Any]:
+def _dataset_page_context(
+    record: Any, template: dict[str, Any] | None, refreshable: bool = False, refresh_blocked: str = ""
+) -> dict[str, Any]:
     """Everything the dataset page shows: the managed record, plus what its template adds.
 
     Each fact is a (label, value, href) triple and is dropped when it has no value, so the
@@ -280,6 +294,7 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
     """
     template = template or {}
     summary = _dataset_view(record, template)
+    vector = summary["kind"] == "vector"
     spatial = record.extent.spatial
     display = _mapping(template.get("display"))
     sync = _mapping(template.get("sync"))
@@ -302,11 +317,15 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         else ""
     )
 
-    if template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
+    if template and vector:
+        # Linked, not described: a template without a provider declares a hand-registered
+        # collection, so a matching template does not show the collection was fetched.
+        origin: Fact = ("Data source", str(template.get("name") or template["id"]), f"/data-sources/{template['id']}")
+    elif template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
         # The workflow's page, not its process graph: the link is named after the workflow, so
         # it should open the thing a reader can read. The JSON stays a click away, behind the
         # "Process graph (JSON)" link on that page.
-        origin: Fact = (
+        origin = (
             "Produced by",
             f"{template['produced_by']} workflow",
             f"/workflows/{template['produced_by']}",
@@ -319,7 +338,6 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         origin = ("Origin", "", None)
 
     about: list[Fact] = [
-        ("Identifier", record.dataset_id, None),
         ("Short name", record.short_name or "", None),
         ("Source", record.source or "", record.source_url),
         origin,
@@ -327,12 +345,15 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         ("Providers", providers, None),
     ]
     data: list[Fact] = [
+        # First, because it is what a reader copies into a process graph or an export.
+        ("Identifier", record.dataset_id, None),
         ("Variable", record.variable, None),
         ("Standard name", str(template.get("standard_name") or ""), None),
         ("Units", record.units or "", None),
         ("Cell methods", str(template.get("cell_methods") or ""), None),
-        ("Period type", record.period_type, None),
-        ("Temporal coverage", summary["coverage"], None),
+        # Both sit under the title when there is a coverage; a climatology has none, so its
+        # period type stays here rather than disappearing from the page.
+        ("Period type", "" if summary["coverage"] else record.period_type, None),
         ("Direction", str(template.get("temporal_direction") or ""), None),
         ("Resolution", record.resolution or "", None),
         (
@@ -371,15 +392,57 @@ def _dataset_page_context(record: Any, template: dict[str, Any] | None) -> dict[
         "status_facts": present(status),
         "links": [link for link in record.links if link.rel != "self"],
         "published": summary["status"] == "published",
+        # A feature collection has no colour scale and the map viewer draws only rasters, so
+        # the page offers neither for one.
+        "vector": vector,
+        # Only where the data source page offers a fetch: a provider this instance has.
+        "refresh_href": f"/data-sources/{template['id']}" if vector and template and refreshable else None,
+        "refresh_blocked": refresh_blocked,
     }
+
+
+def _feature_refresh_blocked(collection_id: str, template: dict[str, Any] | None) -> str:
+    """Why a refresh of *collection_id* would be refused, or "" when it would run.
+
+    The same order the refresh itself checks in: a provider this instance has, then ownership.
+    Ownership is read from the stored record, not the template, because a refresh may only
+    overwrite a collection the same provider wrote; editing `provider:` does not transfer it.
+    """
+    from open_climate_service.features.services import is_refreshable, registered_collections
+
+    if template is None or not is_refreshable(template):
+        return "no provider on this instance fetches it"
+    current = registered_collections().get(collection_id)
+    if current is None:
+        return ""
+    owner = current.features.provider if current.features is not None else None
+    if owner is None:
+        return "it was not fetched by a provider, so no provider may overwrite it"
+    if owner != template.get("provider"):
+        return f"it was fetched by provider '{owner}', but its data source now names '{template.get('provider')}'"
+    return ""
 
 
 def render_dataset_page(record: Any, mount: str) -> str:
     """Render the HTML page for one managed dataset, linked from the landing page."""
+    refreshable = False
+    refresh_blocked = ""
     try:
-        template = registry_datasets.get_dataset(record.source_dataset_id) or registry_datasets.get_dataset(
-            record.dataset_id
-        )
+        if record.item_type == "feature":
+            from open_climate_service.features.templates import get_feature_template
+
+            source_id = record.source_dataset_id or record.dataset_id
+            template = get_feature_template(source_id)
+            # An id a raster template also declares resolves to the raster at /data-sources, and
+            # refreshing the vector one is refused, so neither is linked.
+            if template is not None and registry_datasets.get_dataset(source_id) is not None:
+                template = None
+            refresh_blocked = _feature_refresh_blocked(record.dataset_id, template)
+            refreshable = template is not None and not refresh_blocked
+        else:
+            template = registry_datasets.get_dataset(record.source_dataset_id) or registry_datasets.get_dataset(
+                record.dataset_id
+            )
     except Exception:
         _log.exception("Unexpected error loading the template for dataset '%s'", record.dataset_id)
         template = None
@@ -392,7 +455,7 @@ def render_dataset_page(record: Any, mount: str) -> str:
         nav=page_nav(mount, "datasets"),
         job_script=_read_asset("ocs_jobs.js"),
         read_only=api_config.is_read_only(),
-        **_dataset_page_context(record, template),
+        **_dataset_page_context(record, template, refreshable, refresh_blocked),
     )
 
 
@@ -569,7 +632,9 @@ def _data_source_page_context(
                 # The dataset's own id, not the template's: the two differ whenever a source was
                 # ingested under a different name, and the links below have to reach the dataset.
                 "id": ingested.dataset_id,
-                "coverage": _coverage_label(ingested.extent.temporal.start, ingested.extent.temporal.end),
+                "coverage": _coverage_label(
+                    ingested.extent.temporal.start, ingested.extent.temporal.end, ingested.period_type
+                ),
                 "status": "published" if ingested.publication.status == "published" else "unpublished",
             }
             if ingested is not None
@@ -750,7 +815,7 @@ def _feature_source_view(template: dict[str, Any]) -> dict[str, Any]:
         "period_type": "",
         "resolution": "",
         "licence": _licence_label(template),
-        "kind": "features",
+        "kind": "vector",
         "level": str(subtype) if isinstance(subtype, str) else "",
     }
 
@@ -1478,15 +1543,14 @@ def _extent_globe(extent: dict[str, Any] | None) -> dict[str, Any] | None:
     return _globe((xmin, ymin, xmax, ymax))
 
 
-def _stored_bytes() -> int:
-    """Total size of every store this instance's artifacts point at.
+def _newest_store_records() -> list[Any] | None:
+    """The newest artifact record for each store path, or None when the records cannot be read.
 
     Read from the records, never measured here. A store can be hundreds of thousands of chunk
     files, and walking them on a page load while a heavy job held the GIL took this page from
     seconds to many minutes. Each ingest, sync, openEO publish and feature refresh records the
     size it leaves behind, so the newest record for a path carries that store's current size;
-    distinct paths only, since successive ingestions of a dataset append to one store. A record
-    without a size (written before sizes were recorded) counts as nothing until re-ingested.
+    distinct paths only, since successive ingestions of a dataset append to one store.
     """
     try:
         from open_climate_service.ingestions.services import list_artifacts
@@ -1499,8 +1563,29 @@ def _stored_bytes() -> int:
                 newest[artifact.path] = artifact
     except Exception:
         _log.exception("Unexpected error reading stored data sizes")
-        return 0
-    return sum(artifact.size_bytes or 0 for artifact in newest.values())
+        return None
+    return list(newest.values())
+
+
+def _stored_bytes() -> int:
+    """Total recorded size of every store this instance's artifacts point at.
+
+    A record without a size (written before sizes were recorded) counts as nothing until
+    re-ingested; `_stored_size_label` says so rather than showing the shortfall as a total.
+    """
+    return sum(artifact.size_bytes or 0 for artifact in _newest_store_records() or [])
+
+
+def _stored_size_label() -> str:
+    """The overview's "Data stored" figure, which never passes off a missing size as 0 B."""
+    stores = _newest_store_records()
+    if stores is None:
+        return "Unknown"
+    sized = [artifact.size_bytes for artifact in stores if artifact.size_bytes is not None]
+    if stores and not sized:
+        return "Unknown"
+    total = _format_bytes(sum(sized))
+    return f"At least {total}" if len(sized) < len(stores) else total
 
 
 def _format_bytes(total: int) -> str:
@@ -1681,7 +1766,7 @@ def render_landing(version: str, mount: str) -> str:
         extent=extent,
         globe=_extent_globe(extent),
         datasets=_load_datasets(),
-        stored_size=_format_bytes(_stored_bytes()),
+        stored_size=_stored_size_label(),
         sources=catalogue["sources"],
         workflows=catalogue["workflows"],
         # Shown on the overview, so a visitor knows why no page offers ingest or sync.

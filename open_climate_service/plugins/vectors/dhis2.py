@@ -42,6 +42,8 @@ def dhis2_org_units(connection: str, level: int | None = None, parent: str | Non
     `connection` names a `dhis2_connections` entry (CLIM-840); `level` and/or `parent` narrow
     the selection the same way DHIS2's own organisation unit queries do. Each feature's UID
     lands at `properties.id`, so a template using this provider declares `id_property: id`.
+    DHIS2 itself puts the UID at the feature's top-level `id`; see `_normalise_feature` for
+    why it is copied into `properties`.
 
     Org units with no geometry are DHIS2's own doing -- the `.geojson` endpoint omits them
     before this ever sees them -- so they are counted by a second, geometry-free request rather
@@ -62,6 +64,8 @@ def _fetch_org_units(client: _OrgUnitClient, *, level: int | None, parent: str |
 
     collection: dict[str, Any] = client.get_org_units_geojson(fields=_GEOJSON_FIELDS, **selection)
     features = collection.get("features", [])
+    for feature in features:
+        _normalise_feature(feature)
     _require_unique_ids(features)
 
     # The GeoJSON endpoint has its own selection vocabulary: `level` defaults to 1 and
@@ -103,6 +107,33 @@ def _fetch_org_units(client: _OrgUnitClient, *, level: int | None, parent: str |
             f"{len(all_units)} matched the selection but none had geometry"
         )
     return collection
+
+
+def _normalise_feature(feature: Any) -> None:
+    """Copy the identity DHIS2 sends at the top of a feature into its `properties`, in place.
+
+    `organisationUnits.geojson` puts the UID at the feature's top-level `id` and fills
+    `properties` with `code`, `name`, `level`, `parent`, `parentGraph` and `groups`; it ignores
+    `fields`, so asking for `id,displayName` changes nothing (CLIM-1301). The store reads a
+    collection's identity from `properties` and nowhere else (`validate_feature_ids`), because
+    the top-level `id` does not survive the GeoJSON-to-frame conversion, so a template's
+    `id_property: id` only holds if the UID is copied here. `displayName` is the name the
+    metadata audit and the error messages use, so `name` is copied under that key too.
+
+    A value already present in `properties` is kept: nothing is overwritten.
+    """
+    if not isinstance(feature, dict):
+        return
+    properties = feature.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        feature["properties"] = properties
+    uid = feature.get("id")
+    if "id" not in properties and isinstance(uid, str) and uid.strip():
+        properties["id"] = uid
+    name = properties.get("name")
+    if "displayName" not in properties and isinstance(name, str):
+        properties["displayName"] = name
 
 
 def _require_unique_ids(features: list[Any]) -> None:

@@ -292,5 +292,27 @@ def test_a_record_without_a_size_counts_as_nothing_and_does_not_break_the_page(
     monkeypatch.setattr(storage_size, "stored_bytes", _no_walking)
 
     assert landing._stored_bytes() == 0
-    assert client.get("/", headers={"Accept": "text/html"}).status_code == 200
+    page = client.get("/", headers={"Accept": "text/html"})
+    assert page.status_code == 200
+    # Unknown, not 0 B: nothing recorded a size, which is not the same as storing nothing.
+    assert '<span class="value">Unknown</span>' in page.text
     assert record.size_bytes  # the refresh itself did record one
+
+
+@pytest.mark.parametrize(
+    ("sizes", "label"),
+    [([], "0 B"), ([1500, 200], "1.7 KB"), ([1500, None], "At least 1.5 KB"), ([None, None], "Unknown")],
+)
+def test_the_stored_size_says_when_some_sizes_are_missing(
+    monkeypatch: pytest.MonkeyPatch, sizes: list[int | None], label: str
+) -> None:
+    records = [
+        SimpleNamespace(
+            path=f"/data/store{i}.icechunk", created_at=pd.Timestamp("2026-01-01", tz="UTC"), size_bytes=size
+        )
+        for i, size in enumerate(sizes)
+    ]
+    monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=records))
+    monkeypatch.setattr(storage_size, "stored_bytes", _no_walking)
+
+    assert landing._stored_size_label() == label

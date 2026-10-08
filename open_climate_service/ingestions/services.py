@@ -286,13 +286,12 @@ def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
 
 
 CATALOGUED_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
-"""Stored formats the STAC catalogue describes.
+"""Stored formats the STAC catalogue and openEO `/collections` describe.
 
-Wider than `LOADABLE_RASTER_FORMATS` because STAC describes what *exists* while openEO
-advertises what `load_collection` can *consume*. A feature collection genuinely is a STAC
-collection — it has a licence, an attribution, a spatial extent and a table schema — and
-genuinely is not an openEO datacube. That divergence is the whole reason CLIM-1066 split the
-two gates, and this is the value that makes them differ.
+Wider than `LOADABLE_RASTER_FORMATS`, which is what can be opened as a raster datacube. A
+feature collection is a STAC collection (licence, attribution, extent, table schema) and,
+since CLIM-1326, an openEO collection too: `load_collection` loads it as a vector cube, the
+same thing `load_features` returns.
 """
 
 
@@ -306,13 +305,32 @@ def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     GEOPARQUET here never advertises a child the catalogue cannot serve.
 
     Deliberately not an alias for the raster gate, and the raster gate is deliberately not
-    widened: `load_collection` still cannot consume a feature collection, so openEO must keep
-    answering this question for itself.
+    widened: the Zarr and Icechunk routes and the raster branch of `load_collection` still
+    open only datacubes, so they keep asking the raster question.
     """
     return {
         dataset_id: artifact
         for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
         if artifact.format in CATALOGUED_FORMATS
+    }
+
+
+OPENEO_COLLECTION_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
+"""Stored formats `load_collection` can load: rasters as datacubes, GeoParquet as vector cubes."""
+
+
+def openeo_collection_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the artifacts openEO `/collections` advertises and `load_collection` loads.
+
+    Every published raster, loaded as a raster datacube, plus every published feature
+    collection, loaded as a vector cube (CLIM-1326). The same formats STAC describes today, but
+    a separate gate: openEO advertises what `load_collection` can consume, so a format STAC can
+    describe but `load_collection` cannot load must not reach openEO by following STAC's set.
+    """
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in OPENEO_COLLECTION_FORMATS
     }
 
 
@@ -2213,6 +2231,21 @@ def _build_icechunk_consolidated_metadata(session: _IcechunkSession) -> dict[str
     return result
 
 
+def _consolidated_metadata_for_group(session: _IcechunkSession, group_path: str) -> dict[str, object]:
+    """Consolidated metadata for the group at *group_path*, keyed relative to that group.
+
+    Cut from the store-wide metadata rather than traversed again, so a level group costs no
+    extra store reads and shares the root's per-snapshot cache.
+    """
+    consolidated = _build_icechunk_consolidated_metadata(session)
+    if not group_path:
+        return consolidated
+    prefix = f"{group_path}/"
+    nodes = cast(dict[str, object], consolidated["metadata"])
+    subtree = {path.removeprefix(prefix): meta for path, meta in nodes.items() if path.startswith(prefix)}
+    return {**consolidated, "metadata": subtree}
+
+
 def _normalize_zarr_relative_path(relative_path: str) -> str:
     """Normalize a requested Zarr key path and reject unsafe segments."""
     if "\\" in relative_path:
@@ -2286,12 +2319,16 @@ def _get_icechunk_store_path_or_404(
             raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
         if target.endswith("zarr.json"):
             meta = json.loads(payload.decode("utf-8"))
-            # Inject consolidated metadata into the root zarr.json so xarray can
+            # Inject consolidated metadata into every group's zarr.json so xarray can
             # enumerate variables when accessing the store over HTTP, without needing
             # directory listing or a separate consolidation step.  Result is cached
             # per snapshot so repeated requests within a snapshot lifetime are free.
-            if target == "zarr.json" and meta.get("node_type") == "group":
-                meta["consolidated_metadata"] = _build_icechunk_consolidated_metadata(session)
+            # Every group, not just the root: a pyramid level (`/zarr/{id}/0`) is the URL
+            # an analysis client opens for full-resolution data, and without its own
+            # subtree it opens as an empty dataset.
+            if meta.get("node_type") == "group":
+                group_path = target.removesuffix("zarr.json").rstrip("/")
+                meta["consolidated_metadata"] = _consolidated_metadata_for_group(session, group_path)
             return JSONResponse(content=meta)
         media_type, _ = mimetypes.guess_type(target)
         return _serve_bytes_ranged(payload, media_type or "application/octet-stream", range_header)

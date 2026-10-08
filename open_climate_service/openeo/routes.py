@@ -305,11 +305,33 @@ def cancel_job(job_id: str) -> Response:
     return Response(status_code=204)
 
 
+def _require_finished_job(job_id: str) -> None:
+    """Refuse to serve result files unless the job finished, and no cancellation is pending.
+
+    Shared by every result-file route. A job still running, possibly cancelled but not yet
+    stopped, or one that was cancelled, may have written partial files; they are retained for
+    inspection and replaced by the next run, but are never served as the job's results. An
+    unknown job has no results either, whatever happens to be on disk.
+    """
+    from open_climate_service.openeo.jobs import store_get_job
+    from open_climate_service.openeo.schemas import OpenEOJobStatus
+
+    record = store_get_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if record.status != OpenEOJobStatus.FINISHED or record.cancel_requested:
+        state = "cancelled" if record.cancel_requested or record.status == OpenEOJobStatus.CANCELED else record.status
+        raise HTTPException(
+            status_code=404, detail=f"Result files are only served for a finished job; this job is {state}"
+        )
+
+
 @jobs_router.get("/{job_id}/results/result.geojson")
 def download_geojson_result(job_id: str) -> FileResponse:
     """Serve the GeoJSON result file for a finished batch job."""
     from open_climate_service.openeo.jobs import _JOBS_DIR
 
+    _require_finished_job(job_id)
     path = _JOBS_DIR / job_id / "results" / "result.geojson"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Result file not found")
@@ -321,6 +343,7 @@ def download_zarr_chunk(job_id: str, zarr_path: str) -> FileResponse:
     """Serve one file from within the Zarr result store (chunk or metadata)."""
     from open_climate_service.openeo.jobs import _JOBS_DIR
 
+    _require_finished_job(job_id)
     store_dir = _JOBS_DIR / job_id / "results" / "result.zarr"
     if not store_dir.is_dir():
         raise HTTPException(status_code=404, detail="Result Zarr store not found")
@@ -364,6 +387,7 @@ def download_result_file(job_id: str, filename: str) -> FileResponse:
     """Serve a result file (NetCDF, GeoTIFF, PNG, CSV, GeoParquet) for a finished batch job."""
     from open_climate_service.openeo.jobs import _JOBS_DIR
 
+    _require_finished_job(job_id)
     results_dir = _JOBS_DIR / job_id / "results"
     try:
         path = (results_dir / filename).resolve()
@@ -481,6 +505,12 @@ def execute_synchronous(
 
     if isinstance(result, xr.Dataset):
         if fmt == "DHIS2JSON":
+            from open_climate_service.openeo.jobs import check_ad_hoc_period_reachability
+
+            try:
+                check_ad_hoc_period_reachability(result, options)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return _json_tabular_payload_response(result.to_dataframe().reset_index(), options)
         if fmt == "ZARR":
             raise HTTPException(

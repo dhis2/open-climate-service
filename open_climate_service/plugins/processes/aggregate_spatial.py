@@ -234,6 +234,10 @@ def aggregate_spatial(
     # 4 x longest-WKT x n_features. Hex-encoded WKB in a bytes array would be ~4x smaller and is
     # still null-free, so still Zarr-safe -- worth doing if a real boundary set makes this hurt.
     combined = combined.assign_coords({GEOMETRY_WKT_COORD: (geom_dim, [geom.wkt for geom in geom_shapes])})
+    # The cadence travels with the data: a spatial aggregation changes nothing about time.
+    from open_climate_service.shared.time import cadence_of, stamp_cadence
+
+    stamp_cadence(combined, cadence_of(data))
     return combined
 
 

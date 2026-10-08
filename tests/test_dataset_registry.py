@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -366,6 +367,38 @@ def test_write_dataset_template_rejects_existing_file(
 
     with pytest.raises(FileExistsError, match="already exists"):
         datasets.write_dataset_template(template)
+
+
+def test_write_dataset_template_has_one_owner_under_concurrent_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Only the publisher that atomically creates the file may later treat it as owned."""
+    plugins_dir = tmp_path / "plugins"
+    config_file = tmp_path / "climate-service.yaml"
+    config_file.write_text(f"plugins_dir: {plugins_dir}\n", encoding="utf-8")
+    monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
+    monkeypatch.setattr(api_config, "_cache", None)
+    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    template = {
+        "id": "concurrent_change",
+        "name": "Concurrent Change",
+        "variable": "change",
+        "period_type": "yearly",
+        "sync": {"kind": "static"},
+    }
+
+    def create() -> Path | FileExistsError:
+        try:
+            return datasets.write_dataset_template(template)
+        except FileExistsError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: create(), range(2)))
+
+    assert sum(isinstance(outcome, Path) for outcome in outcomes) == 1
+    assert sum(isinstance(outcome, FileExistsError) for outcome in outcomes) == 1
 
 
 @pytest.mark.parametrize("bad_id", ["../evil", "nested/file", "/abs/path"])

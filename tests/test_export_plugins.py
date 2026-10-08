@@ -16,7 +16,12 @@ from open_climate_service.exports import RenderedExport
 from open_climate_service.exports.registry import load_export_plugins
 from open_climate_service.exports.service import render_named_export
 from open_climate_service.openeo.execution import SaveResultEnvelope
-from open_climate_service.openeo.jobs import OpenEOJobService, _build_dhis2_json_payload, _result_assets
+from open_climate_service.openeo.jobs import (
+    OpenEOJobService,
+    _build_dhis2_json_payload,
+    _result_assets,
+    store_create_job,
+)
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.time import utc_now
 
@@ -222,6 +227,8 @@ def test_sync_and_batch_external_export(
     record = OpenEOJobRecord(
         id="job-example", status=OpenEOJobStatus.FINISHED, created=utc_now(), usage={"output_path": path}
     )
+    # Result files are only served for a finished job that exists (CLIM-1221).
+    store_create_job(record)
     asset = _result_assets(record)["result"]
     assert asset["type"] == "application/x-example"
     response = client.get(asset["href"])

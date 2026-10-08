@@ -178,18 +178,18 @@ def _rendered_size(path: Path) -> tuple[int, int]:
 
 
 def test_a_store_larger_than_the_target_is_scaled_down(tmp_path: Path) -> None:
-    """STAC best practice for the `thumbnail` role is under 600x600, and a store is routinely
-    far larger, so the size has to be applied rather than assumed."""
+    """A store is routinely far larger than a thumbnail, so the size has to be applied rather
+    than assumed."""
     big = xr.Dataset(
-        {"precip": (("y", "x"), np.random.default_rng(0).random((1200, 800), dtype="float32"))},
-        coords={"y": np.linspace(10.0, 0.0, 1200), "x": np.linspace(0.0, 8.0, 800)},
+        {"precip": (("y", "x"), np.random.default_rng(0).random((2400, 1600), dtype="float32"))},
+        coords={"y": np.linspace(10.0, 0.0, 2400), "x": np.linspace(0.0, 8.0, 1600)},
     )
 
     written = write_dataset_thumbnail(_store(tmp_path, big, t_dim=None), DATASET, now=GENERATED_AT)
 
     assert written is not None
-    # The aspect ratio survives: 1200x800 scaled by 512/1200 is 512x341.
-    assert _rendered_size(written) == (THUMBNAIL_LONG_SIDE_PIXELS, 341)
+    # The aspect ratio survives: 2400x1600 scaled by 1024/2400 is 1024x683.
+    assert _rendered_size(written) == (THUMBNAIL_LONG_SIDE_PIXELS, 683)
 
 
 def test_a_store_coarser_than_the_target_is_scaled_up(tmp_path: Path) -> None:
@@ -204,8 +204,8 @@ def test_a_store_coarser_than_the_target_is_scaled_up(tmp_path: Path) -> None:
     written = write_dataset_thumbnail(_store(tmp_path, coarse, t_dim=None), DATASET, now=GENERATED_AT)
 
     assert written is not None
-    # 32x16 enlarged by 512/32 is 512x256, and the aspect ratio is unchanged.
-    assert _rendered_size(written) == (256, THUMBNAIL_LONG_SIDE_PIXELS)
+    # 32x16 enlarged by 1024/32 is 1024x512, and the aspect ratio is unchanged.
+    assert _rendered_size(written) == (THUMBNAIL_LONG_SIDE_PIXELS // 2, THUMBNAIL_LONG_SIDE_PIXELS)
 
 
 def test_an_enlarged_thumbnail_keeps_its_cell_boundaries(tmp_path: Path) -> None:
@@ -234,18 +234,18 @@ def test_an_enlarged_thumbnail_keeps_its_cell_boundaries(tmp_path: Path) -> None
 
 def test_a_slice_far_larger_than_the_thumbnail_is_strided_down(tmp_path: Path) -> None:
     """The accessor opens the *finest* pyramid level, so the slice arrives at full resolution
-    and every cell of it would be materialised for an image 512 px across. Striding bounds
+    and every cell of it would be materialised for an image 1024 px across. Striding bounds
     that; one shared integer stride keeps the aspect ratio and keeps the kept cells real."""
     arr = xr.DataArray(
-        np.zeros((1200, 800), dtype="float32"),
+        np.zeros((2400, 1600), dtype="float32"),
         dims=("y", "x"),
-        coords={"y": np.linspace(10.0, 0.0, 1200), "x": np.linspace(0.0, 8.0, 800)},
+        coords={"y": np.linspace(10.0, 0.0, 2400), "x": np.linspace(0.0, 8.0, 1600)},
     )
 
     strided = decimate(arr, long_side=THUMBNAIL_LONG_SIDE_PIXELS)
 
-    # 1200 // 512 is 2, so both axes take every second cell.
-    assert strided.sizes == {"y": 600, "x": 400}
+    # 2400 // 1024 is 2, so both axes take every second cell.
+    assert strided.sizes == {"y": 1200, "x": 800}
     assert np.array_equal(strided["y"].values, arr["y"].values[::2])
 
 
@@ -269,13 +269,13 @@ def test_a_thumbnail_never_materialises_more_than_it_draws(tmp_path: Path, monke
 
     monkeypatch.setattr(thumbnails, "render_png", recording_render)
     big = xr.Dataset(
-        {"precip": (("y", "x"), np.random.default_rng(0).random((1200, 800), dtype="float32"))},
-        coords={"y": np.linspace(10.0, 0.0, 1200), "x": np.linspace(0.0, 8.0, 800)},
+        {"precip": (("y", "x"), np.random.default_rng(0).random((2400, 1600), dtype="float32"))},
+        coords={"y": np.linspace(10.0, 0.0, 2400), "x": np.linspace(0.0, 8.0, 1600)},
     )
 
     write_dataset_thumbnail(_store(tmp_path, big, t_dim=None), DATASET, now=GENERATED_AT)
 
-    assert shapes == [(600, 400)]
+    assert shapes == [(1200, 800)]
 
 
 def test_the_store_is_closed_once_the_pixels_are_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

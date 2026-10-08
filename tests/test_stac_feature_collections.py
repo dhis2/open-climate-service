@@ -1,4 +1,4 @@
-"""Feature collections in STAC with the table extension, and out of openEO (CLIM-1069)."""
+"""Feature collections in STAC with the table extension (CLIM-1069), and in openEO as vector cubes (CLIM-1326)."""
 
 from __future__ import annotations
 
@@ -364,10 +364,16 @@ def test_the_asset_route_refuses_an_unpublished_collection(client: TestClient, m
 # --- the openEO separation --------------------------------------------------------------------
 
 
-def test_a_feature_collection_stays_out_of_the_openeo_catalogue(client: TestClient, districts: ArtifactRecord) -> None:
-    """`load_collection` cannot consume one, so advertising it would offer an unusable dataset."""
-    assert client.get("/collections").json()["collections"] == []
-    assert client.get("/collections/districts").status_code == 404
+def test_a_feature_collection_is_an_openeo_collection_with_a_geometry_dimension(
+    client: TestClient, districts: ArtifactRecord
+) -> None:
+    """`load_collection` loads it as a vector cube (CLIM-1326), so openEO lists it too."""
+    listed = client.get("/collections").json()["collections"]
+    collection = client.get("/collections/districts").json()
+
+    assert [item["id"] for item in listed] == ["districts"]
+    assert collection["cube:dimensions"]["geometry"]["type"] == "geometry"
+    assert collection["cube:dimensions"]["geometry"]["geometry_types"] == ["Point", "Polygon"]
 
 
 def test_the_raster_gate_is_unchanged_by_the_wider_stac_gate(
