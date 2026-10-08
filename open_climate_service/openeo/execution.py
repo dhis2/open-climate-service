@@ -168,6 +168,29 @@ def _recording_reducer(name: str, func: Any) -> Any:
     return wrapper
 
 
+def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
+    """Wrap openEO's aggregate_spatial so a feature's id and the variable's name survive.
+
+    The upstream implementation drops each GeoJSON Feature's `id`, labels the geometry dimension
+    with the shapes and returns an unnamed DataArray, so a DHIS2 or CHAP export has neither
+    org units nor a value column (openeo-processes-dask#434). It also refuses a raster without
+    a CRS. The features are parsed here instead, with their ids, and the result is named and
+    carries them as `feature_id`, the same as `aggregate_spatial_weighted`.
+    """
+
+    def _aggregate_spatial(data: Any, geometries: Any, reducer: Any, **kwargs: Any) -> Any:
+        from open_climate_service.shared.provenance import observe_spatial_aggregation, record_features
+        from open_climate_service.shared.vectors import raster_and_features, vector_result
+
+        record_features(geometries)
+        raster, frame = raster_and_features(data, geometries)
+        with observe_spatial_aggregation():
+            result = original_fn(data=raster, geometries=frame, reducer=reducer, **kwargs)
+        return vector_result(result, raster, frame.index)
+
+    return _aggregate_spatial
+
+
 def _make_named_merge_cubes(original_fn: Any) -> Any:
     """Wrap merge_cubes to preserve and extend named predictor cubes.
 
@@ -391,6 +414,10 @@ def _build_process_registry() -> Any:
     registry["aggregate_temporal_period"] = Process(
         spec=getattr(specs_module, "aggregate_temporal_period", {}),
         implementation=_make_sorted_atp(impls_module.aggregate_temporal_period),
+    )
+    registry["aggregate_spatial"] = Process(
+        spec=getattr(specs_module, "aggregate_spatial", {}),
+        implementation=_make_feature_aware_aggregate_spatial(impls_module.aggregate_spatial),
     )
     registry["merge_cubes"] = Process(
         spec=getattr(specs_module, "merge_cubes", {}),

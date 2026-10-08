@@ -1,17 +1,12 @@
 """aggregate_spatial_weighted — weighted zonal statistics plugin process."""
 
-import logging
 from typing import Any, Callable
 
-import geopandas as gpd
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]
-import shapely
 import xarray as xr
 import xvec  # type: ignore[import-untyped]  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 from open_climate_service.process import process
-
-logger = logging.getLogger(__name__)
 
 
 @process(
@@ -20,7 +15,12 @@ logger = logging.getLogger(__name__)
     "aggregated using their fractional spatial overlap as weights.",
     parameters={
         "data": {"description": "A raster data cube."},
-        "geometries": {"description": "GeoJSON FeatureCollection, Feature, or geometry."},
+        "geometries": {
+            "description": (
+                "A vector data cube (a GeoDataFrame or xvec cube), or GeoJSON: a FeatureCollection, "
+                "Feature or geometry. Each feature's id is kept as the result's `feature_id`."
+            )
+        },
         "reducer": {"description": "A reducer to apply on the pixel values."},
     },
 )
@@ -28,7 +28,7 @@ def aggregate_spatial_weighted(
     data: xr.Dataset | xr.DataArray,
     geometries: Any,
     reducer: str | Callable,
-) -> xr.DataArray:
+) -> xr.Dataset:
     """Spatially aggregate raster values over vector geometries using fractional pixel overlap as weights.
 
     For each geometry, only the portion of each pixel covered by the
@@ -47,92 +47,27 @@ def aggregate_spatial_weighted(
     Returns:
     -------
     VectorCube
-        Vector data cube (xr.DataArray) containing one aggregated value per geometry,
-        with non-spatial dimensions of the input cube preserved.
+        Vector data cube (xr.Dataset named after the input variable) containing one aggregated
+        value per geometry, with each feature's id as `feature_id` and the non-spatial dimensions
+        of the input cube preserved.
     """
     # NOTE: adapted from openeo_processes_dask.processes.aggregate_spatial to support exactextract
+    from open_climate_service.shared.provenance import observe_spatial_aggregation, record_features, record_reduction
+    from open_climate_service.shared.vectors import raster_and_features, vector_result
 
-    x_dim = "x"
-    y_dim = "y"
-    default_crs = "EPSG:4326"
+    record_features(geometries)
+    raster, frame = raster_and_features(data, geometries)
 
-    # Ensure raster cube is a single-variable DataArray
-    if isinstance(data, xr.Dataset):
-        if len(data.data_vars) == 1:
-            data = data[list(data.data_vars.keys())[0]]
-
-        else:
-            raise ValueError(
-                "The data parameter needs to be a raster cube in the form of an xarray DataArray "
-                "or a single-variable xarray Dataset, received: \n{data}"
-            )
-
-        assert isinstance(data, xr.DataArray)
-
-    # Ensure raster cube has crs
-    if data.rio.crs is None:
-        data = data.rio.set_crs(default_crs)
-
-    # Allow importing geometries from url (e.g. github raw)
-    if isinstance(geometries, str):
-        import json
-        from urllib.request import urlopen
-
-        response = urlopen(geometries)
-        geometries = json.loads(response.read())
-
-    # Convert GeoJSON dict to GeoDataFrame
-    gdf = None
-    if isinstance(geometries, dict):
-        # Get crs from geometries
-        if "features" in geometries:
-            for feature in geometries["features"]:
-                if "properties" not in feature:
-                    feature["properties"] = {}
-                elif feature["properties"] is None:
-                    feature["properties"] = {}
-            if isinstance(geometries.get("crs", {}), dict):
-                default_crs = geometries.get("crs", {}).get("properties", {}).get("name", default_crs)
-            else:
-                default_crs = str(geometries.get("crs", {}))
-            logger.info(f"CRS in geometries: {default_crs}.")
-
-        if "type" in geometries and geometries["type"] == "FeatureCollection":
-            gdf = gpd.GeoDataFrame.from_features(geometries, crs=default_crs)
-        elif "type" in geometries and geometries["type"] in ["Polygon"]:
-            polygon = shapely.geometry.Polygon(geometries["coordinates"][0])
-            gdf = gpd.GeoDataFrame(geometry=[polygon])
-            gdf.crs = default_crs
-
-    # Convert xarray vector cube to GeoDataFrame
-    if isinstance(geometries, xr.Dataset):
-        if hasattr(geometries, "xvec"):
-            gdf = geometries.xvec.to_geodataframe()
-
-    # Already provided as GeoDataFrame
-    if isinstance(geometries, gpd.GeoDataFrame):
-        gdf = geometries
-
-    # Check a GeoDataFrame was created
-    if gdf is None:
-        raise TypeError(f"Failed to convert geometries input value to GeoDataFrame: {geometries}")
-
-    # Reproject geometries to same crs as raster cube
-    gdf = gdf.to_crs(data.rio.crs)
-
-    # Convert to geopandas geometries Series
-    geometries_series = gdf.geometry
-
-    # Run xvec zonal stats with exactextract backend
-    vec_cube: xr.DataArray = data.xvec.zonal_stats(
-        geometries_series,
-        x_coords=x_dim,
-        y_coords=y_dim,
-        method="exactextract",
-        stats=reducer,
-    )
-    # The cadence travels with the data: a spatial aggregation changes nothing about time.
-    from open_climate_service.shared.time import cadence_of, stamp_cadence
-
-    stamp_cadence(vec_cube, cadence_of(data))
-    return vec_cube
+    # Run xvec zonal stats with exactextract backend. A named method is recorded, so a DHIS2
+    # export can check the aggregation it declares against the one that ran.
+    with observe_spatial_aggregation():
+        if isinstance(reducer, str):
+            record_reduction(reducer)
+        vec_cube: xr.DataArray = raster.xvec.zonal_stats(
+            frame.geometry,
+            x_coords="x",
+            y_coords="y",
+            method="exactextract",
+            stats=reducer,
+        )
+    return vector_result(vec_cube, raster, frame.index)

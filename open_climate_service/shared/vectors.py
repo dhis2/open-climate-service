@@ -109,3 +109,47 @@ def feature_id_field(columns: Iterable[Any], requested: str) -> str:
     if requested == GEOMETRY_FIELD and FEATURE_ID_COORD in {str(column) for column in columns}:
         return FEATURE_ID_COORD
     return requested
+
+
+def raster_and_features(data: Any, geometries: Any) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
+    """The inputs of a spatial aggregation, ready for xvec: one named raster, features in its CRS.
+
+    A single-variable Dataset becomes its variable. A raster without a CRS is taken as WGS 84,
+    the CRS of GeoJSON, which is what a grid without one has always been compared against. The
+    features are indexed by feature id (:func:`geometries_to_frame`), and a frame without a CRS
+    is WGS 84 too.
+    """
+    import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
+    import xarray as xr
+
+    if isinstance(data, xr.Dataset):
+        if len(data.data_vars) != 1:
+            raise ValueError(f"spatial aggregation needs a single-variable raster, got {list(data.data_vars)}")
+        data = data[next(iter(data.data_vars))]
+    if data.rio.crs is None:
+        data = data.rio.write_crs("EPSG:4326")
+    frame = geometries_to_frame(geometries)
+    if frame.crs is None:
+        frame = frame.set_crs("EPSG:4326")
+    return data, frame.to_crs(data.rio.crs)
+
+
+def vector_result(
+    result: xr.DataArray, data: xr.DataArray, ids: Iterable[Any], dim: str = GEOMETRY_FIELD
+) -> xr.Dataset:
+    """An aggregation's output in OCS's vector cube form: named, labelled by feature id.
+
+    xvec returns an unnamed DataArray whose geometry dimension holds shapely objects, which Zarr
+    and NetCDF cannot encode. This relabels the dimension with the feature ids, keeps the shapes
+    as WKT in `geometry_wkt` and the ids in `feature_id`, names the result after the input
+    variable so tabular exports get a value column, and keeps the input's cadence, since a
+    spatial aggregation changes nothing about time.
+    """
+    from open_climate_service.shared.time import cadence_of, stamp_cadence
+
+    labels = [str(value) for value in ids]
+    wkt = [shape.wkt for shape in result[dim].values]
+    plain = result.drop_vars(dim).assign_coords({dim: labels, GEOMETRY_WKT_COORD: (dim, wkt)})
+    named = attach_feature_ids(plain, labels, dim).to_dataset(name=str(data.name or "data"))
+    stamp_cadence(named, cadence_of(data))
+    return named

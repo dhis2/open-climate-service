@@ -159,7 +159,7 @@ def _json_default(value: Any) -> Any:
 def _to_labeled_geojson(frame: gpd.GeoDataFrame, *, id_property: str) -> dict[str, Any]:
     """Convert a GeoDataFrame to a GeoJSON FeatureCollection, promoting id_property to top-level id.
 
-    Promotes the use of more meaningful feature ids (labels instead of sequential integers) without 
+    Promotes the use of more meaningful feature ids (labels instead of sequential integers) without
     making any assumptions about the available feature properties on the input GeoJSON.
     """
     collection: dict[str, Any] = json.loads(frame.to_json(default=_json_default))

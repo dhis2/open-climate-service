@@ -99,8 +99,8 @@ def test_the_pinned_node_executes_through_the_real_process_graph(
 def test_the_reference_is_a_node_the_executor_actually_resolves() -> None:
     """An inline `{"process_id": ...}` in an argument is *not* evaluated -- it is passed through.
 
-    The graph parser leaves such dictionaries untouched. A reference only becomes a ResultReference 
-    when it is represented as a sibling node with from_node, which the executor can then resolve. 
+    The graph parser leaves such dictionaries untouched. A reference only becomes a ResultReference
+    when it is represented as a sibling node with from_node, which the executor can then resolve.
     This verifies that _resolve_feature_references produces the expected graph wiring.
     """
     from openeo_pg_parser_networkx import OpenEOProcessGraph

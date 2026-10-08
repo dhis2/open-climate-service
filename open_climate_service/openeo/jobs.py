@@ -1894,9 +1894,9 @@ _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
 
 def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     """Write an xr.Dataset to disk in the requested format. Returns the output path."""
-    # A format that carries geometry gets the real shapes written out, rather than a table 
+    # A format that carries geometry gets the real shapes written out, rather than a table
     # that has to be joined back to a boundary file. E.g. `aggregate_spatial_weighted`` returns
-    # a vector datacube. 
+    # a vector datacube.
     geom_dim = _vector_dim(ds)
     if geom_dim is not None:
         # CSV is listed as a vector format but carries no shapes, so it must not demand them: a

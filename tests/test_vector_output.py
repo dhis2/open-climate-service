@@ -22,7 +22,7 @@ import xvec  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .x
 from shapely.geometry import box
 
 from open_climate_service.openeo import jobs
-from open_climate_service.plugins.processes.aggregate_spatial import aggregate_spatial
+from open_climate_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
 from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
 
 _NORTH = [[0, 2], [4, 2], [4, 4], [0, 4], [0, 2]]
@@ -69,7 +69,7 @@ def _mean(data: Any) -> float:
 
 
 def _result() -> xr.Dataset:
-    return aggregate_spatial(_grid(), _districts(), _mean)
+    return aggregate_spatial_weighted(_grid(), _districts(), "mean")
 
 
 def _write(ds: xr.Dataset, results_dir: Path, fmt: str) -> Path:
@@ -197,12 +197,12 @@ def test_a_null_geometry_is_rejected_rather_than_borrowed(tmp_path: Path) -> Non
 
 
 def test_a_custom_target_dimension_is_still_a_vector_cube(tmp_path: Path) -> None:
-    """`aggregate_spatial(target_dimension="regions")` names the dimension; the cube is no less vector for it.
+    """A cube whose features are on `regions` rather than `geometry` is no less vector for it.
 
     The writer used to recognise a vector cube by the name `geometry` alone, so PARQUET on a
     `regions` cube reported it as a raster with no geometry.
     """
-    result = aggregate_spatial(_grid(), _districts(), _mean, target_dimension="regions")
+    result = _result().rename({"geometry": "regions"})
     assert "regions" in result.dims
 
     frame = gpd.read_parquet(_write(result, tmp_path, "PARQUET"))

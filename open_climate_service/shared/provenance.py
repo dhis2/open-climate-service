@@ -28,6 +28,8 @@ class ExecutionEvidence:
     require_feature_ids: bool = False
     sources: list[dict[str, Any]] = field(default_factory=list)
     features: list[dict[str, Any]] = field(default_factory=list)
+    # One entry per completed spatial aggregation: its named method, or None when its
+    # reducer is not a single named reduction.
     spatial_aggregations: list[str | None] = field(default_factory=list)
     # One entry per completed temporal aggregation (aggregate_temporal_period or
     # aggregate_dekads): the cadence it produced, its single named reducer or None, and
@@ -61,6 +63,7 @@ class ExecutionEvidence:
 
 
 _current: ContextVar[ExecutionEvidence | None] = ContextVar("ocs_execution_evidence", default=None)
+_spatial_methods: ContextVar[set[str] | None] = ContextVar("ocs_spatial_methods", default=None)
 _temporal_scope: ContextVar[dict[str, Any] | None] = ContextVar("ocs_temporal_scope", default=None)
 
 
@@ -115,8 +118,30 @@ def record_source(collection_id: str, artifact: Any) -> None:
     evidence.sources.append(observation)
 
 
+@contextmanager
+def observe_spatial_aggregation() -> Generator[None]:
+    """Attribute named reductions to one spatial aggregation and record its method.
+
+    Only reductions running inside this scope count, so a named reducer used for a
+    temporal reduction or anywhere else never reads as a spatial aggregation. The
+    call is recorded only when it completes.
+    """
+    methods: set[str] = set()
+    token = _spatial_methods.set(methods)
+    try:
+        yield
+    finally:
+        _spatial_methods.reset(token)
+    evidence = _current.get()
+    if evidence is not None:
+        evidence.spatial_aggregations.append(next(iter(methods)) if len(methods) == 1 else None)
+
+
 def record_reduction(method: str) -> None:
-    """Note a named reduction for an open temporal aggregation scope; ignored outside one."""
+    """Note a named reduction for whichever aggregation scope is open; ignored outside both."""
+    methods = _spatial_methods.get()
+    if methods is not None:
+        methods.add(method)
     temporal = _temporal_scope.get()
     if temporal is not None:
         temporal["methods"].add(method)
