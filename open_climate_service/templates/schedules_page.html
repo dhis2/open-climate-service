@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sync schedules · {{ name }}</title>
+    <title>Schedules · {{ name }}</title>
     <style>
 {{ styles | safe }}
     </style>
@@ -22,41 +22,35 @@
 
       <main id="content">
         <div class="page-title">
-          <h2 id="schedules-title" tabindex="-1">Sync schedules</h2>
+          <h2 id="schedules-title" tabindex="-1">Schedules</h2>
           <span class="chip">{{ schedules | length }} schedule{{ 's' if schedules | length != 1 }}</span>
           <span class="chip {{ 'chip-published' if status.running else 'chip-unpublished' }}">{{ 'Scheduler running' if status.running else ('Scheduler off' if not status.enabled else 'Scheduler not running') }}</span>
         </div>
-        <p class="lead">Set when OCS checks an ingested dataset for updates. Each check starts a sync job that adds any new data from its source.</p>
+        <p class="lead">Everything on this instance's clock. A sync schedule submits a job at each check time; the job finds and ingests new source data, if any. Set one up or edit it from the dataset's own page.</p>
 
-        {% if status.reload_error %}
+        {% if change_warning %}
+        <div class="notice error" role="alert">{{ change_warning }}</div>
+        {% elif status.reload_error %}
         <div class="notice error" role="alert">The last reload failed: {{ status.reload_error }}.</div>
         {% endif %}
         {% if not status.enabled %}
-        <div class="notice">Automatic checks are off. To turn them on, set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span>, then restart OCS. You can save schedules here in the meantime.</div>
+        <div class="notice">Automatic checks are off. To turn them on, set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span>, then restart OCS. Schedules can still be saved in the meantime.</div>
         {% endif %}
 
-        <nav class="page-tabs" aria-label="Schedule views">
-          <a href="{{ mount }}/schedules" {% if tab == 'list' %}aria-current="page"{% endif %}>Schedules</a>
-          <a href="{{ mount }}/schedules/new" {% if tab == 'create' and not editing %}aria-current="page"{% endif %}>Add schedule</a>
-          {% if editing %}<a href="{{ mount }}/schedules/{{ editing }}/edit" aria-current="page">Edit {{ editing }}</a>{% endif %}
-        </nav>
-
-        {% if tab == 'list' %}
         {% if schedules %}
         <div class="panel table-wrap records-table">
           <table>
             <thead>
-              <tr><th>Dataset</th><th>Check schedule</th><th>Managed in</th><th>Status</th><th>Next check</th><th>Last check</th>{% if not read_only %}<th>Actions</th>{% endif %}</tr>
+              <tr><th>Schedule</th><th>Target</th><th>Runs</th><th>Status</th><th>Next check</th><th>Last check</th>{% if not read_only %}<th>Actions</th>{% endif %}</tr>
             </thead>
             <tbody>
               {% for s in schedules %}
               <tr>
-                <td><a href="{{ mount }}/datasets/{{ s.dataset_id }}">{{ s.name or s.dataset_id }}</a>{% if s.name %}<br /><small class="mono">{{ s.dataset_id }}</small>{% endif %}</td>
+                <td>{{ s.kind | capitalize }}</td>
+                <td>{% if s.dataset_exists %}<a href="{{ mount }}/datasets/{{ s.dataset_id }}">{{ s.name or s.dataset_id }}</a>{% if s.name %}<br /><small class="mono">{{ s.dataset_id }}</small>{% endif %}{% else %}<span class="mono">{{ s.dataset_id }}</span><br /><small>This dataset is no longer on the instance.</small>{% endif %}</td>
                 <td><span class="mono">{{ s.cron }}</span> ({{ s.timezone }})<br /><small>{{ 'Publish after sync' if s.publish else 'Do not publish after sync' }}; up to {{ s.max_attempts }} attempt{{ 's' if s.max_attempts != 1 }}</small></td>
-                <td>{% if s.source == 'file' %}<span class="chip">climate-service.yaml</span>{% else %}<span class="chip">this page</span>{% endif %}</td>
                 <td>
-                  {% if s.shadowed %}<span class="chip chip-unpublished">Overridden</span><br /><small>The config file has a schedule for this dataset. Remove that entry and restart OCS to use this one.</small>
-                  {% elif not s.enabled %}<span class="chip chip-unpublished">Paused</span>
+                  {% if not s.enabled %}<span class="chip chip-unpublished">Paused</span>
                   {% elif s.registered %}<span class="chip chip-published">Scheduled</span>
                   {% elif s.last_outcome == 'error' %}<span class="chip chip-unpublished">Cannot run</span><br /><small>{{ s.last_message }}</small>
                   {% else %}<span class="chip">Not running</span>{% endif %}
@@ -65,17 +59,15 @@
                 <td>{% if s.last_check %}{{ s.last_check }}<br /><small>{{ s.last_outcome }}{% if s.last_job_id %}, <a href="{{ mount }}/jobs/{{ s.last_job_id }}">view job</a>{% endif %}</small>{% else %}<span class="note">No checks yet</span>{% endif %}</td>
                 {% if not read_only %}
                 <td>
-                  {% if s.source == 'store' %}
                   <div class="form-actions">
-                    <a class="button-link" href="{{ mount }}/schedules/{{ s.dataset_id }}/edit">Edit</a>
+                    {% if s.dataset_exists %}<a class="button-link" href="{{ mount }}/datasets/{{ s.dataset_id }}#schedule">Edit</a>{% endif %}
                     {% if s.enabled %}
-                    <form method="post" action="{{ mount }}/schedules/{{ s.dataset_id }}/pause"><button type="submit">Pause</button></form>
+                    <form method="post" action="{{ mount }}/schedules/sync/{{ s.dataset_id }}/pause"><button type="submit">Pause</button></form>
                     {% else %}
-                    <form method="post" action="{{ mount }}/schedules/{{ s.dataset_id }}/resume"><button type="submit">Resume</button></form>
+                    <form method="post" action="{{ mount }}/schedules/sync/{{ s.dataset_id }}/resume"><button type="submit">Resume</button></form>
                     {% endif %}
-                    <a class="button-link" href="{{ mount }}/schedules/{{ s.dataset_id }}/edit#delete" data-delete="{{ s.dataset_id }}" data-delete-name="{{ s.name or s.dataset_id }}">Delete</a>
+                    <a class="button-link" href="{{ mount }}/schedules/sync/{{ s.dataset_id }}/delete" data-delete="{{ s.dataset_id }}" data-delete-name="{{ s.name or s.dataset_id }}">Delete</a>
                   </div>
-                  {% else %}<span class="note">Edit in config file</span>{% endif %}
                 </td>
                 {% endif %}
               </tr>
@@ -86,105 +78,13 @@
         {% else %}
         <div class="panel empty-state">
           <h3>No schedules yet</h3>
-          <p class="note">Add a schedule to check an ingested dataset for updates automatically.</p>
-          {% if not read_only %}<a class="button-link primary empty-state-action" href="{{ mount }}/schedules/new">Add schedule</a>{% endif %}
+          <p class="note">Open a dataset and schedule automatic checks from its Sync panel.</p>
+          <a class="button-link primary empty-state-action" href="{{ mount }}/datasets">Datasets</a>
         </div>
         {% endif %}
         <p class="note">Last check details reset when OCS restarts. Submitted sync jobs remain available under Jobs. Times use {{ status.timezone }}.</p>
 
-        {% if not read_only %}
-        <dialog id="delete-dialog" aria-labelledby="delete-dialog-title">
-          <form method="post" action="">
-            <h3 id="delete-dialog-title">Delete this schedule?</h3>
-            <p><strong data-delete-dialog-name></strong> will no longer be checked for updates. Existing data and sync jobs remain available, and you can still sync it manually.</p>
-            <input type="hidden" name="confirm" value="yes" />
-            <div class="form-actions dialog-actions">
-              <button type="button" data-delete-dialog-cancel>Cancel</button>
-              <button type="submit" class="danger">Delete schedule</button>
-            </div>
-          </form>
-        </dialog>
-        <script>
-          (function () {
-            var dialog = document.getElementById("delete-dialog");
-            if (!dialog || typeof dialog.showModal !== "function") return;
-            var form = dialog.querySelector("form");
-            var name = dialog.querySelector("[data-delete-dialog-name]");
-            dialog.querySelector("[data-delete-dialog-cancel]").addEventListener("click", function () { dialog.close(); });
-            dialog.addEventListener("click", function (event) { if (event.target === dialog) dialog.close(); });
-            document.querySelectorAll("[data-delete]").forEach(function (link) {
-              link.addEventListener("click", function (event) {
-                event.preventDefault();
-                form.action = "{{ mount }}/schedules/" + encodeURIComponent(link.getAttribute("data-delete")) + "/delete";
-                name.textContent = link.getAttribute("data-delete-name");
-                dialog.showModal();
-              });
-            });
-          })();
-        </script>
-        {% endif %}
-        {% endif %}
-
-        {% if tab == 'create' %}
-        <section class="panel record-form-panel" aria-labelledby="create-title">
-          <h3 id="create-title">{% if editing %}Edit schedule{% else %}New schedule{% endif %}</h3>
-          <p class="note">Choose when to check the source for new data. Each check starts a sync job; if nothing new is available, the dataset is unchanged. Only one schedule can run per dataset.</p>
-          {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
-          {% if read_only %}
-          <p class="note">This instance is read-only, so schedules cannot be changed here.</p>
-          {% else %}
-          {% if not editing and not choices %}
-          <p class="note">No ingested datasets are available for scheduled sync. Ingest a dataset with a source that can be updated first.</p>
-          {% endif %}
-          <form method="post" action="{{ mount }}/schedules{% if editing %}/{{ editing }}{% endif %}" class="record-form">
-            <div class="form-grid">
-              <div class="field field-wide">
-                <label for="s-dataset">Dataset</label>
-                {% if editing %}
-                <input type="text" id="s-dataset" name="dataset_id" value="{{ editing }}" readonly />
-                {% else %}
-                <select id="s-dataset" name="dataset_id" required>
-                  {% for d in choices %}
-                  <option value="{{ d.id }}" {% if draft.dataset_id == d.id %}selected{% endif %} {% if d.configured %}disabled{% endif %}>{{ d.name }} ({{ d.cadence }}, {{ d.coverage.start }} to {{ d.coverage.end }}){% if d.configured %}, already scheduled in climate-service.yaml{% endif %}</option>
-                  {% endfor %}
-                </select>
-                {% endif %}
-                <span class="hint">Only ingested datasets with a source that can be updated are available. Datasets scheduled in the config file cannot be selected again.</span>
-              </div>
-              <div class="field">
-                <label for="s-cron">Check schedule (cron)</label>
-                <input type="text" id="s-cron" name="cron" required placeholder="0 6 * * *" value="{{ draft.cron or '' }}" />
-                <span class="hint">Minute, hour, day, month, weekday in {{ status.timezone }}. For example, 0 6 * * * checks daily at 06:00.</span>
-              </div>
-              <div class="field">
-                <label for="s-attempts">Maximum sync attempts</label>
-                <input type="number" id="s-attempts" name="max_attempts" min="1" value="{{ draft.max_attempts or 3 }}" />
-              </div>
-            </div>
-            <div class="checks">
-              <label><input type="checkbox" name="publish" value="on" {% if draft.publish is not defined or draft.publish %}checked{% endif %} /> Publish the updated dataset in OCS after sync</label>
-              <label><input type="checkbox" name="enabled" value="on" {% if draft.enabled is not defined or draft.enabled %}checked{% endif %} /> Run this schedule (uncheck to save it paused)</label>
-            </div>
-            <div class="form-actions">
-              <button type="submit" class="primary">{{ 'Save changes' if editing else 'Create schedule' }}</button>
-              <a class="button-link" href="{{ mount }}/schedules">Cancel</a>
-              <span class="note">{% if editing %}Changes apply when the scheduler is running.{% else %}The schedule starts when the scheduler is running.{% endif %}</span>
-            </div>
-          </form>
-          {% endif %}
-        </section>
-
-        {% if editing and not read_only %}
-        <section class="panel" id="delete" aria-labelledby="delete-title" style="margin-top: var(--spacers-dp24)">
-          <h3 id="delete-title">Delete schedule</h3>
-          <p class="note">Stops automatic checks for this dataset. Existing data and sync jobs remain available, and you can still sync it manually.</p>
-          <form method="post" action="{{ mount }}/schedules/{{ editing }}/delete" class="form-actions">
-            <label><input type="checkbox" name="confirm" value="yes" required /> I understand</label>
-            <button type="submit">Delete schedule</button>
-          </form>
-        </section>
-        {% endif %}
-        {% endif %}
+        {% include "_schedule_delete_dialog.html" %}
       </main>
     </div>
   </body>

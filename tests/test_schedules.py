@@ -1,4 +1,4 @@
-"""Sync schedules saved from the page and the API, merged with the file's (CLIM-1242)."""
+"""Sync schedules in the single shared store (CLIM-1242)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,14 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.scheduler import service as scheduler_service
 from open_climate_service.scheduler import store
-from open_climate_service.scheduler.config import DatasetSyncSchedule, SchedulerConfig, merge_schedules
+from open_climate_service.scheduler.config import (
+    DatasetSyncSchedule,
+    SchedulerConfig,
+    effective_schedules,
+    get_scheduler_config,
+)
+from open_climate_service.scheduler.migration import migrate_legacy_schedules
+from open_climate_service.scheduler.presets import cron_from_form, form_values, suggested_frequency
 from open_climate_service.scheduler.service import SchedulerService
 from open_climate_service.scheduler.store import ScheduleStoreUnreadable, StoredSchedule
 
@@ -123,21 +130,66 @@ def test_store_stamp_detects_equal_size_replacement_with_unchanged_mtime(instanc
     assert store.store_stamp() != first
 
 
-# --- merge ---------------------------------------------------------------------------------------
-
-
-def test_file_entries_come_first_and_shadow_stored_ones() -> None:
-    config = SchedulerConfig(enabled=True, dataset_sync=[_file("chirps")])
-    merged = merge_schedules(
-        config, [_stored("era5"), _stored("chirps", cron="0 9 * * *"), _stored("x", enabled=False)]
+def test_legacy_yaml_migration_is_atomic_and_idempotent(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api_config, "get_config_path", lambda: Path("/tmp/instance.yaml"))
+    monkeypatch.setattr(
+        api_config,
+        "_cache",
+        {
+            "scheduler": {
+                "enabled": False,
+                "dataset_sync": [
+                    {"dataset_id": "chirps", "cron": "0 5 * * *", "publish": False},
+                    {"dataset_id": "era5", "cron": "0 6 * * *"},
+                ],
+            }
+        },
     )
-    assert [(item.dataset_id, item.source, item.shadowed, item.effective) for item in merged] == [
-        ("chirps", "file", False, True),
-        ("chirps", "store", True, False),
-        ("era5", "store", False, True),
-        ("x", "store", False, False),
+    assert migrate_legacy_schedules() == 2
+    assert migrate_legacy_schedules() == 0
+    assert store.schedules_path().is_file()
+    assert [item.dataset_id for item in store.list_schedules()] == ["chirps", "era5"]
+    assert store.get_schedule("chirps").publish is False  # type: ignore[union-attr]
+
+    store.save_schedule(_stored("chirps", cron="0 7 * * *"), create=False)
+    before = store.schedules_path().read_bytes()
+    with pytest.raises(ValueError, match="different settings"):
+        migrate_legacy_schedules()
+    assert store.schedules_path().read_bytes() == before
+
+
+def test_legacy_yaml_is_rejected_at_runtime_with_migration_instruction(
+    instance: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api_config, "_cache", {"scheduler": {"dataset_sync": []}})
+    with pytest.raises(ValueError, match="migrate-schedules"):
+        get_scheduler_config()
+
+
+def test_migration_rejects_duplicate_yaml_entries_without_writing(
+    instance: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api_config, "get_config_path", lambda: Path("/tmp/instance.yaml"))
+    monkeypatch.setattr(
+        api_config,
+        "_cache",
+        {"scheduler": {"dataset_sync": [{"dataset_id": "chirps", "cron": "0 5 * * *"}] * 2}},
+    )
+    with pytest.raises(ValueError, match="duplicate dataset ids"):
+        migrate_legacy_schedules()
+    assert not store.schedules_path().exists()
+
+
+# --- effective store entries ---------------------------------------------------------------------
+
+
+def test_stored_entries_are_the_only_effective_schedules() -> None:
+    entries = effective_schedules([_stored("era5"), _stored("chirps"), _stored("x", enabled=False)])
+    assert [(item.dataset_id, item.effective) for item in entries] == [
+        ("chirps", True),
+        ("era5", True),
+        ("x", False),
     ]
-    assert merged[0].schedule.cron == "0 5 * * *" and merged[1].schedule.cron == "0 9 * * *"
 
 
 # --- service -------------------------------------------------------------------------------------
@@ -158,10 +210,10 @@ def _fake_scheduler(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return scheduler
 
 
-def test_start_registers_file_and_active_stored_entries_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_registers_active_stored_entries_only(monkeypatch: pytest.MonkeyPatch) -> None:
     scheduler = _fake_scheduler(monkeypatch)
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_file("chirps")]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored("era5"), _stored("chirps", cron="0 9 * * *"), _stored("x", enabled=False)],
         template_loader=lambda dataset_id: _TEMPLATES.get(dataset_id, {"id": dataset_id, "sync": {"kind": "temporal"}}),
     )
@@ -171,11 +223,10 @@ def test_start_registers_file_and_active_stored_entries_only(monkeypatch: pytest
     watch = next(call for call in scheduler.add_job.call_args_list if call.kwargs["id"] == "scheduler:store-watch")
     assert watch.args[0] == service.reload_if_changed
     status = service.status()
-    assert [(item.dataset_id, item.source, item.effective) for item in status.schedules] == [
-        ("chirps", "file", True),
-        ("chirps", "store", False),
-        ("era5", "store", True),
-        ("x", "store", False),
+    assert [(item.dataset_id, item.effective) for item in status.schedules] == [
+        ("chirps", True),
+        ("era5", True),
+        ("x", False),
     ]
     assert status.reload_error is None
 
@@ -187,15 +238,15 @@ def test_start_survives_an_unreadable_store_and_says_so(monkeypatch: pytest.Monk
         raise ScheduleStoreUnreadable("schedules.json is not valid JSON")
 
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_file("chirps")]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=broken,
         template_loader=lambda dataset_id: _TEMPLATES.get(dataset_id),
     )
     service.start()
-    assert _added(scheduler) == ["dataset-sync:chirps"]
+    assert _added(scheduler) == []
     status = service.status()
     assert status.reload_error and "not valid JSON" in status.reload_error
-    assert [item.dataset_id for item in status.schedules] == ["chirps"]
+    assert status.schedules == []
 
 
 def test_reload_adds_replaces_and_removes_jobs_by_id(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,24 +397,21 @@ def test_the_clock_owner_picks_up_a_change_made_by_another_process(
     scheduler.remove_job.assert_called_once_with("dataset-sync:era5")
 
 
-def test_shadowed_and_paused_rows_carry_no_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_active_and_paused_rows_have_separate_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
     scheduler = _fake_scheduler(monkeypatch)
     next_check = datetime(2026, 10, 8, 6, tzinfo=timezone.utc)
     scheduler.get_jobs.return_value = [MagicMock(id="dataset-sync:chirps", next_run_time=next_check)]
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_file("chirps")]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored("chirps", cron="0 9 * * *"), _stored("era5", enabled=False)],
         template_loader=lambda dataset_id: _TEMPLATES.get(dataset_id),
     )
     service.start()
     service.check_now(_file("chirps"))
-    rows = {(item.dataset_id, item.source): item for item in service.status().schedules}
-    winner = rows[("chirps", "file")]
-    assert winner.registered and winner.next_check == next_check and winner.last_outcome is not None
-    shadowed = rows[("chirps", "store")]
-    assert shadowed.shadowed and not shadowed.registered and shadowed.next_check is None
-    assert shadowed.last_outcome is None and shadowed.last_check is None
-    paused = rows[("era5", "store")]
+    rows = {item.dataset_id: item for item in service.status().schedules}
+    active = rows["chirps"]
+    assert active.registered and active.next_check == next_check and active.last_outcome is not None
+    paused = rows["era5"]
     assert not paused.effective and not paused.registered and paused.next_check is None
 
 
@@ -382,51 +430,41 @@ def test_reload_on_a_disabled_scheduler_only_updates_the_listing(instance: None)
 
 
 def test_api_creates_reads_updates_pauses_and_deletes(client: TestClient) -> None:
-    created = client.post("/schedules", json={"dataset_id": "era5", "cron": "0 6 * * *"})
+    created = client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"})
     assert created.status_code == 201, created.text
     assert created.json()["source"] == "store" and created.json()["enabled"] is True
-    assert client.post("/schedules", json={"dataset_id": "era5", "cron": "0 6 * * *"}).status_code == 409
+    assert client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"}).status_code == 409
     listed = client.get("/schedules").json()
     assert [item["dataset_id"] for item in listed["schedules"]] == ["era5"] and listed["reload_error"] is None
-    one = client.get("/schedules/era5")
+    one = client.get("/schedules/sync/era5")
     assert one.status_code == 200 and one.json()["cron"] == "0 6 * * *"
-    assert client.get("/schedules/missing").status_code == 404
+    assert client.get("/schedules/sync/missing").status_code == 404
 
-    updated = client.put("/schedules/era5", json={"cron": "0 7 * * *", "max_attempts": 5, "publish": False})
+    updated = client.put("/schedules/sync/era5", json={"cron": "0 7 * * *", "max_attempts": 5, "publish": False})
     assert updated.status_code == 200 and updated.json()["cron"] == "0 7 * * *"
     assert updated.json()["max_attempts"] == 5 and updated.json()["publish"] is False
-    assert client.put("/schedules/missing", json={"cron": "0 7 * * *"}).status_code == 404
+    assert client.put("/schedules/sync/missing", json={"cron": "0 7 * * *"}).status_code == 404
 
-    paused = client.post("/schedules/era5/pause", headers={"Accept": "application/json"})
+    paused = client.post("/schedules/sync/era5/pause", headers={"Accept": "application/json"})
     assert paused.status_code == 200 and paused.json()["enabled"] is False and paused.json()["effective"] is False
-    resumed = client.post("/schedules/era5/resume", headers={"Accept": "application/json"})
+    resumed = client.post("/schedules/sync/era5/resume", headers={"Accept": "application/json"})
     assert resumed.status_code == 200 and resumed.json()["effective"] is True
 
-    assert client.delete("/schedules/era5").status_code == 204
-    assert client.delete("/schedules/era5").status_code == 404
+    assert client.delete("/schedules/sync/era5").status_code == 204
+    assert client.delete("/schedules/sync/era5").status_code == 404
     assert client.get("/schedules").json()["schedules"] == []
 
 
 def test_api_refuses_what_the_clock_could_not_run(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    static = client.post("/schedules", json={"dataset_id": "worldpop", "cron": "0 6 * * *"})
+    static = client.post("/schedules/sync", json={"dataset_id": "worldpop", "cron": "0 6 * * *"})
     assert static.status_code == 422 and "not syncable" in static.text
-    unknown = client.post("/schedules", json={"dataset_id": "nope", "cron": "0 6 * * *"})
+    unknown = client.post("/schedules/sync", json={"dataset_id": "nope", "cron": "0 6 * * *"})
     assert unknown.status_code == 422 and "no registered data source" in unknown.text
-    bad_cron = client.post("/schedules", json={"dataset_id": "era5", "cron": "every day"})
+    bad_cron = client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "every day"})
     assert bad_cron.status_code == 422 and "cron" in bad_cron.text
 
-    monkeypatch.setattr(
-        api_config,
-        "_cache",
-        {"scheduler": {"enabled": False, "dataset_sync": [{"dataset_id": "chirps", "cron": "0 5 * * *"}]}},
-    )
-    monkeypatch.setattr(scheduler_service, "_service", None)
-    shadowed = client.post("/schedules", json={"dataset_id": "chirps", "cron": "0 6 * * *"})
-    assert shadowed.status_code == 409 and "climate-service.yaml" in shadowed.text
-    assert client.put("/schedules/chirps", json={"cron": "0 6 * * *"}).status_code == 409
-    assert client.delete("/schedules/chirps").status_code == 409
-    listed = client.get("/schedules").json()["schedules"]
-    assert [(item["dataset_id"], item["source"]) for item in listed] == [("chirps", "file")]
+    assert client.put("/schedules/sync/chirps", json={"cron": "0 6 * * *"}).status_code == 404
+    assert client.delete("/schedules/sync/chirps").status_code == 404
 
 
 def test_managed_schedule_uses_its_source_template(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -440,42 +478,32 @@ def test_managed_schedule_uses_its_source_template(client: TestClient, monkeypat
         "get_latest_artifact_for_dataset_or_404",
         lambda dataset_id: SimpleNamespace(dataset_id=dataset_id, source_dataset_id="era5"),
     )
-    form = client.get("/schedules/new", headers={"Accept": BROWSER})
-    assert '<option value="managed-era5"' in form.text
-    created = client.post("/schedules", json={"dataset_id": "managed-era5", "cron": "0 6 * * *"})
+    created = client.post("/schedules/sync", json={"dataset_id": "managed-era5", "cron": "0 6 * * *"})
     assert created.status_code == 201, created.text
     assert (
         scheduler_service.get_scheduler_service()
         ._plan(
             SchedulerConfig(enabled=True),
-            merge_schedules(SchedulerConfig(enabled=True), [_stored("managed-era5")]),
+            effective_schedules([_stored("managed-era5")]),
         )
         .refused
         == {}
     )
-    updated = client.put("/schedules/managed-era5", json={"cron": "0 7 * * *"})
+    updated = client.put("/schedules/sync/managed-era5", json={"cron": "0 7 * * *"})
     assert updated.status_code == 200, updated.text
 
 
-def test_a_shadowed_stored_schedule_stays_editable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        api_config,
-        "_cache",
-        {"scheduler": {"enabled": False, "dataset_sync": [{"dataset_id": "chirps", "cron": "0 5 * * *"}]}},
-    )
-    monkeypatch.setattr(scheduler_service, "_service", None)
+def test_a_stored_schedule_stays_editable(client: TestClient) -> None:
     store.save_schedule(_stored("chirps", cron="0 9 * * *"), create=True)
-    updated = client.put("/schedules/chirps", json={"cron": "0 10 * * *"})
+    updated = client.put("/schedules/sync/chirps", json={"cron": "0 10 * * *"})
     assert updated.status_code == 200, updated.text
-    assert updated.json()["source"] == "store" and updated.json()["shadowed"] is True
-    assert updated.json()["cron"] == "0 10 * * *" and updated.json()["effective"] is False
-    assert client.get("/schedules/chirps").json()["source"] == "file"
-    paused = client.post("/schedules/chirps/pause", headers={"Accept": "application/json"})
+    assert updated.json()["source"] == "store"
+    assert updated.json()["cron"] == "0 10 * * *" and updated.json()["effective"] is True
+    assert client.get("/schedules/sync/chirps").json()["source"] == "store"
+    paused = client.post("/schedules/sync/chirps/pause", headers={"Accept": "application/json"})
     assert paused.status_code == 200 and paused.json()["enabled"] is False
-    edit = client.get("/schedules/chirps/edit", headers={"Accept": BROWSER})
-    assert edit.status_code == 200 and 'value="0 10 * * *"' in edit.text
-    assert client.delete("/schedules/chirps").status_code == 204
-    assert [item["source"] for item in client.get("/schedules").json()["schedules"]] == ["file"]
+    assert client.delete("/schedules/sync/chirps").status_code == 204
+    assert client.get("/schedules").json()["schedules"] == []
 
 
 def test_a_saved_schedule_reaches_the_running_clock(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -485,108 +513,370 @@ def test_a_saved_schedule_reaches_the_running_clock(client: TestClient, monkeypa
     scheduler_service.get_scheduler_service().start()
     assert _added(scheduler) == []
 
-    assert client.post("/schedules", json={"dataset_id": "era5", "cron": "0 6 * * *"}).status_code == 201
+    assert client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"}).status_code == 201
     assert _added(scheduler) == ["dataset-sync:era5"]
     scheduler.get_job.return_value = MagicMock()
-    assert client.post("/schedules/era5/pause", headers={"Accept": "application/json"}).status_code == 200
+    assert client.post("/schedules/sync/era5/pause", headers={"Accept": "application/json"}).status_code == 200
     scheduler.remove_job.assert_called_once_with("dataset-sync:era5")
 
 
 # --- pages ---------------------------------------------------------------------------------------
 
 
-def test_page_lists_adds_edits_and_deletes(client: TestClient) -> None:
-    page = client.get("/schedules", headers={"Accept": BROWSER})
-    assert page.status_code == 200 and "Sync schedules" in page.text and "No schedules yet" in page.text
-    assert "Scheduler off" in page.text
-    assert "Each check starts a sync job" in page.text
-    assert "enabled: true" in page.text and "climate-service.yaml" in page.text
-    assert "pipeline" not in page.text.lower()
+@pytest.fixture
+def dataset_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """The dataset page for era5 and chirps, served the way the app serves it."""
+    import open_climate_service.ingestions.services as ingestion_services
+    from tests.test_dataset_page import _record
 
-    form = client.get("/schedules/new?dataset=era5", headers={"Accept": BROWSER})
-    assert form.status_code == 200 and "New schedule" in form.text
-    assert '<option value="era5" selected' in form.text and "CHIRPS" in form.text
+    def record(dataset_id: str) -> Any:
+        if dataset_id not in {"era5", "chirps"}:
+            raise HTTPException(status_code=404, detail=dataset_id)
+        return _record(dataset_id)
+
+    monkeypatch.setattr(ingestion_services, "get_dataset_or_404", record)
+    return client
+
+
+def test_the_dataset_page_creates_edits_pauses_and_deletes_its_schedule(dataset_pages: TestClient) -> None:
+    client = dataset_pages
+    page = client.get("/datasets/era5", headers={"Accept": BROWSER})
+    assert page.status_code == 200 and 'id="schedule"' in page.text
+    assert "Not synced on a schedule" in page.text and "Schedule automatic sync" in page.text
+    assert 'action="/schedules/sync"' in page.text and 'name="return_to" value="dataset"' in page.text
+    assert 'role="tablist" aria-label="Sync options" hidden' in page.text
+    assert 'id="sync-tab" role="tab"' in page.text and 'id="schedule-tab" role="tab"' in page.text
+    assert 'id="sync-panel" role="tabpanel"' in page.text
+    assert 'id="schedule" role="tabpanel"' in page.text
+    assert page.text.index('id="schedule" role="tabpanel"') < page.text.index('id="access-title"')
+    assert 'name="frequency"' in page.text and 'name="check_time"' in page.text
+    assert "Suggested starting point for monthly data: weekly" in page.text
+    assert "scheduler is off" in page.text
 
     created = client.post(
-        "/schedules",
-        data={"dataset_id": "era5", "cron": "0 6 * * *", "publish": "on", "enabled": "on", "max_attempts": "2"},
+        "/schedules/sync",
+        data={"dataset_id": "era5", "cron": "0 6 * * *", "publish": "on", "enabled": "on", "return_to": "dataset"},
         follow_redirects=False,
     )
-    assert created.status_code == 303 and created.headers["location"].endswith("/schedules")
-    listed = client.get("/schedules", headers={"Accept": BROWSER})
-    assert "0 6 * * *" in listed.text and "this page" in listed.text and ">Pause<" in listed.text
-    # Delete from the list opens a confirmation; without scripts it lands on the edit view's panel.
-    assert 'data-delete="era5"' in listed.text and 'href="/schedules/era5/edit#delete"' in listed.text
-    assert '<dialog id="delete-dialog"' in listed.text and 'name="confirm" value="yes"' in listed.text
+    assert created.status_code == 303 and created.headers["location"].endswith("/datasets/era5#schedule")
+    page = client.get("/datasets/era5", headers={"Accept": BROWSER})
+    assert "Checked on" in page.text and "0 6 * * *" in page.text and "Edit schedule" in page.text
+    assert 'action="/schedules/sync/era5"' in page.text and ">Pause<" in page.text
+    assert 'data-delete="era5"' in page.text and '<dialog id="delete-dialog"' in page.text
+    assert 'name="return_to" value="dataset"' in page.text and "<noscript>" in page.text
 
-    refused = client.post("/schedules", data={"dataset_id": "worldpop", "cron": "0 6 * * *"})
-    assert refused.status_code == 400 and "not syncable" in refused.text and 'value="0 6 * * *"' in refused.text
+    saved = client.post(
+        "/schedules/sync/era5",
+        data={"cron": "0 7 * * *", "max_attempts": "4", "enabled": "on", "return_to": "dataset"},
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303 and saved.headers["location"].endswith("/datasets/era5#schedule")
+    stored = store.get_schedule("era5")
+    assert stored is not None and stored.cron == "0 7 * * *" and stored.max_attempts == 4
+    assert stored.publish is True, "editing the check time must not silently change publication behavior"
 
-    assert ">Cancel<" in form.text
-    edit = client.get("/schedules/era5/edit", headers={"Accept": BROWSER})
-    assert edit.status_code == 200 and "Edit schedule" in edit.text and "readonly" in edit.text
-    assert 'id="delete"' in edit.text and "I understand" in edit.text and "I understand" not in listed.text
-    saved = client.post("/schedules/era5", data={"cron": "0 7 * * *", "max_attempts": "3"}, follow_redirects=False)
-    assert saved.status_code == 303 and store.get_schedule("era5").cron == "0 7 * * *"  # type: ignore[union-attr]
-    assert store.get_schedule("era5").publish is False  # type: ignore[union-attr]
-    assert store.get_schedule("era5").enabled is False  # type: ignore[union-attr]
+    paused = client.post("/schedules/sync/era5/pause", data={"return_to": "dataset"}, follow_redirects=False)
+    assert paused.status_code == 303 and paused.headers["location"].endswith("/datasets/era5#schedule")
+    assert "are paused" in client.get("/datasets/era5", headers={"Accept": BROWSER}).text
+    assert ">Resume<" in client.get("/datasets/era5", headers={"Accept": BROWSER}).text
 
-    unconfirmed = client.post("/schedules/era5/delete", data={}, follow_redirects=False)
+    unconfirmed = client.post("/schedules/sync/era5/delete", data={"return_to": "dataset"}, follow_redirects=False)
     assert unconfirmed.status_code == 400 and store.get_schedule("era5") is not None
-    confirmed = client.post("/schedules/era5/delete", data={"confirm": "yes"}, follow_redirects=False)
-    assert confirmed.status_code == 303 and store.get_schedule("era5") is None
+    deleted = client.post(
+        "/schedules/sync/era5/delete", data={"confirm": "yes", "return_to": "dataset"}, follow_redirects=False
+    )
+    assert deleted.status_code == 303 and deleted.headers["location"].endswith("/datasets/era5#schedule")
+    assert store.get_schedule("era5") is None
 
 
-def test_form_can_create_a_paused_schedule(client: TestClient) -> None:
-    created = client.post("/schedules", data={"dataset_id": "era5", "cron": "0 6 * * *"}, follow_redirects=False)
+def test_a_refused_save_shows_the_dataset_page_with_the_reason_and_the_draft(dataset_pages: TestClient) -> None:
+    refused = dataset_pages.post(
+        "/schedules/sync", data={"dataset_id": "era5", "cron": "every day", "return_to": "dataset"}
+    )
+    assert refused.status_code == 422 and "cron" in refused.text and 'value="every day"' in refused.text
+    assert 'id="schedule"' in refused.text and store.get_schedule("era5") is None
+    assert 'data-initial-tab="schedule"' in refused.text
+
+
+def test_bad_form_dataset_id_keeps_validation_error_instead_of_becoming_404(dataset_pages: TestClient) -> None:
+    response = dataset_pages.post(
+        "/schedules/sync", data={"dataset_id": "", "cron": "0 6 * * *", "return_to": "dataset"}
+    )
+    assert response.status_code == 422
+    assert "dataset_id" in response.text and "Schedules" in response.text
+
+
+def test_a_nonexistent_form_target_keeps_the_syncability_error(dataset_pages: TestClient) -> None:
+    response = dataset_pages.post(
+        "/schedules/sync", data={"dataset_id": "missing", "cron": "0 6 * * *", "return_to": "dataset"}
+    )
+    assert response.status_code == 422
+    assert "no registered data source" in response.text
+
+
+def test_concurrent_removal_during_update_returns_404(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    store.save_schedule(_stored("era5"), create=True)
+
+    def removed(_: StoredSchedule, *, create: bool) -> StoredSchedule:
+        assert create is False
+        raise ValueError("No stored schedule for dataset 'era5'")
+
+    monkeypatch.setattr(store, "save_schedule", removed)
+    response = client.put("/schedules/sync/era5", json={"cron": "0 7 * * *"})
+    assert response.status_code == 404 and "No stored schedule" in response.text
+
+
+def test_concurrent_removal_during_pause_or_resume_returns_404(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def removed(_: str, __: bool) -> StoredSchedule:
+        raise ValueError("No stored schedule for dataset 'era5'")
+
+    monkeypatch.setattr(store, "set_enabled", removed)
+    for operation in ("pause", "resume"):
+        response = client.post(f"/schedules/sync/era5/{operation}", headers={"Accept": "application/json"})
+        assert response.status_code == 404 and "No stored schedule" in response.text
+
+
+def test_concurrent_removal_during_delete_returns_404(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "delete_schedule", lambda _: False)
+    assert client.delete("/schedules/sync/era5").status_code == 404
+    response = client.post("/schedules/sync/era5/delete", data={"confirm": "yes"})
+    assert response.status_code == 404
+
+
+def test_an_unticked_box_saves_the_schedule_paused(dataset_pages: TestClient) -> None:
+    created = dataset_pages.post(
+        "/schedules/sync",
+        data={"dataset_id": "era5", "cron": "0 6 * * *", "return_to": "dataset"},
+        follow_redirects=False,
+    )
     assert created.status_code == 303
     saved = store.get_schedule("era5")
-    assert saved is not None and saved.enabled is False
+    assert saved is not None and saved.enabled is False and saved.publish is False
 
 
-def test_page_shows_file_entries_read_only_and_shadowing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        api_config,
-        "_cache",
-        {"scheduler": {"enabled": False, "dataset_sync": [{"dataset_id": "chirps", "cron": "0 5 * * *"}]}},
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"frequency": "daily", "check_time": "06:15"}, "15 6 * * *"),
+        ({"frequency": "weekly", "check_time": "09:00", "weekday": "fri"}, "0 9 * * fri"),
+        ({"frequency": "monthly", "check_time": "12:30", "month_day": "28"}, "30 12 28 * *"),
+        ({"frequency": "custom", "cron": "0 */6 * * *"}, "0 */6 * * *"),
+    ],
+)
+def test_simple_schedule_choices_compile_to_cron(fields: dict[str, str], expected: str) -> None:
+    assert cron_from_form(fields) == expected
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"frequency": "weekly", "check_time": "25:00", "weekday": "mon"},
+        {"frequency": "weekly", "check_time": "06:00", "weekday": "not-a-day"},
+        {"frequency": "monthly", "check_time": "06:00", "month_day": "31"},
+        {"frequency": "custom", "cron": ""},
+    ],
+)
+def test_simple_schedule_choices_reject_invalid_values(fields: dict[str, str]) -> None:
+    with pytest.raises(ValueError):
+        cron_from_form(fields)
+
+
+def test_cadence_suggestions_are_not_assumed_publication_times() -> None:
+    assert suggested_frequency("daily") == "daily"
+    assert suggested_frequency("weekly") == "daily"
+    assert suggested_frequency("dekadal") == "weekly"
+    assert suggested_frequency("monthly") == "weekly"
+    assert suggested_frequency("yearly") == "monthly"
+    assert form_values("0 6 * * fri", "daily")["frequency"] == "weekly"
+    assert form_values("0 */6 * * *", "daily")["frequency"] == "custom"
+
+
+def test_simple_schedule_form_saves_preset_and_keeps_existing_publication(dataset_pages: TestClient) -> None:
+    created = dataset_pages.post(
+        "/schedules/sync",
+        data={
+            "dataset_id": "era5",
+            "frequency": "weekly",
+            "check_time": "09:15",
+            "weekday": "fri",
+            "enabled": "on",
+            "return_to": "dataset",
+        },
+        follow_redirects=False,
     )
-    monkeypatch.setattr(scheduler_service, "_service", None)
+    assert created.status_code == 303
+    saved = store.get_schedule("era5")
+    assert saved is not None and saved.cron == "15 9 * * fri" and saved.publish is False
+    page = dataset_pages.get("/datasets/era5", headers={"Accept": BROWSER})
+    assert 'value="weekly" selected' in page.text and 'value="fri" selected' in page.text
+
+    updated = dataset_pages.post(
+        "/schedules/sync/era5",
+        data={"frequency": "monthly", "check_time": "08:30", "month_day": "5", "enabled": "on"},
+        follow_redirects=False,
+    )
+    assert updated.status_code == 303
+    saved = store.get_schedule("era5")
+    assert saved is not None and saved.cron == "30 8 5 * *" and saved.publish is False
+
+
+def test_a_persisted_but_unapplied_schedule_is_reported_as_a_conflict(
+    dataset_pages: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = scheduler_service.get_scheduler_service()
+
+    def fail_reload() -> None:
+        service._reload_error = "clock refused the new trigger"
+
+    monkeypatch.setattr(service, "reload", fail_reload)
+    response = dataset_pages.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"})
+    assert response.status_code == 409
+    assert response.json()["stored"] is True and response.json()["applied"] is False
+    assert store.get_schedule("era5") is not None
+
+    page = dataset_pages.post(
+        "/schedules/sync/era5",
+        data={"cron": "0 7 * * *", "enabled": "on", "return_to": "dataset"},
+        follow_redirects=False,
+    )
+    assert page.status_code == 409
+    assert "was saved, but the scheduler could not apply it" in page.text
+    assert "clock refused the new trigger" in page.text
+
+
+def test_deletion_refuses_to_report_success_when_clock_kept_old_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = scheduler_service.get_scheduler_service()
+    store.save_schedule(_stored("era5"), create=True)
+
+    def fail_reload() -> None:
+        service._reload_error = "clock refused removal"
+
+    monkeypatch.setattr(service, "reload", fail_reload)
+    response = client.delete("/schedules/sync/era5")
+    assert response.status_code == 409 and response.json()["stored"] is False
+    assert store.get_schedule("era5") is None
+
+
+def test_the_dataset_page_edits_the_single_stored_schedule(dataset_pages: TestClient) -> None:
+    page = dataset_pages.get("/datasets/era5", headers={"Accept": BROWSER})
+    assert "Not synced on a schedule" in page.text
+    assert '<details class="schedule-editor"' in page.text
+    assert ">Cancel</a>" not in page.text
+
+    store.save_schedule(_stored("era5", cron="0 9 * * *"), create=True)
+    page = dataset_pages.get("/datasets/era5", headers={"Accept": BROWSER})
+    assert "0 9 * * *" in page.text and "overridden" not in page.text.lower()
+    assert 'value="0 9 * * *"' in page.text and "Edit schedule" in page.text
+    assert 'href="/datasets/era5?schedule_view=status#schedule-status" data-schedule-cancel>Cancel</a>' in page.text
+    assert 'id="schedule-status">Automatic sync</h4>' in page.text
+    assert 'url.searchParams.set("schedule_refresh", String(Date.now()))' in page.text
+
+    cancelled = dataset_pages.get("/datasets/era5?schedule_view=status", headers={"Accept": BROWSER})
+    assert 'value="0 9 * * *"' in cancelled.text
+    assert '<details class="schedule-editor" open' not in cancelled.text
+    assert store.get_schedule("era5").cron == "0 9 * * *"  # type: ignore[union-attr]
+
+
+def test_the_schedules_page_lists_everything_and_sends_edits_to_the_dataset_page(
+    dataset_pages: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = dataset_pages
+    page = client.get("/schedules", headers={"Accept": BROWSER})
+    assert page.status_code == 200 and "<h2" in page.text and ">Schedules</h2>" in page.text
+    assert "No schedules yet" in page.text and "Scheduler off" in page.text
+    assert "Add schedule" not in page.text and "<select" not in page.text and "pipeline" not in page.text.lower()
+    assert client.get("/schedules/new", headers={"Accept": BROWSER}).status_code in {404, 405}
+
+    store.save_schedule(_stored("era5"), create=True)
+    store.save_schedule(_stored("gone"), create=True)
+    listed = client.get("/schedules", headers={"Accept": BROWSER})
+    assert "<td>Sync</td>" in listed.text
+    assert 'href="/datasets/era5#schedule">Edit</a>' in listed.text
+    assert 'action="/schedules/sync/era5/pause"' in listed.text and 'data-delete="era5"' in listed.text
+    assert "no longer on the instance" in listed.text and 'data-delete="gone"' in listed.text
+    assert 'href="/datasets/gone#schedule">Edit' not in listed.text
+    assert 'href="/schedules/sync/gone/delete"' in listed.text
+    confirmation = client.get("/schedules/sync/gone/delete", headers={"Accept": BROWSER})
+    assert confirmation.status_code == 200
+    assert 'action="/schedules/sync/gone/delete"' in confirmation.text
+    assert 'name="confirm" value="yes"' in confirmation.text
+
+    # The page's Pause form has no fields; a browser still posts it as a form, which this mirrors.
+    paused = client.post(
+        "/schedules/sync/era5/pause",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        follow_redirects=False,
+    )
+    assert paused.status_code == 303 and paused.headers["location"].endswith("/schedules")
+    deleted = client.post("/schedules/sync/gone/delete", data={"confirm": "yes"}, follow_redirects=False)
+    assert deleted.status_code == 303 and deleted.headers["location"].endswith("/schedules")
+    assert store.get_schedule("gone") is None
+
+
+def test_the_schedules_page_shows_all_entries_as_manageable(client: TestClient) -> None:
     store.save_schedule(_stored("chirps", cron="0 9 * * *"), create=True)
     page = client.get("/schedules", headers={"Accept": BROWSER})
-    assert "climate-service.yaml" in page.text and "Edit in config file" in page.text and "Overridden" in page.text
-    form = client.get("/schedules/new", headers={"Accept": BROWSER})
-    assert '<option value="chirps" disabled' in form.text or 'value="chirps"  disabled' in form.text
+    assert 'href="/datasets/chirps#schedule">Edit</a>' in page.text
+    assert "Edit in config file" not in page.text and "Overridden" not in page.text
 
 
-def test_dataset_page_names_the_schedule_or_offers_one(instance: None) -> None:
-    from open_climate_service.system import templates as landing
-    from tests.test_dataset_page import _record
+def test_the_menu_entry_is_schedules(client: TestClient) -> None:
+    page = client.get("/schedules", headers={"Accept": BROWSER})
+    assert ">Schedules<" in page.text and "Sync schedules" not in page.text
 
-    html = landing.render_dataset_page(_record("era5"), "/ocs")
-    assert "Not synced on a schedule" in html and "/ocs/schedules/new?dataset=era5" in html
-    store.save_schedule(_stored("era5", cron="0 6 * * *"), create=True)
-    scheduler_service.get_scheduler_service().reload()
-    html = landing.render_dataset_page(_record("era5"), "/ocs")
-    assert "Checked on" in html and "0 6 * * *" in html
+
+# --- review findings -----------------------------------------------------------------------------
+
+
+def test_a_process_without_the_clock_lists_what_another_process_saved(instance: None) -> None:
+    writer = SchedulerService(template_loader=lambda dataset_id: _TEMPLATES.get(dataset_id))
+    reader = SchedulerService(template_loader=lambda dataset_id: _TEMPLATES.get(dataset_id))
+    writer.start()
+    reader.start()
+    assert reader.status().schedules == []
+    store.save_schedule(_stored("era5"), create=True)
+    writer.reload()
+    assert [item.dataset_id for item in reader.status().schedules] == ["era5"]
+    assert reader.schedule_for("era5") is not None
     store.set_enabled("era5", False)
-    scheduler_service.get_scheduler_service().reload()
-    assert "paused" in landing.render_dataset_page(_record("era5"), "/ocs")
+    assert reader.schedule_for("era5") is not None and reader.schedule_for("era5").enabled is False  # type: ignore[union-attr]
 
 
-def test_dataset_page_names_shadowed_stored_schedule(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.system import templates as landing
-    from tests.test_dataset_page import _record
+def test_an_unreadable_store_is_reported_and_writes_answer_503(client: TestClient) -> None:
+    assert client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"}).status_code == 201
+    store.schedules_path().write_text("not json", encoding="utf-8")
+    listed = client.get("/schedules").json()
+    assert listed["reload_error"] and "not valid JSON" in listed["reload_error"]
+    assert [item["dataset_id"] for item in listed["schedules"]] == ["era5"]
+    created = client.post("/schedules/sync", json={"dataset_id": "chirps", "cron": "0 6 * * *"})
+    assert created.status_code == 503 and "cannot be read" in created.text
+    paused = client.post("/schedules/sync/era5/pause", headers={"Accept": "application/json"})
+    assert paused.status_code == 503
+    assert client.put("/schedules/sync/era5", json={"cron": "0 7 * * *"}).status_code == 503
+    assert client.delete("/schedules/sync/era5").status_code == 503
 
-    monkeypatch.setattr(
-        api_config,
-        "_cache",
-        {"scheduler": {"enabled": False, "dataset_sync": [{"dataset_id": "era5", "cron": "0 5 * * *"}]}},
+
+def test_a_partial_put_keeps_every_setting_it_does_not_name(client: TestClient) -> None:
+    created = client.post(
+        "/schedules/sync",
+        json={"dataset_id": "era5", "cron": "0 6 * * *", "max_attempts": 5, "publish": False, "enabled": False},
     )
-    monkeypatch.setattr(scheduler_service, "_service", None)
-    store.save_schedule(_stored("era5", cron="0 9 * * *"), create=True)
-    html = landing.render_dataset_page(_record("era5"), "/ocs")
-    assert "0 5 * * *" in html and "overridden" in html
-    assert "0 9 * * *" not in html
+    assert created.status_code == 201
+    updated = client.put("/schedules/sync/era5", json={"cron": "0 7 * * *"})
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["cron"] == "0 7 * * *" and body["max_attempts"] == 5
+    assert body["publish"] is False and body["enabled"] is False
+
+
+def test_status_rows_name_their_kind(client: TestClient) -> None:
+    client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"})
+    assert client.get("/schedules").json()["schedules"][0]["kind"] == "sync"
+    assert client.get("/schedules/sync/era5").json()["kind"] == "sync"
 
 
 def test_stored_schedule_timestamps_are_timezone_aware(instance: None) -> None:

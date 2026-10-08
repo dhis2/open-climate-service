@@ -87,38 +87,197 @@
               {% elif vector %}
               <p class="note">This collection cannot be refreshed here: {{ refresh_blocked or "no provider on this instance fetches it" }}.</p>
               {% elif syncable and not read_only %}
-              <p class="note" id="sync-schedule">
-                {% if schedule and has_shadowed_schedule %}Checked on <span class="mono">{{ schedule.cron }}</span> ({{ schedule.timezone }}) from <span class="mono">climate-service.yaml</span>; a saved schedule for this dataset is overridden.
-                {% elif schedule and not schedule.enabled %}Scheduled on <span class="mono">{{ schedule.cron }}</span> ({{ schedule.timezone }}), paused.
-                {% elif schedule %}Checked on <span class="mono">{{ schedule.cron }}</span> ({{ schedule.timezone }}){% if schedule.next_check %}, next {{ schedule.next_check }}{% endif %}{% if schedule.source == 'file' %}, from <span class="mono">climate-service.yaml</span>{% endif %}.
-                {% else %}Not synced on a schedule. <a href="{{ mount }}/schedules/new?dataset={{ dataset.id }}">Add one</a> to check for new data automatically.{% endif %}
-                {% if schedule %}<a href="{{ mount }}/schedules">All schedules</a>{% endif %}
-              </p>
-              <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
-                Checking the source for new data…
-              </p>
-              <form id="sync-form" method="post" action="{{ mount }}/manage/sync">
-                <input type="hidden" name="dataset_id" value="{{ dataset.id }}" />
-                <div class="field" style="margin-top: var(--spacers-dp12)">
-                  <label for="sync-end">Sync through (optional)</label>
-                  <input type="text" id="sync-end" name="end" {% if format_hint %}placeholder="{{ format_hint }}"{% endif %} aria-describedby="sync-end-hint" />
-                  <span class="hint" id="sync-end-hint">Leave blank to sync through the latest available period.</span>
+              <div data-sync-tabs data-initial-tab="{{ 'schedule' if schedule_error or scheduler_reload_error else 'sync' }}">
+                <div class="sync-tab-list" role="tablist" aria-label="Sync options" hidden>
+                  <button type="button" id="sync-tab" role="tab" aria-controls="sync-panel" aria-selected="true">Sync now</button>
+                  <button type="button" id="schedule-tab" role="tab" aria-controls="schedule" aria-selected="false">Schedule</button>
                 </div>
-                {% if published %}
-                <input type="hidden" name="publish" value="on" />
+                <div id="sync-panel" role="tabpanel" aria-labelledby="sync-tab">
+                  <p class="note" id="sync-plan" data-plan-url="{{ mount }}/sync/{{ dataset.id }}/plan" aria-live="polite">
+                    Checking the source for new data…
+                  </p>
+                  <form id="sync-form" method="post" action="{{ mount }}/manage/sync">
+                    <input type="hidden" name="dataset_id" value="{{ dataset.id }}" />
+                    <div class="field" style="margin-top: var(--spacers-dp12)">
+                      <label for="sync-end">Sync through (optional)</label>
+                      <input type="text" id="sync-end" name="end" {% if format_hint %}placeholder="{{ format_hint }}"{% endif %} aria-describedby="sync-end-hint" />
+                      <span class="hint" id="sync-end-hint">Leave blank to sync through the latest available period.</span>
+                    </div>
+                    {% if published %}
+                    <input type="hidden" name="publish" value="on" />
+                    {% endif %}
+                    <div class="form-actions">
+                      <button type="submit" class="primary" id="sync-button">Start sync</button>
+                      <span class="note">
+                        {% if published %}The dataset stays published.{% else %}The dataset stays unpublished.{% endif %}
+                      </span>
+                    </div>
+                    <div class="progress" data-job-progress hidden>
+                      <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
+                      <span class="progress-label" aria-live="polite">Starting…</span>
+                    </div>
+                    <div class="notice error" data-job-error role="alert" hidden></div>
+                  </form>
+                </div>
+
+              {% set draft = schedule_draft or stored_schedule or {} %}
+              {% set tz = scheduler_status.timezone or 'UTC' %}
+                <div class="schedule-block" id="schedule" role="tabpanel" aria-labelledby="schedule-tab">
+                <h4 id="schedule-status">Automatic sync</h4>
+                {% if schedule_error %}<div class="notice error" role="alert">{{ schedule_error }}</div>{% endif %}
+                {% if scheduler_reload_error and not schedule_error %}<div class="notice error" role="alert">The scheduler could not apply the latest saved schedules; the previous schedule remains in force. {{ scheduler_reload_error }}</div>{% endif %}
+                {% if stored_schedule and not stored_schedule.enabled %}
+                <p class="note">Checks on <span class="mono">{{ stored_schedule.cron }}</span> ({{ tz }}) are paused.</p>
+                {% elif stored_schedule %}
+                <p class="note">Checked on <span class="mono">{{ stored_schedule.cron }}</span> ({{ tz }}){% if stored_schedule.next_check %}, next {{ stored_schedule.next_check }}{% endif %}.{% if stored_schedule.last_check %} Last check {{ stored_schedule.last_check }}: {{ stored_schedule.last_outcome }}{% if stored_schedule.last_job_id %}, <a href="{{ mount }}/jobs/{{ stored_schedule.last_job_id }}">view job</a>{% endif %}.{% endif %}</p>
+                {% else %}
+                <p class="note">Not synced on a schedule. Set one up to check the source for new data automatically.</p>
                 {% endif %}
+                {% if scheduler_status and not scheduler_status.enabled %}
+                <p class="hint">The scheduler is off on this instance, so no schedule fires until an operator enables it in <span class="mono">climate-service.yaml</span> and restarts OCS.</p>
+                {% endif %}
+
+                <details class="schedule-editor" {% if schedule_error or not stored_schedule %}open{% endif %}>
+                  <summary>{{ 'Edit schedule' if stored_schedule else 'Schedule automatic sync' }}</summary>
+                  <form method="post" action="{{ mount }}/schedules/sync{% if stored_schedule %}/{{ dataset.id }}{% endif %}" data-schedule-picker>
+                    <input type="hidden" name="dataset_id" value="{{ dataset.id }}" />
+                    <input type="hidden" name="return_to" value="dataset" />
+                    <div class="form-grid">
+                      <div class="field">
+                        <label for="schedule-frequency">How often to check</label>
+                        <select id="schedule-frequency" name="frequency" aria-describedby="schedule-frequency-hint">
+                          <option value="daily" {% if schedule_form.frequency == 'daily' %}selected{% endif %}>Every day</option>
+                          <option value="weekly" {% if schedule_form.frequency == 'weekly' %}selected{% endif %}>Every week</option>
+                          <option value="monthly" {% if schedule_form.frequency == 'monthly' %}selected{% endif %}>Every month</option>
+                          <option value="custom" {% if schedule_form.frequency == 'custom' %}selected{% endif %}>Custom (advanced)</option>
+                        </select>
+                        <span class="hint" id="schedule-frequency-hint">Suggested starting point for {{ dataset.period_type }} data: {{ suggested_schedule_frequency }}. This is a check interval, not the source's publication schedule.</span>
+                      </div>
+                      <div class="field" data-schedule-field="time">
+                        <label for="schedule-time">Check time ({{ tz }})</label>
+                        <input type="time" id="schedule-time" name="check_time" value="{{ schedule_form.check_time }}" />
+                      </div>
+                      <div class="field" data-schedule-field="weekly">
+                        <label for="schedule-weekday">Day of the week</label>
+                        <select id="schedule-weekday" name="weekday">
+                          {% for key, label in [('mon', 'Monday'), ('tue', 'Tuesday'), ('wed', 'Wednesday'), ('thu', 'Thursday'), ('fri', 'Friday'), ('sat', 'Saturday'), ('sun', 'Sunday')] %}
+                          <option value="{{ key }}" {% if schedule_form.weekday == key %}selected{% endif %}>{{ label }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div class="field" data-schedule-field="monthly">
+                        <label for="schedule-month-day">Day of the month</label>
+                        <input type="number" id="schedule-month-day" name="month_day" min="1" max="28" value="{{ schedule_form.month_day }}" />
+                        <span class="hint">Days 1–28 occur in every month.</span>
+                      </div>
+                      <div class="field" data-schedule-field="custom">
+                        <label for="schedule-cron">Custom cron expression</label>
+                        <input type="text" id="schedule-cron" name="cron" placeholder="0 6 * * *" value="{{ schedule_form.cron }}" aria-describedby="schedule-cron-hint" />
+                        <span class="hint" id="schedule-cron-hint">Minute, hour, day, month, weekday in {{ tz }}.</span>
+                      </div>
+                      <div class="field">
+                        <label for="schedule-attempts">Maximum sync attempts</label>
+                        <input type="number" id="schedule-attempts" name="max_attempts" min="1" value="{{ draft.max_attempts or 3 }}" />
+                      </div>
+                    </div>
+                    {# An edit never changes the saved publication setting implicitly. #}
+                    {% if not stored_schedule and published %}<input type="hidden" name="publish" value="on" />{% endif %}
+                    <p class="hint">Choose a check time after the source normally publishes new data. {{ dataset.period_type | capitalize }} describes the data periods, not when they become available. Each check submits a sync job; a job with no new data finishes without changing the dataset.</p>
+                    <p class="hint">{% if stored_schedule %}This schedule {{ 'publishes after sync' if stored_schedule.publish else 'does not publish after sync' }}; editing its timing will not change that setting.{% else %}A new schedule {{ 'keeps this dataset published' if published else 'keeps this dataset unpublished' }}.{% endif %}</p>
+                    <div class="checks">
+                      <label><input type="checkbox" name="enabled" value="on" {% if draft.enabled is not defined or draft.enabled %}checked{% endif %} /> Run this schedule (uncheck to save it paused)</label>
+                    </div>
+                    <div class="form-actions">
+                      <button type="submit" class="primary">{{ 'Save changes' if stored_schedule else 'Create schedule' }}</button>
+                      {% if stored_schedule %}<a class="button-link" href="{{ mount }}/datasets/{{ dataset.id }}?schedule_view=status#schedule-status" data-schedule-cancel>Cancel</a>{% endif %}
+                    </div>
+                  </form>
+                  <script>
+                    (function () {
+                      var form = document.querySelector("[data-schedule-picker]");
+                      if (!form) return;
+                      var frequency = form.querySelector('[name="frequency"]');
+                      function showFields() {
+                        var choice = frequency.value;
+                        form.querySelectorAll("[data-schedule-field]").forEach(function (field) {
+                          var kind = field.getAttribute("data-schedule-field");
+                          field.hidden = kind !== choice && !(kind === "time" && choice !== "custom");
+                          field.querySelectorAll("input,select").forEach(function (control) {
+                            control.disabled = field.hidden;
+                          });
+                        });
+                        form.querySelector('[name="cron"]').required = choice === "custom";
+                      }
+                      frequency.addEventListener("change", showFields);
+                      var cancel = form.querySelector("[data-schedule-cancel]");
+                      if (cancel) cancel.addEventListener("click", function (event) {
+                        event.preventDefault();
+                        // A fresh GET discards edits and validation drafts, even if Cancel is clicked twice.
+                        var url = new URL(cancel.href);
+                        url.searchParams.set("schedule_refresh", String(Date.now()));
+                        window.location.assign(url.toString());
+                      });
+                      showFields();
+                    })();
+                  </script>
+                </details>
+                {% if stored_schedule %}
                 <div class="form-actions">
-                  <button type="submit" class="primary" id="sync-button">Start sync</button>
-                  <span class="note">
-                    {% if published %}The dataset stays published.{% else %}The dataset stays unpublished.{% endif %}
-                  </span>
+                  {% if stored_schedule.enabled %}
+                  <form method="post" action="{{ mount }}/schedules/sync/{{ dataset.id }}/pause"><input type="hidden" name="return_to" value="dataset" /><button type="submit">Pause</button></form>
+                  {% else %}
+                  <form method="post" action="{{ mount }}/schedules/sync/{{ dataset.id }}/resume"><input type="hidden" name="return_to" value="dataset" /><button type="submit">Resume</button></form>
+                  {% endif %}
+                  <a class="button-link" href="#schedule-delete" data-delete="{{ dataset.id }}" data-delete-name="{{ dataset.name }}">Delete schedule</a>
                 </div>
-                <div class="progress" data-job-progress hidden>
-                  <div class="progress-track"><div class="progress-fill indeterminate"></div></div>
-                  <span class="progress-label" aria-live="polite">Starting…</span>
-                </div>
-                <div class="notice error" data-job-error role="alert" hidden></div>
-              </form>
+                <noscript>
+                  <form id="schedule-delete" method="post" action="{{ mount }}/schedules/sync/{{ dataset.id }}/delete" class="form-actions">
+                    <input type="hidden" name="return_to" value="dataset" />
+                    <label><input type="checkbox" name="confirm" value="yes" required /> Delete this schedule</label>
+                    <button type="submit">Confirm delete</button>
+                  </form>
+                </noscript>
+                {% endif %}
+                <p class="hint"><a href="{{ mount }}/schedules">All schedules</a></p>
+              </div>
+              </div>
+              <script>
+                (function () {
+                  var root = document.querySelector("[data-sync-tabs]");
+                  if (!root) return;
+                  var list = root.querySelector('[role="tablist"]');
+                  var tabs = Array.from(list.querySelectorAll('[role="tab"]'));
+                  list.hidden = false;
+                  function selectTab(panelId) {
+                    tabs.forEach(function (tab) {
+                      var selected = tab.getAttribute("aria-controls") === panelId;
+                      tab.setAttribute("aria-selected", selected ? "true" : "false");
+                      tab.tabIndex = selected ? 0 : -1;
+                      root.querySelector("#" + tab.getAttribute("aria-controls")).hidden = !selected;
+                    });
+                  }
+                  tabs.forEach(function (tab, index) {
+                    tab.addEventListener("click", function () {
+                      var panelId = tab.getAttribute("aria-controls");
+                      selectTab(panelId);
+                      history.replaceState(null, "", "#" + (panelId === "schedule" ? "schedule" : "sync"));
+                    });
+                    tab.addEventListener("keydown", function (event) {
+                      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                      event.preventDefault();
+                      var next = tabs[(index + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+                      next.click();
+                      next.focus();
+                    });
+                  });
+                  function selectFromLocation() {
+                    var requested = (location.hash === "#schedule" || location.hash === "#schedule-status") ? "schedule" : location.hash === "#sync" ? "sync-panel" : null;
+                    selectTab(requested || (root.dataset.initialTab === "schedule" ? "schedule" : "sync-panel"));
+                  }
+                  window.addEventListener("hashchange", selectFromLocation);
+                  selectFromLocation();
+                })();
+              </script>
               {% elif not syncable %}
               <p class="note">
                 {% if sync_kind == "static" %}This dataset does not update from a source, so there is nothing to sync.{% else %}This dataset has no source to sync from.{% endif %}
@@ -160,6 +319,7 @@
             </section>
           </div>
         </div>
+        {% if syncable and stored_schedule %}{% set delete_return_to = "dataset" %}{% include "_schedule_delete_dialog.html" %}{% endif %}
       </main>
     </div>
 
@@ -173,6 +333,12 @@
           window.location.reload();
         },
       });
+
+      // Arriving from the Schedules page's Edit opens the schedule editor rather than leaving it folded.
+      if (window.location.hash === "#schedule") {
+        var editor = document.querySelector(".schedule-editor");
+        if (editor) editor.open = true;
+      }
 
       // The plan asks the provider what it has published, which can be slow, so it is fetched
       // after the page has rendered rather than holding the page up.

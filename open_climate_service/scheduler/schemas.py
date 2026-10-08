@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from open_climate_service.scheduler.config import ScheduleSource
 from open_climate_service.scheduler.dispatcher import CheckOutcome
 
 
@@ -14,15 +14,15 @@ class ScheduleStatus(BaseModel):
     """Configuration and volatile runtime status for one dataset schedule."""
 
     schedule_id: str
+    kind: Literal["sync"] = Field(default="sync", description="What the schedule runs; only dataset sync so far.")
     dataset_id: str
     cron: str
     timezone: str
     publish: bool
     max_attempts: int
-    source: ScheduleSource = "file"
+    source: Literal["store"] = "store"
     enabled: bool = True
-    shadowed: bool = False
-    effective: bool = Field(default=True, description="Enabled and not shadowed: the entry the clock would run.")
+    effective: bool = Field(default=True, description="Enabled: the entry the clock would run.")
     registered: bool = Field(default=False, description="Whether a clock job exists for it in this process now.")
     next_check: datetime | None = None
     last_check: datetime | None = None

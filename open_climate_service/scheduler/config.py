@@ -1,15 +1,9 @@
-"""Validated instance configuration for scheduled dataset synchronization.
-
-Two sources feed the scheduler: the ``scheduler`` block of ``climate-service.yaml``, which an
-operator edits by hand, and the schedules saved from the web interface or the API
-(``scheduler.store``). ``merge_schedules`` combines them into the one effective list the clock
-runs, file first.
-"""
+"""Validated clock settings and schedules loaded from the shared schedules store."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.triggers.cron import CronTrigger
@@ -19,8 +13,6 @@ from open_climate_service import config as api_config
 
 if TYPE_CHECKING:
     from open_climate_service.scheduler.store import StoredSchedule
-
-ScheduleSource = Literal["file", "store"]
 
 
 class DatasetSyncSchedule(BaseModel):
@@ -54,7 +46,6 @@ class SchedulerConfig(BaseModel):
 
     enabled: bool = False
     timezone: str = "UTC"
-    dataset_sync: list[DatasetSyncSchedule] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_configuration(self) -> "SchedulerConfig":
@@ -62,10 +53,6 @@ class SchedulerConfig(BaseModel):
             ZoneInfo(self.timezone)
         except ZoneInfoNotFoundError as exc:
             raise ValueError(f"unknown scheduler timezone {self.timezone!r}") from exc
-        dataset_ids = [schedule.dataset_id for schedule in self.dataset_sync]
-        duplicates = sorted({dataset_id for dataset_id in dataset_ids if dataset_ids.count(dataset_id) > 1})
-        if duplicates:
-            raise ValueError(f"only one scheduler entry is allowed per dataset: {duplicates}")
         return self
 
     @property
@@ -75,20 +62,12 @@ class SchedulerConfig(BaseModel):
 
 
 class EffectiveSchedule(BaseModel):
-    """One entry of the merged schedule list, with where it came from and whether it runs.
-
-    A file entry always runs while the scheduler is enabled; the file has no pause switch
-    short of removing the entry. A stored entry runs when it is enabled and not shadowed by a
-    file entry for the same dataset. A shadowed entry stays listed, marked ineffective, so an
-    operator can see why their saved schedule does nothing and which entry wins.
-    """
+    """One stored schedule and whether its clock job is enabled."""
 
     model_config = ConfigDict(frozen=True)
 
     schedule: DatasetSyncSchedule
-    source: ScheduleSource
     enabled: bool = True
-    shadowed: bool = False
 
     @property
     def dataset_id(self) -> str:
@@ -100,29 +79,24 @@ class EffectiveSchedule(BaseModel):
 
     @property
     def effective(self) -> bool:
-        """Whether this is the entry the clock would run: enabled and not shadowed.
+        """Whether this is the entry the clock would run: enabled.
 
         Whether it actually runs also depends on the scheduler being enabled in this process
         and on the dataset resolving; ``ScheduleStatus.registered`` reports that.
         """
-        return self.enabled and not self.shadowed
+        return self.enabled
 
 
-def merge_schedules(config: SchedulerConfig, stored: Iterable[StoredSchedule]) -> list[EffectiveSchedule]:
-    """File entries first, then stored ones; a stored entry for a file-configured dataset is shadowed."""
-    effective: list[EffectiveSchedule] = [
-        EffectiveSchedule(schedule=schedule, source="file") for schedule in config.dataset_sync
-    ]
-    file_datasets = {schedule.dataset_id for schedule in config.dataset_sync}
+def effective_schedules(stored: Iterable[StoredSchedule]) -> list[EffectiveSchedule]:
+    """Return the single store's schedules in dataset-id order."""
+    effective: list[EffectiveSchedule] = []
     for item in sorted(stored, key=lambda entry: entry.dataset_id):
         effective.append(
             EffectiveSchedule(
                 schedule=DatasetSyncSchedule(
                     dataset_id=item.dataset_id, cron=item.cron, publish=item.publish, max_attempts=item.max_attempts
                 ),
-                source="store",
                 enabled=item.enabled,
-                shadowed=item.dataset_id in file_datasets,
             )
         )
     return effective
@@ -133,4 +107,9 @@ def get_scheduler_config() -> SchedulerConfig:
     raw = api_config.get_config().get("scheduler", {})
     if not isinstance(raw, dict):
         raise ValueError("scheduler in CLIMATE_SERVICE_CONFIG must be a mapping")
+    if "dataset_sync" in raw:
+        raise ValueError(
+            "scheduler.dataset_sync is no longer supported; run 'climate-service migrate-schedules' "
+            "to copy entries to <data_dir>/schedules.json, then remove dataset_sync from climate-service.yaml"
+        )
     return SchedulerConfig.model_validate(raw)

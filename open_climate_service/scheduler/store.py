@@ -1,11 +1,6 @@
-"""Operator-managed sync schedules, stored beside the instance configuration file.
+"""Operator-managed sync schedules, stored in ``<data_dir>/schedules.json``.
 
-The file keeps the schedules an operator wrote by hand in ``climate-service.yaml``; this store
-keeps the ones created from the web interface or the API (CLIM-1242). The two are merged by
-``scheduler.config.merge_schedules``, file first, so a stored entry for a dataset the file also
-configures is shadowed rather than a second clock for the same dataset.
-
-One JSON document holds every stored schedule, keyed by dataset id, because the one-per-dataset
+One JSON document holds every dataset schedule, keyed by dataset id, because the one-per-dataset
 rule makes the dataset id the natural key and the set is small. Writes take the cross-process
 lock the other indexes use and replace the file atomically.
 """
@@ -104,6 +99,37 @@ def get_schedule(dataset_id: str) -> StoredSchedule | None:
 
 def _write(schedules: dict[str, StoredSchedule], path: Path) -> None:
     atomic_json(path, {key: schedules[key].model_dump(mode="json") for key in sorted(schedules)})
+
+
+def import_legacy_schedules(legacy: list[DatasetSyncSchedule]) -> int:
+    """Atomically import old YAML schedules without replacing operator edits.
+
+    Identical entries are already migrated; any conflicting entry aborts the entire import.
+    This lets an operator rerun the command safely before removing the old YAML block.
+    """
+    path = schedules_path()
+    with index_lock(path):
+        schedules = _parse(_read_raw(path), path)
+        conflicts = [
+            item.dataset_id
+            for item in legacy
+            if (existing := schedules.get(item.dataset_id)) is not None
+            and (existing.cron, existing.publish, existing.max_attempts) != (item.cron, item.publish, item.max_attempts)
+        ]
+        if conflicts:
+            raise ValueError(
+                "Schedules already exist with different settings for: "
+                + ", ".join(sorted(conflicts))
+                + "; resolve them before importing; no schedules were changed"
+            )
+        count = 0
+        for item in legacy:
+            if item.dataset_id not in schedules:
+                schedules[item.dataset_id] = StoredSchedule.model_validate(item.model_dump())
+                count += 1
+        if count:
+            _write(schedules, path)
+    return count
 
 
 def save_schedule(schedule: StoredSchedule, *, create: bool) -> StoredSchedule:

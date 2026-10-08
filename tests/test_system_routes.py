@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
+from jinja2 import TemplateNotFound
 from starlette.responses import StreamingResponse
 
 from open_climate_service.ingestions import services as ingestion_services
@@ -31,6 +32,26 @@ class _FakeRequest:
 @pytest.fixture(autouse=True)
 def _clear_template_cache() -> None:
     system_templates._cache.clear()
+
+
+@pytest.mark.parametrize("name", ["../config.py", "subdir/page.html", r"subdir\page.html", "ocs_ui.css"])
+def test_template_loader_refuses_names_outside_bundled_html(name: str) -> None:
+    with pytest.raises(TemplateNotFound):
+        system_templates._template_source(name)
+    with pytest.raises(TemplateNotFound):
+        system_templates.get_template(name)
+
+
+def test_missing_included_template_is_reported_as_template_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    resource = MagicMock()
+    resource.__truediv__.return_value = resource
+    resource.read_text.side_effect = FileNotFoundError("missing include")
+    monkeypatch.setattr(system_templates.importlib.resources, "files", lambda _: resource)
+
+    with pytest.raises(TemplateNotFound, match="missing.html"):
+        system_templates._template_source("missing.html")
 
 
 @pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]

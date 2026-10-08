@@ -790,6 +790,7 @@ p.note.table-title {
 }
 .field input[type="text"],
 .field input[type="number"],
+.field input[type="time"],
 .field select {
   font: inherit;
   color: var(--colors-grey900);
@@ -926,6 +927,13 @@ button.primary:disabled {
 .records-table td .form-actions {
   margin-top: 0;
   flex-wrap: wrap;
+  gap: var(--spacers-dp8);
+  min-width: 11rem;
+}
+
+.notice + .records-table,
+.notice + .empty-state {
+  margin-top: var(--spacers-dp16);
 }
 
 .records-table td form {
@@ -966,6 +974,58 @@ button.primary:disabled {
   margin-top: 0;
   padding-top: var(--spacers-dp16);
   border-top: 1px solid var(--colors-grey300);
+}
+
+/* Progressive enhancement: without scripts both sync and schedule stay visible. */
+.sync-tab-list[hidden] ~ .schedule-block {
+  margin-top: var(--spacers-dp16);
+  padding-top: var(--spacers-dp16);
+  border-top: 1px solid var(--colors-grey300);
+}
+
+.sync-tab-list:not([hidden]) {
+  display: flex;
+  gap: var(--spacers-dp16);
+  margin: var(--spacers-dp8) 0 var(--spacers-dp16);
+  border-bottom: 1px solid var(--colors-grey400);
+}
+
+.sync-tab-list button {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  padding: var(--spacers-dp8) var(--spacers-dp4);
+  color: var(--colors-grey700);
+  font-weight: var(--font-weight-medium);
+}
+
+.sync-tab-list button[aria-selected="true"] {
+  border-bottom-color: var(--theme-primary600);
+  color: var(--theme-primary800);
+}
+
+.sync-tab-list button:focus-visible {
+  outline: 2px solid var(--theme-focus);
+  outline-offset: 2px;
+}
+
+.schedule-block h4 {
+  margin: 0 0 var(--spacers-dp4);
+  font-size: var(--font-size-h3);
+}
+
+.sync-tab-list:not([hidden]) ~ .schedule-block h4 {
+  display: none;
+}
+
+.schedule-editor {
+  margin-top: var(--spacers-dp8);
+}
+
+.schedule-editor summary {
+  cursor: pointer;
+  color: var(--theme-primary800);
+  font-weight: var(--font-weight-medium);
 }
 
 /* A confirmation before a destructive action, styled as a panel over a dimmed page. */

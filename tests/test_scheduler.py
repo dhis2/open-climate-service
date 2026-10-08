@@ -14,6 +14,7 @@ from open_climate_service.jobs.models import JobRecord, JobStatus
 from open_climate_service.scheduler.config import DatasetSyncSchedule, SchedulerConfig
 from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult, _dataset_is_materialized, enqueue_sync
 from open_climate_service.scheduler.service import SchedulerService
+from open_climate_service.scheduler.store import StoredSchedule
 
 
 def _schedule(**updates: object) -> DatasetSyncSchedule:
@@ -23,6 +24,10 @@ def _schedule(**updates: object) -> DatasetSyncSchedule:
     }
     values.update(updates)
     return DatasetSyncSchedule.model_validate(values)
+
+
+def _stored_schedule() -> StoredSchedule:
+    return StoredSchedule.model_validate(_schedule().model_dump())
 
 
 def _template(**updates: object) -> dict[str, object]:
@@ -50,35 +55,30 @@ def _job(*, process_id: str = "scheduled-sync", status: JobStatus = JobStatus.AC
 
 
 def test_scheduler_configuration_defaults_to_utc_and_three_attempts() -> None:
-    config = SchedulerConfig.model_validate(
-        {"enabled": True, "dataset_sync": [{"dataset_id": "chirps3_precipitation_daily", "cron": "0 6 * * *"}]}
-    )
+    config = SchedulerConfig.model_validate({"enabled": True})
 
     assert config.timezone_info.key == "UTC"
-    assert config.dataset_sync[0].max_attempts == 3
-    assert config.dataset_sync[0].schedule_id == "dataset-sync:chirps3_precipitation_daily"
+    assert _schedule().max_attempts == 3
+    assert _schedule().schedule_id == "dataset-sync:chirps3_precipitation_daily"
 
 
 @pytest.mark.parametrize(
     "payload,match",
     [
         ({"timezone": "Not/A_Zone"}, "timezone"),
-        ({"dataset_sync": [{"dataset_id": "x", "cron": "daily"}]}, "cron"),
-        ({"dataset_sync": [{"dataset_id": "x", "cron": "0 6 * * *", "max_attempts": 0}]}, "greater than"),
-        (
-            {
-                "dataset_sync": [
-                    {"dataset_id": "x", "cron": "0 6 * * *"},
-                    {"dataset_id": "x", "cron": "0 7 * * *"},
-                ]
-            },
-            "one scheduler entry",
-        ),
+        ({"dataset_sync": [{"dataset_id": "x", "cron": "0 6 * * *"}]}, "Extra inputs"),
     ],
 )
 def test_scheduler_configuration_rejects_invalid_values(payload: dict[str, object], match: str) -> None:
     with pytest.raises(ValueError, match=match):
         SchedulerConfig.model_validate(payload)
+
+
+def test_schedule_definition_rejects_bad_values() -> None:
+    with pytest.raises(ValueError, match="cron"):
+        DatasetSyncSchedule(dataset_id="x", cron="daily")
+    with pytest.raises(ValueError, match="greater than"):
+        DatasetSyncSchedule(dataset_id="x", cron="0 6 * * *", max_attempts=0)
 
 
 def test_due_schedule_enqueues_retryable_native_job(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,7 +176,8 @@ def test_service_registers_coalesced_non_overlapping_cron_job(monkeypatch: pytes
     monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
     monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_schedule()]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
         template_loader=lambda _: _template(),
     )
 
@@ -190,6 +191,21 @@ def test_service_registers_coalesced_non_overlapping_cron_job(monkeypatch: pytes
     scheduler.shutdown.assert_called_once_with(wait=False)
 
 
+def test_start_loads_clock_config_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    scheduler = MagicMock()
+    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    load_config = MagicMock(return_value=SchedulerConfig(enabled=True))
+    service = SchedulerService(
+        config_loader=load_config,
+        store_loader=lambda: [_stored_schedule()],
+        template_loader=lambda _: _template(),
+    )
+    service.start()
+    assert load_config.call_count == 1
+    service.shutdown()
+
+
 @pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
 async def test_real_scheduler_computes_timezone_aware_next_run(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
@@ -197,8 +213,8 @@ async def test_real_scheduler_computes_timezone_aware_next_run(monkeypatch: pyte
         config_loader=lambda: SchedulerConfig(
             enabled=True,
             timezone="Europe/Oslo",
-            dataset_sync=[_schedule()],
         ),
+        store_loader=lambda: [_stored_schedule()],
         template_loader=lambda _: _template(),
     )
 
@@ -218,7 +234,8 @@ def test_service_skips_future_facing_schedule_without_failing_startup(monkeypatc
     monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
     monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_schedule()]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
         template_loader=lambda _: _template(temporal_direction="future"),
     )
 
@@ -236,7 +253,8 @@ def test_service_skips_static_schedule_without_failing_startup(monkeypatch: pyte
     monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
     monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_schedule()]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
         template_loader=lambda _: _template(sync={"kind": "static"}),
     )
 
@@ -256,7 +274,8 @@ def test_service_skips_missing_template_without_failing_startup(monkeypatch: pyt
     monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
     monkeypatch.setattr("open_climate_service.scheduler.service.logger.warning", warning)
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_schedule()]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
         template_loader=lambda _: None,
     )
 
@@ -273,7 +292,9 @@ def test_service_does_not_start_on_read_only_instance(monkeypatch: pytest.Monkey
     scheduler_factory = MagicMock()
     monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", scheduler_factory)
     monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: True)
-    service = SchedulerService(config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_schedule()]))
+    service = SchedulerService(
+        config_loader=lambda: SchedulerConfig(enabled=True), store_loader=lambda: [_stored_schedule()]
+    )
 
     service.start()
 
@@ -294,7 +315,8 @@ def test_status_exposes_next_and_last_check(monkeypatch: pytest.MonkeyPatch) -> 
         job_id="job-123",
     )
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_schedule()]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
         dispatcher=lambda _: result,
         template_loader=lambda _: _template(),
     )
@@ -314,7 +336,8 @@ def test_check_error_is_retained_without_escaping() -> None:
         raise RuntimeError("source unavailable")
 
     service = SchedulerService(
-        config_loader=lambda: SchedulerConfig(enabled=True, dataset_sync=[_schedule()]),
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
         dispatcher=fail,
         template_loader=lambda _: _template(),
     )

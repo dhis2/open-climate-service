@@ -20,8 +20,8 @@ from open_climate_service.scheduler.config import (
     DatasetSyncSchedule,
     EffectiveSchedule,
     SchedulerConfig,
+    effective_schedules,
     get_scheduler_config,
-    merge_schedules,
 )
 from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult, enqueue_sync
 from open_climate_service.scheduler.schemas import ScheduleListResponse, ScheduleStatus
@@ -87,9 +87,9 @@ class _Plan:
 class SchedulerService:
     """Own the process-local clock while delegating sync decisions to OCS.
 
-    The effective schedule list is the file's ``dataset_sync`` entries merged with the stored
-    ones (CLIM-1242). ``start`` registers it once; ``reload`` re-reads both sources, resolves
-    and validates the merged whole before touching anything, then reconciles the running jobs
+    The effective schedule list comes only from the shared store (CLIM-1242).
+    ``start`` registers it once; ``reload`` re-reads the store, resolves
+    and validates the whole before touching anything, then reconciles the running jobs
     by id. A load that cannot be validated leaves the previous list in force.
     """
 
@@ -144,16 +144,16 @@ class SchedulerService:
             runnable.append((entry, trigger))
         return _Plan(config=config, effective=effective, runnable=runnable, refused=refused)
 
-    def _load(self) -> _Plan:
-        """Read both sources, merge and resolve them; raises when either cannot be read or validated.
+    def _load(self, config: SchedulerConfig | None = None) -> _Plan:
+        """Read the clock config and store, then resolve the schedules.
 
         The stamp is taken before the store is read, so a write that lands between the two
         moves the stamp past what was loaded and the watch reloads once more.
         """
         stamp = self._stamp_loader()
-        config = self._config_loader()
+        config = config if config is not None else self._config_loader()
         stored = self._store_loader()
-        plan = self._plan(config, merge_schedules(config, stored))
+        plan = self._plan(config, effective_schedules(stored))
         return _Plan(plan.config, plan.effective, plan.runnable, plan.refused, stamp)
 
     def _apply(
@@ -185,14 +185,14 @@ class SchedulerService:
     def start(self) -> None:
         """Validate configuration and start callbacks when this process is enabled."""
         with self._lock:
+            config = self._config_loader()
             try:
-                plan = self._load()
+                plan = self._load(config)
             except Exception as exc:
-                # The file is validated at startup elsewhere; an unreadable store must not
-                # take the instance down, so the clock runs the file alone and says why.
-                logger.exception("Stored schedules could not be read; running the file's schedules only")
-                config = self._config_loader()
-                plan = self._plan(config, merge_schedules(config, []))
+                # Keep the API available for repair, but never run schedules from another
+                # source or pretend a broken store is an empty, healthy one.
+                logger.exception("Stored schedules could not be read; the clock has no schedules")
+                plan = self._plan(config, [])
                 self._reload_error = f"{type(exc).__name__}: {exc}"
             self._config = plan.config
             self._effective = plan.effective
@@ -229,7 +229,7 @@ class SchedulerService:
             )
 
     def reload(self) -> None:
-        """Re-read both sources, resolve the whole merged list, then reconcile the running jobs.
+        """Re-read the store, resolve the whole list, then reconcile the running jobs.
 
         Nothing is touched until every entry has resolved: the store has been parsed, each
         effective entry's target checked and its trigger built. When the load fails, the
@@ -289,7 +289,10 @@ class SchedulerService:
         an edit handled by an API-only replica reaches the clock without that replica knowing
         where the clock is. Returns whether a reload ran.
         """
-        if self._stamp_loader() == self._stamp:
+        current_stamp = self._stamp_loader()
+        with self._lock:
+            loaded_stamp = self._stamp
+        if current_stamp == loaded_stamp:
             return False
         logger.info("Stored schedules changed outside this process; reloading")
         self.reload()
@@ -330,27 +333,29 @@ class SchedulerService:
     # --- reading -------------------------------------------------------------------------------
 
     def effective(self) -> list[EffectiveSchedule]:
-        """The merged list the clock runs, or would run if enabled."""
-        if self._config is None:
-            plan = self._load()
-            self._config, self._effective = plan.config, plan.effective
-            self._last_results.update(plan.refused)
-        return list(self._effective)
+        """The stored list the clock runs, or would run if enabled.
+
+        Looks for a store change first, so a process that does not own the clock, and so has
+        no watch job, still lists what another process saved. The check is one digest of a
+        small file.
+        """
+        self.reload_if_changed()
+        with self._lock:
+            if self._config is None:
+                plan = self._load()
+                self._config, self._effective = plan.config, plan.effective
+                self._stamp = plan.stamp
+                self._last_results.update(plan.refused)
+            return list(self._effective)
 
     def schedule_for(self, dataset_id: str) -> ScheduleStatus | None:
-        """The effective schedule of one dataset, with its runtime state, or None.
-
-        When the file and the store both name the dataset, this is the file's entry, the one
-        that runs.
-        """
+        """The schedule of one dataset, with its runtime state, or None."""
         return next((item for item in self.status().schedules if item.dataset_id == dataset_id), None)
 
     def status(self) -> ScheduleListResponse:
         """Return configuration plus volatile next/last-check state.
 
-        Runtime state belongs to the entry that runs. A shadowed or paused entry shares its
-        id with nothing that fires, so its runtime fields are empty rather than borrowed from
-        the entry that won.
+        A paused entry has no clock job, so its runtime fields are empty.
         """
         effective = self.effective()
         config = self._config
@@ -372,9 +377,7 @@ class SchedulerService:
                     timezone=config.timezone,
                     publish=schedule.publish,
                     max_attempts=schedule.max_attempts,
-                    source=entry.source,
                     enabled=entry.enabled,
-                    shadowed=entry.shadowed,
                     effective=entry.effective,
                     registered=job is not None,
                     next_check=getattr(job, "next_run_time", None),
