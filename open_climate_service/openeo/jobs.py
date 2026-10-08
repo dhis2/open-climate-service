@@ -64,7 +64,7 @@ from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
-from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
+from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD, feature_id_field
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
 _T = TypeVar("_T")
@@ -2181,6 +2181,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
     cube_labels_raw = options.get("cube_labels")
 
     frame = pd.DataFrame(df).copy()
+    location_field = feature_id_field(frame.columns, location_field)
     if location_field not in frame.columns:
         if location_field == "geometry":
             raise ValueError(

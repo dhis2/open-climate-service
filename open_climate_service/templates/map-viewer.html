@@ -505,15 +505,25 @@
         });
       }
 
+      function isVectorCollection(col) {
+        const dims = col?.["cube:dimensions"];
+        return dims != null && Object.values(dims).some((dim) => dim?.type === "geometry");
+      }
+
       async function loadCatalog() {
         try {
           const res = await fetch("{{ mount }}/collections");
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const body = await res.json();
-          const collections = body.collections ?? [];
+          // /collections lists vector collections too (CLIM-1326). This viewer draws rasters
+          // only, so a collection whose cube has a geometry dimension stays out of the list.
+          const all = body.collections ?? [];
+          const collections = all.filter((col) => !isVectorCollection(col));
           if (collections.length === 0) {
             setStatus(
-              "No published datasets found. Ingest and publish a dataset first."
+              all.length === 0
+                ? "No published datasets found. Ingest and publish a dataset first."
+                : "No published raster datasets found. The map viewer shows raster datasets only for now."
             );
             // A deep link still names a dataset, and "not published" answers that question
             // better than the generic empty-catalogue line.

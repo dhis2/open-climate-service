@@ -17,6 +17,8 @@ from open_climate_service.shared.provenance import record_source
 if TYPE_CHECKING:
     import geopandas as gpd
 
+    from open_climate_service.ingestions.schemas import ArtifactRecord
+
 _BBOX_KEYS = ("west", "south", "east", "north")
 
 
@@ -65,11 +67,25 @@ def load_features(id: str, spatial_extent: Any = None, version: str | None = Non
             f"load_features: feature collection {id!r} changed after this job was submitted "
             f"(expected {version}, current {actual_version.isoformat()})"
         )
-    detail = record.features
-    if detail is None:  # pragma: no cover -- registered_collections() already filters on this
-        raise ValueError(f"load_features: '{id}' is not a feature collection")
+    return load_feature_record(id, record, spatial_extent=spatial_extent)
 
-    bbox, bbox_crs = _parse_spatial_extent(spatial_extent)
+
+def load_feature_record(
+    id: str, record: ArtifactRecord, spatial_extent: Any = None, process: str = "load_features"
+) -> dict[str, Any]:
+    """Read a feature collection's record as a GeoJSON FeatureCollection, reprojected to WGS 84.
+
+    The read shared by `load_features`, which finds the record from the collection's template,
+    and `load_collection`, which already holds the published record it advertises (CLIM-1326).
+    Reading from the record, not the template, keeps a published collection loadable after its
+    template is removed or renamed on the instance. `process` names the caller in its errors, so a
+    client is told about the process it actually ran.
+    """
+    detail = record.features
+    if detail is None:
+        raise ValueError(f"{process}: '{id}' is not a feature collection")
+
+    bbox, bbox_crs = _parse_spatial_extent(spatial_extent, process)
     frame = store.read_feature_collection(
         record,
         bbox=bbox,
@@ -99,25 +115,27 @@ def _version_instant(value: str | datetime) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _parse_spatial_extent(spatial_extent: Any) -> tuple[tuple[float, float, float, float] | None, str]:
+def _parse_spatial_extent(
+    spatial_extent: Any, process: str = "load_features"
+) -> tuple[tuple[float, float, float, float] | None, str]:
     """Return (bbox, bbox_crs) from an openEO spatial_extent object, or (None, WGS84) for none."""
     if spatial_extent is None:
         return None, store.WGS84
     if not isinstance(spatial_extent, dict):
-        raise ValueError(f"load_features: spatial_extent must be an object, got {type(spatial_extent).__name__}")
+        raise ValueError(f"{process}: spatial_extent must be an object, got {type(spatial_extent).__name__}")
     try:
         west, south, east, north = (float(spatial_extent[key]) for key in _BBOX_KEYS)
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"load_features: spatial_extent must declare west/south/east/north: {exc}") from exc
+        raise ValueError(f"{process}: spatial_extent must declare west/south/east/north: {exc}") from exc
     if not all(math.isfinite(value) for value in (west, south, east, north)):
-        raise ValueError("load_features: spatial_extent coordinates must be finite numbers")
+        raise ValueError(f"{process}: spatial_extent coordinates must be finite numbers")
     if west >= east or south >= north:
-        raise ValueError("load_features: spatial_extent must satisfy west < east and south < north")
+        raise ValueError(f"{process}: spatial_extent must satisfy west < east and south < north")
     crs = spatial_extent.get("crs") or store.WGS84
     try:
         canonical_crs = validate_crs_code(crs)
     except ValueError as exc:
-        raise ValueError(f"load_features: spatial_extent has an invalid CRS: {crs!r}") from exc
+        raise ValueError(f"{process}: spatial_extent has an invalid CRS: {crs!r}") from exc
     return (west, south, east, north), canonical_crs
 
 

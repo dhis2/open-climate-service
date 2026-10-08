@@ -15,6 +15,7 @@ from open_climate_service import config
 from open_climate_service.exports.delivery_input import lease_export_input
 from open_climate_service.exports.manifest import ExportManifest
 from open_climate_service.exports.service import write_named_export
+from open_climate_service.ingestions.schemas import ArtifactFormat
 from open_climate_service.openeo import jobs
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus, OpenEOJobUpdate
 from open_climate_service.shared.provenance import (
@@ -261,7 +262,9 @@ def test_feature_and_snapshot_evidence_is_execution_scoped():
 def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch):
     from open_climate_service.openeo import execution
 
-    artifact = SimpleNamespace(path="/source", artifact_id="artifact-1", source_dataset_id="rain")
+    artifact = SimpleNamespace(
+        path="/source", artifact_id="artifact-1", source_dataset_id="rain", format=ArtifactFormat.ICECHUNK
+    )
     monkeypatch.setattr(execution, "_get_published_artifact", lambda _: artifact)
     monkeypatch.setattr(execution, "_open_artifact", lambda _: xr.Dataset({"rain": ("t", [1])}))
     monkeypatch.setattr(execution, "_ensure_crs", lambda data: data)

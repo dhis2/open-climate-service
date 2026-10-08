@@ -18,6 +18,7 @@ from open_climate_service.exports.tabular import (
     _to_dhis2_period_string,
     _to_dhis2_value_string,
 )
+from open_climate_service.shared.vectors import feature_id_field
 
 
 class _RetryableTransportError(Exception):
@@ -135,6 +136,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         kind = mapping["period_type"]
 
         frame, value_columns = self._to_frame(data, org_field, period_field, kind)
+        org_field = feature_id_field(frame.columns, org_field)
         if org_field not in frame.columns or period_field not in frame.columns:
             raise ValueError("DHIS2 result is missing organisation-unit or period fields")
         if not frame.columns.is_unique:
