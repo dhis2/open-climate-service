@@ -313,6 +313,8 @@ Most datasets are historical, and the default (`past`) suits them. Two other sha
 | `future`         | All ahead of now — a forecast                                 | **Optional**, meaning "from now" |
 | `spanning`       | Cross now — WorldPop Global2 (2015–2030), climate projections | Required                         |
 
+A climatology (`period_type: climatology`) is the exception to all three: its periods are day-of-year or month ordinals, and its reference period comes from the template (for example `period: [1991, 2020]` in the ingestion params). Leave `start` and `end` out and the whole reference period is ingested; the data source page shows no date fields for one.
+
 `spanning` requires a start _on purpose_. Defaulting it to "now" would ingest only the projected years and silently drop every historical one, which is usually the half you actually want. What declaring it does buy you: the ingest form prefills the end from the dataset's declared `extents.temporal.end`, so selecting WorldPop offers the full range through 2030 instead of truncating at today.
 
 #### Forecast datasets (`temporal_direction: future`)
