@@ -106,7 +106,8 @@ Only one schedule is allowed per dataset. All schedules are stored in one file,
 clock switch and timezone remain in `climate-service.yaml`. A static or forecast
 dataset cannot take a schedule, and the API refuses it with the reason.
 
-Each row shows the cron and timezone, its status (scheduled, paused, or unable to run
+Each row shows a readable check time (or cron for a custom schedule) and timezone,
+its status (scheduled, paused, or unable to run
 with the reason), the next check and the last one. Check
 state is kept in memory and resets on restart; the sync jobs a check submits are durable and
 linked from the row. The timezone is the instance's `scheduler.timezone`. When the scheduler is

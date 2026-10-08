@@ -48,7 +48,7 @@
               <tr>
                 <td>{{ s.kind | capitalize }}</td>
                 <td>{% if s.dataset_exists %}<a href="{{ mount }}/datasets/{{ s.dataset_id }}">{{ s.name or s.dataset_id }}</a>{% if s.name %}<br /><small class="mono">{{ s.dataset_id }}</small>{% endif %}{% else %}<span class="mono">{{ s.dataset_id }}</span><br /><small>This dataset is no longer on the instance.</small>{% endif %}</td>
-                <td><span class="mono">{{ s.cron }}</span> ({{ s.timezone }})<br /><small>{{ 'Publish after sync' if s.publish else 'Do not publish after sync' }}; up to {{ s.max_attempts }} attempt{{ 's' if s.max_attempts != 1 }}</small></td>
+                <td>{% if s.run_description %}{{ s.run_description }}{% else %}<span class="mono">{{ s.cron }}</span> ({{ s.timezone }}){% endif %}<br /><small>{{ 'Publish after sync' if s.publish else 'Do not publish after sync' }}; up to {{ s.max_attempts }} attempt{{ 's' if s.max_attempts != 1 }}</small></td>
                 <td>
                   {% if not s.enabled %}<span class="chip chip-unpublished">Paused</span>
                   {% elif s.registered %}<span class="chip chip-published">Scheduled</span>

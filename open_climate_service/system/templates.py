@@ -20,7 +20,7 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
-from open_climate_service.scheduler.presets import form_values, suggested_frequency
+from open_climate_service.scheduler.presets import form_values, schedule_description, suggested_frequency
 from open_climate_service.shared.time import datetime_to_period_string
 
 from .schemas import Link, RootResponse
@@ -523,7 +523,12 @@ def render_schedules_page(status: Any, mount: str, *, change_warning: str | None
     except Exception:
         _log.exception("Dataset names could not be listed for the schedules page")
     rows = [
-        {**item.model_dump(mode="json"), "name": names.get(item.dataset_id), "dataset_exists": item.dataset_id in names}
+        {
+            **item.model_dump(mode="json"),
+            "name": names.get(item.dataset_id),
+            "dataset_exists": item.dataset_id in names,
+            "run_description": schedule_description(item.cron, item.timezone),
+        }
         for item in status.schedules
     ]
     return get_template("schedules_page.html").render(

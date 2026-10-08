@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping
 
 _WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 _CLOCK = re.compile(r"^(\d{2}):(\d{2})$")
 
 
@@ -87,3 +88,18 @@ def form_values(cron: str | None, period_type: str | None, draft: Mapping[str, A
         if "_ui_cron" in draft:
             values["cron"] = str(draft["_ui_cron"])
     return values
+
+
+def schedule_description(cron: str, timezone: str) -> str | None:
+    """Describe a simple check schedule; return None for custom cron expressions."""
+    values = form_values(cron, None)
+    frequency = values["frequency"]
+    clock = values["check_time"]
+    if frequency == "daily":
+        return f"Every day at {clock} ({timezone})"
+    if frequency == "weekly":
+        weekday = _WEEKDAYS.index(values["weekday"])
+        return f"Every {_WEEKDAY_NAMES[weekday]} at {clock} ({timezone})"
+    if frequency == "monthly":
+        return f"Day {values['month_day']} of every month at {clock} ({timezone})"
+    return None

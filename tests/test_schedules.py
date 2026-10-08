@@ -24,7 +24,12 @@ from open_climate_service.scheduler.config import (
     get_scheduler_config,
 )
 from open_climate_service.scheduler.migration import migrate_legacy_schedules
-from open_climate_service.scheduler.presets import cron_from_form, form_values, suggested_frequency
+from open_climate_service.scheduler.presets import (
+    cron_from_form,
+    form_values,
+    schedule_description,
+    suggested_frequency,
+)
 from open_climate_service.scheduler.service import SchedulerService
 from open_climate_service.scheduler.store import ScheduleStoreUnreadable, StoredSchedule
 
@@ -693,6 +698,19 @@ def test_cadence_suggestions_are_not_assumed_publication_times() -> None:
     assert form_values("0 */6 * * *", "daily")["frequency"] == "custom"
 
 
+@pytest.mark.parametrize(
+    ("cron", "expected"),
+    [
+        ("0 6 * * *", "Every day at 06:00 (UTC)"),
+        ("15 9 * * fri", "Every Friday at 09:15 (UTC)"),
+        ("30 8 5 * *", "Day 5 of every month at 08:30 (UTC)"),
+        ("*/2 * * * *", None),
+    ],
+)
+def test_schedule_description_only_labels_simple_frequencies(cron: str, expected: str | None) -> None:
+    assert schedule_description(cron, "UTC") == expected
+
+
 def test_simple_schedule_form_saves_preset_and_keeps_existing_publication(dataset_pages: TestClient) -> None:
     created = dataset_pages.post(
         "/schedules/sync",
@@ -792,9 +810,11 @@ def test_the_schedules_page_lists_everything_and_sends_edits_to_the_dataset_page
     assert client.get("/schedules/new", headers={"Accept": BROWSER}).status_code in {404, 405}
 
     store.save_schedule(_stored("era5"), create=True)
-    store.save_schedule(_stored("gone"), create=True)
+    store.save_schedule(_stored("gone", cron="*/2 * * * *"), create=True)
     listed = client.get("/schedules", headers={"Accept": BROWSER})
     assert "<td>Sync</td>" in listed.text
+    assert "Every day at 06:00 (UTC)" in listed.text
+    assert "*/2 * * * *" in listed.text
     assert 'href="/datasets/era5#schedule">Edit</a>' in listed.text
     assert 'action="/schedules/sync/era5/pause"' in listed.text and 'data-delete="era5"' in listed.text
     assert "no longer on the instance" in listed.text and 'data-delete="gone"' in listed.text
