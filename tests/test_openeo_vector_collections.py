@@ -331,17 +331,12 @@ def test_raster_collections_load_as_before(rain_and_regions: None) -> None:
 # --- the map viewer ---------------------------------------------------------------------------
 
 
-def test_the_map_viewer_leaves_vector_collections_out_of_its_list(client: TestClient) -> None:
-    """It draws rasters only, and fills its list from /collections, which now holds vectors too."""
+def test_the_map_viewer_lists_vector_collections_beside_the_rasters(client: TestClient) -> None:
+    """/collections holds vectors too; the viewer groups them and draws them (CLIM-1234)."""
     page = client.get("/map").text
 
     assert "function isVectorCollection(col)" in page
     assert 'dim?.type === "geometry"' in page
-    assert "all.filter((col) => !isVectorCollection(col))" in page
-
-
-def test_the_map_viewer_does_not_call_a_vector_only_instance_empty(client: TestClient) -> None:
-    """Published vectors and no rasters is not "no published datasets"."""
-    page = client.get("/map").text
-
-    assert "No published raster datasets found. The map viewer shows raster datasets only for now." in page
+    assert "const rasters = all.filter((col) => !isVectorCollection(col));" in page
+    assert "const features = all.filter(isVectorCollection);" in page
+    assert "raster datasets only" not in page
