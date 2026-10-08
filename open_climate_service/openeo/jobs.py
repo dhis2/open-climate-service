@@ -1069,7 +1069,7 @@ class OpenEOJobService:
                 return f"managed://{options['dataset_id']}"
             if fmt in _TABULAR_EXPORT_FORMATS:
                 return _write_dataset_tabular_export(result, results_dir, fmt, options)
-            return _write_raster(result, results_dir, fmt)
+            return _write_xarray(result, results_dir, fmt)
 
         try:
             import geopandas as gpd
@@ -1082,7 +1082,7 @@ class OpenEOJobService:
                         fmt,
                         options,
                     )
-                return _write_vector(result, results_dir, fmt)
+                return _write_geodataframe(result, results_dir, fmt)
         except ImportError:
             pass
 
@@ -1901,7 +1901,7 @@ _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
 }
 
 
-def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
+def _write_xarray(ds: Any, results_dir: Any, fmt: str) -> str | None:
     """Write an xr.Dataset to disk in the requested format. Returns the output path."""
     # A format that carries geometry gets the real shapes written out, rather than a table
     # that has to be joined back to a boundary file. E.g. `aggregate_spatial_weighted`` returns
@@ -1924,7 +1924,7 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
                 raise ValueError(f"Cannot write {fmt}: the vector datacube has no usable geometry ({exc})") from exc
             # Outside the try, so a write failure still cannot fall through to a raster writer: a
             # request for GeoParquet coming back as a Zarr directory is worse than an error.
-            return _write_vector(frame, results_dir, fmt)
+            return _write_geodataframe(frame, results_dir, fmt)
         # A raster or tabular format was asked for, so honour it. Its shapes are not numbers or
         # strings: Zarr and NetCDF get them encoded as CF geometry, a table goes without them
         # and keeps each feature's id.
@@ -2062,7 +2062,7 @@ def _as_wgs84(gdf: Any) -> Any:
     return gdf.to_crs("EPSG:4326")
 
 
-def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
+def _write_geodataframe(gdf: Any, results_dir: Any, fmt: str) -> str | None:
     """Write a GeoDataFrame to disk in the requested format. Returns the output path."""
     ext, _ = _VECTOR_FORMATS.get(fmt, (".geojson", "application/geo+json"))
 

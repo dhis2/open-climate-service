@@ -2062,11 +2062,11 @@ def _reduced_dataset() -> Any:
 
 
 @pytest.mark.parametrize("fmt", ["NETCDF", "ZARR"])
-def test_write_raster_scrubs_attrs_no_writer_can_encode(tmp_path: Path, fmt: str) -> None:
+def test_write_xarray_scrubs_attrs_no_writer_can_encode(tmp_path: Path, fmt: str) -> None:
     """netCDF rejects a dict attr outright; Zarr rejects it as non-JSON (CLIM-825)."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
-    output = _write_raster(_reduced_dataset(), tmp_path, fmt)
+    output = _write_xarray(_reduced_dataset(), tmp_path, fmt)
 
     assert output is not None
     assert Path(output).exists()
@@ -2109,14 +2109,14 @@ def test_netcdf_attr_filter_matches_what_the_writer_accepts(
             ds.to_netcdf(tmp_path / f"{label}-raw.nc")
 
 
-def test_write_raster_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None:
+def test_write_xarray_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None:
     """A dict of plain strings survives a JSON scrub but still breaks to_netcdf."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
     ds = _reduced_dataset()
     ds.attrs["json_safe_dict"] = {"t": "2025-01-01"}
 
-    output = _write_raster(ds, tmp_path, "NETCDF")
+    output = _write_xarray(ds, tmp_path, "NETCDF")
 
     assert output is not None
     reopened = xr.open_dataset(output)
@@ -2126,15 +2126,15 @@ def test_write_raster_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None
         reopened.close()
 
 
-def test_write_raster_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path: Path) -> None:
+def test_write_xarray_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path: Path) -> None:
     """netCDF writes arrays and numpy scalars happily; the JSON scrub would discard them."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
     ds = _reduced_dataset()
     ds.attrs["valid_range"] = np.array([0.0, 100.0], dtype="float32")
     ds.attrs["scale_factor"] = np.float32(0.1)
 
-    output = _write_raster(ds, tmp_path, "NETCDF")
+    output = _write_xarray(ds, tmp_path, "NETCDF")
 
     assert output is not None
     reopened = xr.open_dataset(output)
@@ -2145,11 +2145,11 @@ def test_write_raster_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path:
         reopened.close()
 
 
-def test_write_raster_keeps_attrs_the_writer_can_encode(tmp_path: Path) -> None:
+def test_write_xarray_keeps_attrs_the_writer_can_encode(tmp_path: Path) -> None:
     """The scrub must drop only what cannot be written, not all metadata."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
-    output = _write_raster(_reduced_dataset(), tmp_path, "NETCDF")
+    output = _write_xarray(_reduced_dataset(), tmp_path, "NETCDF")
     assert output is not None
 
     reopened = xr.open_dataset(output)
@@ -2182,7 +2182,7 @@ def test_batch_job_with_unwritable_format_errors_without_a_result_asset(
 ) -> None:
     """The batch half of CLIM-909: the job must fail, not finish with mislabelled output.
 
-    Before the fix `_write_raster` fell back to Zarr, so the job wrote `result.zarr`, was marked
+    Before the fix `_write_xarray` fell back to Zarr, so the job wrote `result.zarr`, was marked
     FINISHED, and advertised it as the requested format — quieter than the synchronous 500 and
     harder to notice.
     """
