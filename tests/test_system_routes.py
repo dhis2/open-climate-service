@@ -353,18 +353,60 @@ def test_an_unpublished_dataset_in_the_address_is_reported_not_ignored(client: T
     assert "is not published, so it cannot be shown on the map" in body
 
 
-def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client: TestClient) -> None:
-    """A published vector dataset is not in the raster catalogue, and "not published" was wrong.
+def test_the_map_viewer_lists_vector_datasets_and_reads_their_geoparquet(client: TestClient) -> None:
+    """Published vector datasets are drawn from the GeoParquet their STAC `data` asset names (CLIM-1234)."""
+    body = client.get("/map").text
 
-    The page asks the dataset's own record why it is missing: a vector dataset, an unpublished
-    one, or none at all each get their own message.
-    """
+    assert 'import { parquetReadObjects } from "https://esm.sh/hyparquet@' in body
+    # Listed from /collections like the rasters, so the same publication gate applies to both.
+    assert 'fetch("/datasets"' not in body
+    assert "publication?.status" not in body
+    assert "const featureAsset = collection.assets?.data;" in body
+    # MapLibre places GeoJSON as longitude and latitude, so a projected collection is refused.
+    assert 'if (storedCrs !== "EPSG:4326")' in body
+    # The source names the providers, the attribution goes on the map; vectors have no units.
+    assert "fetch(`/features/${encodeURIComponent(collection.id)}`)" in body
+    assert "...(attribution && { attribution })," in body
+    assert 'metaSource.textContent = providers.join(", ") || "—";' in body
+    assert "showUnits(null);" in body
+    assert 'map.on("click", id, showFeatureName);' in body
+
+
+def test_the_map_viewer_keeps_64_bit_integers_exact(client: TestClient) -> None:
+    """A Parquet integer outside JavaScript's safe range is kept as a string, not rounded."""
+    body = client.get("/map").text
+
+    assert "value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)" in body
+    assert "return safe ? Number(value) : value.toString();" in body
+
+
+def test_the_map_viewer_refuses_a_geoparquet_over_its_size_limit(client: TestClient) -> None:
+    """The size is read from the headers and an oversized file is not downloaded."""
+    body = client.get("/map").text
+
+    assert "const MAX_FEATURE_BYTES = 25 * 1024 * 1024;" in body
+    assert 'const size = Number(res.headers.get("Content-Length"));' in body
+    assert "if (size > MAX_FEATURE_BYTES) {\n            download.abort();" in body
+    assert "link.href = asset.href;" in body
+
+
+def test_a_selection_made_while_tiles_load_still_runs(client: TestClient) -> None:
+    """`isStyleLoaded()` is false while basemap tiles load, long after `load` fired once."""
+    body = client.get("/map").text
+
+    assert "if (!map || mapUnavailable || mapLoaded) {" in body
+    assert "mapLoaded = true;" in body
+    assert "isStyleLoaded()" not in body.split("function whenMapReady")[1].split("}")[0]
+
+
+def test_a_dataset_missing_from_the_catalogue_is_explained_by_its_record(client: TestClient) -> None:
+    """The page asks the dataset's own record why it is missing: unpublished, or not there at all."""
     body = client.get("/map").text
 
     assert "fetch(`/datasets/${encodeURIComponent(requested)}`" in body
-    assert 'record?.itemType === "feature"' in body
-    assert "is a vector dataset. The map viewer shows raster datasets only for now." in body
-    assert 'record.publication?.status !== "published"' in body
+    # Published vector datasets are listed now (CLIM-1234), so none is turned away as a vector.
+    assert "shows raster datasets only" not in body
+    assert "} else if (!hasStacCollection(record)) {" in body
     # Only a 404 means the dataset does not exist; any other failure says nothing about it.
     assert "res.status === 404" in body
     assert 'lookup === "missing"' in body and "was not found." in body
