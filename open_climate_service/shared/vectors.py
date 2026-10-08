@@ -59,6 +59,35 @@ def geometries_to_frame(geometries: Any) -> gpd.GeoDataFrame:
     raise ValueError(f"geometries must be GeoJSON, a GeoDataFrame or a vector cube, got {type(geometries).__name__}")
 
 
+def explicit_feature_collection(geometries: Any) -> Any:
+    """*geometries* as a GeoJSON FeatureCollection when it carries explicit feature ids.
+
+    A GeoDataFrame with an index of its own (not pandas' default 0, 1, 2...) or a vector cube
+    with `feature_id` names its features as clearly as GeoJSON `id`s do; this lets the GeoJSON
+    validators and fingerprints apply to them. Anything else, GeoJSON included, comes back as
+    it is, so positional ids are still refused where ids are required.
+    """
+    import geopandas as gpd
+    import pandas as pd
+    import xarray as xr
+    from shapely.geometry import mapping
+
+    frame: gpd.GeoDataFrame | None = None
+    if isinstance(geometries, gpd.GeoDataFrame) and not isinstance(geometries.index, pd.RangeIndex):
+        frame = geometries
+    elif isinstance(geometries, (xr.Dataset, xr.DataArray)) and FEATURE_ID_COORD in geometries.coords:
+        frame = _frame_from_vector_cube(geometries)
+    if frame is None:
+        return geometries
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "id": str(label), "geometry": mapping(shape), "properties": {}}
+            for label, shape in zip(frame.index, frame.geometry, strict=True)
+        ],
+    }
+
+
 def _feature_id(feature: dict[str, Any], position: int) -> str:
     """A GeoJSON Feature's `id`, or its position when it has none: a null `id` is no id."""
     value = feature.get("id")

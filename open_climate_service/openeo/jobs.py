@@ -67,7 +67,13 @@ from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
-from open_climate_service.shared.vectors import encode_vector_cube, feature_id_field, holds_shapes, vector_dim
+from open_climate_service.shared.vectors import (
+    FEATURE_ID_COORD,
+    encode_vector_cube,
+    feature_id_field,
+    holds_shapes,
+    vector_dim,
+)
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
 _T = TypeVar("_T")
@@ -1901,6 +1907,9 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     # that has to be joined back to a boundary file. E.g. `aggregate_spatial_weighted`` returns
     # a vector datacube.
     geom_dim = vector_dim(ds)
+    # The vector dimension once its shapes are dropped for a table: `feature_id` names the
+    # features, and the bare dimension would only add row numbers beside it.
+    shapeless_dim: str | None = None
     if geom_dim is not None:
         # CSV is listed as a vector format but carries no shapes, so it must not demand them: a
         # cube with feature ids and no geometry is still a perfectly good table.
@@ -1923,6 +1932,8 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
             ds = encode_vector_cube(ds)
         elif holds_shapes(ds, geom_dim):
             ds = ds.drop_vars(geom_dim)
+            if FEATURE_ID_COORD in ds.coords:
+                shapeless_dim = geom_dim
 
     if fmt not in _RASTER_FORMATS:
         # Defaulting an unwritable format to Zarr wrote a `result.zarr` directory and called it
@@ -1978,11 +1989,9 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     if ext == ".csv":
         path = str(results_dir / "result.csv")
         df = ds.to_dataframe().reset_index()
-        # Drop internal Zarr artefacts (spatial_ref, index) that add noise for consumers, and a
-        # dimension without labels: a vector cube's once its shapes are dropped, which pandas
-        # would otherwise write as row numbers beside the feature ids.
-        unlabelled = {str(dim) for dim in ds.dims if dim not in ds.coords}
-        drop = [c for c in df.columns if c in ("spatial_ref", "index") or c in unlabelled or c.startswith("level_")]
+        # Drop internal Zarr artefacts (spatial_ref, index) that add noise for consumers, and the
+        # shapeless vector dimension (see above). Any other unlabelled axis keeps its positions.
+        drop = [c for c in df.columns if c in ("spatial_ref", "index", shapeless_dim) or str(c).startswith("level_")]
         df.drop(columns=drop, errors="ignore").to_csv(path, index=False)
         return path
 

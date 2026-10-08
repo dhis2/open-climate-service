@@ -183,6 +183,12 @@ def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
     ) -> Any:
         # `target_dimension` and `context` are openEO parameters the upstream function does not
         # take; a graph from the openEO editor passes both, as null. The dimension is named here.
+        # A context could not reach the reducer, so one that is actually given is refused rather
+        # than silently dropped.
+        if context is not None:
+            raise ValueError(
+                "aggregate_spatial: `context` is not supported; the reducer cannot receive it. Leave it null."
+            )
         from open_climate_service.shared.provenance import record_features, spatial_aggregation_scope
         from open_climate_service.shared.vectors import GEOMETRY_FIELD, features_in_crs, single_raster, vector_result
 

@@ -273,3 +273,54 @@ def test_every_renderer_excludes_the_same_non_value_columns() -> None:
     assert Dhis2ExportPlugin._candidate_value_fields(frame, None, "geometry", "time") == ["t2m"]
     payload = _build_dhis2_json_payload(frame, options)
     assert payload["dataValues"], "the plugin renderer refused a cube the CHAP path accepts"
+
+
+def test_csv_of_a_raster_keeps_its_unlabelled_axes(tmp_path: Path) -> None:
+    """Only a vector cube's shapeless dimension is dropped; a raster's positional axes stay."""
+    raster = xr.Dataset({"t2m": (("y", "x"), np.arange(4.0).reshape(2, 2))})
+    columns = _write(raster, tmp_path, "CSV").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert columns == ["y", "x", "t2m"]
+
+
+# --- explicit ids from a GeoDataFrame or a vector cube --------------------------------------
+
+_NAMED_DHIS2_EXPORT = {
+    "process_graph": {
+        "save": {
+            "process_id": "save_result",
+            "arguments": {"format": "DHIS2JSON", "options": {"export": "rainfall"}},
+            "result": True,
+        }
+    }
+}
+_UIDS = ["ImspTQPwCqd", "O6uvpzGd5pu"]
+
+
+def _frame(index: Any) -> gpd.GeoDataFrame:
+    return gpd.GeoDataFrame(geometry=[box(0, 2, 4, 4), box(0, 0, 4, 2)], index=index, crs="EPSG:4326")
+
+
+@pytest.mark.parametrize(
+    "geometries",
+    [
+        pytest.param(lambda: _frame(pd.Index(_UIDS)), id="geodataframe"),
+        pytest.param(lambda: aggregate_spatial_weighted(_grid(), _frame(pd.Index(_UIDS)), "mean"), id="vector-cube"),
+    ],
+)
+def test_a_named_dhis2_export_accepts_ids_a_frame_or_cube_carries(geometries: Any) -> None:
+    from open_climate_service.shared.provenance import capture_execution
+
+    with capture_execution(_NAMED_DHIS2_EXPORT) as evidence:
+        result = aggregate_spatial_weighted(_grid(), geometries(), "mean")
+
+    assert list(result.feature_id.values) == _UIDS
+    assert evidence.features[-1]["ids_valid"] is True
+    assert evidence.features[-1]["input_sha256"] is not None
+
+
+def test_a_named_dhis2_export_still_refuses_positional_ids() -> None:
+    """A GeoDataFrame's default 0, 1, 2 index is a position, not an org unit."""
+    from open_climate_service.shared.provenance import capture_execution
+
+    with capture_execution(_NAMED_DHIS2_EXPORT), pytest.raises(ValueError, match="explicit feature identifiers"):
+        aggregate_spatial_weighted(_grid(), _frame(pd.RangeIndex(2)), "mean")

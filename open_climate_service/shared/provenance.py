@@ -208,7 +208,10 @@ def record_features(geometries: Any) -> None:
     if evidence is None:
         return
     from open_climate_service.shared.features import validate_dhis2_feature_ids, validate_feature_ids
+    from open_climate_service.shared.vectors import explicit_feature_collection
 
+    # A GeoDataFrame or vector cube with explicit ids is checked and fingerprinted as GeoJSON.
+    geometries = explicit_feature_collection(geometries)
     if evidence.require_feature_ids:
         validate_dhis2_feature_ids(geometries)
     if not isinstance(geometries, dict) or geometries.get("type") not in {"Feature", "FeatureCollection"}:
