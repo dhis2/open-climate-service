@@ -66,6 +66,7 @@ from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
     datetime_to_period_string,
     dekad_start,
+    has_calendar_periods,
     next_period_string,
     normalize_period_string,
     utc_now,
@@ -473,7 +474,10 @@ def create_artifact(
     )
     resolved_download_end = download_end if download_end is not None else end
     if resolved_download_end is None:
-        if registry_datasets.is_future_facing(dataset):
+        if not has_calendar_periods(period_type):
+            # No "now" to end at either; the plugin enumerates the reference period's ordinals.
+            resolved_download_end = _LAST_ORDINAL
+        elif registry_datasets.is_future_facing(dataset):
             # "Now" is this dataset's *start*, so using it as the end would collapse a
             # seven-day forecast to a single day. Offer a generous horizon instead and let
             # the plugin clip to whatever it actually publishes. `request_scope.end` stays
@@ -2493,6 +2497,15 @@ def _normalize_optional_request_period(value: str | None, *, period_type: str, f
     return _normalize_request_period(value, period_type=period_type, field_name=field_name)
 
 
+_FIRST_ORDINAL = "1"
+_LAST_ORDINAL = "366"
+"""The widest scope of a climatology, whose ids are day-of-year (or month) ordinals.
+
+Used only when a request leaves the bounds out. The plugin enumerates the ordinals its reference
+period has, so the bounds name "all of it" rather than select a part.
+"""
+
+
 def _resolve_request_start(value: str | None, *, dataset: dict[str, object], period_type: str) -> str:
     """Return the normalized start period, substituting "now" for a forecast dataset.
 
@@ -2513,6 +2526,11 @@ def _resolve_request_start(value: str | None, *, dataset: dict[str, object], per
     """
     if value is not None:
         return _normalize_request_period(value, period_type=period_type, field_name="start")
+
+    if not has_calendar_periods(period_type):
+        # A climatology's ids are ordinals and its reference period is fixed by the template,
+        # so there is no start to ask for: the scope is all of it, from the first ordinal.
+        return _FIRST_ORDINAL
 
     if not registry_datasets.is_future_facing(dataset):
         raise HTTPException(

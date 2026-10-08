@@ -61,6 +61,9 @@
                 data-dataset-url="{{ mount }}/datasets/{{ source.id }}"
               >
                 <input type="hidden" name="dataset_id" value="{{ source.id }}" />
+                {% if defaults.direction == "ordinal" %}
+                <p class="hint">No dates to choose: this ingests the reference period the template declares.</p>
+                {% else %}
                 <div class="form-grid">
                   <div class="field">
                     <label for="start">Start{% if not defaults.start_required %} (optional){% endif %}</label>
@@ -74,7 +77,7 @@
                       aria-describedby="start-hint"
                     />
                     <span class="hint" id="start-hint">
-                      {% if defaults.direction == "ordinal" %}Not used: this covers the reference period the template declares.{% elif defaults.direction == "future" %}Leave blank to ingest the full forecast window from now.{% elif format_hint %}Format {{ format_hint }}.{% endif %}
+                      {% if defaults.direction == "future" %}Leave blank to ingest the full forecast window from now.{% elif format_hint %}Format {{ format_hint }}.{% endif %}
                     </span>
                   </div>
                   <div class="field">
@@ -92,6 +95,7 @@
                     </span>
                   </div>
                 </div>
+                {% endif %}
                 <div class="checks">
                   <label><input type="checkbox" name="publish" checked /> Publish after ingestion</label>
                   <label><input type="checkbox" name="overwrite" /> Overwrite if already ingested</label>
