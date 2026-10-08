@@ -104,13 +104,14 @@ must not be treated as public merely because reading them does not mutate state.
 See [Read-only instances](instance_guide.md#read-only-instances) for the current
 deployment behavior.
 
-Schedule definitions come from two places: operator-managed configuration in
-`climate-service.yaml`, and schedules saved from the web interface or the API, stored
-beside the file. The file wins when both name a dataset. See
+Schedule definitions come from the single `<data_dir>/schedules.json` store, whether
+prepared before startup or saved through the web interface or API. The instance-wide
+clock switch and timezone remain in `climate-service.yaml`. See
 [Scheduled dataset synchronization](scheduled_sync.md) for configuration, the
 schedule API and the reload rules.
 
-The current CLI only starts the server. Commands for ingestion, job inspection,
+The CLI starts the server and has a one-time legacy schedule migration command.
+Commands for ingestion, job inspection,
 and maintenance of read-only deployments are planned. Such commands must use the
 shared domain services and may call them directly while the HTTP server is stopped.
 

@@ -7,22 +7,56 @@ the native OCS job service.
 
 ## Configure schedules
 
-Schedules are an instance-level operational choice in `climate-service.yaml`:
+`climate-service.yaml` controls whether the instance clock runs and its timezone:
 
 ```yaml
 scheduler:
   enabled: true
   timezone: UTC
-  dataset_sync:
-    - dataset_id: chirps3_precipitation_daily
-      cron: "0 6 * * *"
-      publish: true
-      max_attempts: 3
 ```
 
-`cron` is a standard five-field expression interpreted in the configured IANA timezone.
-UTC is the default and is recommended for checks that follow upstream publication times.
-Only one entry is allowed per dataset.
+Create and edit schedules from each dataset's **Schedule** tab, or through the
+`/schedules/sync` API. All dataset schedules live together in
+`<data_dir>/schedules.json`, keyed by dataset id. This file can be prepared before
+starting OCS, though the UI/API is recommended for validation and atomic writes.
+Only one schedule is allowed per dataset. The schedule's `cron` is a standard
+five-field expression interpreted in the configured IANA timezone. UTC is the
+default and is recommended for checks that follow upstream publication times.
+
+For pre-start provisioning, one file contains all datasets, for example:
+
+```json
+{
+  "chirps3_precipitation_daily": {
+    "dataset_id": "chirps3_precipitation_daily",
+    "cron": "0 6 * * *",
+    "publish": true,
+    "max_attempts": 3,
+    "enabled": true
+  },
+  "era5land_precipitation_monthly": {
+    "dataset_id": "era5land_precipitation_monthly",
+    "cron": "0 8 5 * *",
+    "publish": true,
+    "max_attempts": 3,
+    "enabled": false
+  }
+}
+```
+
+The map key and `dataset_id` must match. The optional `enabled` field defaults to
+true; the second example stays paused until an operator resumes it. When editing
+the JSON outside the UI, stop OCS or replace the complete file atomically so the
+clock never reads a partial write.
+
+If upgrading an instance with `scheduler.dataset_sync` in YAML, stop OCS and run
+`climate-service migrate-schedules` with `CLIMATE_SERVICE_CONFIG` set to that
+instance's YAML file. The command imports the entries atomically into the one
+JSON file, skips identical entries if rerun, and refuses conflicting saved entries
+without overwriting them. Verify the store, remove `dataset_sync` from YAML, and
+restart OCS. The upgraded server rejects a leftover YAML schedule list with a
+migration instruction; it never silently ignores or runs a second copy. Keep
+`scheduler.enabled` and `scheduler.timezone` in YAML.
 
 The target dataset must already have been ingested. When a schedule becomes due, APScheduler
 queues work through the same native job path as an asynchronous `POST /sync/{dataset_id}` request
@@ -37,17 +71,28 @@ boundary.
 
 ## Manage schedules without a restart
 
-Schedules can also be added, changed, paused and removed from the **Sync schedules** page and
-the `/schedules` API. These schedules are stored beside the configuration file, under
-`<data_dir>/schedules.json`, and the clock runs the two sources merged:
+Schedules can be added, changed, paused and removed without a restart: on the dataset
+page, whose Sync panel holds the dataset's schedule; on the **Schedules** page, which lists
+everything on the clock and pauses, resumes or deletes any saved entry; and through the
+`/schedules/sync` API. The clock reads only `<data_dir>/schedules.json`:
 
-- File entries are listed and visible but read-only in the page and the API.
-- The file wins. A stored entry for a dataset the file also configures is kept and listed as
-  shadowed, and does not run. It stays editable and pausable, so it is ready for the day the
-  file entry goes. Creating a stored entry for a file-configured dataset is refused.
-- The configuration file is read once, at startup. A reload re-reads the store only, so a
-  change to `scheduler.dataset_sync` in the file, including removing an entry so a shadowed
-  stored one becomes effective, takes effect after a restart.
+On the dataset page, **Sync now** and **Schedule** share one card; Sync now opens by default,
+and an edit link or validation error opens Schedule. Without JavaScript both sections remain
+visible and their forms still work. On the Schedule tab, choose **Every day**, **Every week**,
+or **Every month**, then set a check time in `scheduler.timezone`. Custom cron remains
+available under **Custom (advanced)**.
+The page suggests daily checks for hourly, daily and weekly data; weekly checks for dekadal
+and monthly data; and monthly checks for yearly data. These are starting points, **not**
+publication dates: the dataset period describes what a value represents, while the upstream
+source may publish that value later. Choose a check time after its usual release, or check
+more often if its delay varies. A check submits a native sync job; if nothing new is available,
+the job completes without changing the dataset. Monthly presets use days 1–28 so they do not
+skip shorter months. Neither the preset nor a custom cron changes which source periods the
+sync engine ingests.
+
+- The configuration file controls the global clock switch and timezone, read at startup;
+  the JSON store controls every dataset schedule. Editing that store through the UI/API
+  takes effect without restarting OCS.
 - A stored entry has a pause switch, `enabled`. Pausing keeps the entry and stops it firing.
 - Every change reloads the clock. The reload parses the store, then resolves every effective
   entry's dataset and builds its trigger, before any job is touched. When the store cannot be
@@ -56,11 +101,18 @@ the `/schedules` API. These schedules are stored beside the configuration file, 
   listed with the reason, so no job keeps firing with settings the status no longer shows. If
   the clock itself refuses a sound plan, the previous jobs are put back and the error says so;
   should that fail too, the error says the clock may run settings the list does not show.
+  If a save or delete persists but that reload fails, the API answers 409 with an explicit
+  stored-versus-applied result; the page shows the failure rather than claiming the clock
+  accepted it. The previous clock plan stays in force until a successful reload.
 - A change made through another process reaches the clock. The process that owns the clock
   watches the store file and reloads within 30 seconds of a write from anywhere on the shared
   data directory, so an API-only replica can pause or edit a schedule without knowing which
-  replica runs the clock. The request's own process reloads at once.
-- `effective` on a listed entry means enabled and not shadowed: the entry the clock would run.
+  replica runs the clock. The request's own process reloads at once. Every process, with or
+  without the clock, compares a digest of the store file before it lists schedules, so a
+  replica's page and API show a change saved elsewhere straight away.
+- An unreadable store file is reported, not hidden. Listings carry `reload_error` with the
+  reason, and writes answer 503 with it, until the file is fixed.
+- `effective` on a listed entry means enabled: the entry the clock would run.
   `registered` means a clock job exists for it in this process now, which also needs the
   scheduler enabled and the dataset to resolve.
 - APScheduler job ids are stable, `dataset-sync:<dataset_id>`, so a reload adds, replaces and
@@ -73,12 +125,16 @@ The API:
 
 | Method and path | Effect |
 | --- | --- |
-| `GET /schedules` | The merged list with runtime status; the page for a browser |
-| `GET /schedules/{dataset_id}` | One dataset's effective schedule and status |
-| `POST /schedules` | Add a stored schedule: `dataset_id`, `cron`, `publish`, `max_attempts`, `enabled` |
-| `PUT /schedules/{dataset_id}` | Replace a stored schedule's settings |
-| `POST /schedules/{dataset_id}/pause`, `/resume` | Flip the pause switch |
-| `DELETE /schedules/{dataset_id}` | Remove a stored schedule |
+| `GET /schedules` | Everything on the clock with runtime status, each row with its `kind`; the page for a browser |
+| `GET /schedules/sync/{dataset_id}` | One dataset's effective sync schedule and status |
+| `POST /schedules/sync` | Add a stored sync schedule: `dataset_id`, `cron`, `publish`, `max_attempts`, `enabled` |
+| `PUT /schedules/sync/{dataset_id}` | Change a stored sync schedule; settings left out of the body are kept |
+| `POST /schedules/sync/{dataset_id}/pause`, `/resume` | Flip the pause switch |
+| `DELETE /schedules/sync/{dataset_id}` | Remove a stored sync schedule |
+
+Sync schedules sit under `/schedules/sync` because they are keyed by the dataset they sync,
+one per dataset. Another kind of schedule would get its own path under `/schedules` and appear
+in the same listing.
 
 A dataset that is static, forecast-facing or has no registered data source is refused with the
 reason. The target must have been ingested for a check to submit a sync; a stored schedule for

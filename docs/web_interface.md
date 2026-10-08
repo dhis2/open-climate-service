@@ -29,7 +29,7 @@ JavaScript.
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
 | **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
-| **Sync schedules** (`/schedules`) | Set when OCS checks ingested datasets for updates; view, add, edit, pause and delete schedules |
+| **Schedules** (`/schedules`) | Everything on the instance's clock: each dataset's sync schedule, with pause, resume and delete; set up and edited on the dataset page |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
 The overview counts the collections and links to them rather than listing them, so the root
@@ -88,36 +88,31 @@ and return value, the workflows on this instance that use it, and its reference 
 with datasets, the URL still returns the openEO process description as JSON to API clients;
 a browser gets the page, and `?f=json` and `?f=html` choose explicitly.
 
-### The sync schedules page (`/schedules`)
+### The Schedules page (`/schedules`)
 
-A sync schedule sets when OCS checks an ingested dataset for updates. At each scheduled time,
-OCS starts a sync job that adds any new data from its source. The page lists every schedule
-the instance runs, from two sources. Entries from `scheduler.dataset_sync` in
-`climate-service.yaml` are shown but cannot be changed here. Entries saved from this page or
-the API are stored beside the file and can be edited, paused, resumed and deleted. Saving a
-change applies it at once; the clock reloads without a restart.
+The Schedules page lists everything on the instance's clock. Today that is one kind, a sync
+schedule: at each check time OCS submits a sync job, which adds new source data if any is
+available. Each row names its kind in the first column, so the list can carry other kinds later.
 
-Only one schedule is allowed per dataset, and the file wins: a saved schedule for a dataset the
-file also configures is kept but marked shadowed, so an operator can see which entry runs and
-why theirs does nothing. It stays editable and pausable. Adding a schedule for such a dataset
-is refused. The file is read at startup, so removing its entry to let the saved one run takes
-a restart. The form offers the
-ingested datasets whose source can be synced; a static or forecast dataset is not offered, and
-the API refuses it with the reason.
+A sync schedule belongs to exactly one dataset, so it is set up and edited on the dataset page,
+next to the manual sync it automates (see below). The Schedules page is where they are seen
+together, and it covers what a dataset page cannot: a saved schedule whose
+dataset is no longer on the instance, which can still be paused or deleted; and the
+instance-wide reload error. Each saved row offers Edit, which opens the dataset page, Pause or
+Resume, and Delete, which asks for confirmation in a dialog.
 
-Each row shows the cron and timezone, where the entry is managed, its status (scheduled, paused,
-overridden, or unable to run with the reason), the next check and the last one. Check state is
-kept in memory and resets on restart; the sync jobs a check submits are durable and linked from
-the row. The timezone is the instance's `scheduler.timezone`. When the scheduler is disabled,
-schedules can still be saved and are listed. The page explains that an operator enables checks
-by setting `enabled: true` under `scheduler:` in `climate-service.yaml` and restarting OCS.
-If a change cannot be applied, the page shows why and the previous schedules stay
-in force.
+Only one schedule is allowed per dataset. All schedules are stored in one file,
+`<data_dir>/schedules.json`, and can be managed from the UI or API. The instance-wide
+clock switch and timezone remain in `climate-service.yaml`. A static or forecast
+dataset cannot take a schedule, and the API refuses it with the reason.
 
-The dataset page shows the dataset's own schedule in its Sync panel, or offers to add one. The
-API offers the same: `GET /schedules` for the merged list with status, `POST /schedules` to add,
-`PUT /schedules/{dataset_id}` to change, `POST /schedules/{dataset_id}/pause` and `/resume`,
-and `DELETE /schedules/{dataset_id}`.
+Each row shows the cron and timezone, its status (scheduled, paused, or unable to run
+with the reason), the next check and the last one. Check
+state is kept in memory and resets on restart; the sync jobs a check submits are durable and
+linked from the row. The timezone is the instance's `scheduler.timezone`. When the scheduler is
+disabled, schedules can still be saved and are listed, and the page explains that an operator
+enables checks by setting `enabled: true` under `scheduler:` in `climate-service.yaml` and
+restarting OCS. If a change cannot be applied, the page shows why.
 
 ### The dataset page (`/datasets/{dataset_id}`)
 
@@ -151,6 +146,15 @@ There is no separate console: data is added from the page of the thing it concer
   cutoff date. The page reloads with the new coverage when it finishes. A sync keeps the
   dataset's current publication state — a published dataset stays published — because an
   incremental sync appends to the store the published version already points at.
+- **Schedule** the sync on the same dataset page: **Sync now** and **Schedule** are tabs in
+  one card, with Sync now shown first. On Schedule, choose daily, weekly or monthly checks,
+  a time, and up to how many attempts a sync job may make. Custom cron is available for
+  advanced needs. The suggested check frequency reflects the data's period type, but the
+  operator should choose a time after the source normally publishes; period type does not
+  tell OCS that release time. A schedule can be saved paused. Once saved, it shows the next
+  and last check and offers Edit, Pause or Resume, and Delete behind a confirmation.
+  Editing does not silently change its publication setting. Every schedule on the
+  instance is listed on the [Schedules page](#the-schedules-page-schedules).
 
 You do **not** enter a bounding box — ingestion always uses the spatial extent configured
 for the instance in `climate-service.yaml`. On a read-only instance neither form is shown.
