@@ -130,7 +130,7 @@ def test_sync_dataset_returns_up_to_date_when_no_new_period_is_due(monkeypatch: 
     assert result.sync_detail.reason == "no_new_period"
     assert (
         result.sync_detail.message
-        == "Data already exists through 2026-01-31; target 2026-01-31 does not require a new download."
+        == "Data exists for 2026-01-01 through 2026-01-31; target 2026-01-31 does not require a new download."
     )
 
 
@@ -165,7 +165,7 @@ def test_sync_dataset_creates_new_version_from_next_period(monkeypatch: pytest.M
     assert result.sync_detail.sync_kind == SyncKind.TEMPORAL
     assert result.sync_detail.action == SyncAction.REMATERIALIZE
     assert result.sync_detail.reason == "new_periods_available"
-    assert "Data exists through 2026-01-31" in result.sync_detail.message
+    assert "Data exists for 2026-01-01 through 2026-01-31" in result.sync_detail.message
     assert "Sync will rematerialize the dataset through 2026-02-10" in result.sync_detail.message
     assert result.sync_detail.current_start == "2026-01-01"
     assert result.sync_detail.current_end == "2026-01-31"
@@ -271,7 +271,7 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
     assert result.sync_detail is not None
     assert result.sync_detail.action == SyncAction.APPEND
     assert result.sync_detail.reason == "new_periods_available_for_append"
-    assert "Data exists through 2026-01-31" in result.sync_detail.message
+    assert "Data exists for 2026-01-01 through 2026-01-31" in result.sync_detail.message
     assert "Sync will add 2026-02-01 through 2026-02-10" in result.sync_detail.message
     # Said once: an append covers exactly that range, so naming the target again repeated it.
     assert result.sync_detail.message.count("2026-02-10") == 1
@@ -847,14 +847,15 @@ def test_release_planner_reports_version_decoupled_from_period_type(monkeypatch:
     assert result.sync_detail.action == SyncAction.NO_OP
     assert result.sync_detail.current_version == _version("R2025A")
     assert result.sync_detail.target_version == _version("R2025A")
-    assert result.sync_detail.message.startswith("Data through 2024 is already available locally")
+    assert result.sync_detail.message.startswith("Data exists for ")
+    assert "; target 2024 does not require a new download." in result.sync_detail.message
 
 
 @pytest.mark.parametrize(
     ("available", "expected_action", "expected_message"),
     [
-        ([], SyncAction.NO_OP, "No new data is available beyond 2024."),
-        (["2025"], SyncAction.REMATERIALIZE, "New data is available through 2025."),
+        ([], SyncAction.NO_OP, "; no new release is available from the source."),
+        (["2025"], SyncAction.REMATERIALIZE, ". Sync will rematerialize the dataset through 2025."),
     ],
 )
 def test_release_period_path_messages_name_periods_not_the_matching_version(
@@ -884,7 +885,8 @@ def test_release_period_path_messages_name_periods_not_the_matching_version(
     )
 
     assert result.action == expected_action
-    assert result.message.startswith(expected_message)
+    assert result.message.startswith("Data exists for ")
+    assert result.message.endswith(expected_message)
     assert "worldpop:R2025A" not in result.message
 
 
@@ -1475,7 +1477,9 @@ def test_sync_plan_route_returns_plan_without_creating_artifact(
         "sync_kind": "temporal",
         "action": "rematerialize",
         "reason": "new_periods_available",
-        "message": "Data exists through 2026-01-31. Sync will rematerialize the dataset through 2026-02-10.",
+        "message": (
+            "Data exists for 2026-01-01 through 2026-01-31. Sync will rematerialize the dataset through 2026-02-10."
+        ),
         "current_start": "2026-01-01",
         "current_end": "2026-01-31",
         "target_end": "2026-02-10",
@@ -1585,6 +1589,12 @@ def test_plan_sync_marks_default_target_end_source(monkeypatch: pytest.MonkeyPat
     assert result.target_end_source == "default_today"
     assert result.delta_start == "2024-03-01"
     assert result.delta_end == "2026-04-20"
+
+
+def test_existing_coverage_uses_the_dataset_period_and_names_edge_cases_once() -> None:
+    assert sync_engine._existing_coverage("2026-01-01", "2026-08-01", "monthly") == "2026-01 through 2026-08"
+    assert sync_engine._existing_coverage("2026-01-01", "2026-01-31", "monthly") == "2026-01"
+    assert sync_engine._existing_coverage(None, "2026-08-01", "monthly") == "2026-08"
 
 
 def test_run_sync_raises_clear_error_when_append_invariants_are_missing(monkeypatch: pytest.MonkeyPatch) -> None:

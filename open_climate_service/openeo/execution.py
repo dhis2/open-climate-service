@@ -12,7 +12,7 @@ import importlib
 import inspect
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import xarray as xr
@@ -22,6 +22,7 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat
+from open_climate_service.shared.cancellation import ExecutionCancelled, raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +81,92 @@ def _make_sorted_atp(original_fn: Any) -> Any:
     """
 
     def _sorted_atp(data: Any, reducer: Any, period: str, dimension: Any = None, **kwargs: Any) -> Any:
+        import numpy as np
+
+        from open_climate_service.shared.provenance import (
+            observe_temporal_aggregation,
+            record_completeness_unknown,
+            record_incomplete_periods,
+        )
+        from open_climate_service.shared.time import (
+            Reachability,
+            cadence_of,
+            incomplete_destination_periods,
+            infer_cadence,
+            openeo_period_to_cadence,
+            period_reachability,
+            stamp_cadence,
+        )
+
         temporal_dims = data.openeo.temporal_dims
         t_dim = dimension or (temporal_dims[0] if temporal_dims else None)
         if t_dim is not None:
             data = data.sortby(t_dim)
-        return original_fn(data=data, reducer=reducer, period=period, dimension=dimension, **kwargs)
+        # Recorded as execution evidence so an export can verify that the period it emits was
+        # produced by this step with the declared reducer, and refuse or drop the destination
+        # periods the input did not fully cover (CLIM-1302).
+        destination = openeo_period_to_cadence(period)
+        source = cadence_of(data)
+        inferred_source = None
+        if t_dim is not None and t_dim in getattr(data, "coords", {}):
+            inferred_source = infer_cadence(np.asarray(data[t_dim].values))
+        # Only carried cadence is authoritative enough to reject before execution. A sparse,
+        # unstamped daily axis can resemble a weekly one; use inference for completeness
+        # evidence below, but do not turn that guess into a false reachability failure.
+        if source is not None and destination is not None:
+            reachability, reason = period_reachability(source, destination)
+            if reachability is Reachability.UNREACHABLE:
+                raise ValueError(
+                    f"aggregate_temporal_period(period={period!r}) cannot derive {destination} data "
+                    f"from {source} data: {reason}"
+                )
+        with observe_temporal_aggregation(destination):
+            if t_dim is None or destination is None or t_dim not in getattr(data, "coords", {}):
+                record_completeness_unknown("the aggregation has no exportable period or no time axis to count")
+            else:
+                t_values = np.asarray(data[t_dim].values)
+                # The cadence the cube carries is what the data is at this node: stamped from the
+                # dataset template at load and rewritten by each temporal step. Inferring it
+                # from the axis would let missing observations redefine it, and reusing the
+                # loaded dataset's declaration would be wrong after an earlier aggregation.
+                source = source or inferred_source
+                if source is None:
+                    record_completeness_unknown(
+                        "the source cadence is neither carried by the data nor inferable from its axis"
+                    )
+                elif source != destination:
+                    try:
+                        record_incomplete_periods(incomplete_destination_periods(t_values, source, destination))
+                    except ValueError as exc:
+                        record_completeness_unknown(str(exc))
+            result = original_fn(data=data, reducer=reducer, period=period, dimension=dimension, **kwargs)
+            return stamp_cadence(result, destination)
 
     return _sorted_atp
+
+
+_Cube = TypeVar("_Cube")
+
+_RECORDED_REDUCERS = ("mean", "sum", "min", "max", "median")
+
+
+def _recording_reducer(name: str, func: Any) -> Any:
+    """Wrap a standard reducer so an open aggregation scope learns its name.
+
+    `reduce_by_method` already reports the method it dispatches; a graph that reduces with the
+    standard `mean` or `sum` process left no trace, so neither a spatial nor a temporal
+    aggregation built from one could be attributed. `functools.wraps` keeps the signature the
+    outer registry wrapper inspects.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        from open_climate_service.shared.provenance import record_reduction
+
+        record_reduction(name)
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _make_named_merge_cubes(original_fn: Any) -> Any:
@@ -290,11 +370,20 @@ def _build_process_registry() -> Any:
 
     # Order matters: wrap_funcs are applied left to right, so the first entry ends up
     # innermost. _normalise_temporal_arguments must sit inside wrap_fn to see arguments
-    # after ParameterReference resolution — see its docstring.
-    registry = ProcessRegistry(wrap_funcs=[_normalise_temporal_arguments, wrap_fn])
+    # after ParameterReference resolution — see its docstring. _check_cancellation is
+    # outermost, so a cancelled job stops before any of it runs.
+    registry = ProcessRegistry(wrap_funcs=[_normalise_temporal_arguments, wrap_fn, _check_cancellation])
+    from open_climate_service.shared.cancellation import install_dask_cancellation
+
+    install_dask_cancellation()
 
     for name, func in inspect.getmembers(impls_module, inspect.isfunction):
         spec: dict[str, Any] = getattr(specs_module, name, None) or {}
+        # The module avoids shadowing builtins (`_sum`, `_min`, `_max`); the registry strips the
+        # underscore, so the process id is the stripped name and that is what gets recorded.
+        process_id = name.lstrip("_")
+        if process_id in _RECORDED_REDUCERS:
+            func = _recording_reducer(process_id, func)
         registry[name] = Process(spec=spec, implementation=func)
 
     # Backend-specific processes override any stub from the standard library.
@@ -454,14 +543,62 @@ def _temporal_to_list(extent: Any) -> list[str | None] | None:
     return result
 
 
+def _spatial_extent_with_crs(extent: Any) -> dict[str, Any] | None:
+    """The bbox as `load_features` takes it: west/south/east/north, plus the CRS when declared.
+
+    A plain object passes through unchanged for `load_features` to validate, so a missing or
+    non-numeric coordinate is reported against `spatial_extent`. `load_collection` is registered
+    without a process spec, so any other value can arrive here too and is refused by name.
+    """
+    if extent is None or isinstance(extent, dict):
+        return extent
+    if not all(hasattr(extent, key) for key in ("west", "south", "east", "north")):
+        raise ValueError(f"load_collection: spatial_extent must be a bounding box object, got {type(extent).__name__}")
+    bbox: dict[str, Any] | None = _bbox_to_dict(extent)
+    if bbox is None:
+        return None
+    crs = getattr(extent, "crs", None)
+    if crs is not None:
+        bbox["crs"] = crs
+    return bbox
+
+
+def _load_vector_collection(id: str, artifact: Any, spatial_extent: Any, bands: Any) -> dict[str, Any]:
+    """Load a published feature collection, returning what `load_features` returns (CLIM-1326).
+
+    `temporal_extent` is not applied: a feature collection is static geometry with no time
+    dimension, and the openEO editor passes `temporal_extent: null` for a collection whose
+    temporal extent is open, as a feature collection's is. `bands` is refused rather than
+    ignored, because a vector collection has none and silently dropping a selection would
+    return more than was asked for. Any `bands` is refused, also an empty list or a malformed
+    value, as the process contract says to omit it.
+
+    The record read is the published `artifact` that `/collections` advertises, not one found
+    again from the collection's feature template, so every advertised collection stays loadable
+    also after its template is removed or renamed on the instance.
+    """
+    from open_climate_service.plugins.processes.load_features import load_feature_record
+
+    if bands is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"load_collection: '{id}' is a vector collection and has no bands; omit `bands`",
+        )
+    return load_feature_record(
+        id, artifact, spatial_extent=_spatial_extent_with_crs(spatial_extent), process="load_collection"
+    )
+
+
 def _load_collection_impl(
     id: str,
     spatial_extent: Any = None,
     temporal_extent: Any = None,
     bands: Any = None,
-) -> xr.DataArray:
-    """Load a published dataset as an openEO data cube (xr.DataArray)."""
+) -> xr.DataArray | dict[str, Any]:
+    """Load a published dataset: a raster as a data cube, a feature collection as a vector cube."""
     artifact = _get_published_artifact(id)
+    if artifact.format == ArtifactFormat.GEOPARQUET:
+        return _load_vector_collection(id, artifact, spatial_extent, bands)
     ds = _ensure_crs(_open_artifact(artifact))
     from open_climate_service.shared.provenance import record_source
 
@@ -526,15 +663,39 @@ def _load_collection_impl(
             )
 
     if len(available_vars) == 1:
-        return ds[available_vars[0]]
+        return stamp_declared_cadence(ds[available_vars[0]], id)
 
     # Multi-band: stack variables on a new "bands" dimension
     import pandas as pd
 
-    return xr.concat(
-        [ds[b] for b in available_vars],
-        dim=pd.Index(available_vars, name="bands"),
+    return stamp_declared_cadence(
+        xr.concat(
+            [ds[b] for b in available_vars],
+            dim=pd.Index(available_vars, name="bands"),
+        ),
+        id,
     )
+
+
+def stamp_declared_cadence(data: _Cube, collection_id: str) -> _Cube:
+    """Mark a freshly loaded cube with the cadence its dataset template declares (CLIM-1302).
+
+    The declaration is what the data *is*, whatever its axis looks like: a daily dataset with
+    days missing is still daily, and reading the spacing instead would turn the gaps into a
+    weekly cadence and lose them. A collection with no template, or one declaring no cadence,
+    leaves the cube unmarked and later steps fall back to the axis.
+    """
+    from open_climate_service.data_registry.services import datasets as registry
+    from open_climate_service.shared.time import stamp_cadence
+
+    try:
+        template = registry.get_dataset(collection_id)
+    except Exception:
+        return data
+    cadence = template.get("period_type") if isinstance(template, dict) else None
+    if isinstance(cadence, str):
+        stamp_cadence(data, cadence)
+    return data
 
 
 class SaveResultEnvelope:
@@ -586,9 +747,9 @@ def _get_published_artifact(collection_id: str) -> Any:
 
 
 def _eligible_artifacts() -> dict[str, Any]:
-    # The raster gate, not the STAC one: this resolves what load_collection will open as a
-    # datacube, which is a narrower question than what the catalogue describes.
-    return ingestion_services.latest_published_raster_artifacts_by_dataset()
+    # openEO's own gate: what /collections advertises is what load_collection loads, rasters
+    # as datacubes and feature collections as vector cubes (CLIM-1326).
+    return ingestion_services.openeo_collection_artifacts_by_dataset()
 
 
 def _open_artifact(artifact: Any) -> xr.Dataset:
@@ -719,6 +880,21 @@ def _naive_temporal_scalar(value: Any) -> Any:
     return text
 
 
+def _check_cancellation(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a process so a cancelled job stops before running it (CLIM-1221).
+
+    The outermost wrapper, so the check precedes argument resolution and the process itself.
+    Throttled, and a no-op outside a job's cancellation scope.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        raise_if_cancelled()
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def _normalise_temporal_arguments(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a process so scalar date arguments arrive timezone-naive.
 
@@ -749,6 +925,13 @@ def _normalise_temporal_arguments(func: Callable[..., Any]) -> Callable[..., Any
 # ---------------------------------------------------------------------------
 
 
+class InvalidProcessGraph(HTTPException):
+    """The process graph could not be built: unknown processes, or malformed nodes or arguments.
+
+    Distinct from an error raised while the graph runs, which a retry may not repeat.
+    """
+
+
 def run_process_graph(
     process: dict[str, Any],
     request: Request | None = None,
@@ -768,16 +951,25 @@ def run_process_graph(
     workflow_graphs = {wf.id: dict(wf.process_graph) for wf in workflow_records if wf.process_graph}
     try:
         graph = OpenEOProcessGraph(process_graph)
+        execute = graph.to_callable(registry)
+    except (TypeError, ValueError, KeyError) as exc:
+        # The graph itself is invalid: the one failure that is permanent by construction.
+        raise InvalidProcessGraph(status_code=400, detail=f"Invalid process graph: {exc}") from exc
+    try:
         from open_climate_service.shared.provenance import capture_execution
 
         with capture_execution(process, workflow_graphs) as evidence:
-            result = graph.to_callable(registry)()
+            result = execute()
             if isinstance(result, SaveResultEnvelope):
                 result.provenance = evidence.describe()
             return result
-    except HTTPException:
+    except (HTTPException, ExecutionCancelled):
+        # A cancellation is not a failure of the graph: never report it as a 400 or 500.
         raise
     except (TypeError, ValueError, KeyError) as exc:
+        # Still a 400 for a synchronous caller, but raised while running, where a ValueError
+        # can as well be a truncated remote response as a bad argument. Batch jobs classify it
+        # by its cause, not by this status.
         raise HTTPException(status_code=400, detail=f"Invalid process graph: {exc}") from exc
     except Exception as e:
         logger.exception("Process graph execution failed")

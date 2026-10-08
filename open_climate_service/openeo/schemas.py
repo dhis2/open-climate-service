@@ -83,6 +83,14 @@ class OpenEOJobRecord(BaseModel):
     finished_at: datetime | None = Field(default=None, exclude=True)
     # The delivery this job owed when it finished ({"export", "mode"}), written with FINISHED.
     delivery_due: dict[str, str] | None = Field(default=None, exclude=True)
+    # Execution attempts under this one job ID. Triggered jobs retry up to `max_attempts`;
+    # `retry_at` is when a job waiting out a backoff becomes due again.
+    attempt: int = Field(default=0, exclude=True)
+    max_attempts: int = Field(default=1, exclude=True)
+    retry_at: datetime | None = Field(default=None, exclude=True)
+    # Set once the running attempt has passed its point of no return (a managed store commit):
+    # from then on the job finishes rather than being cancelled half-published.
+    publishing: bool = Field(default=False, exclude=True)
 
 
 class OpenEOJobCreate(BaseModel):

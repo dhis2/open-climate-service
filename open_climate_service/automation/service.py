@@ -709,6 +709,7 @@ class WorkflowAutomationService:
             body,
             source_event_id=event.event_id,
             trigger_id=trigger.id,
+            max_attempts=trigger.max_attempts,
         )
         service.start_triggered_job(job.id)
         if created:

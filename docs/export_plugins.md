@@ -21,6 +21,9 @@ exports:
 ```
 
 Replace the data-element UID with the destination defined in your DHIS2 instance.
+`org_unit_field: geometry` reads each value's organisation unit from the feature ids:
+the `feature_id` coordinate when the spatial aggregation carries one, otherwise the
+labels of its geometry dimension. CHAP CSV's `location_field: geometry` does the same.
 Pass the prepared aggregate to `save_result`:
 
 ```json
@@ -83,6 +86,68 @@ connection is not required to render or download a payload, but a bound connecti
 is required for later server-side delivery. Use
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)
 for that binding.
+
+### The export's period must be reachable from the dataset's cadence
+
+An export exports what exists. `period_type` labels; it never aggregates, and neither does
+anything else on the export path. So the export has to say how its period relates to the
+dataset it declares, and OCS checks it twice: at startup, from the dataset template's
+`period_type`, and at render time, from the spacing of the data actually being exported.
+
+| Dataset cadence | Export `period_type` | Outcome |
+| --- | --- | --- |
+| the same | the same | Pass-through. No `temporal_aggregation`; declaring one is refused. |
+| finer, and tiling the period | coarser | Exportable only after an explicit aggregation. `temporal_aggregation: sum \| mean \| min \| max` declares which, and the export verifies that it ran. |
+| anything else | | Refused, with the reason. |
+
+Producing the coarser data is openEO's job, not the export's, and there are two ways to do it.
+Publish a derived dataset (`load_collection`, `aggregate_temporal_period`, `save_result` as
+Zarr with a `dataset_id`) and point the export at that dataset, which then needs no
+declaration at all. Or put `aggregate_temporal_period` in the graph that feeds the export and
+declare its reducer as `temporal_aggregation`. The built-in org-unit workflows do neither:
+given a dataset finer than the export's period, they are refused.
+
+A derived dataset is published by an openEO job, and openEO jobs record no `dataset.updated`
+event, so a trigger cannot yet listen for it the way it listens for a sync. Until a derivation
+step emits that event, an export from a derived dataset is run by hand or by a workflow that
+derives and exports in one graph.
+
+The pairs currently supported by `aggregate_temporal_period`: hourly into daily, weekly,
+monthly and yearly; daily into weekly, monthly and yearly; dekadal into monthly and yearly;
+monthly into yearly; and quarterly into yearly. Weekly data tiles nothing, because ISO weeks
+straddle months, quarters and years. Calendar-quarter destinations are refused for now: they
+tile arithmetically, but the standard process has no calendar-quarter period with which to
+produce and record them. Nothing can be made finer than it is stored.
+
+`aggregate_dekads(period="week")` is a separate, day-overlap-weighted transformation rather
+than a tiling aggregation. Its weekly result can be exported ad hoc, or published as a derived
+weekly dataset and then used by a named export. A named weekly export declared directly against
+the original dekadal dataset is still refused at startup.
+
+```yaml
+exports:
+  - id: rainfall-monthly
+    plugin: dhis2
+    dataset: chirps3_precipitation_daily
+    period_type: monthly
+    temporal_aggregation: sum       # required: the dataset is daily
+    incomplete_periods: reject      # the default; or drop
+    series:
+      - select: {}
+        data_element: BXgDHhPdFVU
+```
+
+When the graph aggregates, a destination period counts only when every source period inside
+it is present. A sync that ends on the 14th does not produce that month: the job fails naming
+the period, unless the export says `incomplete_periods: drop`, in which case the period is
+left out and the rest is delivered. Execution provenance records each temporal aggregation
+(its period, reducer and incomplete periods), so a declared `temporal_aggregation` is verified
+against what ran, the way the spatial `aggregation` is. A derived dataset carries no such
+record; its completeness is the derivation's concern.
+
+A hand-written graph gets the same guard at `save_result`: a `period_type` coarser than the
+result's spacing is refused with the `aggregate_temporal_period` step to add, instead of
+collapsing several values onto one DHIS2 key.
 
 ## Write a render-only plugin
 
