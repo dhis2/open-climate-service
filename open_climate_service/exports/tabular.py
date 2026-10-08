@@ -6,9 +6,11 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
+from open_climate_service.shared.vectors import FEATURE_ID_COORD, GEOMETRY_WKT_COORD, feature_id_field
 
-_NON_VALUE_FIELDS = frozenset({"geometry", GEOMETRY_WKT_COORD, "spatial_ref", "index", "band", "bands"})
+_NON_VALUE_FIELDS = frozenset(
+    {"geometry", GEOMETRY_WKT_COORD, FEATURE_ID_COORD, "spatial_ref", "index", "band", "bands"}
+)
 """Columns that are never a data value once a cube is flattened to a dataframe.
 
 Shared by the tabular exports rather than repeated in each: they identify their value column by
@@ -27,6 +29,7 @@ def _build_dhis2_json_payload(df: Any, options: dict[str, Any]) -> dict[str, lis
     category_option_combo = _optional_str_option(options, "category_option_combo")
 
     frame = pd.DataFrame(df).copy()
+    org_unit_field = feature_id_field(frame.columns, org_unit_field)
     if org_unit_field not in frame.columns:
         raise ValueError(f"Missing org unit field '{org_unit_field}' in aggregated result")
     if period_field not in frame.columns:
