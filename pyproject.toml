@@ -27,7 +27,7 @@ override-dependencies = [
 
 [project]
 name = "open-climate-service"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.12"
 description = "Climate and Earth Observation data API"
 license = "BSD-3-Clause"
@@ -59,6 +59,9 @@ xarray = [
     "fsspec>=2024.6.0",
     "aiohttp>=3.10",
 ]
+# DHIS2 Web API client, for the server-side org unit provider and DHIS2 delivery, and for
+# the client-side import example. Pure Python; installs with pip on any platform.
+dhis2 = ["dhis2-client>=0.3.2"]
 # Full server stack — required to run your own Open Climate Service instance.
 server = [
     "fastapi>=0.100.0",
@@ -204,11 +207,6 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["license_expression"]
 follow_untyped_imports = true
-
-[[tool.mypy.overrides]]
-# Optional, supplied by deployments/plugins; not yet published on PyPI.
-module = ["dhis2_client", "dhis2_client.*"]
-ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*"]

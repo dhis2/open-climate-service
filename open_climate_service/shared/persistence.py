@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +44,24 @@ def try_index_lock(path: Path) -> Generator[None]:
         yield
     finally:
         lock.release()
+
+
+@contextmanager
+def execution_lease(path: Path) -> Generator[bool]:
+    """Hold an exclusive execution lease for the block; yield whether it was won.
+
+    A job may execute in at most one process at a time. The lease is a file lock, so the
+    operating system releases it when its process exits, and a crash never leaves a job
+    leased. A lost lease is reported by yielding False rather than raising, so the caller
+    decides what not running the job means.
+    """
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(try_index_lock(path))
+        except AlreadyLocked:
+            yield False
+            return
+        yield True
 
 
 def atomic_json(path: Path, value: Any) -> None:

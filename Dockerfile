@@ -30,7 +30,7 @@ COPY open_climate_service/ open_climate_service/
 COPY README.md LICENSE ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra server && \
+    uv sync --frozen --no-dev --extra server --extra dhis2 && \
     python -m compileall -q open_climate_service/
 
 RUN mkdir -p /app/data/pygeoapi /app/data/artifacts && \

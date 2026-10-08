@@ -38,7 +38,7 @@ from open_climate_service.shared.time import (
     resolve_iso_period_step,
 )
 from open_climate_service.shared.urls import absolute_url, path_segment, self_url
-from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
+from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
 CATALOG_TITLE = "Open Climate Service"
 CATALOG_DESCRIPTION = "Published Open Climate Service GeoZarr datasets"
@@ -139,6 +139,15 @@ def build_collection(dataset_id: str, request: Request) -> dict[str, object]:
     artifact = _eligible_artifacts_by_dataset().get(dataset_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail=f"STAC collection '{dataset_id}' not found")
+    return build_collection_for_artifact(dataset_id, artifact, request)
+
+
+def build_collection_for_artifact(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
+    """Build the collection document from a record the caller already holds.
+
+    For a caller that selected the record itself, as openEO does: looking it up again could
+    return a newer record after a concurrent refresh, and the document would then mix the two.
+    """
     if artifact.format == ArtifactFormat.GEOPARQUET:
         return _build_feature_collection(dataset_id, artifact, request)
     return _build_raster_collection(dataset_id, artifact, request)
@@ -212,7 +221,10 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     assets = collection_payload.setdefault("assets", {})
     zarr_from_xstac = assets.get("zarr", {}) if isinstance(assets, dict) else {}
     template_asset = _asset_to_dict(_required_zarr_asset(template))
-    xarray_open_kwargs = _zarr_open_kwargs(artifact)
+    # Both data assets name the full-resolution level of a pyramided store: its root has no data
+    # variables, so a client following the catalogue would otherwise open an empty dataset.
+    data_group = data_group_open_kwargs(_zarr_media_type(artifact))
+    xarray_open_kwargs: dict[str, object] = {**_zarr_open_kwargs(artifact), **data_group}
     collection_payload["assets"]["zarr"] = {
         **zarr_from_xstac,
         **_zarr_asset_metadata(artifact),
@@ -241,7 +253,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             "type": "application/octet-stream",
             "title": "Icechunk store (native SDK access)",
             "roles": ["data"],
-            "xarray:open_kwargs": {"zarr_format": 3, "consolidated": False},
+            "xarray:open_kwargs": {"zarr_format": 3, "consolidated": False, **data_group},
         }
     collection_payload["license"] = template.license
     providers = _build_providers(source_dataset)

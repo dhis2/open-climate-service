@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import logging
 import threading
-import time
 from collections.abc import Generator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
@@ -28,8 +27,9 @@ from open_climate_service.jobs.models import (
     JobRecord,
     JobStatus,
 )
+from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.dynamic_import import get_dynamic_function
-from open_climate_service.shared.persistence import AlreadyLocked, try_index_lock
+from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -74,19 +74,10 @@ def _execution_lease(job_id: str) -> Generator[bool]:
     A job may execute in at most one process at a time. Without this, a second process could
     recover a job that the first was still running, typically across an overlapping restart:
     both then wrote the same store, one failed on a commit conflict and marked the shared
-    record failed, and the other went on writing for hours behind that failed status. The
-    lease is a file lock, so the operating system releases it when its process exits.
+    record failed, and the other went on writing for hours behind that failed status.
     """
-    try:
-        lease = try_index_lock(_lease_path(job_id))
-        lease.__enter__()
-    except AlreadyLocked:
-        yield False
-        return
-    try:
-        yield True
-    finally:
-        lease.__exit__(None, None, None)
+    with execution_lease(_lease_path(job_id)) as won:
+        yield won
 
 
 def _supports_argument(func: Any, name: str) -> bool:
@@ -165,6 +156,9 @@ class JobService:
         self._lock = threading.Lock()
         self._event_consumer: Callable[[list[JobEvent]], None] | None = None
         self._stopping = threading.Event()
+        # Jobs waiting out a retry backoff. A timer, not a sleeping worker, so a backoff
+        # holds neither a job slot nor one of the executor's threads.
+        self._retry_timers: dict[str, threading.Timer] = {}
         self._watched: set[str] = set()
         # How often a job leased by another process is checked for takeover.
         self.lease_poll_seconds = 5.0
@@ -174,8 +168,16 @@ class JobService:
         self._event_consumer = consumer
 
     def shutdown(self) -> None:
-        """Stop the executor without waiting for outstanding work."""
+        """Stop the executor without waiting for outstanding work.
+
+        A job waiting out a retry backoff stays RETRYING, and the next start requeues it.
+        """
         self._stopping.set()
+        with self._lock:
+            timers = list(self._retry_timers.values())
+            self._retry_timers.clear()
+        for timer in timers:
+            timer.cancel()
         self._executor.shutdown()
 
     def list_jobs(self) -> JobListResponse:
@@ -302,7 +304,24 @@ class JobService:
             ),
         )
 
-        if record.status == JobStatus.ACCEPTED:
+        if record.status == JobStatus.RETRYING:
+            with self._lock:
+                timer = self._retry_timers.pop(job_id, None)
+            if timer is not None:
+                # Popped before it fired, so no attempt will start: record it now rather than
+                # when the backoff ends.
+                timer.cancel()
+                record = store.mutate_job_record(
+                    job_id,
+                    lambda current: current.model_copy(
+                        update={
+                            "status": JobStatus.CANCELLED,
+                            "finished_at": utc_now(),
+                            "progress": JobProgress(message="Cancelled before retry execution resumed"),
+                        }
+                    ),
+                )
+        elif record.status == JobStatus.ACCEPTED:
             with self._lock:
                 future = self._futures.get(job_id)
             if future is not None and future.cancel():
@@ -445,20 +464,32 @@ class JobService:
             future = self._executor.submit(self._run_job, job_id)
             self._futures[job_id] = future
 
-    def _sleep_for_retry(self, job_id: str, seconds: int) -> bool:
-        """Sleep in short intervals so retry wait remains cancellation-aware."""
-        remaining = float(seconds)
-        while remaining > 0:
-            record = store.get_job_record(job_id)
-            if record is not None and record.cancel_requested:
-                return False
-            interval = min(1.0, remaining)
-            time.sleep(interval)
-            remaining -= interval
-        return True
+    def _schedule_retry(self, job_id: str, seconds: int) -> None:
+        """Requeue a job once its retry backoff has passed, without holding a worker meanwhile."""
+        with self._lock:
+            if self._stopping.is_set():
+                return  # stays RETRYING, so the next start requeues it
+            timer = threading.Timer(seconds, self._retry_due, args=(job_id,))
+            timer.daemon = True
+            self._retry_timers[job_id] = timer
+        timer.start()
+        # A cancellation that arrived after the attempt failed but before the timer existed
+        # found nothing to stop; requeue now so the pre-execution check records it.
+        if self._cancel_requested(job_id):
+            self._retry_due(job_id, cancel_timer=True)
+
+    def _retry_due(self, job_id: str, *, cancel_timer: bool = False) -> None:
+        with self._lock:
+            timer = self._retry_timers.pop(job_id, None)
+        if timer is None:
+            return  # cancelled, or the service stopped
+        if cancel_timer:
+            timer.cancel()
+        self._enqueue_job(job_id)
 
     def _run_job(self, job_id: str) -> None:
         watch_for_takeover = False
+        retry_after: int | None = None
         try:
             with _execution_lease(job_id) as won:
                 if not won:
@@ -475,17 +506,23 @@ class JobService:
                     current = store.get_job_record(job_id)
                     if current is None or current.status not in _PENDING_STATUSES:
                         return
-                    self._execute_job(job_id)
+                    retry_after = self._execute_job(job_id)
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)
+        # Watch or schedule a retry only once this worker is neither leased nor registered as
+        # active. Otherwise a requeue from the watcher, the retry timer, or the immediate requeue
+        # that records a cancellation is refused as a duplicate, leaving the job with no worker.
         if watch_for_takeover:
-            # Start watching only after this worker is no longer registered as active.
-            # Otherwise the watcher can recover the job before this future finishes,
-            # have its enqueue rejected, and leave the job with no worker or watcher.
             self._watch_for_takeover(job_id)
+        elif retry_after is not None:
+            self._schedule_retry(job_id, retry_after)
 
-    def _execute_job(self, job_id: str) -> None:
+    def _execute_job(self, job_id: str) -> int | None:
+        """Run the job until it ends or fails retryably; return the retry delay in that case.
+
+        The caller schedules the retry, after releasing the job's lease and worker slot.
+        """
         while True:
             record = self.get_job_or_404(job_id)
             if _is_pre_execution_cancellation(record):
@@ -504,11 +541,26 @@ class JobService:
                         }
                     ),
                 )
-                return
+                return None
 
-            started = store.mutate_job_record(
-                job_id,
-                lambda current: current.model_copy(
+            slots = get_job_slots()
+            if not slots.acquire(
+                should_stop=lambda: self._stopping.is_set() or self._cancel_requested(job_id),
+                on_wait=lambda: self._report_waiting_for_slot(job_id),
+            ):
+                if self._stopping.is_set():
+                    return None  # still accepted, so the next start recovers it
+                continue  # cancelled while waiting; the check above records it
+            cancelled = False
+
+            def start(current: JobRecord) -> JobRecord:
+                # Checked in the same write that marks it RUNNING, so a cancellation that
+                # lands after the slot is won still stops the job before it runs.
+                nonlocal cancelled
+                if current.cancel_requested:
+                    cancelled = True
+                    return current
+                return current.model_copy(
                     update={
                         "status": JobStatus.RUNNING,
                         "started_at": current.started_at or utc_now(),
@@ -517,93 +569,111 @@ class JobService:
                         "retry_after": None,
                         "error": None,
                     }
-                ),
-            )
+                )
 
             try:
-                execution_result = self._invoke_process(started)
-                completed_at = utc_now()
-                if isinstance(execution_result, JobExecutionResult):
-                    result = execution_result.result
-                    events = _persisted_events(job_id, execution_result.events, completed_at)
-                else:
-                    result = execution_result
-                    events = []
-                completed = store.mutate_job_record(
-                    job_id,
-                    lambda current: current.model_copy(
-                        update={
-                            "status": JobStatus.SUCCESSFUL,
-                            "finished_at": completed_at,
-                            "result": result,
-                            "events": events,
-                            "progress": JobProgress(
-                                done=current.progress.done,
-                                total=current.progress.total,
-                                percent=current.progress.percent,
-                                message="Completed",
-                            ),
-                        }
-                    ),
-                )
-                self._consume_events(completed)
-                return
-            except JobCancelledError as exc:
-                cancelled_result = exc.result
-                store.mutate_job_record(
-                    job_id,
-                    lambda current: current.model_copy(
-                        update={
-                            "status": JobStatus.CANCELLED,
-                            "finished_at": utc_now(),
-                            "result": cancelled_result,
-                            "progress": JobProgress(
-                                done=current.progress.done,
-                                total=current.progress.total,
-                                percent=current.progress.percent,
-                                message="Cancelled",
-                            ),
-                        }
-                    ),
-                )
-                return
-            except Exception as exc:
-                logger.exception("Job %s failed", job_id)
-                error = JobError(type=type(exc).__name__, message=str(exc))
-                if started.attempt < started.max_attempts:
-                    retry_after = _retry_delay_seconds(started.attempt)
-                    store.mutate_job_record(
-                        job_id,
-                        lambda latest: latest.model_copy(
-                            update={
-                                "status": JobStatus.RETRYING,
-                                "retry_after": retry_after,
-                                "error": error,
-                                "progress": JobProgress(message="Retry scheduled"),
-                            }
-                        ),
-                    )
-                    if not self._sleep_for_retry(job_id, retry_after):
-                        continue
-                    continue
+                started = store.mutate_job_record(job_id, start)
+                if cancelled:
+                    continue  # the check above records it
+                retry_after = self._run_attempt(job_id, started)
+            finally:
+                slots.release()
+            return retry_after
 
+    def _cancel_requested(self, job_id: str) -> bool:
+        record = store.get_job_record(job_id)
+        return bool(record and record.cancel_requested)
+
+    def _report_waiting_for_slot(self, job_id: str) -> None:
+        store.mutate_job_record(
+            job_id,
+            lambda current: current.model_copy(update={"progress": JobProgress(message="Waiting for a free job slot")}),
+        )
+
+    def _run_attempt(self, job_id: str, started: JobRecord) -> int | None:
+        """Run one attempt of a started job: the retry delay if it should run again, else None."""
+        try:
+            execution_result = self._invoke_process(started)
+            completed_at = utc_now()
+            if isinstance(execution_result, JobExecutionResult):
+                result = execution_result.result
+                events = _persisted_events(job_id, execution_result.events, completed_at)
+            else:
+                result = execution_result
+                events = []
+            completed = store.mutate_job_record(
+                job_id,
+                lambda current: current.model_copy(
+                    update={
+                        "status": JobStatus.SUCCESSFUL,
+                        "finished_at": completed_at,
+                        "result": result,
+                        "events": events,
+                        "progress": JobProgress(
+                            done=current.progress.done,
+                            total=current.progress.total,
+                            percent=current.progress.percent,
+                            message="Completed",
+                        ),
+                    }
+                ),
+            )
+            self._consume_events(completed)
+            return None
+        except JobCancelledError as exc:
+            cancelled_result = exc.result
+            store.mutate_job_record(
+                job_id,
+                lambda current: current.model_copy(
+                    update={
+                        "status": JobStatus.CANCELLED,
+                        "finished_at": utc_now(),
+                        "result": cancelled_result,
+                        "progress": JobProgress(
+                            done=current.progress.done,
+                            total=current.progress.total,
+                            percent=current.progress.percent,
+                            message="Cancelled",
+                        ),
+                    }
+                ),
+            )
+            return None
+        except Exception as exc:
+            logger.exception("Job %s failed", job_id)
+            error = JobError(type=type(exc).__name__, message=str(exc))
+            if started.attempt < started.max_attempts:
+                retry_after = _retry_delay_seconds(started.attempt)
                 store.mutate_job_record(
                     job_id,
                     lambda latest: latest.model_copy(
                         update={
-                            "status": JobStatus.FAILED,
-                            "finished_at": utc_now(),
+                            "status": JobStatus.RETRYING,
+                            "retry_after": retry_after,
                             "error": error,
-                            "progress": JobProgress(
-                                done=latest.progress.done,
-                                total=latest.progress.total,
-                                percent=latest.progress.percent,
-                                message="Failed",
-                            ),
+                            "progress": JobProgress(message="Retry scheduled"),
                         }
                     ),
                 )
-                return
+                return retry_after
+
+            store.mutate_job_record(
+                job_id,
+                lambda latest: latest.model_copy(
+                    update={
+                        "status": JobStatus.FAILED,
+                        "finished_at": utc_now(),
+                        "error": error,
+                        "progress": JobProgress(
+                            done=latest.progress.done,
+                            total=latest.progress.total,
+                            percent=latest.progress.percent,
+                            message="Failed",
+                        ),
+                    }
+                ),
+            )
+            return None
 
     def _invoke_process(self, record: JobRecord) -> Any:
         fn_path = record.request.get("__fn_path__")

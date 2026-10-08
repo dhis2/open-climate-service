@@ -9,6 +9,7 @@ import re
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -50,13 +51,21 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobStatus,
     OpenEOJobUpdate,
 )
+from open_climate_service.shared.cancellation import (
+    ExecutionCancelled,
+    cancellation_scope,
+    enter_publication,
+    raise_if_cancelled,
+)
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
+from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
-from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
-from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
+from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD, feature_id_field
+from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
 _T = TypeVar("_T")
 
@@ -186,12 +195,104 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data["source_event_id"] = record.source_event_id
     data["finished_at"] = record.finished_at.isoformat() if record.finished_at is not None else None
     data["delivery_due"] = record.delivery_due
+    data["attempt"] = record.attempt
+    data["max_attempts"] = record.max_attempts
+    data["retry_at"] = record.retry_at.isoformat() if record.retry_at is not None else None
+    data["publishing"] = record.publishing
     return data
 
 
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
+
+
+def _cancel_requested(job_id: str) -> bool:
+    record = store_get_job(job_id)
+    return bool(record and record.cancel_requested)
+
+
+def _seconds_until(moment: datetime | None) -> float:
+    """Seconds from now until ``moment``; zero when it is absent or past."""
+    if moment is None:
+        return 0.0
+    return max(0.0, (_as_utc(moment) - utc_now()).total_seconds())
+
+
+def _execution_lease_path(job_id: str) -> Path:
+    return _JOBS_DIR / ".execution-leases" / job_id
+
+
+MAX_TRIGGERED_ATTEMPTS = 10
+"""Upper bound on attempts per triggered job, shared with the trigger configuration."""
+
+
+def _retry_delay_seconds(attempt: int) -> int:
+    """Backoff before the next attempt: 1, 2, then 4 minutes."""
+    return int(min(240, 60 * (2 ** max(0, attempt - 1))))
+
+
+_VALIDATION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ValueError,
+    TypeError,
+    KeyError,
+    LookupError,
+    NotImplementedError,
+)
+"""Validation-type failures. Permanent where they mean invalid configuration, not elsewhere."""
+
+_TRANSIENT_HTTP_STATUSES = frozenset({408, 409, 423, 429})
+
+
+def _is_permanent_error(exc: BaseException, *, while_saving: bool = False) -> bool:
+    """True when retrying cannot help.
+
+    Decided by what failed and where, following only explicit causes (``raise ... from``):
+    an implicit ``__context__`` is whatever happened to be handled at the time, so a
+    ``ConnectionError`` raised while handling a cache-miss ``KeyError`` is not a ``KeyError``.
+
+    * An invalid process graph is permanent: it fails the same way on every attempt.
+    * An ``HTTPException`` a process raised itself with a 4xx, other than a conflict, lock,
+      timeout or rate limit, is permanent: an unknown collection, a refused request.
+    * While saving the result, a validation-type error is permanent: an unknown export, a
+      mapping or unit mismatch. Its I/O errors are not.
+    * Anything else raised while the graph runs is retried within the attempt budget. That
+      includes ``ValueError``: a truncated remote response or a partly readable store raises
+      one too, and type alone cannot tell it from a bad argument.
+    """
+    from open_climate_service.openeo.execution import InvalidProcessGraph
+
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and all(current is not seen for seen in chain):
+        chain.append(current)
+        current = current.__cause__
+    for item in chain:
+        if isinstance(item, InvalidProcessGraph):
+            return True
+        # A 4xx wrapping a cause is the executor translating a failure for HTTP callers;
+        # only one raised directly states a request error.
+        if isinstance(item, HTTPException) and item.__cause__ is None and 400 <= item.status_code < 500:
+            return item.status_code not in _TRANSIENT_HTTP_STATUSES
+    root = chain[-1]
+    return while_saving and isinstance(root, _VALIDATION_ERROR_TYPES) and not isinstance(root, OSError)
+
+
+def _with_attempts(message: str, record: OpenEOJobRecord) -> str:
+    """Name the attempts used, for a job that could retry; a single-attempt job is unchanged."""
+    if record.max_attempts <= 1:
+        return message
+    return f"{message} (attempt {record.attempt} of {record.max_attempts})"
+
+
+def _append_log(record: OpenEOJobRecord, line: str) -> str:
+    """Add one timestamped line to the job's visible attempt history."""
+    entry = f"{utc_now().isoformat()} {line}"
+    return f"{record.logs}\n{entry}" if record.logs else entry
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
 class OpenEOJobService:
@@ -203,6 +304,12 @@ class OpenEOJobService:
         self._lock = threading.Lock()
         self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
         self._delivery_due: Callable[[OpenEOJobRecord], dict[str, str] | None] | None = None
+        self._stopping = threading.Event()
+        # Jobs waiting out a retry backoff: a timer requeues each, so no worker sleeps.
+        self._retry_timers: dict[str, threading.Timer] = {}
+        self._watched: set[str] = set()
+        # How often a job leased by another process is checked for takeover.
+        self.lease_poll_seconds = 5.0
 
     def set_delivery_due_provider(self, provider: Callable[[OpenEOJobRecord], dict[str, str] | None] | None) -> None:
         """Register the callback that says which delivery a job owes as it finishes.
@@ -221,36 +328,122 @@ class OpenEOJobService:
         self._finished_listener = listener
 
     def shutdown(self) -> None:
+        """Stop executing. A job waiting out a retry backoff stays QUEUED for the next start."""
+        self._stopping.set()
+        with self._lock:
+            timers = list(self._retry_timers.values())
+            self._retry_timers.clear()
+        for timer in timers:
+            timer.cancel()
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     def recover_pending_jobs(self) -> None:
         """Recover jobs left in a non-terminal state from a previous server run.
 
-        QUEUED jobs are re-enqueued.  RUNNING jobs are marked ERROR because their
-        executor thread no longer exists after the restart.
+        QUEUED jobs are re-enqueued, or wait out the rest of a retry backoff. A RUNNING
+        triggered job with attempts left is requeued, since its interruption says nothing
+        about the workflow; any other RUNNING job is marked ERROR. A job still executing in
+        another live process, typically one that is shutting down, is left to it and watched
+        instead, and taken over if that process exits without finishing it.
         """
         for record in store_list_jobs():
-            if record.status == OpenEOJobStatus.RUNNING:
-                logger.warning("openEO job %s was RUNNING at restart — marking as error", record.id)
-                try:
-                    store_update_job(
-                        record.id,
-                        lambda r: r.model_copy(
-                            update={
-                                "status": OpenEOJobStatus.ERROR,
-                                "error_message": "Interrupted by server restart",
-                                "updated": utc_now(),
-                            }
-                        ),
-                    )
-                except KeyError:
-                    pass
-            elif record.status == OpenEOJobStatus.QUEUED:
-                logger.info("openEO job %s was QUEUED at restart — re-enqueueing", record.id)
-                try:
+            if record.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+                continue
+            # One job that cannot be recovered must not stop the recovery of the others.
+            try:
+                requeue = False
+                with execution_lease(_execution_lease_path(record.id)) as won:
+                    if won:
+                        requeue = self._recover(record.id)
+                if not won:
+                    logger.warning("openEO job %s is still executing in another process; watching it", record.id)
+                    self._watch_for_takeover(record.id)
+                elif requeue:
                     self._enqueue(record.id)
-                except Exception:
-                    logger.exception("Failed to re-enqueue openEO job %s", record.id)
+            except Exception:
+                logger.exception("Could not recover openEO job %s; continuing with the others", record.id)
+
+    def _recover(self, job_id: str) -> bool:
+        """Prepare one interrupted job while holding its lease; return whether to run it now."""
+        record = store_get_job(job_id)
+        if record is None or record.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
+            return False
+        if record.cancel_requested:
+            store_update_job(
+                job_id, lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()})
+            )
+            return False
+        if record.status == OpenEOJobStatus.QUEUED:
+            if record.retry_at is not None:
+                remaining = (_as_utc(record.retry_at) - utc_now()).total_seconds()
+                if remaining > 0:
+                    logger.info("openEO job %s resumes its retry backoff (%.0fs left)", job_id, remaining)
+                    self._schedule_retry(job_id, remaining)
+                    return False
+            logger.info("openEO job %s was QUEUED at restart — re-enqueueing", job_id)
+            return True
+        if record.trigger_id is not None and record.attempt < record.max_attempts:
+            logger.warning("Triggered openEO job %s was interrupted by a restart; requeueing it", job_id)
+            store_update_job(
+                job_id,
+                lambda r: r.model_copy(
+                    update={
+                        "status": OpenEOJobStatus.QUEUED,
+                        "updated": utc_now(),
+                        "publishing": False,
+                        "logs": _append_log(
+                            r, f"attempt {r.attempt} of {r.max_attempts} interrupted by a server restart; requeued"
+                        ),
+                    }
+                ),
+            )
+            return True
+        logger.warning("openEO job %s was RUNNING at restart — marking as error", job_id)
+        store_update_job(
+            job_id,
+            lambda r: r.model_copy(
+                update={
+                    "status": OpenEOJobStatus.ERROR,
+                    "error_message": _with_attempts("Interrupted by server restart", r),
+                    "updated": utc_now(),
+                    "publishing": False,
+                    "logs": _append_log(r, f"attempt {r.attempt} of {r.max_attempts} interrupted by a server restart")
+                    if r.max_attempts > 1
+                    else r.logs,
+                }
+            ),
+        )
+        return False
+
+    def _watch_for_takeover(self, job_id: str) -> None:
+        """Take over a job from another process once its execution lease is released.
+
+        The record is re-read under the lease, so a job the other process finished is left
+        alone and one it abandoned is recovered as at startup. One watcher per job at most.
+        """
+        with self._lock:
+            if self._stopping.is_set() or job_id in self._watched:
+                return
+            self._watched.add(job_id)
+
+        def watch() -> None:
+            try:
+                while not self._stopping.wait(self.lease_poll_seconds):
+                    with execution_lease(_execution_lease_path(job_id)) as won:
+                        if not won:
+                            continue
+                        requeue = self._recover(job_id)
+                    if requeue and not self._stopping.is_set():
+                        logger.info("Took over openEO job %s after its previous process released it", job_id)
+                        with self._lock:
+                            self._watched.discard(job_id)
+                        self._enqueue(job_id)
+                    return
+            finally:
+                with self._lock:
+                    self._watched.discard(job_id)
+
+        threading.Thread(target=watch, name=f"openeo-takeover-{job_id}", daemon=True).start()
 
     # ------------------------------------------------------------------
     # HTTP-layer helpers
@@ -294,8 +487,20 @@ class OpenEOJobService:
         *,
         source_event_id: str,
         trigger_id: str,
+        max_attempts: int = 1,
     ) -> tuple[OpenEOJobRecord, bool]:
-        """Create at most one job for a durable event and automation trigger."""
+        """Create at most one job for a durable event and automation trigger.
+
+        ``max_attempts`` bounds how often the job runs under its one deterministic ID: a
+        transient failure or an interrupting restart is retried, a permanent error is not.
+        It must lie within the same bounds as a trigger's configuration.
+        """
+        # `type(...) is int`, not isinstance: a bool is an int, and a caller outside the
+        # configuration path is not held to the annotation at runtime.
+        if type(max_attempts) is not int or not 1 <= max_attempts <= MAX_TRIGGERED_ATTEMPTS:
+            raise ValueError(
+                f"max_attempts must be an integer from 1 to {MAX_TRIGGERED_ATTEMPTS}, got {max_attempts!r}"
+            )
         if not isinstance(body.process.get("process_graph"), dict):
             raise ValueError("process.process_graph must be an object")
         job_id = str(uuid5(NAMESPACE_URL, f"ocs:{source_event_id}:{trigger_id}"))
@@ -316,6 +521,7 @@ class OpenEOJobService:
             ],
             trigger_id=trigger_id,
             source_event_id=source_event_id,
+            max_attempts=max_attempts,
         )
 
         def _create_once(records: list[dict[str, object]]) -> tuple[OpenEOJobRecord, bool]:
@@ -398,8 +604,10 @@ class OpenEOJobService:
             job_dir = _JOBS_DIR / job_id
             if job_dir.exists():
                 shutil.rmtree(job_dir, ignore_errors=True)
-        # The lease file lives outside the job directory; remove it now the job is gone.
+        # The lease files live outside the job directory; remove them now the job is gone.
         (_JOBS_DIR / ".export-locks" / f"{job_id}.lock").unlink(missing_ok=True)
+        lease = _execution_lease_path(job_id)
+        lease.with_suffix(lease.suffix + ".lock").unlink(missing_ok=True)
 
     def start_job(self, job_id: str) -> None:
         """Queue a job for processing (POST /jobs/{id}/results)."""
@@ -411,9 +619,19 @@ class OpenEOJobService:
                 raise HTTPException(status_code=400, detail="Job is already running")
             if record.status == OpenEOJobStatus.QUEUED:
                 return
+            # A deliberate re-run starts a fresh attempt budget.
             store_update_job(
                 job_id,
-                lambda r: r.model_copy(update={"status": OpenEOJobStatus.QUEUED, "updated": utc_now()}),
+                lambda r: r.model_copy(
+                    update={
+                        "status": OpenEOJobStatus.QUEUED,
+                        "updated": utc_now(),
+                        "attempt": 0,
+                        "retry_at": None,
+                        # A re-run is a new request: an earlier cancellation must not cancel it.
+                        "cancel_requested": False,
+                    }
+                ),
             )
             self._enqueue(job_id)
 
@@ -429,6 +647,12 @@ class OpenEOJobService:
         with self._lock:
             future = self._futures.get(job_id)
             cancelled_before_start = future is not None and future.cancel()
+            # A job waiting out a retry backoff has no worker: stopping its timer means no
+            # attempt will start, so it is cancelled now rather than when the backoff ends.
+            timer = self._retry_timers.pop(job_id, None)
+        if timer is not None:
+            timer.cancel()
+            cancelled_before_start = True
 
         def _cancel(r: OpenEOJobRecord) -> OpenEOJobRecord:
             # Re-checked inside the store mutation: the worker may have finished the job since
@@ -438,10 +662,24 @@ class OpenEOJobService:
             # its delivery may already have been submitted.
             if r.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
                 raise HTTPException(status_code=400, detail="Job is not running or queued")
+            if r.publishing:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Job is publishing its result and can no longer be cancelled",
+                )
             if cancelled_before_start and r.status == OpenEOJobStatus.QUEUED:
                 # future.cancel() returned True: the job was still queued in the thread pool
-                # and will never start.
-                return r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()})
+                # and will never start, or its retry timer was stopped.
+                backing_off = r.retry_at is not None and r.attempt > 0
+                return r.model_copy(
+                    update={
+                        "status": OpenEOJobStatus.CANCELED,
+                        "updated": utc_now(),
+                        "logs": _append_log(r, f"cancelled during the retry backoff after attempt {r.attempt}")
+                        if backing_off
+                        else r.logs,
+                    }
+                )
             # Running (or the worker already claimed it): cooperative cancellation; the worker
             # checks this flag in the same mutation that would mark the job FINISHED.
             return r.model_copy(update={"cancel_requested": True, "updated": utc_now()})
@@ -482,59 +720,254 @@ class OpenEOJobService:
             self._futures[job_id] = future
 
     def _run_job(self, job_id: str) -> None:
+        retry_after: float | None = None
+        watch = False
         try:
-            self._execute(job_id)
+            with execution_lease(_execution_lease_path(job_id)) as won:
+                if not won:
+                    # Another process is executing this job. Leave its record alone, but watch
+                    # it: if that process exits without finishing, nothing else would.
+                    logger.warning("openEO job %s is executing in another process; watching it", job_id)
+                    watch = True
+                else:
+                    # Re-read under the lease: another process may have finished or cancelled
+                    # the job since it was queued here.
+                    current = store_get_job(job_id)
+                    if current is not None and current.status == OpenEOJobStatus.QUEUED:
+                        wait = _seconds_until(current.retry_at)
+                        if wait > 0:
+                            # Queued here before its backoff passed, e.g. by a second process
+                            # after a takeover: wait out the rest instead of retrying early.
+                            retry_after = wait
+                        else:
+                            retry_after = self._execute_in_slot(job_id)
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)
+        # Only once this worker is neither leased nor registered: otherwise a requeue from a
+        # watcher or a retry timer could be refused as a duplicate and leave the job idle.
+        if watch:
+            self._watch_for_takeover(job_id)
+        elif retry_after is not None:
+            self._schedule_retry(job_id, retry_after)
 
-    def _execute(self, job_id: str) -> None:
+    def _execute_in_slot(self, job_id: str) -> float | None:
+        """Run one attempt holding a shared job slot, so ingests and openEO jobs share one limit.
+
+        The job waits QUEUED for the slot. One cancelled meanwhile is still handed to `_execute`,
+        which records the cancellation without computing; one still waiting at shutdown stays
+        QUEUED for the next start to re-enqueue.
+        """
+        slots = get_job_slots()
+        if not slots.acquire(should_stop=lambda: self._stopping.is_set() or _cancel_requested(job_id)):
+            return None if self._stopping.is_set() else self._execute(job_id)
+        try:
+            return self._execute(job_id)
+        finally:
+            slots.release()
+
+    def _schedule_retry(self, job_id: str, seconds: float) -> None:
+        """Requeue a job once its retry backoff has passed, holding no worker meanwhile.
+
+        A job has at most one pending retry: scheduling again replaces the earlier timer.
+        """
+        with self._lock:
+            if self._stopping.is_set():
+                return  # stays QUEUED with its retry_at, so the next start resumes the wait
+            previous = self._retry_timers.pop(job_id, None)
+            timer = threading.Timer(max(0.0, seconds), self._retry_due)
+            # The timer passes itself, so a replaced timer that fires anyway can tell it is stale.
+            timer.args = (job_id, timer)
+            timer.daemon = True
+            self._retry_timers[job_id] = timer
+        if previous is not None:
+            previous.cancel()
+        timer.start()
+        # A cancel that landed after the failure was recorded but before this timer existed
+        # found no timer to stop and only set the flag. Apply it now, not when the backoff ends.
+        if _cancel_requested(job_id):
+            self._cancel_pending_retry(job_id)
+
+    def _cancel_pending_retry(self, job_id: str) -> None:
+        """Cancel a job waiting out its backoff: stop its timer and record it as cancelled."""
+        with self._lock:
+            timer = self._retry_timers.pop(job_id, None)
+        if timer is None:
+            return  # already fired, so the worker's pre-execution check records the cancel
+        timer.cancel()
+
+        def _cancelled(r: OpenEOJobRecord) -> OpenEOJobRecord:
+            if r.status != OpenEOJobStatus.QUEUED:
+                return r
+            return r.model_copy(
+                update={
+                    "status": OpenEOJobStatus.CANCELED,
+                    "updated": utc_now(),
+                    "logs": _append_log(r, f"cancelled during the retry backoff after attempt {r.attempt}"),
+                }
+            )
+
+        store_update_job(job_id, _cancelled)
+
+    def _retry_due(self, job_id: str, timer: threading.Timer | None = None) -> None:
+        """Requeue a job whose backoff has passed, if ``timer`` is still the one registered for it.
+
+        A timer replaced by a later `_schedule_retry` may already be firing when it is
+        cancelled. Without the identity check it would pop its replacement and requeue the job
+        early, cutting the new backoff short. ``None`` acts on whichever timer is registered.
+        """
+        with self._lock:
+            current = self._retry_timers.get(job_id)
+            if current is None or (timer is not None and current is not timer):
+                return  # cancelled, or superseded by a newer timer that will requeue the job
+            del self._retry_timers[job_id]
+            # A timer can fire while shutdown is in progress. The job then stays QUEUED with
+            # its retry_at, and the next start requeues it.
+            if self._stopping.is_set():
+                return
+        self._enqueue(job_id)
+
+    def _execute(self, job_id: str) -> float | None:
+        """Run one attempt; return the retry delay in seconds if the job should run again."""
         from open_climate_service.openeo.execution import run_process_graph
 
         record = store_get_job(job_id)
         if record is None:
-            return
+            return None
         if record.cancel_requested:
-            store_update_job(
-                job_id,
-                lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()}),
-            )
-            return
-
-        store_update_job(
-            job_id,
-            lambda r: r.model_copy(update={"status": OpenEOJobStatus.RUNNING, "updated": utc_now()}),
-        )
-
-        try:
-            result = run_process_graph(record.process)
-            # Re-read record — cancellation may have been requested while running.
-            current = store_get_job(job_id)
-            if current is not None and current.cancel_requested:
-                store_update_job(
-                    job_id,
-                    lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()}),
-                )
-                return
-            output_path = self._persist_result(job_id, result)
-            finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
-        except Exception as job_exc:
-            logger.exception("openEO job %s failed", job_id)
-            error_msg = f"{type(job_exc).__name__}: {job_exc}"
             store_update_job(
                 job_id,
                 lambda r: r.model_copy(
                     update={
-                        "status": OpenEOJobStatus.ERROR,
-                        "error_message": error_msg,
+                        "status": OpenEOJobStatus.CANCELED,
                         "updated": utc_now(),
+                        "logs": _append_log(r, "cancelled before the next attempt started"),
                     }
                 ),
             )
-        else:
-            # Outside the try: a listener failure must not turn a finished job into an error.
-            if finished.status == OpenEOJobStatus.FINISHED:
-                self._notify_finished(finished)
+            return None
+
+        started = store_update_job(
+            job_id,
+            lambda r: r.model_copy(
+                update={
+                    "status": OpenEOJobStatus.RUNNING,
+                    "updated": utc_now(),
+                    "attempt": r.attempt + 1,
+                    "retry_at": None,
+                    "publishing": False,
+                }
+            ),
+        )
+
+        saving = False
+        try:
+            # Each attempt owns a fresh result directory. Without this, a successful rerun in
+            # another format made files left by an earlier or cancelled attempt downloadable.
+            import shutil
+
+            results_dir = _JOBS_DIR / job_id / "results"
+            shutil.rmtree(results_dir, ignore_errors=True)
+            results_dir.mkdir(parents=True, exist_ok=True)
+            # Cancellation is checked before every process and dask task, and once more,
+            # atomically, at the point of no return of any publication (CLIM-1221).
+            with cancellation_scope(
+                lambda: _cancel_requested(job_id),
+                enter_publication=lambda: self._enter_publication(job_id),
+            ):
+                result = run_process_graph(record.process)
+                raise_if_cancelled(force=True)
+                saving = True
+                output_path = self._persist_result(job_id, result)
+            finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
+        except ExecutionCancelled:
+            logger.info("openEO job %s was cancelled while running; nothing was published", job_id)
+            store_update_job(
+                job_id,
+                lambda r: r.model_copy(
+                    update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now(), "publishing": False}
+                ),
+            )
+            return None
+        except Exception as job_exc:
+            logger.exception("openEO job %s failed", job_id)
+            return self._record_failure(job_id, started, job_exc, while_saving=saving)
+        # Outside the try: a listener failure must not turn a finished job into an error.
+        # Only a finished attempt reaches this, so only a successful attempt can deliver.
+        if finished.status == OpenEOJobStatus.FINISHED:
+            self._notify_finished(finished)
+        return None
+
+    def _enter_publication(self, job_id: str) -> None:
+        """Pass the point of no return, or raise if the job was cancelled first.
+
+        One store mutation, so it is atomic with `cancel_job`: whichever lands first decides.
+        If the cancellation did, nothing is published. If this did, the attempt finishes,
+        and a later cancel request is refused rather than leaving a half-published result.
+        """
+
+        def _gate(r: OpenEOJobRecord) -> OpenEOJobRecord:
+            if r.cancel_requested:
+                raise ExecutionCancelled("The job was cancelled before it could publish")
+            return r.model_copy(update={"publishing": True, "updated": utc_now()})
+
+        store_update_job(job_id, _gate)
+
+    def _record_failure(
+        self, job_id: str, started: OpenEOJobRecord, exc: Exception, *, while_saving: bool = False
+    ) -> float | None:
+        """Record a failed attempt: requeue it for a retry, or mark the job ERROR."""
+        error = f"{type(exc).__name__}: {exc}"
+        permanent = _is_permanent_error(exc, while_saving=while_saving)
+        if not permanent and started.attempt < started.max_attempts:
+            delay = float(_retry_delay_seconds(started.attempt))
+            retry_at = utc_now() + timedelta(seconds=delay)
+
+            def _retry(r: OpenEOJobRecord) -> OpenEOJobRecord:
+                if r.cancel_requested:  # cancelled while the attempt ran: nothing to retry
+                    return r.model_copy(
+                        update={
+                            "status": OpenEOJobStatus.CANCELED,
+                            "updated": utc_now(),
+                            "logs": _append_log(
+                                r, f"attempt {r.attempt} of {r.max_attempts} failed: {error}; cancelled"
+                            ),
+                        }
+                    )
+                return r.model_copy(
+                    update={
+                        "status": OpenEOJobStatus.QUEUED,
+                        "error_message": error,
+                        "retry_at": retry_at,
+                        "publishing": False,
+                        "updated": utc_now(),
+                        "logs": _append_log(
+                            r,
+                            f"attempt {r.attempt} of {r.max_attempts} failed: {error}; "
+                            f"retrying at {retry_at.isoformat()}",
+                        ),
+                    }
+                )
+
+            updated = store_update_job(job_id, _retry)
+            return delay if updated.status == OpenEOJobStatus.QUEUED else None
+
+        def _fail(r: OpenEOJobRecord) -> OpenEOJobRecord:
+            outcome = "failed with a permanent error, not retried" if permanent else "failed"
+            return r.model_copy(
+                update={
+                    "status": OpenEOJobStatus.ERROR,
+                    "error_message": _with_attempts(error, r),
+                    "updated": utc_now(),
+                    "publishing": False,
+                    "logs": _append_log(r, f"attempt {r.attempt} of {r.max_attempts} {outcome}: {error}")
+                    if r.max_attempts > 1
+                    else r.logs,
+                }
+            )
+
+        store_update_job(job_id, _fail)
+        return None
 
     def _finish(self, record: OpenEOJobRecord, output_path: str | None) -> OpenEOJobRecord:
         """Mark a job FINISHED, or CANCELED if cancellation arrived while its result was saved.
@@ -551,7 +984,17 @@ class OpenEOJobService:
             # A re-run keeps its delivery links, so an automated delivery is not repeated.
             usage["deliveries"] = deliveries
         finished = record.model_copy(
-            update={"status": OpenEOJobStatus.FINISHED, "updated": now, "finished_at": now, "usage": usage}
+            update={
+                "status": OpenEOJobStatus.FINISHED,
+                "updated": now,
+                "finished_at": now,
+                "usage": usage,
+                "publishing": False,
+                # The attempt history ends with the outcome that counts, in the same write.
+                "logs": _append_log(record, f"attempt {record.attempt} of {record.max_attempts} finished")
+                if record.max_attempts > 1
+                else record.logs,
+            }
         )
         due: dict[str, str] | None = None
         if self._delivery_due is not None:
@@ -765,15 +1208,22 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
 
     variable = _derive_variable(ds, options)
     source_template = _resolve_source_template(options)
+    _publish_raw = options.get("publish", True)
+    if not isinstance(_publish_raw, bool):
+        raise ValueError(f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}")
     template = _reg.get_dataset(dataset_id)
+    # A template this call registers, so a cancellation before publication can remove it again.
+    created_template: Path | None = None
     if template is None:
         # Validate the candidate before it reaches disk. Persisting first left an incompatible
         # template behind when publication then failed, and the corrected retry reloaded that
         # template and failed again — the operator had to delete a YAML to get unstuck.
         candidate = _derive_managed_dataset_template(ds, options, source_template, t_dim)
         _reject_incompatible_template_units(ds, variable, cf_attrs_from_template(candidate))
+        # Nothing reaches disk for a job that is already cancelled.
+        raise_if_cancelled(force=True)
         try:
-            _reg.write_dataset_template(candidate)
+            created_template = _reg.write_dataset_template(candidate)
         except FileExistsError:
             pass
         template = _reg.get_dataset(dataset_id)
@@ -805,6 +1255,28 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
     store_path = downloader.DOWNLOAD_DIR / f"{dataset_id}.icechunk"
     store_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Validate the complete record before crossing the store commit's point of no return.
+    # Only its measured byte size depends on the committed store and is filled in afterwards.
+    record = ArtifactRecord(
+        artifact_id=str(uuid.uuid4()),
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        variable=variable,
+        period_type=period_type,
+        format=ArtifactFormat.ICECHUNK,
+        path=str(store_path),
+        asset_paths=[str(store_path)],
+        size_bytes=0,
+        variables=[str(v) for v in ds.data_vars],
+        request_scope=ArtifactRequestScope(
+            start=coverage.temporal.start,
+            end=coverage.temporal.end,
+        ),
+        coverage=coverage,
+        created_at=datetime.now(UTC),
+        publication=ArtifactPublication(),
+    )
+
     # The same writer lock as ingestion and sync. Publishing into a store while one of those
     # writes it would make one of them fail with an Icechunk commit conflict.
     store_lock = ingestion_services._acquire_store_lock(store_path)
@@ -814,16 +1286,26 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             "run this job again once that finishes"
         )
     try:
-        downloader.write_to_icechunk_store(
-            _strip_non_serializable_attrs(ds),
-            store_path,
-            x_dim,
-            y_dim,
-            t_dim,
-            crs=crs,
-            pyramid_method=downloader.resampling_method_from_template(template),
-            commit_message=f"Published from openEO job: {dataset_id}",
-        )
+        try:
+            downloader.write_to_icechunk_store(
+                _strip_non_serializable_attrs(ds),
+                store_path,
+                x_dim,
+                y_dim,
+                t_dim,
+                crs=crs,
+                pyramid_method=downloader.resampling_method_from_template(template),
+                commit_message=f"Published from openEO job: {dataset_id}",
+                # The point of no return: a cancelled job stops here, before the commit, so
+                # the store keeps its previous state and nothing is published.
+                before_commit=enter_publication,
+            )
+        except ExecutionCancelled:
+            if created_template is not None:
+                # Registered by this attempt for a dataset that now will not exist.
+                created_template.unlink(missing_ok=True)
+                _reg.reset_template_caches()
+            raise
 
         # A derived product is a published dataset and appears in the same lists, so it gets a
         # thumbnail on the same terms. One write, so this is already the once-per-run render the
@@ -833,30 +1315,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             {**template, "id": dataset_id, "variable": variable},
         )
 
-        record = ArtifactRecord(
-            artifact_id=str(uuid.uuid4()),
-            dataset_id=dataset_id,
-            dataset_name=dataset_name,
-            variable=variable,
-            period_type=period_type,
-            format=ArtifactFormat.ICECHUNK,
-            path=str(store_path),
-            asset_paths=[str(store_path)],
-            size_bytes=stored_bytes(store_path),
-            variables=[str(v) for v in ds.data_vars],
-            request_scope=ArtifactRequestScope(
-                start=coverage.temporal.start,
-                end=coverage.temporal.end,
-            ),
-            coverage=coverage,
-            created_at=datetime.now(UTC),
-            publication=ArtifactPublication(),
-        )
-        _publish_raw = options.get("publish", True)
-        if not isinstance(_publish_raw, bool):
-            raise ValueError(
-                f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}"
-            )
+        record = record.model_copy(update={"size_bytes": stored_bytes(store_path)})
         ingestion_services.register_artifact_record(record, publish=_publish_raw)
     finally:
         store_lock.release()
@@ -1254,70 +1713,24 @@ def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None) -> Any:
 
 
 def _is_dekadal_axis(t_values: Any) -> bool:
-    """Whether every timestamp starts a dekad, at dekadal spacing.
+    """Whether every timestamp starts a dekad, at dekadal spacing; see `shared.time.is_dekadal_axis`."""
+    from open_climate_service.shared.time import is_dekadal_axis
 
-    Two conditions, and both are needed:
-
-    * **Every timestamp falls on the 1st, 11th or 21st.** Necessary because a regular 10-day
-      series on any other day of the month is not dekadal, and calling it so would attach a
-      cadence whose period strings mean something else.
-    * **Some adjacent pair is 8 to 11 days apart.** Necessary because the day-of-month test
-      alone accepts a *monthly* axis: every month starts on the 1st, and a monthly-on-the-11th
-      axis is equally a subset. The same trap is guarded in ``aggregate_dekads._dekad_dates``.
-      Tested on the minimum rather than the median so a dekadal axis with missing dekads — a
-      real state, which ``aggregate_dekads`` warns about — is still recognised.
-    """
-    import numpy as np
-    import pandas as pd
-
-    from open_climate_service.shared.time import DEKAD_START_DAYS
-
-    stamps = pd.DatetimeIndex(np.asarray(t_values, dtype="datetime64[ns]"))
-    if not set(stamps.day) <= set(DEKAD_START_DAYS):
-        return False
-    gaps = np.diff(stamps.values).astype("timedelta64[D]").astype(int)
-    return bool(gaps.size and gaps.min() <= 11)
+    return is_dekadal_axis(t_values)
 
 
 def _infer_period_type(ds: Any, t_dim: str) -> str | None:
-    """Infer period type from the median time step of a dataset."""
-    import numpy as np
+    """Infer period type from the median time step of a dataset; see `shared.time.infer_cadence`.
+
+    Kept here by name because the managed-output and export paths call it with a dataset and
+    a dimension name; the cadence rule itself lives beside the period reachability table it
+    now serves (CLIM-1302).
+    """
+    from open_climate_service.shared.time import infer_cadence
 
     if t_dim not in ds.coords or ds.sizes.get(t_dim, 0) < 2:
         return None
-
-    # Sort first: streaming/append can leave a non-monotonic time axis, and an
-    # unsorted np.diff yields negative/irregular steps that skew the median.
-    t_values = np.sort(ds[t_dim].values)
-    deltas = np.diff(t_values).astype("timedelta64[s]").astype(float)
-    median_seconds = float(np.median(deltas))
-
-    if median_seconds <= 3600:
-        return "hourly"
-    if median_seconds <= 86400:
-        return "daily"
-    # Dekads are recognised by their structure, not by their interval. A dekad *starts* on the
-    # 1st, 11th or 21st by definition, so testing that is exact where a median is a guess: it
-    # accepts a short axis across a month boundary (Feb 21 -> Mar 1, 8 days) and one with missing
-    # dekads (median 15.5 days), and it refuses unrelated 10-day data that happens to fall on
-    # other days of the month. Placed before the weekly and monthly buckets, which would
-    # otherwise claim both of those cases.
-    if _is_dekadal_axis(t_values):
-        return "dekadal"
-    if median_seconds <= 8 * 86400:
-        return "weekly"
-    if median_seconds <= 32 * 86400:
-        return "monthly"
-    # Deliberately no "quarterly" branch. It is in the STAC step map (so a store that already
-    # carries it still gets P3M) but is not implemented for ingest or coverage:
-    # `datetime_to_period_string` raises on it and `numpy_datetime_to_period_string` KeyErrors,
-    # so inferring it attached a cadence that fails the moment the artifact is written — and
-    # since it is now rejected at registration, it would fail auto-registration outright.
-    # Returning None instead is honest and legal: a managed openEO output is static, and a
-    # static template may carry no cadence. Add the branch back with quarterly support.
-    if 330 * 86400 <= median_seconds <= 370 * 86400:
-        return "yearly"
-    return None
+    return infer_cadence(ds[t_dim].values)
 
 
 def _derive_variable(ds: Any, options: dict[str, Any]) -> str:
@@ -1395,13 +1808,16 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
                     "roles": ["metadata"],
                 }
                 # Keep the claim in step with the STAC collection's zarr asset, so a client
-                # sees the same media type from either surface. Uncached, unlike the STAC
-                # side — a job-result read is rare enough not to warrant one.
+                # sees the same media type and open arguments from either surface. Uncached,
+                # unlike the STAC side — a job-result read is rare enough not to warrant one.
                 store_path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
                 if store_path:
-                    assets["zarr"]["type"] = zarr_media_type(
-                        store_path, icechunk=artifact.format == ArtifactFormat.ICECHUNK
-                    )
+                    media_type = zarr_media_type(store_path, icechunk=artifact.format == ArtifactFormat.ICECHUNK)
+                    assets["zarr"]["type"] = media_type
+                    assets["zarr"]["xarray:open_kwargs"] = {
+                        **assets["zarr"]["xarray:open_kwargs"],
+                        **data_group_open_kwargs(media_type),
+                    }
         except Exception:
             logger.debug("Could not resolve STAC publication for managed dataset '%s'", dataset_id, exc_info=True)
         return assets
@@ -1683,9 +2099,49 @@ def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
     return path
 
 
+def check_ad_hoc_period_reachability(ds: Any, options: dict[str, Any]) -> None:
+    """Refuse a `period_type` the result's own cadence cannot honestly be labelled with (CLIM-1139).
+
+    A coarser label would put several timestamps on one DHIS2 key, which DHIS2 resolves by
+    keeping whichever arrives last; a finer one cannot be derived at all. Both are named,
+    with the step to add for the first. The cadence the result carries, stamped at load and
+    rewritten by each temporal aggregation, is authoritative; the axis spacing is inferred
+    only for a result that carries none, and a single timestamp is accepted as is.
+    """
+    from open_climate_service.shared.time import (
+        Reachability,
+        cadence_to_openeo_period,
+        normalise_export_period,
+        period_reachability,
+    )
+
+    period_field = _optional_str_option(options, "period_field") or "t"
+    destination = normalise_export_period(_optional_str_option(options, "period_type"))
+    if destination is None or period_field not in getattr(ds, "coords", {}):
+        return
+    from open_climate_service.shared.time import cadence_of
+
+    source = cadence_of(ds) or _infer_period_type(ds, period_field)
+    if source is None:
+        return
+    outcome, reason = period_reachability(source, destination)
+    if outcome is Reachability.PASS_THROUGH:
+        return
+    if outcome is Reachability.AGGREGATE:
+        period = cadence_to_openeo_period(destination)
+        step = f"aggregate_temporal_period(period='{period}')" if period else "a temporal aggregation"
+        raise ValueError(
+            f"period_type '{destination}' is coarser than the result's {source} spacing, so each "
+            f"{destination} period would receive several values. Add {step} with the reducer you mean "
+            f"before save_result, or set period_type to '{source}'"
+        )
+    raise ValueError(f"period_type '{destination}' cannot be derived from {source} data: {reason}")
+
+
 def _write_dataset_tabular_export(ds: Any, results_dir: Any, fmt: str, options: dict[str, Any]) -> str | None:
     import pandas as pd
 
+    check_ad_hoc_period_reachability(ds, options)
     inferred_options = dict(options)
     period_field = _optional_str_option(inferred_options, "period_field") or "t"
     period_type = _optional_str_option(inferred_options, "period_type")
@@ -1727,6 +2183,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
     cube_labels_raw = options.get("cube_labels")
 
     frame = pd.DataFrame(df).copy()
+    location_field = feature_id_field(frame.columns, location_field)
     if location_field not in frame.columns:
         if location_field == "geometry":
             raise ValueError(
