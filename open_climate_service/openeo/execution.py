@@ -189,13 +189,18 @@ def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
             raise ValueError(
                 "aggregate_spatial: `context` is not supported; the reducer cannot receive it. Leave it null."
             )
+        import joblib  # type: ignore[import-untyped]
+
         from open_climate_service.shared.provenance import record_features, spatial_aggregation_scope
         from open_climate_service.shared.vectors import GEOMETRY_FIELD, features_in_crs, single_raster, vector_result
 
         record_features(geometries)
         raster = single_raster(data)
         frame = features_in_crs(geometries, raster.rio.crs)
-        with spatial_aggregation_scope():
+        # xvec runs the reducer through joblib, by default in loky worker processes, where the
+        # scope's ContextVar is not set; threads do not inherit it either. Run it in this thread
+        # so the named reduction is recorded and a DHIS2 export can check its declared method.
+        with spatial_aggregation_scope(), joblib.parallel_config(backend="sequential"):
             result = original_fn(data=raster, geometries=frame, reducer=reducer, **kwargs)
         return vector_result(result, raster, frame.index, target_dimension or GEOMETRY_FIELD)
 

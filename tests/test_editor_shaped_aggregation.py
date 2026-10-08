@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from open_climate_service.openeo import execution
 from open_climate_service.openeo import jobs as openeo_jobs
 from open_climate_service.openeo.schemas import OpenEOJobStatus
 from tests.test_dhis2_export_workflow import (
@@ -103,6 +104,35 @@ def test_aggregate_spatial_refuses_a_context_it_cannot_pass_on(
 
     assert record.status == OpenEOJobStatus.ERROR
     assert "`context` is not supported" in str(record.error_message)
+
+
+_SUM_CALLBACK = {
+    "process_graph": {"sum1": {"process_id": "sum", "arguments": {"data": {"from_parameter": "data"}}, "result": True}}
+}
+
+
+@pytest.mark.parametrize(("reducer", "method"), [(_MEAN_CALLBACK, "mean"), (_SUM_CALLBACK, "sum")])
+def test_aggregate_spatial_records_the_method_its_reducer_ran(
+    instance: openeo_jobs.OpenEOJobService,  # noqa: F811
+    reducer: dict[str, Any],
+    method: str,
+) -> None:
+    """The reducer runs inside the recording scope, not in a worker process that cannot see it."""
+    result = execution.run_process_graph(_graph("aggregate_spatial", reducer))
+
+    assert result.provenance["spatial_aggregations"] == [method]
+
+
+def test_a_named_export_refuses_a_spatial_method_it_does_not_declare(
+    instance: openeo_jobs.OpenEOJobService,  # noqa: F811
+) -> None:
+    """`rain-monthly` declares `aggregation: mean`; a graph that sums is refused, not exported."""
+    graph = _graph("aggregate_spatial", _SUM_CALLBACK)
+    graph["process_graph"]["save"]["arguments"]["options"] = {"export": "rain-monthly"}
+    record = _run(instance, "core-sum-named", graph)
+
+    assert record.status == OpenEOJobStatus.ERROR
+    assert "does not match the executed spatial aggregation 'sum'" in str(record.error_message)
 
 
 def test_aggregate_spatial_weighted_takes_a_named_reducer(instance: openeo_jobs.OpenEOJobService) -> None:  # noqa: F811
