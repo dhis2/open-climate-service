@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Schedules · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <div class="page-title">
+          <h2 id="schedules-title" tabindex="-1">Schedules</h2>
+          <span class="chip">{{ schedules | length }} schedule{{ 's' if schedules | length != 1 }}</span>
+          <span class="chip {{ 'chip-published' if status.running else 'chip-unpublished' }}">{{ 'Scheduler running' if status.running else ('Scheduler off' if not status.enabled else 'Scheduler not running') }}</span>
+        </div>
+        <p class="lead">Everything on this instance's clock. A sync schedule submits a job at each check time; the job finds and ingests new source data, if any. Set one up or edit it from the dataset's own page.</p>
+
+        {% if change_warning %}
+        <div class="notice error" role="alert">{{ change_warning }}</div>
+        {% elif status.reload_error %}
+        <div class="notice error" role="alert">The last reload failed: {{ status.reload_error }}.</div>
+        {% endif %}
+        {% if not status.enabled %}
+        <div class="notice">Automatic checks are off. To turn them on, set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span>, then restart OCS. Schedules can still be saved in the meantime.</div>
+        {% endif %}
+
+        {% if schedules %}
+        <div class="panel table-wrap records-table">
+          <table>
+            <thead>
+              <tr><th>Schedule</th><th>Target</th><th>Runs</th><th>Status</th><th>Next check</th><th>Last check</th>{% if not read_only %}<th>Actions</th>{% endif %}</tr>
+            </thead>
+            <tbody>
+              {% for s in schedules %}
+              <tr>
+                <td>{{ s.kind | capitalize }}</td>
+                <td>{% if s.dataset_exists %}<a href="{{ mount }}/datasets/{{ s.dataset_id }}">{{ s.name or s.dataset_id }}</a>{% if s.name %}<br /><small class="mono">{{ s.dataset_id }}</small>{% endif %}{% else %}<span class="mono">{{ s.dataset_id }}</span><br /><small>This dataset is no longer on the instance.</small>{% endif %}</td>
+                <td>{% if s.run_description %}{{ s.run_description }}{% else %}<span class="mono">{{ s.cron }}</span> ({{ s.timezone }}){% endif %}<br /><small>{{ 'Publish after sync' if s.publish else 'Do not publish after sync' }}; up to {{ s.max_attempts }} attempt{{ 's' if s.max_attempts != 1 }}</small></td>
+                <td>
+                  {% if not s.enabled %}<span class="chip chip-unpublished">Paused</span>
+                  {% elif s.registered %}<span class="chip chip-published">Scheduled</span>
+                  {% elif s.last_outcome == 'error' %}<span class="chip chip-unpublished">Cannot run</span><br /><small>{{ s.last_message }}</small>
+                  {% else %}<span class="chip">Not running</span>{% endif %}
+                </td>
+                <td>{{ s.next_check or '' }}</td>
+                <td>{% if s.last_check %}{{ s.last_check }}<br /><small>{{ s.last_outcome }}{% if s.last_job_id %}, <a href="{{ mount }}/jobs/{{ s.last_job_id }}">view job</a>{% endif %}</small>{% else %}<span class="note">No checks yet</span>{% endif %}</td>
+                {% if not read_only %}
+                <td>
+                  <div class="form-actions">
+                    {% if s.dataset_exists %}<a class="button-link" href="{{ mount }}/datasets/{{ s.dataset_id }}#schedule">Edit</a>{% endif %}
+                    {% if s.enabled %}
+                    <form method="post" action="{{ mount }}/schedules/sync/{{ s.dataset_id }}/pause"><button type="submit">Pause</button></form>
+                    {% else %}
+                    <form method="post" action="{{ mount }}/schedules/sync/{{ s.dataset_id }}/resume"><button type="submit">Resume</button></form>
+                    {% endif %}
+                    <a class="button-link" href="{{ mount }}/schedules/sync/{{ s.dataset_id }}/delete" data-delete="{{ s.dataset_id }}" data-delete-name="{{ s.name or s.dataset_id }}">Delete</a>
+                  </div>
+                </td>
+                {% endif %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="panel empty-state">
+          <h3>No schedules yet</h3>
+          <p class="note">Open a dataset and schedule automatic checks from its Sync panel.</p>
+          <a class="button-link primary empty-state-action" href="{{ mount }}/datasets">Datasets</a>
+        </div>
+        {% endif %}
+        <p class="note">Last check details reset when OCS restarts. Submitted sync jobs remain available under Jobs. Times use {{ status.timezone }}.</p>
+
+        {% include "_schedule_delete_dialog.html" %}
+      </main>
+    </div>
+  </body>
+</html>

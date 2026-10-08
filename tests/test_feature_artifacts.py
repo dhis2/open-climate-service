@@ -818,10 +818,10 @@ def test_an_unpublished_feature_collection_reaches_neither_catalogue(monkeypatch
     assert services.stac_eligible_artifacts_by_dataset() == {}
 
 
-def test_the_catalogue_advertises_a_feature_collection_and_openeo_does_not(
+def test_the_catalogue_and_openeo_both_advertise_a_feature_collection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every surface agrees: in STAC and `/datasets`, absent from openEO."""
+    """Every surface agrees: in STAC, `/datasets` and openEO, which loads it as a vector cube (CLIM-1326)."""
     monkeypatch.setattr(services, "list_artifacts", lambda: SimpleNamespace(items=[_feature_artifact()]))
 
     catalog = client.get("/stac/catalog.json").json()
@@ -829,8 +829,7 @@ def test_the_catalogue_advertises_a_feature_collection_and_openeo_does_not(
 
     assert any(link["href"].endswith("/stac/collections/districts") for link in catalog["links"])
     assert {link["rel"] for link in dataset["links"]} == {"self", "stac", "features"}
-    assert client.get("/collections/districts").status_code == 404
-    assert client.get("/collections").json()["collections"] == []
+    assert [collection["id"] for collection in client.get("/collections").json()["collections"]] == ["districts"]
 
 
 def test_an_unpublished_feature_collection_is_advertised_nowhere(

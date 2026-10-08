@@ -104,12 +104,13 @@ must not be treated as public merely because reading them does not mutate state.
 See [Read-only instances](instance_guide.md#read-only-instances) for the current
 deployment behavior.
 
-Schedule definitions are operator-managed configuration in `climate-service.yaml`;
-there is no schedule editing API or web view. See
-[Scheduled dataset synchronization](scheduled_sync.md) for configuration and the
-available status API.
+Schedule definitions come from the single `<data_dir>/schedules.json` store, whether
+prepared before startup or saved through the web interface or API. The instance-wide
+clock switch and timezone remain in `climate-service.yaml`. See
+[Scheduled dataset synchronization](scheduled_sync.md) for configuration, the
+schedule API and the reload rules.
 
-The current CLI only starts the server. Commands for ingestion, job inspection,
+The current CLI starts the server. Commands for ingestion, job inspection,
 and maintenance of read-only deployments are planned. Such commands must use the
 shared domain services and may call them directly while the HTTP server is stopped.
 
@@ -121,8 +122,8 @@ has already returned `202` by that point, so its job fails with the same explana
 An openEO job that reaches managed-dataset publication while the lock is held fails before
 writing the target store, with an error explaining that another writer is active.
 
-A native job also runs in at most one process at a time. If a process that is still shutting
-down is executing a job, startup recovery in the new process leaves that job alone instead of
+A native or openEO job also runs in at most one process at a time. If a process that is still
+shutting down is executing a job, startup recovery in the new process leaves that job alone instead of
 running it a second time, and watches it. If the old process finishes the job, nothing more
 happens; if it exits without finishing, the new process takes the job over within seconds, as
 it would have at startup. The operating system releases both locks when their process exits,

@@ -16,7 +16,12 @@ import pytest
 
 from open_climate_service.features.providers import get_feature_provider
 from open_climate_service.plugins.vectors import dhis2 as provider
-from open_climate_service.plugins.vectors.dhis2 import _fetch_org_units, _require_unique_ids, dhis2_org_units
+from open_climate_service.plugins.vectors.dhis2 import (
+    _fetch_org_units,
+    _normalise_feature,
+    _require_unique_ids,
+    dhis2_org_units,
+)
 
 
 def _org_unit(uid: str, name: str) -> dict[str, Any]:
@@ -24,11 +29,31 @@ def _org_unit(uid: str, name: str) -> dict[str, Any]:
 
 
 def _feature(uid: str, name: str) -> dict[str, Any]:
+    """A feature as `organisationUnits.geojson` really returns it (CLIM-1301).
+
+    The UID sits at the top-level `id`; `properties` carries `code`, `name`, `level`, `parent`,
+    `parentGraph` and `groups`, and never `id` or `displayName`, whatever `fields` asked for.
+    """
     return {
         "type": "Feature",
-        "properties": {"id": uid, "displayName": name},
+        "id": uid,
         "geometry": {"type": "Point", "coordinates": [0, 0]},
+        "properties": {
+            "code": f"OU_{uid}",
+            "name": name,
+            "level": "2",
+            "parent": "root",
+            "parentGraph": "root",
+            "groups": [],
+        },
     }
+
+
+def _normalised(uid: str, name: str) -> dict[str, Any]:
+    """The same feature after the provider has copied the identity into `properties`."""
+    feature = _feature(uid, name)
+    _normalise_feature(feature)
+    return feature
 
 
 class _FakeClient:
@@ -67,7 +92,57 @@ def test_fetch_org_units_returns_the_geojson_collection() -> None:
 
     result = _fetch_org_units(client, level=2, parent=None)
 
-    assert result == {"type": "FeatureCollection", "features": [_feature("ou1", "A")]}
+    assert result["type"] == "FeatureCollection"
+    assert [feature["id"] for feature in result["features"]] == ["ou1"]
+    assert result["features"][0]["geometry"] == _feature("ou1", "A")["geometry"]
+
+
+def test_fetch_org_units_copies_the_top_level_id_and_name_into_properties() -> None:
+    """DHIS2 sends the UID at the top level and ignores `fields`; the store reads `properties`.
+
+    Before CLIM-1301 the provider read `properties.id`, which DHIS2 never sends, so every real
+    fetch failed with "has no usable id" while the tests passed against a fake that had it.
+    """
+    client = _FakeClient([_org_unit("ou1", "A")], [_feature("ou1", "A")])
+
+    result = _fetch_org_units(client, level=2, parent=None)
+
+    properties = result["features"][0]["properties"]
+    assert properties["id"] == "ou1"
+    assert properties["displayName"] == "A"
+    assert properties["name"] == "A", "the original DHIS2 properties are kept"
+    assert result["features"][0]["id"] == "ou1", "the top-level id is kept too"
+
+
+def test_fetch_org_units_keeps_an_id_already_in_properties() -> None:
+    feature = _feature("ou1", "A")
+    feature["properties"]["id"] = "ou1"
+    feature["properties"]["displayName"] = "Display A"
+    client = _FakeClient([_org_unit("ou1", "A")], [feature])
+
+    result = _fetch_org_units(client, level=2, parent=None)
+
+    assert result["features"][0]["properties"]["id"] == "ou1"
+    assert result["features"][0]["properties"]["displayName"] == "Display A"
+
+
+def test_fetch_org_units_rejects_a_feature_with_no_id_anywhere() -> None:
+    feature = _feature("ou1", "A")
+    del feature["id"]
+    client = _FakeClient([_org_unit("ou1", "A")], [feature])
+
+    with pytest.raises(ValueError, match="'A' has no usable id"):
+        _fetch_org_units(client, level=2, parent=None)
+
+
+def test_fetch_org_units_tolerates_a_feature_without_properties() -> None:
+    feature = _feature("ou1", "A")
+    del feature["properties"]
+    client = _FakeClient([_org_unit("ou1", "A")], [feature])
+
+    result = _fetch_org_units(client, level=2, parent=None)
+
+    assert result["features"][0]["properties"] == {"id": "ou1"}
 
 
 def test_fetch_org_units_translates_the_geojson_parent_for_the_metadata_audit() -> None:
@@ -113,7 +188,7 @@ def test_fetch_org_units_logs_a_warning_for_units_missing_geometry(caplog: pytes
     with caplog.at_level(logging.WARNING, logger=provider.__name__):
         result = _fetch_org_units(client, level=2, parent=None)
 
-    assert result["features"] == [_feature("ou1", "Has geometry")]
+    assert result["features"] == [_normalised("ou1", "Has geometry")]
     assert "1 of 2 have no geometry" in caplog.text
     assert "ou2" in caplog.text
     assert "No geometry" in caplog.text
@@ -139,7 +214,7 @@ def test_fetch_org_units_does_not_warn_when_nothing_is_missing(caplog: pytest.Lo
 
 
 def test_require_unique_ids_accepts_distinct_units() -> None:
-    _require_unique_ids([_feature("ou1", "A"), _feature("ou2", "B")])  # must not raise
+    _require_unique_ids([_normalised("ou1", "A"), _normalised("ou2", "B")])  # must not raise
 
 
 def test_require_unique_ids_rejects_a_missing_id() -> None:
@@ -154,7 +229,7 @@ def test_require_unique_ids_rejects_a_missing_id() -> None:
 
 def test_require_unique_ids_rejects_a_duplicate_id() -> None:
     with pytest.raises(ValueError, match="'ou1'.*more than once"):
-        _require_unique_ids([_feature("ou1", "A"), _feature("ou1", "A again")])
+        _require_unique_ids([_normalised("ou1", "A"), _normalised("ou1", "A again")])
 
 
 def test_fetch_org_units_surfaces_a_duplicate_before_the_missing_geometry_audit() -> None:
@@ -178,7 +253,7 @@ def test_dhis2_org_units_resolves_and_closes_the_named_connection(monkeypatch: p
     result = dhis2_org_units("national-hmis", level=2)
 
     get_connection.assert_called_once_with("national-hmis")
-    assert result["features"] == [_feature("ou1", "A")]
+    assert result["features"] == [_normalised("ou1", "A")]
     assert client.closed is True
 
 

@@ -230,7 +230,14 @@ def write_dataset_template(dataset: dict[str, Any], *, overwrite: bool = False) 
 
     _validate_dataset_template(dataset, source=str(destination))
     payload = yaml.safe_dump([dataset], sort_keys=False, allow_unicode=False)
-    destination.write_text(payload, encoding="utf-8")
+    if overwrite:
+        destination.write_text(payload, encoding="utf-8")
+    else:
+        # Exclusive creation makes the caller that receives this path the only owner of the
+        # new template. A concurrent publisher gets FileExistsError and reloads the winner;
+        # it can never also believe it created the file and later remove the winner's template.
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(payload)
     return destination
 
 

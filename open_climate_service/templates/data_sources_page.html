@@ -22,7 +22,7 @@
 
       <main id="content">
         <h2 id="data-sources-title" tabindex="-1">Data sources</h2>
-        <p class="lead">Data this instance can fetch from outside providers: rasters and feature collections.</p>
+        <p class="lead">Data this instance can fetch from outside providers: raster and vector data.</p>
         {% if sources %}
         {% set periods = sources | map(attribute="period_type") | reject("equalto", "") | unique | sort | list %}
         {% set kinds = sources | map(attribute="kind") | unique | sort | list %}
@@ -38,7 +38,7 @@
               <select data-filter-field="kind">
                 <option value="">All</option>
                 <option value="raster">Raster</option>
-                <option value="features">Features</option>
+                <option value="vector">Vector</option>
               </select>
             </label>
             {% endif %}
@@ -73,7 +73,7 @@
                 <span class="provider clamp" title="{{ s.provider }}">{{ s.provider or "Unknown provider" }}</span>
                 {% if s.description %}<p class="description clamp">{{ s.description }}</p>{% endif %}
                 <div class="meta">
-                  {% if s.kind == "features" %}<span class="chip">Features</span>{% endif %}
+                  {% if s.kind == "vector" %}<span class="chip">Vector</span>{% endif %}
                   {% if s.level %}<span class="chip">{{ s.level }}</span>{% endif %}
                   {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
                   {% if s.units %}<span class="chip">{{ s.units }}</span>{% endif %}

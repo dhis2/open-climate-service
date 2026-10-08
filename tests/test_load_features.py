@@ -282,3 +282,26 @@ def test_load_features_disables_the_unqualified_read_size_guard(monkeypatch: pyt
     load_features("districts")
 
     assert calls == [{"bbox": None, "bbox_crs": "EPSG:4326", "max_unqualified_read": None}]
+
+
+def test_list_valued_properties_load_as_plain_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DHIS2 org unit carries `groups`, a list; GeoParquet returns it as an array (CLIM-1301)."""
+    import json
+
+    import geopandas as gpd
+    import numpy as np
+    from shapely.geometry import Point
+
+    from open_climate_service.plugins.processes.load_features import _to_labeled_geojson
+
+    frame = gpd.GeoDataFrame(
+        {"id": ["ou1"], "name": ["A"], "groups": [np.array(["g1", "g2"])], "level": [np.int64(2)]},
+        geometry=[Point(0.0, 0.0)],
+        crs="EPSG:4326",
+    )
+    collection = _to_labeled_geojson(frame, id_property="id")
+    json.dumps(collection)  # must not raise
+    feature = collection["features"][0]
+    assert feature["id"] == "ou1"
+    assert feature["properties"]["groups"] == ["g1", "g2"]
+    assert feature["properties"]["level"] == 2

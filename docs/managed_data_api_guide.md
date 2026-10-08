@@ -331,6 +331,28 @@ curl -s http://127.0.0.1:9000/zarr/chirps3_precipitation_daily/zarr.json | jq
 
 `/zarr/{dataset_id}` is the store prefix; the root metadata is at `/zarr/{dataset_id}/zarr.json`.
 
+With xarray:
+
+```python
+import xarray as xr
+
+url = "http://127.0.0.1:9000/zarr/chirps3_precipitation_daily"
+ds = xr.open_zarr(url, zarr_format=3, consolidated=True)
+```
+
+A dataset whose grid exceeds 1024 x 1024 cells is stored as a pyramid, and its root has no data
+variables: opening it as above returns only the time coordinate. Its data is in level `0`, at
+full resolution, which opens either way:
+
+```python
+ds = xr.open_zarr(url, group="0", zarr_format=3, consolidated=True)
+ds = xr.open_zarr(f"{url}/0", zarr_format=3, consolidated=True)
+```
+
+The STAC collection's `zarr` asset says which applies: a pyramided store's `xarray:open_kwargs`
+include `"group": "0"`, so `xr.open_zarr(asset["href"], **asset["xarray:open_kwargs"])` works
+for both.
+
 ## 8. Access the Icechunk store natively
 
 `/icechunk/{dataset_id}/{path}` serves raw Icechunk store files for native SDK access. Use this when you need versioning or want to avoid the zarr proxy layer.
@@ -367,10 +389,12 @@ Both endpoints are advertised as `assets` in the STAC collection:
 
 The `thumbnail` asset is present only when the image exists — see section 9.
 
-A **pyramided** store advertises one extra media type parameter:
+A **pyramided** store advertises one extra media type parameter, and both data assets name the
+full-resolution level in `xarray:open_kwargs`:
 
 ```json
-"type": "application/vnd.zarr; version=3; profile=multiscales"
+"type": "application/vnd.zarr; version=3; profile=multiscales",
+"xarray:open_kwargs": { "consolidated": true, "group": "0" }
 ```
 
 This is how a client learns the store has resolution levels — the plain Zarr media type cannot
@@ -384,8 +408,8 @@ order, one space after each `;`. Reformatting it silently disables rendering.
 
 ## 9. Fetch a dataset thumbnail
 
-`GET /datasets/{dataset_id}/thumbnail.png` serves a small PNG preview of the dataset: one
-representative 2-D slice, styled with the template's `display.colormap`, longest side 512 px,
+`GET /datasets/{dataset_id}/thumbnail.png` serves a PNG preview of the dataset: one
+representative 2-D slice, styled with the template's `display.colormap`, longest side 1024 px,
 missing values transparent.
 
 ```bash

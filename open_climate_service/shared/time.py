@@ -469,3 +469,292 @@ def numpy_datetime_to_period_string(datetimes: np.ndarray[Any, Any], period_type
 
     lengths = {"hourly": 13, "daily": 10, "monthly": 7, "yearly": 4}
     return np.datetime_as_string(datetimes, unit="s").astype(f"U{lengths[period_type]}")
+
+
+# ---------------------------------------------------------------------------
+# Period reachability for exports (CLIM-1302)
+# ---------------------------------------------------------------------------
+
+EXPORT_PERIOD_TYPES = ("daily", "weekly", "monthly", "quarterly", "yearly")
+"""The DHIS2 periods an export can emit, in the dataset ``period_type`` vocabulary."""
+
+_EXPORT_PERIOD_ALIASES = {
+    "day": "daily",
+    "daily": "daily",
+    "week": "weekly",
+    "weekly": "weekly",
+    "month": "monthly",
+    "monthly": "monthly",
+    "quarter": "quarterly",
+    "quarterly": "quarterly",
+    "year": "yearly",
+    "yearly": "yearly",
+}
+
+_OPENEO_PERIOD_TO_CADENCE = {
+    "hour": "hourly",
+    "day": "daily",
+    "week": "weekly",
+    "dekad": "dekadal",
+    "month": "monthly",
+    "year": "yearly",
+}
+_CADENCE_TO_OPENEO_PERIOD = {cadence: period for period, cadence in _OPENEO_PERIOD_TO_CADENCE.items()}
+
+# Which destination periods are unions of whole source periods. Weekly tiles nothing: ISO
+# weeks straddle months, quarters and years. Dekads tile months (three per month) and so
+# everything built from months. Hours tile days, and days tile ISO weeks.
+_TILES: dict[str, frozenset[str]] = {
+    # Calendar quarters are intentionally absent as destinations. The standard openEO
+    # aggregate_temporal_period vocabulary has no calendar-quarter period, so advertising
+    # those transitions would accept a declaration that no instrumented process can satisfy.
+    "hourly": frozenset({"daily", "weekly", "monthly", "yearly"}),
+    "daily": frozenset({"weekly", "monthly", "yearly"}),
+    "dekadal": frozenset({"monthly", "yearly"}),
+    "weekly": frozenset(),
+    "monthly": frozenset({"yearly"}),
+    "quarterly": frozenset({"yearly"}),
+    "yearly": frozenset(),
+}
+_CADENCE_RANK = {"hourly": 0, "daily": 1, "weekly": 2, "dekadal": 2, "monthly": 3, "quarterly": 4, "yearly": 5}
+
+
+CADENCE_ATTR = "ocs_cadence"
+"""Attribute a cube carries to say what cadence its time axis is at.
+
+Stamped from the dataset template when a collection is loaded, rewritten by every temporal
+aggregation, and carried through spatial aggregation. It describes the data at that node of
+the graph, which neither the loaded dataset's declaration nor the spacing of a possibly sparse
+axis can do on their own.
+"""
+
+
+def cadence_of(data: Any) -> str | None:
+    """The consistent cadence a cube says it is at, or None when absent or ambiguous.
+
+    Converting an xarray DataArray to a Dataset keeps the array attributes on its data
+    variable. Recovering a cadence shared by all stamped variables makes that harmless while
+    refusing to guess when variables genuinely carry different cadences.
+    """
+    attrs = getattr(data, "attrs", None)
+    value = attrs.get(CADENCE_ATTR) if isinstance(attrs, dict) else None
+    if isinstance(value, str) and value:
+        return value
+    variables = getattr(data, "data_vars", None)
+    if variables is None:
+        return None
+    cadences = {cadence for variable in variables.values() if (cadence := cadence_of(variable)) is not None}
+    return next(iter(cadences)) if len(cadences) == 1 else None
+
+
+def stamp_cadence(data: Any, cadence: str | None) -> Any:
+    """Set the cadence a cube is at, in place, and return it; a None cadence clears it."""
+    attrs = getattr(data, "attrs", None)
+    if isinstance(attrs, dict):
+        if cadence is None:
+            attrs.pop(CADENCE_ATTR, None)
+        else:
+            attrs[CADENCE_ATTR] = cadence
+    return data
+
+
+class Reachability(StrEnum):
+    """How an export period can be produced from a dataset cadence."""
+
+    PASS_THROUGH = "pass_through"
+    """Same cadence: each stored timestamp is one destination period."""
+
+    AGGREGATE = "aggregate"
+    """Coarser, and every destination period is a union of whole source periods."""
+
+    UNREACHABLE = "unreachable"
+    """Finer than the source, or not tiled by it; no computation produces it honestly."""
+
+
+def normalise_export_period(value: Any) -> str | None:
+    """Map ``day``/``daily``, ``month``/``monthly`` and the rest to the dataset vocabulary."""
+    if not isinstance(value, str):
+        return None
+    return _EXPORT_PERIOD_ALIASES.get(value.strip().lower())
+
+
+def openeo_period_to_cadence(period: Any) -> str | None:
+    """The dataset cadence an openEO ``aggregate_temporal_period`` period produces, if any."""
+    return _OPENEO_PERIOD_TO_CADENCE.get(period) if isinstance(period, str) else None
+
+
+def cadence_to_openeo_period(cadence: str) -> str | None:
+    """The openEO period that aggregates to ``cadence``; ``quarterly`` has none."""
+    return _CADENCE_TO_OPENEO_PERIOD.get(cadence)
+
+
+def period_reachability(source: str | None, destination: str) -> tuple[Reachability, str]:
+    """Decide whether ``destination`` can be produced from ``source``, and say why.
+
+    ``source`` is a dataset cadence (``hourly`` ... ``yearly``, ``dekadal``, ``climatology``);
+    ``destination`` an export period in the same vocabulary. The second value is a sentence
+    for an error message or a manifest, never empty.
+    """
+    if source is None:
+        return Reachability.UNREACHABLE, "the source cadence is unknown"
+    if source == destination:
+        return Reachability.PASS_THROUGH, f"{source} data is exported as {destination} periods as is"
+    if destination in _TILES.get(source, frozenset()):
+        return Reachability.AGGREGATE, f"every {destination} period is a union of whole {source} periods"
+    if source == "climatology":
+        return Reachability.UNREACHABLE, "a climatology is indexed by day of year, not by calendar date"
+    if source == "weekly":
+        return Reachability.UNREACHABLE, "ISO weeks straddle months, quarters and years"
+    if source not in _CADENCE_RANK or destination not in _CADENCE_RANK:
+        return Reachability.UNREACHABLE, f"{source!r} cannot be related to {destination!r}"
+    if _CADENCE_RANK[destination] < _CADENCE_RANK[source]:
+        return Reachability.UNREACHABLE, f"{destination} is finer than {source} and cannot be derived from it"
+    return Reachability.UNREACHABLE, f"{destination} periods are not unions of whole {source} periods"
+
+
+def is_dekadal_axis(t_values: Any) -> bool:
+    """Whether every timestamp starts a dekad, at dekadal spacing.
+
+    Two conditions, and both are needed: every timestamp falls on the 1st, 11th or 21st,
+    because a regular 10-day series on any other day is not dekadal; and some adjacent pair
+    is 8 to 11 days apart, because the day-of-month test alone accepts a monthly axis. Tested
+    on the minimum rather than the median so an axis with missing dekads is still recognised.
+    """
+    import numpy as np
+    import pandas as pd
+
+    stamps = pd.DatetimeIndex(np.unique(np.asarray(t_values, dtype="datetime64[ns]")))
+    if not set(stamps.day) <= set(DEKAD_START_DAYS):
+        return False
+    gaps = np.diff(stamps.values).astype("timedelta64[D]").astype(int)
+    return bool(gaps.size and 8 <= gaps.min() <= 11)
+
+
+def infer_cadence(t_values: Any) -> str | None:
+    """Infer a dataset cadence from a sorted time axis, or None below two timestamps.
+
+    The median step decides, except for dekads, which are recognised by their structure:
+    a dekad starts on the 1st, 11th or 21st by definition, so that test is exact where a
+    median is a guess. There is deliberately no quarterly branch: it is not an ingest cadence.
+    """
+    import numpy as np
+
+    values = np.sort(np.asarray(t_values, dtype="datetime64[ns]"))
+    if values.size < 2:
+        return None
+    deltas = np.diff(values).astype("timedelta64[s]").astype(float)
+    median_seconds = float(np.median(deltas))
+    if median_seconds <= 3600:
+        return "hourly"
+    if median_seconds <= 86400:
+        return "daily"
+    if is_dekadal_axis(values):
+        return "dekadal"
+    if median_seconds <= 8 * 86400:
+        return "weekly"
+    if median_seconds <= 32 * 86400:
+        return "monthly"
+    if 330 * 86400 <= median_seconds <= 370 * 86400:
+        return "yearly"
+    return None
+
+
+def export_period_label(timestamp: Any, destination: str) -> str:
+    """The DHIS2 period string a timestamp falls in: 20250131, 2025W05, 202501, 2025Q1, 2025."""
+    import pandas as pd
+
+    stamp = pd.Timestamp(timestamp)
+    if destination == "daily":
+        return stamp.strftime("%Y%m%d")
+    if destination == "weekly":
+        iso = stamp.isocalendar()
+        return f"{iso.year}W{iso.week:02d}"
+    if destination == "monthly":
+        return stamp.strftime("%Y%m")
+    if destination == "quarterly":
+        return f"{stamp.year}Q{stamp.quarter}"
+    if destination == "yearly":
+        return stamp.strftime("%Y")
+    raise ValueError(f"Unsupported export period {destination!r}")
+
+
+def period_label_start(label: str, cadence: str) -> Any:
+    """The first instant of a DHIS2 period string, so a label can be relabelled at a coarser cadence."""
+    import datetime as dt
+
+    import pandas as pd
+
+    if cadence == "weekly":
+        year, week = label.split("W")
+        return pd.Timestamp(dt.date.fromisocalendar(int(year), int(week), 1))
+    if cadence == "quarterly":
+        year, quarter = label.split("Q")
+        return pd.Timestamp(year=int(year), month=3 * (int(quarter) - 1) + 1, day=1)
+    pattern = {"daily": "%Y%m%d", "monthly": "%Y%m", "yearly": "%Y"}[cadence]
+    return pd.Timestamp(dt.datetime.strptime(label, pattern))
+
+
+def _destination_bounds(timestamp: Any, destination: str) -> tuple[Any, Any]:
+    """Inclusive start and exclusive end of the destination period holding ``timestamp``."""
+    import pandas as pd
+
+    stamp = pd.Timestamp(timestamp).normalize()
+    if destination == "daily":
+        start = stamp
+        return start, start + pd.Timedelta(days=1)
+    if destination == "weekly":
+        start = stamp - pd.Timedelta(days=int(stamp.weekday()))
+        return start, start + pd.Timedelta(days=7)
+    if destination == "monthly":
+        start = stamp.replace(day=1)
+        return start, start + pd.offsets.MonthBegin(1)
+    if destination == "quarterly":
+        start = pd.Timestamp(year=stamp.year, month=3 * (stamp.quarter - 1) + 1, day=1)
+        return start, start + pd.offsets.MonthBegin(3)
+    if destination == "yearly":
+        start = pd.Timestamp(year=stamp.year, month=1, day=1)
+        return start, start + pd.offsets.YearBegin(1)
+    raise ValueError(f"Unsupported export period {destination!r}")
+
+
+def expected_source_steps(start: Any, end: Any, source: str) -> int:
+    """How many whole ``source`` periods lie in ``[start, end)``."""
+    import pandas as pd
+
+    begin, finish = pd.Timestamp(start), pd.Timestamp(end)
+    if source == "hourly":
+        return int((finish - begin) / pd.Timedelta(hours=1))
+    if source == "daily":
+        return int((finish - begin) / pd.Timedelta(days=1))
+    if source == "dekadal":
+        return 3 * len(pd.period_range(begin, finish - pd.Timedelta(days=1), freq="M"))
+    if source == "monthly":
+        return len(pd.period_range(begin, finish - pd.Timedelta(days=1), freq="M"))
+    if source == "quarterly":
+        return len(pd.period_range(begin, finish - pd.Timedelta(days=1), freq="Q"))
+    raise ValueError(f"{source!r} periods cannot be counted inside a coarser period")
+
+
+def incomplete_destination_periods(t_values: Any, source: str, destination: str) -> list[str]:
+    """Destination periods for which the axis holds fewer than every whole source period.
+
+    Timestamps are taken as source period starts, which is how stores and
+    ``aggregate_temporal_period`` label them. Returns DHIS2 period strings, in order, so an
+    export can refuse or drop exactly those.
+    """
+    import numpy as np
+    import pandas as pd
+
+    stamps = pd.DatetimeIndex(np.unique(np.asarray(t_values, dtype="datetime64[ns]")))
+    if stamps.empty:
+        return []
+    # One pass: label every stamp, count per label, compare with the label's expected count.
+    labels = pd.Series([export_period_label(stamp, destination) for stamp in stamps], index=stamps)
+    present = labels.value_counts()
+    first_stamp = labels.reset_index().drop_duplicates(subset=0).set_index(0)["index"]
+    incomplete: list[str] = []
+    for label in labels.drop_duplicates():
+        start, end = _destination_bounds(first_stamp[label], destination)
+        if int(present[label]) < expected_source_steps(start, end, source):
+            incomplete.append(str(label))
+    return incomplete

@@ -1,0 +1,36 @@
+{# The confirmation a Delete action opens, shared by the Schedules page and the dataset page.
+   Expects `mount`, `read_only` and, when the page should be returned to after the delete,
+   `delete_return_to`. A link with `data-delete="<dataset_id>"` opens it; without scripts the
+   link's own href is followed. #}
+{% if not read_only %}
+<dialog id="delete-dialog" aria-labelledby="delete-dialog-title">
+  <form method="post" action="">
+    <h3 id="delete-dialog-title">Delete this schedule?</h3>
+    <p><strong data-delete-dialog-name></strong> will no longer be checked for updates. Existing data and sync jobs remain available, and you can still sync it manually.</p>
+    <input type="hidden" name="confirm" value="yes" />
+    {% if delete_return_to %}<input type="hidden" name="return_to" value="{{ delete_return_to }}" />{% endif %}
+    <div class="form-actions dialog-actions">
+      <button type="button" data-delete-dialog-cancel>Cancel</button>
+      <button type="submit" class="danger">Delete schedule</button>
+    </div>
+  </form>
+</dialog>
+<script>
+  (function () {
+    var dialog = document.getElementById("delete-dialog");
+    if (!dialog || typeof dialog.showModal !== "function") return;
+    var form = dialog.querySelector("form");
+    var name = dialog.querySelector("[data-delete-dialog-name]");
+    dialog.querySelector("[data-delete-dialog-cancel]").addEventListener("click", function () { dialog.close(); });
+    dialog.addEventListener("click", function (event) { if (event.target === dialog) dialog.close(); });
+    document.querySelectorAll("[data-delete]").forEach(function (link) {
+      link.addEventListener("click", function (event) {
+        event.preventDefault();
+        form.action = "{{ mount }}/schedules/sync/" + encodeURIComponent(link.getAttribute("data-delete")) + "/delete";
+        name.textContent = link.getAttribute("data-delete-name");
+        dialog.showModal();
+      });
+    });
+  })();
+</script>
+{% endif %}
