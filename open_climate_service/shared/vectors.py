@@ -139,6 +139,8 @@ def vector_result(
 ) -> xr.Dataset:
     """An aggregation's output in OCS's vector cube form: named, labelled by feature id.
 
+    *result* is xvec's, with its features on `geometry`; *dim* is the dimension they end up on.
+
     xvec returns an unnamed DataArray whose geometry dimension holds shapely objects, which Zarr
     and NetCDF cannot encode. This relabels the dimension with the feature ids, keeps the shapes
     as WKT in `geometry_wkt` and the ids in `feature_id`, names the result after the input
@@ -148,8 +150,13 @@ def vector_result(
     from open_climate_service.shared.time import cadence_of, stamp_cadence
 
     labels = [str(value) for value in ids]
-    wkt = [shape.wkt for shape in result[dim].values]
-    plain = result.drop_vars(dim).assign_coords({dim: labels, GEOMETRY_WKT_COORD: (dim, wkt)})
+    wkt = [shape.wkt for shape in result[GEOMETRY_FIELD].values]
+    plain = (
+        result.drop_vars(GEOMETRY_FIELD).rename({GEOMETRY_FIELD: dim})
+        if dim != GEOMETRY_FIELD
+        else result.drop_vars(dim)
+    )
+    plain = plain.assign_coords({dim: labels, GEOMETRY_WKT_COORD: (dim, wkt)})
     named = attach_feature_ids(plain, labels, dim).to_dataset(name=str(data.name or "data"))
     stamp_cadence(named, cadence_of(data))
     return named

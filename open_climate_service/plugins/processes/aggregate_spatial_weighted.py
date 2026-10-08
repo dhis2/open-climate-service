@@ -8,20 +8,40 @@ import xvec  # type: ignore[import-untyped]  # noqa: F401  # pyright: ignore[rep
 
 from open_climate_service.process import process
 
+REDUCERS = ("mean", "sum", "min", "max", "median")
+"""The statistics the weighted aggregation offers: the methods a DHIS2 export can declare."""
+
 
 @process(
     summary="Aggregate a raster data cube over vector geometries using spatially weighted statistics.",
     description="For each geometry, pixels overlapping the geometry are spatially "
     "aggregated using their fractional spatial overlap as weights.",
     parameters={
-        "data": {"description": "A raster data cube."},
+        "data": {
+            "description": "A raster data cube.",
+            "schema": {
+                "type": "object",
+                "subtype": "datacube",
+                "dimensions": [{"type": "spatial", "axis": ["x", "y"]}],
+            },
+        },
         "geometries": {
             "description": (
                 "A vector data cube (a GeoDataFrame or xvec cube), or GeoJSON: a FeatureCollection, "
                 "Feature or geometry. Each feature's id is kept as the result's `feature_id`."
-            )
+            ),
+            "schema": [
+                {"type": "object", "subtype": "datacube", "dimensions": [{"type": "geometry"}]},
+                {"type": "object", "subtype": "geojson"},
+            ],
         },
-        "reducer": {"description": "A reducer to apply on the pixel values."},
+        "reducer": {
+            "description": (
+                "The statistic, by name. The pixels are weighted by their overlap with the geometry, "
+                "which exactextract does for these named statistics only, not for a reducer process."
+            ),
+            "schema": {"type": "string", "enum": list(REDUCERS)},
+        },
     },
 )
 def aggregate_spatial_weighted(
@@ -55,14 +75,18 @@ def aggregate_spatial_weighted(
     from open_climate_service.shared.provenance import observe_spatial_aggregation, record_features, record_reduction
     from open_climate_service.shared.vectors import raster_and_features, vector_result
 
+    if not isinstance(reducer, str) or reducer not in REDUCERS:
+        raise ValueError(
+            f"aggregate_spatial_weighted: reducer must be one of {', '.join(REDUCERS)}, by name; "
+            "a reducer process cannot be weighted by pixel overlap. Use aggregate_spatial for one."
+        )
     record_features(geometries)
     raster, frame = raster_and_features(data, geometries)
 
     # Run xvec zonal stats with exactextract backend. A named method is recorded, so a DHIS2
     # export can check the aggregation it declares against the one that ran.
     with observe_spatial_aggregation():
-        if isinstance(reducer, str):
-            record_reduction(reducer)
+        record_reduction(reducer)
         vec_cube: xr.DataArray = raster.xvec.zonal_stats(
             frame.geometry,
             x_coords="x",

@@ -178,15 +178,19 @@ def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
     carries them as `feature_id`, the same as `aggregate_spatial_weighted`.
     """
 
-    def _aggregate_spatial(data: Any, geometries: Any, reducer: Any, **kwargs: Any) -> Any:
+    def _aggregate_spatial(
+        data: Any, geometries: Any, reducer: Any, target_dimension: Any = None, context: Any = None, **kwargs: Any
+    ) -> Any:
+        # `target_dimension` and `context` are openEO parameters the upstream function does not
+        # take; a graph from the openEO editor passes both, as null. The dimension is named here.
         from open_climate_service.shared.provenance import observe_spatial_aggregation, record_features
-        from open_climate_service.shared.vectors import raster_and_features, vector_result
+        from open_climate_service.shared.vectors import GEOMETRY_FIELD, raster_and_features, vector_result
 
         record_features(geometries)
         raster, frame = raster_and_features(data, geometries)
         with observe_spatial_aggregation():
             result = original_fn(data=raster, geometries=frame, reducer=reducer, **kwargs)
-        return vector_result(result, raster, frame.index)
+        return vector_result(result, raster, frame.index, target_dimension or GEOMETRY_FIELD)
 
     return _aggregate_spatial
 
