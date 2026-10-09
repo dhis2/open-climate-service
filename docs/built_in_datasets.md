@@ -217,20 +217,6 @@ returns level 1.
 `Prefer: respond-async` to run it as a background job). Fetch again when the hierarchy changes in
 DHIS2.
 
-**4. Use it.** Once fetched and published (a fetch publishes by default), the collection is an
-openEO collection like any other: listed under `/collections`, offered in the openEO editor, and
-loaded with `load_collection` straight into `aggregate_spatial` (see
-[vector collections](openeo.md)):
-
-```python
-rain = conn.load_collection("chirps3_precipitation_monthly", temporal_extent=["2025-01-01", "2025-12-31"])
-districts = conn.load_collection("districts")
-zonal = rain.aggregate_spatial(geometries=districts, reducer="mean")
-```
-
-In a workflow trigger's arguments, refer to it as `geometries: {from_features: districts}`; the
-built-in `aggregate_to_dhis2_json` workflow takes it that way. `load_features` still loads it too.
-
 **What it checks.** DHIS2 leaves out organisation units that have no geometry. The provider counts
 them with a second request and logs how many were skipped, naming a few, so a gap is visible
 rather than silent; if none of the selected units has a geometry, the fetch fails. A unit with no
