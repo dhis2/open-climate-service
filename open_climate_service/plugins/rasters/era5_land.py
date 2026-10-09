@@ -44,10 +44,11 @@ _CDS_VARIABLE_NAMES: dict[str, str] = {
 # The grid (0.1° resolution, EPSG:4326, float32) is inferred by the orchestrator
 # from the first fetched period.
 
-# Half a grid step of ERA5-Land's 0.1 degree grid. Earth Data Hub selections widen the
-# bbox by half a step (cell_pad, from the grid itself), and the CDS requests that fill in
-# the days Earth Data Hub has not published yet widen it by this much, so they cover the
-# same grid points and a dataset's two sources agree on its shape.
+# Half a grid step of ERA5-Land's 0.1 degree grid. Earth Data Hub selections and the CDS
+# requests that fill in the days Earth Data Hub has not published yet both widen the bbox
+# by exactly this much, so they cover the same grid points and a dataset's two sources
+# agree on its shape. A step read from the grid (cell_pad) can differ from it in the last
+# float digits, which is enough to take a column on one source and not the other.
 _HALF_GRID_STEP = 0.05
 
 
@@ -627,14 +628,13 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
             self._close_cached_locked()
             xmin, ymin, xmax, ymax = bbox_tuple
             ds = _edh_open_zarr(self._edh_url)
-            # Extend the bbox by half a grid step, derived from the axis rather than assumed.
-            # This does two jobs: it keeps the cells straddling each bbox edge, which a plain
-            # label slice drops because it selects on cell centres, and it avoids
-            # floating-point boundary exclusion (e.g. 360 - 10.1 = 349.8999... misses the
-            # 349.9 grid point). The CDS fallback requests pad by the same half step
-            # (_cds_fallback_area), so both sources return the same spatial grid.
-            lat_pad = cell_pad(ds["latitude"])
-            lon_pad = cell_pad(ds["longitude"])
+            # Extend the bbox by half a grid step. This keeps the cells straddling each bbox
+            # edge, which a plain label slice drops because it selects on cell centres, and
+            # avoids floating-point boundary exclusion (e.g. 360 - 10.1 = 349.8999... misses
+            # the 349.9 grid point). The fixed step rather than cell_pad: the CDS fallback
+            # requests (_cds_fallback_area) pad by exactly the same amount, so both sources
+            # return the same spatial grid.
+            lat_pad = lon_pad = _HALF_GRID_STEP
             if self._edh_lon_360:
                 xmin_sel = (xmin % 360) - lon_pad
                 xmax_sel = (xmax % 360) + lon_pad

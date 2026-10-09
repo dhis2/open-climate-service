@@ -32,9 +32,10 @@ def cell_pad(coord: xr.DataArray | np.ndarray) -> float:
     centre-based selection into footprint-based selection.
 
     The widest spacing is used rather than the local one so the result is provably sufficient
-    on an irregular axis; at worst it includes one extra cell, which `normalize_period` then
-    trims. Returns 0.0 for an axis with fewer than two values, where there is no spacing to
-    infer and nothing to pad.
+    on an irregular axis. On a regular grid that adds at most one cell per side; on an
+    irregular axis it can add more where the spacing is denser than the widest gap. Either
+    way `normalize_period` trims the extra. Returns 0.0 for an axis with fewer than two
+    values, where there is no spacing to infer and nothing to pad.
     """
     values = np.asarray(getattr(coord, "values", coord), dtype="float64").ravel()
     if values.size < 2:
