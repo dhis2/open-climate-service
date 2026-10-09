@@ -44,6 +44,29 @@ _CDS_VARIABLE_NAMES: dict[str, str] = {
 # The grid (0.1° resolution, EPSG:4326, float32) is inferred by the orchestrator
 # from the first fetched period.
 
+# Half a grid step of ERA5-Land's 0.1 degree grid. Earth Data Hub selections widen the
+# bbox by half a step (cell_pad, from the grid itself), and the CDS requests that fill in
+# the days Earth Data Hub has not published yet widen it by this much, so they cover the
+# same grid points and a dataset's two sources agree on its shape.
+_HALF_GRID_STEP = 0.05
+
+
+def _cds_fallback_area(bbox: tuple[float, float, float, float]) -> list[float]:
+    """CDS ``area`` (N, W, S, E) covering the grid points the Earth Data Hub selection takes for ``bbox``.
+
+    CDS keeps only the grid points inside ``area``, so an edge between two points
+    (a bbox ending at 13.91° drops the 13.9° row) gives one row or column fewer than
+    the Earth Data Hub selection, which pads by half a step, and the append fails.
+    The padding stops at the poles and at ±180°, where CDS refuses the area.
+    """
+    xmin, ymin, xmax, ymax = bbox
+    return [
+        min(ymax + _HALF_GRID_STEP, 90.0),
+        max(xmin - _HALF_GRID_STEP, -180.0),
+        max(ymin - _HALF_GRID_STEP, -90.0),
+        min(xmax + _HALF_GRID_STEP, 180.0),
+    ]
+
 
 class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):
     """Streaming plugin for hourly ERA5-Land variables from the Copernicus CDS.
@@ -94,7 +117,6 @@ class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):
         return monthly_ds.sel(t=timestamp)
 
     def _fetch_month(self, year: int, month: int, bbox: tuple[float, float, float, float]) -> xr.Dataset:
-        xmin, ymin, xmax, ymax = bbox
         _, last_day = calendar.monthrange(year, month)
         # Cap to availability cutoff so we don't request future days from CDS
         cutoff = _hourly_availability_cutoff()
@@ -106,7 +128,7 @@ class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):
             "month": str(month).zfill(2),
             "day": [str(d).zfill(2) for d in range(1, last_day + 1)],
             "time": [f"{h:02d}:00" for h in range(24)],
-            "area": [ymax, xmin, ymin, xmax],  # N, W, S, E
+            "area": _cds_fallback_area(bbox),
             "data_format": "netcdf",
             "download_format": "unarchived",
         }
@@ -176,7 +198,6 @@ class ERA5LandDailyTemperaturePlugin(BaseDatasetPlugin):
         return _drop_auxiliary_variables(monthly_ds.sel(t=slice(timestamp, timestamp)), "t2m")
 
     def _fetch_month(self, year: int, month: int, bbox: tuple[float, float, float, float]) -> xr.Dataset:
-        xmin, ymin, xmax, ymax = bbox
         _, last_day = calendar.monthrange(year, month)
         cutoff = _daily_availability_cutoff()
         if cutoff.year == year and cutoff.month == month:
@@ -189,7 +210,7 @@ class ERA5LandDailyTemperaturePlugin(BaseDatasetPlugin):
             "daily_statistic": "daily_mean",
             "time_zone": "utc+00:00",
             "frequency": "1_hourly",
-            "area": [ymax, xmin, ymin, xmax],  # N, W, S, E
+            "area": _cds_fallback_area(bbox),
             "data_format": "netcdf",
             "download_format": "unarchived",
         }
@@ -610,8 +631,8 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
             # This does two jobs: it keeps the cells straddling each bbox edge, which a plain
             # label slice drops because it selects on cell centres, and it avoids
             # floating-point boundary exclusion (e.g. 360 - 10.1 = 349.8999... misses the
-            # 349.9 grid point). CDS is inclusive of boundary points, so this also keeps the
-            # EDH and CDS paths returning the same spatial grid.
+            # 349.9 grid point). The CDS fallback requests pad by the same half step
+            # (_cds_fallback_area), so both sources return the same spatial grid.
             lat_pad = cell_pad(ds["latitude"])
             lon_pad = cell_pad(ds["longitude"])
             if self._edh_lon_360:
