@@ -13,7 +13,7 @@ exports:
   - id: rainfall-monthly
     plugin: dhis2
     period_type: monthly
-    org_unit_field: geometry
+    org_unit_field: feature_id
     period_field: t
     series:
       - select: {}
@@ -21,9 +21,10 @@ exports:
 ```
 
 Replace the data-element UID with the destination defined in your DHIS2 instance.
-`org_unit_field: geometry` reads each value's organisation unit from the feature ids:
-the `feature_id` coordinate when the spatial aggregation carries one, otherwise the
-labels of its geometry dimension. CHAP CSV's `location_field: geometry` does the same.
+`org_unit_field: feature_id`, the default, reads each value's organisation unit from the
+feature ids a spatial aggregation keeps beside its geometries. CHAP CSV's `location_field`
+defaults to `feature_id` too. Geometries are never used as ids: a result that has shapes but
+no `feature_id` is refused, so give each GeoJSON Feature an `id`.
 Pass the prepared aggregate to `save_result`:
 
 ```json
@@ -77,9 +78,11 @@ The optional `dataset`, `org_units`, and `connection` references, and the option
 intended input/delivery configuration. They do not trigger any work. Synchronous
 and batch renders check them against execution provenance where it contains an
 observation, and batch exports bind them to a manifest. The dataset must match an
-observed source. The aggregation is checked when exactly one `aggregate_spatial`
-ran and it reduced with `reduce_by_method`, as the built-in workflow does. With
-no spatial aggregation, several, or another reducer, the aggregation cannot be
+observed source. The aggregation is checked when exactly one spatial aggregation 
+process ran — either the built-in `aggregate_spatial` with a `reduce_by_method` reducer, 
+or the custom `aggregate_spatial_weighted` with a parsed reducer string, as the built-in 
+workflow does. 
+With no spatial aggregation, several, or another reducer, the aggregation cannot be
 attributed to the result; it remains an unverified declaration and the manifest
 lists `spatial_aggregation_method` as missing. A
 connection is not required to render or download a payload, but a bound connection
@@ -216,9 +219,10 @@ target fingerprint, and execution provenance available from OCS processes. The
 payload and manifest are both exposed as job result assets. Synchronous rendering
 still returns the payload directly and remains available in read-only mode.
 
-Execution provenance records observed managed artifacts, Icechunk snapshot IDs,
-hashes of inline spatial features, and the method of each `aggregate_spatial` call
-where those inputs pass through native OCS processes. The manifest explicitly lists evidence that is unavailable; declarations
+Execution provenance records observed managed artifacts, Icechunk snapshot IDs, hashes of 
+inline spatial features, and the method of each spatial aggregation call — both built-in 
+`aggregate_spatial` and custom `aggregate_spatial_weighted` — where those inputs pass through 
+native OCS processes. The manifest explicitly lists evidence that is unavailable; declarations
 alone do not prove aggregation semantics or per-output lineage.
 
 The delivery-input validator accepts only completed jobs with intact payloads and

@@ -43,12 +43,11 @@ def load_features(id: str, spatial_extent: Any = None, version: str | None = Non
 
     GeoJSON has no CRS of its own -- RFC 7946 fixes it to WGS 84 -- so a collection stored in a
     projected CRS is reprojected here before being handed to any downstream process such as
-    `aggregate_spatial`. This is the permanent output contract of `load_features`, not a
+    `aggregate_spatial_weighted`. This is the permanent output contract of `load_features`, not a
     temporary shim: every caller gets WGS 84 coordinates regardless of the collection's native
     storage CRS.
 
-    Each feature's `id_property` value is re-stamped onto the feature's top-level `id`, because
-    `aggregate_spatial` reads its geometry labels from there rather than from `properties`.
+    Each feature's `id_property` value is re-stamped onto the feature's top-level `id`.
 
     The parameter remains named `id` because that is the public openEO process parameter used
     by process graphs.
@@ -160,11 +159,8 @@ def _json_default(value: Any) -> Any:
 def _to_labeled_geojson(frame: gpd.GeoDataFrame, *, id_property: str) -> dict[str, Any]:
     """Convert a GeoDataFrame to a GeoJSON FeatureCollection, promoting id_property to top-level id.
 
-    `aggregate_spatial._parse_geometries` reads its geometry labels from each feature's top-level
-    `id`, not from `properties[id_property]` -- the opposite of the convention the feature store
-    itself uses for identity (`shared.features.validate_feature_ids`). Re-stamping here is what
-    lets a loaded collection feed straight into `aggregate_spatial` with meaningful labels instead
-    of sequential integers.
+    Promotes the use of more meaningful feature ids (labels instead of sequential integers) without
+    making any assumptions about the available feature properties on the input GeoJSON.
     """
     collection: dict[str, Any] = json.loads(frame.to_json(default=_json_default))
     for feature in collection.get("features", []):
