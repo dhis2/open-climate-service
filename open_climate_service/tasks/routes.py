@@ -58,6 +58,21 @@ def _validate_structure(tasks: list[Task]) -> None:
     compile_tasks(tasks)
 
 
+def check_target(task: Task) -> None:
+    """Refuse a sync or refresh task whose dataset or collection cannot be run. Raises ValueError."""
+    from open_climate_service.scheduler.service import resolve_schedule_template, validate_schedule_target
+
+    if task.kind == "sync":
+        validate_schedule_target(resolve_schedule_template(task.target), task.target)
+    elif task.kind == "refresh":
+        from open_climate_service.features.services import refreshable_feature_template_or_error
+
+        try:
+            refreshable_feature_template_or_error(task.target)
+        except HTTPException as exc:
+            raise ValueError(f"Refresh task {task.id!r}: {exc.detail}") from None
+
+
 def _validator(written: Task) -> Any:
     """Check a write: the structure of all tasks, and everything the written task depends on.
 
@@ -68,18 +83,9 @@ def _validator(written: Task) -> Any:
     def check(tasks: list[Task]) -> None:
         from open_climate_service.automation.config import AutomationConfig, compile_tasks
         from open_climate_service.automation.service import validate_automation
-        from open_climate_service.scheduler.service import resolve_schedule_template, validate_schedule_target
 
         _validate_structure(tasks)
-        if written.kind == "sync":
-            validate_schedule_target(resolve_schedule_template(written.target), written.target)
-        elif written.kind == "refresh":
-            from open_climate_service.features.services import refreshable_feature_template_or_error
-
-            try:
-                refreshable_feature_template_or_error(written.target)
-            except HTTPException as exc:
-                raise ValueError(f"Refresh task {written.id!r}: {exc.detail}") from None
+        check_target(written)
         involved = {written.id}
         if written.kind == "deliver" and written.after is not None and written.after.task is not None:
             involved.add(written.after.task)

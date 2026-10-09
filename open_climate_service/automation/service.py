@@ -196,13 +196,13 @@ def _set_delivery_error(job_id: str, export_id: str, message: str | None) -> Non
         logger.exception("Could not update delivery error state for openEO job %s", job_id)
 
 
-def _validate_deliveries(config: AutomationConfig) -> None:
+def _validate_deliveries(config: AutomationConfig, exports: dict[str, dict[str, Any]] | None = None) -> None:
     """Refuse a delivery that could only fail per job, naming its task.
 
     The export is resolved in its own plugin's format and the plugin decides what its deliveries
     need (CLIM-1289): no plugin id or format is named here.
     """
-    from open_climate_service.exports.service import resolve_export_by_id
+    from open_climate_service.exports.service import resolve_definition, resolve_export_by_id
 
     deliveries = [(trigger, trigger.deliver) for trigger in config.workflow_triggers if trigger.deliver is not None]
     for trigger, delivery in deliveries:
@@ -215,7 +215,12 @@ def _validate_deliveries(config: AutomationConfig) -> None:
                 "the workflow and delivery must use the same named export"
             )
         try:
-            resolved = resolve_export_by_id(export_id)
+            if exports is None:
+                resolved = resolve_export_by_id(export_id)
+            elif export_id in exports:
+                resolved = resolve_definition(exports[export_id])
+            else:
+                raise ValueError(f"Unknown export '{export_id}'")
         except ValueError as exc:
             raise ValueError(f"{prefix}, which is invalid: {exc}") from None
         try:
@@ -771,7 +776,7 @@ class WorkflowAutomationService:
         return job.id, created
 
 
-def validate_automation(config: AutomationConfig) -> None:
+def validate_automation(config: AutomationConfig, exports: dict[str, dict[str, Any]] | None = None) -> None:
     """Refuse a set of triggers that could only fail at run time, naming the task.
 
     Run when the tasks store is written, so a bad task is refused before it is saved, and again
@@ -784,7 +789,7 @@ def validate_automation(config: AutomationConfig) -> None:
     _validate_output_ownership(config)
     _validate_event_references(config)
     _validate_feature_references(config)
-    _validate_deliveries(config)
+    _validate_deliveries(config, exports)
 
 
 def _validate_self_trigger(config: AutomationConfig) -> None:

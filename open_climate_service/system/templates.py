@@ -1398,6 +1398,7 @@ _API_GROUP_NOTES = {
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
     "Tasks": "Every automated task: sync, refresh, workflow and deliver, each on a cron, after a change, or by hand.",
     "Runs": "What each task did: one record per run, with its job's status and the runs it set off.",
+    "Configuration": "Every task and export as one document, to export, commit and import on another instance.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "System": "Health, version and the landing page's JSON form.",
 }

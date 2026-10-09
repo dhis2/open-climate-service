@@ -120,3 +120,46 @@ def test_exports_are_saved_live_and_checked_by_their_plugin(
 
     assert client.delete("/exports/rain-monthly").status_code == 204
     assert client.get("/exports").json()["exports"] == []
+
+
+# --- the operational configuration as one document -----------------------------------------------------
+
+
+def test_the_configuration_round_trips_as_one_document(client: TestClient) -> None:  # noqa: F811
+    assert (
+        client.post(
+            "/tasks", json={"id": "sync-chirps", "kind": "sync", "target": "chirps", "cron": "0 6 * * *"}
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/tasks", json={"id": "agg", "kind": "workflow", "target": _WORKFLOW, "after": {"dataset": "chirps"}}
+        ).status_code
+        == 201
+    )
+
+    document = client.get("/configuration?format=yaml")
+    assert document.headers["content-type"].startswith("application/yaml")
+
+    for task_id in ("agg", "sync-chirps"):
+        client.delete(f"/tasks/{task_id}")
+    assert client.get("/tasks").json()["tasks"] == []
+
+    restored = client.put("/configuration", content=document.content, headers={"Content-Type": "application/yaml"})
+    assert restored.status_code == 200, restored.text
+    assert [task["id"] for task in client.get("/tasks").json()["tasks"]] == ["agg", "sync-chirps"]
+
+
+def test_a_document_with_one_bad_task_changes_nothing(client: TestClient) -> None:  # noqa: F811
+    client.post("/tasks", json={"id": "sync-chirps", "kind": "sync", "target": "chirps", "cron": "0 6 * * *"})
+    bad = {
+        "tasks": [
+            {"id": "sync-era5", "kind": "sync", "target": "era5", "cron": "0 6 * * *"},
+            {"id": "x", "kind": "workflow", "target": "no_such_workflow"},
+        ],
+        "exports": [],
+    }
+    refused = client.put("/configuration", json=bad)
+    assert refused.status_code == 409 and "unknown workflow" in refused.json()["detail"]
+    assert [task["id"] for task in client.get("/tasks").json()["tasks"]] == ["sync-chirps"]
