@@ -28,8 +28,8 @@ def cell_pad(coord: xr.DataArray | np.ndarray) -> float:
     """Return half the widest cell spacing on ``coord``.
 
     Coordinates name cell *centres*, so a bbox edge falling inside a cell still needs that
-    whole cell. Padding a label slice by this much before selecting is what turns
-    centre-based selection into footprint-based selection.
+    whole cell. Widening the coordinate range by this much before selecting with ``sel`` is
+    what turns centre-based selection into footprint-based selection.
 
     The widest spacing is used rather than the local one so the result is provably sufficient
     on an irregular axis. On a regular grid that adds at most one cell per side; on an
@@ -44,7 +44,7 @@ def cell_pad(coord: xr.DataArray | np.ndarray) -> float:
 
 
 def _axis_slice(coord: xr.DataArray, low: float, high: float) -> slice:
-    """A label slice on ``coord`` padded by `cell_pad`, in the axis's own direction."""
+    """A slice by coordinate value on ``coord``, padded by `cell_pad`, in the axis's own direction."""
     pad = cell_pad(coord)
     values = np.asarray(coord.values, dtype="float64").ravel()
     if values.size > 1 and values[0] > values[-1]:
@@ -62,12 +62,12 @@ def bbox_slice(
     """Return ``{x_dim: slice, y_dim: slice}`` covering every cell on ``obj`` that meets ``bbox``.
 
     Use this instead of ``slice(xmin, xmax)`` when selecting a bbox from a source grid:
-    ``ds.sel(bbox_slice(ds, bbox, x_dim="longitude", y_dim="latitude"))``. Label selection
-    keeps only cells whose centre lies inside the bounds, so the cells straddling each edge
-    are dropped and the result covers *less* than the bbox — up to half a cell short on every
-    side. On a coarse grid that is kilometres of missing coverage at the edge of the instance
-    extent, which shows up as an uncovered strip on the map and as border districts
-    aggregated from partial data.
+    ``ds.sel(bbox_slice(ds, bbox, x_dim="longitude", y_dim="latitude"))``. Selecting by
+    coordinate value keeps only cells whose centre lies inside the bounds, so the cells
+    straddling each edge are dropped and the result covers *less* than the bbox — up to half a
+    cell short on every side. On a coarse grid that is kilometres of missing coverage at the
+    edge of the instance extent, which shows up as an uncovered strip on the map and as border
+    districts aggregated from partial data.
 
     Each slice follows its coordinate's own direction, so a descending latitude axis (as most
     geographic sources have) needs nothing special. Takes the bbox in the source's own

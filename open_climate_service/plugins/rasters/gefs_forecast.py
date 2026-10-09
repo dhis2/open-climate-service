@@ -155,7 +155,7 @@ class GefsForecastPlugin(BaseDatasetPlugin):
         # Subset before reducing: the global grid is 721 x 1440 across 31 members and 181 leads,
         # so reducing first would pull the whole world to produce one country.
         #
-        # `bbox_slice` rather than `slice(ymax, ymin)`: a plain label slice keeps only cells
+        # `bbox_slice` rather than `slice(ymax, ymin)`: a plain coordinate slice keeps only cells
         # whose *centre* falls inside the bbox, so on this 0.25° grid the store ended up ~14 km
         # short of the requested extent on each edge — an uncovered strip on the map and border
         # districts aggregated from partial data. It also handles the descending latitude axis.

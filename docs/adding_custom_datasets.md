@@ -97,7 +97,7 @@ plugin import surface), alongside `BaseDatasetPlugin`.
   `time`/`valid_time` → `t`), clips to `bbox` (reprojecting the bbox from `bbox_crs` — WGS84
   by default — onto the source CRS, so a projected/UTM grid clips correctly), drops a
   singleton `band`, masks the nodata sentinel, and stamps the period onto the time axis.
-- **`bbox_slice(obj, bbox, *, x_dim, y_dim)`** — label slices covering every cell the
+- **`bbox_slice(obj, bbox, *, x_dim, y_dim)`** — slices by coordinate value covering every cell the
   bbox touches, for a plugin that selects from a remote store itself rather than reading it
   whole: `ds.sel(bbox_slice(ds, bbox, x_dim="longitude", y_dim="latitude"))`. A plain
   `slice(xmin, xmax)` selects on cell centres and drops the cells straddling each edge.
