@@ -29,8 +29,7 @@ from open_climate_service.openeo import execution
 from open_climate_service.openeo import jobs as openeo_jobs
 from open_climate_service.openeo import workflows as workflow_store
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.plugins.processes.aggregate_spatial import reduce_by_method
-from open_climate_service.shared.provenance import capture_execution, observe_spatial_aggregation, record_source
+from open_climate_service.shared.provenance import capture_execution, record_source
 from open_climate_service.shared.time import utc_now
 
 _DATA_ELEMENT = "BXgDHhPdFVU"
@@ -246,22 +245,6 @@ def test_workflow_rejects_features_without_original_ids(instance: openeo_jobs.Op
     assert record.error_message is not None and "Feature 0 has no usable feature.id" in record.error_message
 
 
-@pytest.mark.parametrize("bad_id", ["district-1", 12345, "ImspTQPwCq"])
-def test_workflow_rejects_non_uid_feature_ids_before_aggregating(
-    instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch, bad_id: Any
-) -> None:
-    from open_climate_service.plugins.processes import aggregate_spatial as module
-
-    def must_not_run(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("zonal aggregation ran before feature IDs were validated")
-
-    monkeypatch.setattr(module, "_dataset_reduce_spatial", must_not_run)
-    record = _run(instance, "agg-job", _process(_geometries(first_id=bad_id)))
-    assert record.status == OpenEOJobStatus.ERROR
-    assert record.error_message is not None
-    assert "is not a DHIS2 organisation unit UID" in record.error_message
-
-
 def test_workflow_rejects_method_contradicting_the_export(instance: openeo_jobs.OpenEOJobService) -> None:
     record = _run(instance, "agg-job", _process(_geometries(), method="sum"))
     assert record.status == OpenEOJobStatus.ERROR
@@ -324,19 +307,11 @@ def test_ad_hoc_dhis2_json_graph_remains_supported(instance: openeo_jobs.OpenEOJ
                 "arguments": {"id": "rain_monthly", "temporal_extent": ["2025-01-01", "2025-02-28"]},
             },
             "zonal": {
-                "process_id": "aggregate_spatial",
+                "process_id": "aggregate_spatial_weighted",
                 "arguments": {
                     "data": {"from_node": "load"},
                     "geometries": _geometries(),
-                    "reducer": {
-                        "process_graph": {
-                            "mean": {
-                                "process_id": "mean",
-                                "arguments": {"data": {"from_parameter": "data"}},
-                                "result": True,
-                            }
-                        }
-                    },
+                    "reducer": "mean",
                 },
             },
             "save": {
@@ -369,17 +344,6 @@ def test_synchronous_run_checks_aggregation_like_a_batch_job(
         assert len(response.json()["dataValues"]) == 4
     else:
         assert "does not match the executed spatial aggregation 'sum'" in response.text
-
-
-def test_named_reductions_outside_aggregate_spatial_are_not_spatial_aggregations() -> None:
-    with capture_execution({}) as evidence:
-        reduce_by_method(np.array([1.0, 2.0]), "sum")  # e.g. a temporal reduction
-        with observe_spatial_aggregation():
-            reduce_by_method(np.array([1.0, 2.0]), "mean")
-        with observe_spatial_aggregation():
-            pass  # an aggregate_spatial whose reducer is not a named reduction
-    assert evidence.spatial_aggregations == ["mean", None]
-    assert "spatial_aggregation_method" in evidence.describe()["missing"]
 
 
 @pytest.mark.parametrize(("observed", "missing"), [([], True), (["mean"], False), (["mean", "sum"], True)])

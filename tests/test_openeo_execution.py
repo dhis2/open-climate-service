@@ -6,10 +6,12 @@ import csv
 import json
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from fastapi import HTTPException
@@ -41,6 +43,9 @@ from open_climate_service.openeo.jobs import (
 )
 from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.time import utc_now
+
+_RASTER_ARTIFACT = SimpleNamespace(format=ArtifactFormat.ICECHUNK)
+"""A stub published artifact: `load_collection` reads only its format before opening it."""
 
 # ---------------------------------------------------------------------------
 # _bbox_to_dict
@@ -171,10 +176,11 @@ def test_ensure_crs_is_idempotent_and_preserves_existing_crs() -> None:
 def test_load_collection_returns_georegistered_cube(monkeypatch: pytest.MonkeyPatch) -> None:
     import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: object())
+    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
     monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     cube = _load_collection_impl("pop_collection")
+    assert isinstance(cube, xr.DataArray), "a raster collection loads as a datacube"
 
     # The returned DataArray must carry a CRS so odc-based processes
     # (resample_cube_spatial) can georegister it.
@@ -184,7 +190,7 @@ def test_load_collection_returns_georegistered_cube(monkeypatch: pytest.MonkeyPa
 
 def test_load_collection_empty_temporal_extent_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     # The mock cube only covers 2021; a 2030 extent selects zero timesteps.
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: object())
+    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
     monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     with pytest.raises(HTTPException) as excinfo:
@@ -200,11 +206,12 @@ def test_load_collection_empty_temporal_extent_raises_clear_error(monkeypatch: p
 
 
 def test_load_collection_overlapping_temporal_extent_returns_data(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: object())
+    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
     monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     cube = _load_collection_impl("pop_collection", temporal_extent=["2021-01-01", "2021-12-31"])
 
+    assert isinstance(cube, xr.DataArray)
     assert cube.sizes["t"] == 1
 
 
@@ -459,10 +466,20 @@ def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyP
     assert published["stac"]["href"] == "/stac/collections/my_aggregate"
 
 
+def _store_finished_job(job_id: str) -> None:
+    """Result files are only served for a finished job (CLIM-1221)."""
+    from open_climate_service.openeo.jobs import store_create_job
+    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_climate_service.shared.time import utc_now
+
+    store_create_job(OpenEOJobRecord(id=job_id, status=OpenEOJobStatus.FINISHED, created=utc_now()))
+
+
 def test_download_result_file_serves_geojson_with_geojson_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
     geojson_path = results_dir / "result.geojson"
@@ -478,6 +495,7 @@ def test_download_result_file_serves_json_with_json_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
     json_path = results_dir / "result.json"
@@ -981,9 +999,53 @@ def test_dhis2_value_string_formats_boolean_scalars() -> None:
 
 
 def test_build_chap_csv_frame_requires_location_field() -> None:
-    with pytest.raises(ValueError, match="Missing location field 'geometry' in aggregated result"):
+    with pytest.raises(ValueError, match="Missing location field 'feature_id' in aggregated result"):
         _build_chap_csv_frame(
             [{"t": "2024-01-01", "temperature": 1.5}],
+            {"period_type": "daily"},
+        )
+
+
+@pytest.mark.parametrize("requested", ["feature_id", "geometry"])
+def test_feature_id_field_reads_feature_ids_beside_shapes(requested: str) -> None:
+    from shapely.geometry import Point
+
+    from open_climate_service.shared.vectors import feature_id_field
+
+    frame = pd.DataFrame({"geometry": [Point(0, 0)], "feature_id": ["OU_A"], "t": ["2024-01"]})
+
+    assert feature_id_field(frame, requested) == "feature_id"
+
+
+@pytest.mark.parametrize("requested", ["feature_id", "geometry", "regions"])
+def test_feature_id_field_refuses_shapes_as_ids(requested: str) -> None:
+    """A time series repeats each shape per period; shapes are never written out as ids."""
+    from shapely.geometry import Point
+
+    from open_climate_service.shared.vectors import feature_id_field
+
+    shapes = [Point(0, 0), Point(1, 1)]
+    column = "regions" if requested == "regions" else "geometry"
+    frame = pd.DataFrame({column: shapes, "t": ["2024-01", "2024-01"]})
+
+    with pytest.raises(ValueError, match="holds geometries, not feature ids"):
+        feature_id_field(frame, requested)
+
+
+def test_feature_id_field_keys_on_plain_geometry_labels_without_feature_ids() -> None:
+    from open_climate_service.shared.vectors import feature_id_field
+
+    frame = pd.DataFrame({"geometry": ["OU_A", "OU_B"], "t": ["2024-01", "2024-01"]})
+
+    assert feature_id_field(frame, "feature_id") == "geometry"
+
+
+def test_chap_csv_refuses_shapes_without_feature_ids() -> None:
+    from shapely.geometry import Point
+
+    with pytest.raises(ValueError, match="holds geometries, not feature ids"):
+        _build_chap_csv_frame(
+            [{"geometry": Point(0, 0), "t": "2024-01-01", "temperature": 1.5}],
             {"period_type": "daily"},
         )
 
@@ -1155,7 +1217,6 @@ def test_merge_cubes_wrapper_appends_third_named_predictor() -> None:
 
 
 def test_merge_cubes_wrapper_combines_three_zonal_datasets_as_chap_csv() -> None:
-    """Single-variable Datasets mirror aggregate_spatial's return type."""
     from open_climate_service.openeo.execution import _build_process_registry
 
     reg = _build_process_registry()
@@ -1844,11 +1905,17 @@ def test_persist_result_reloads_template_after_concurrent_create(
 def test_persist_result_rejects_non_boolean_publish_option(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    writes: list[int] = []
     monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr(
+        "open_climate_service.data_manager.services.downloader.write_to_icechunk_store",
+        lambda *args, **kwargs: writes.append(1),
+    )
     envelope = SaveResultEnvelope(_small_dataset(), "Zarr", {"dataset_id": "ds", "publish": "false"})
     with pytest.raises(ValueError, match="'publish' option must be a boolean"):
         job_service._persist_result("job-bad-publish", envelope)
+    assert writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -2040,11 +2107,11 @@ def _reduced_dataset() -> Any:
 
 
 @pytest.mark.parametrize("fmt", ["NETCDF", "ZARR"])
-def test_write_raster_scrubs_attrs_no_writer_can_encode(tmp_path: Path, fmt: str) -> None:
+def test_write_xarray_scrubs_attrs_no_writer_can_encode(tmp_path: Path, fmt: str) -> None:
     """netCDF rejects a dict attr outright; Zarr rejects it as non-JSON (CLIM-825)."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
-    output = _write_raster(_reduced_dataset(), tmp_path, fmt)
+    output = _write_xarray(_reduced_dataset(), tmp_path, fmt)
 
     assert output is not None
     assert Path(output).exists()
@@ -2087,14 +2154,14 @@ def test_netcdf_attr_filter_matches_what_the_writer_accepts(
             ds.to_netcdf(tmp_path / f"{label}-raw.nc")
 
 
-def test_write_raster_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None:
+def test_write_xarray_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None:
     """A dict of plain strings survives a JSON scrub but still breaks to_netcdf."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
     ds = _reduced_dataset()
     ds.attrs["json_safe_dict"] = {"t": "2025-01-01"}
 
-    output = _write_raster(ds, tmp_path, "NETCDF")
+    output = _write_xarray(ds, tmp_path, "NETCDF")
 
     assert output is not None
     reopened = xr.open_dataset(output)
@@ -2104,15 +2171,15 @@ def test_write_raster_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None
         reopened.close()
 
 
-def test_write_raster_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path: Path) -> None:
+def test_write_xarray_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path: Path) -> None:
     """netCDF writes arrays and numpy scalars happily; the JSON scrub would discard them."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
     ds = _reduced_dataset()
     ds.attrs["valid_range"] = np.array([0.0, 100.0], dtype="float32")
     ds.attrs["scale_factor"] = np.float32(0.1)
 
-    output = _write_raster(ds, tmp_path, "NETCDF")
+    output = _write_xarray(ds, tmp_path, "NETCDF")
 
     assert output is not None
     reopened = xr.open_dataset(output)
@@ -2123,11 +2190,11 @@ def test_write_raster_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path:
         reopened.close()
 
 
-def test_write_raster_keeps_attrs_the_writer_can_encode(tmp_path: Path) -> None:
+def test_write_xarray_keeps_attrs_the_writer_can_encode(tmp_path: Path) -> None:
     """The scrub must drop only what cannot be written, not all metadata."""
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
-    output = _write_raster(_reduced_dataset(), tmp_path, "NETCDF")
+    output = _write_xarray(_reduced_dataset(), tmp_path, "NETCDF")
     assert output is not None
 
     reopened = xr.open_dataset(output)
@@ -2160,7 +2227,7 @@ def test_batch_job_with_unwritable_format_errors_without_a_result_asset(
 ) -> None:
     """The batch half of CLIM-909: the job must fail, not finish with mislabelled output.
 
-    Before the fix `_write_raster` fell back to Zarr, so the job wrote `result.zarr`, was marked
+    Before the fix `_write_xarray` fell back to Zarr, so the job wrote `result.zarr`, was marked
     FINISHED, and advertised it as the requested format — quieter than the synchronous 500 and
     harder to notice.
     """

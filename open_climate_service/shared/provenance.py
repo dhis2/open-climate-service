@@ -28,7 +28,7 @@ class ExecutionEvidence:
     require_feature_ids: bool = False
     sources: list[dict[str, Any]] = field(default_factory=list)
     features: list[dict[str, Any]] = field(default_factory=list)
-    # One entry per completed aggregate_spatial call: its named method, or None when its
+    # One entry per completed spatial aggregation: its named method, or None when its
     # reducer is not a single named reduction.
     spatial_aggregations: list[str | None] = field(default_factory=list)
     # One entry per completed temporal aggregation (aggregate_temporal_period or
@@ -118,13 +118,25 @@ def record_source(collection_id: str, artifact: Any) -> None:
     evidence.sources.append(observation)
 
 
-@contextmanager
-def observe_spatial_aggregation() -> Generator[None]:
-    """Attribute named reductions to one aggregate_spatial call and record its method.
+def record_spatial_aggregation(method: str | None) -> None:
+    """Record one completed spatial aggregation and the named method it reduced with.
 
-    Only reductions running inside this scope count, so a named reducer used for a
-    temporal reduction or anywhere else never reads as a spatial aggregation. The
-    call is recorded only when it completes.
+    *method* is None when the reducer was not a single named reduction, which a DHIS2 export
+    then cannot attribute. Ignored outside a recorded execution, like `record_features`.
+    """
+    evidence = _current.get()
+    if evidence is not None:
+        evidence.spatial_aggregations.append(method)
+
+
+@contextmanager
+def spatial_aggregation_scope() -> Generator[None]:
+    """Record a spatial aggregation whose reducer is a process, from the reductions it runs.
+
+    openEO's `aggregate_spatial` takes its reducer as a process graph, so the method is only
+    known from the named reductions that run during the call. Only reductions inside this scope
+    count, so one used for a temporal reduction elsewhere in the graph never reads as spatial.
+    Recorded with `record_spatial_aggregation` once the call completes.
     """
     methods: set[str] = set()
     token = _spatial_methods.set(methods)
@@ -132,9 +144,7 @@ def observe_spatial_aggregation() -> Generator[None]:
         yield
     finally:
         _spatial_methods.reset(token)
-    evidence = _current.get()
-    if evidence is not None:
-        evidence.spatial_aggregations.append(next(iter(methods)) if len(methods) == 1 else None)
+    record_spatial_aggregation(next(iter(methods)) if len(methods) == 1 else None)
 
 
 def record_reduction(method: str) -> None:
@@ -145,11 +155,6 @@ def record_reduction(method: str) -> None:
     temporal = _temporal_scope.get()
     if temporal is not None:
         temporal["methods"].add(method)
-
-
-def record_spatial_reduction(method: str) -> None:
-    """Note a named reduction; ignored outside an aggregate_spatial call. See `record_reduction`."""
-    record_reduction(method)
 
 
 @contextmanager
@@ -203,7 +208,10 @@ def record_features(geometries: Any) -> None:
     if evidence is None:
         return
     from open_climate_service.shared.features import validate_dhis2_feature_ids, validate_feature_ids
+    from open_climate_service.shared.vectors import explicit_feature_collection
 
+    # A GeoDataFrame or vector cube with explicit ids is checked and fingerprinted as GeoJSON.
+    geometries = explicit_feature_collection(geometries)
     if evidence.require_feature_ids:
         validate_dhis2_feature_ids(geometries)
     if not isinstance(geometries, dict) or geometries.get("type") not in {"Feature", "FeatureCollection"}:

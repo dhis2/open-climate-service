@@ -22,6 +22,7 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat
+from open_climate_service.shared.cancellation import ExecutionCancelled, raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,11 @@ _registry: Any = None  # lazy singleton
 
 @xr.register_dataset_accessor("openeo")
 class _DatasetOpenEOAccessor:  # pyright: ignore[reportUnusedClass]
-    """Mirrors the DataArray openeo accessor for xr.Dataset.
+    """Minimal openEO accessor for ``xarray.Dataset``.
 
-    openeo-processes-dask only registers the accessor for DataArray.
-    Several standard processes (e.g. rename_labels) call data.openeo.temporal_dims
-    on the result of aggregate_spatial which returns a Dataset, so we register a
-    minimal compatible accessor here.
+    ``openeo-processes-dask`` registers the accessor for ``DataArray`` only,
+    while some processes operate on ``Dataset`` results and expect the same
+    accessor attributes.
     """
 
     def __init__(self, ds: xr.Dataset) -> None:
@@ -168,6 +168,52 @@ def _recording_reducer(name: str, func: Any) -> Any:
     return wrapper
 
 
+def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
+    """Wrap openEO's aggregate_spatial so a feature's id and the variable's name survive.
+
+    The upstream implementation drops each GeoJSON Feature's `id`, labels the geometry dimension
+    with the shapes and returns an unnamed DataArray, so a DHIS2 or CHAP export has neither
+    org units nor a value column (openeo-processes-dask#434). It also refuses a raster without
+    a CRS. The features are parsed here instead, with their ids, and the result is named and
+    carries them as `feature_id`, the same as `aggregate_spatial_weighted`.
+    """
+
+    def _aggregate_spatial(
+        data: Any, geometries: Any, reducer: Any, target_dimension: Any = None, context: Any = None, **kwargs: Any
+    ) -> Any:
+        # `target_dimension` and `context` are openEO parameters the upstream function does not
+        # take; a graph from the openEO editor passes both, as null. The dimension is named here,
+        # and a context is bound to the reducer, so a callback reading `context` receives it.
+        import functools
+
+        import numpy as np
+
+        from open_climate_service.shared.provenance import record_features, spatial_aggregation_scope
+        from open_climate_service.shared.vectors import GEOMETRY_FIELD, features_in_crs, single_raster, vector_result
+
+        if context is not None:
+            # Callback parameters come from `named_parameters`, as openEO's own reducers pass it.
+            reducer = functools.partial(reducer, named_parameters={"context": context})
+        record_features(geometries)
+        raster = single_raster(data)
+        frame = features_in_crs(geometries, raster.rio.crs)
+        with spatial_aggregation_scope():
+            # The reducer runs in joblib workers, by default other processes, where the scope's
+            # ContextVar is not set. One call here on a tiny array, the way xvec calls it, records
+            # its named reduction so a DHIS2 export can check its declared method, and leaves the
+            # aggregation itself on joblib's parallel backend.
+            try:
+                xr.DataArray(np.array([[1.0, 2.0]]), dims=("y", "x")).reduce(
+                    reducer, dim=("y", "x"), positional_parameters={"data": 0}
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Could not probe the aggregate_spatial reducer for its method", exc_info=True)
+            result = original_fn(data=raster, geometries=frame, reducer=reducer, **kwargs)
+        return vector_result(result, raster, frame.index, target_dimension or GEOMETRY_FIELD)
+
+    return _aggregate_spatial
+
+
 def _make_named_merge_cubes(original_fn: Any) -> Any:
     """Wrap merge_cubes to preserve and extend named predictor cubes.
 
@@ -184,7 +230,6 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
     Match upstream's coordinate tolerance and align label order before requiring
     equal indexes, so temporal or location misalignment is never hidden.
 
-    ``aggregate_spatial`` returns an ``xr.Dataset`` even for one input variable.
     Distinct single-variable datasets are normalised only when starting a named
     predictor stack; ordinary Dataset merges retain upstream types and attrs.
     """
@@ -291,6 +336,31 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
         context: Any = None,
         **kwargs: Any,
     ) -> Any:
+        # Vector cubes are merged on their feature ids: upstream takes set differences of the
+        # labels, and shapes cannot be ordered. The shapes go back on afterwards, in the CRS of
+        # the first cube, which the second cube's are reprojected to.
+        from open_climate_service.shared.vectors import labelled_by_feature_id, with_shapes
+
+        cube1, shapes1 = labelled_by_feature_id(cube1)
+        cube2, shapes2 = labelled_by_feature_id(cube2)
+        if shapes1 is None and shapes2 is None:
+            return _merge_labelled(cube1, cube2, overlap_resolver, context, **kwargs)
+        if shapes1 is None or shapes2 is None:
+            raise ValueError("merge_cubes: a vector cube can only be merged with another vector cube")
+        if shapes1.name != shapes2.name:
+            raise ValueError(
+                f"merge_cubes: the vector cubes have their features on different dimensions, "
+                f"'{shapes1.name}' and '{shapes2.name}'"
+            )
+        if shapes1.crs is not None and shapes2.crs is not None and shapes1.crs != shapes2.crs:
+            shapes2 = shapes2.to_crs(shapes1.crs)
+        import geopandas as gpd
+
+        shapes = gpd.GeoSeries(shapes1.combine_first(shapes2), crs=shapes1.crs, name=shapes1.name)
+        merged = _merge_labelled(cube1, cube2, overlap_resolver, context, **kwargs)
+        return with_shapes(merged, shapes)
+
+    def _merge_labelled(cube1: Any, cube2: Any, overlap_resolver: Any, context: Any, **kwargs: Any) -> Any:
         array1 = _as_named_array(cube1)
         array2 = _as_named_array(cube2)
         if array1 is not None and array2 is not None and (cube_axis in array1.dims or cube_axis in array2.dims):
@@ -298,8 +368,9 @@ def _make_named_merge_cubes(original_fn: Any) -> Any:
                 raise ValueError("An overlap resolver is only supported on the initial named predictor merge")
             return _append_disjoint_predictors(array1, array2)
 
-        # Distinct single-variable Datasets are the aggregate_spatial predictor
-        # case. Do not promote same-variable Datasets or any ordinary merge.
+        # When both inputs are single-variable Datasets with different variable names,
+        # pass their DataArrays to the underlying implementation. Preserve Datasets
+        # for same-variable inputs and ordinary merges.
         promote_datasets = (
             isinstance(cube1, xr.Dataset)
             and isinstance(cube2, xr.Dataset)
@@ -369,8 +440,12 @@ def _build_process_registry() -> Any:
 
     # Order matters: wrap_funcs are applied left to right, so the first entry ends up
     # innermost. _normalise_temporal_arguments must sit inside wrap_fn to see arguments
-    # after ParameterReference resolution — see its docstring.
-    registry = ProcessRegistry(wrap_funcs=[_normalise_temporal_arguments, wrap_fn])
+    # after ParameterReference resolution — see its docstring. _check_cancellation is
+    # outermost, so a cancelled job stops before any of it runs.
+    registry = ProcessRegistry(wrap_funcs=[_normalise_temporal_arguments, wrap_fn, _check_cancellation])
+    from open_climate_service.shared.cancellation import install_dask_cancellation
+
+    install_dask_cancellation()
 
     for name, func in inspect.getmembers(impls_module, inspect.isfunction):
         spec: dict[str, Any] = getattr(specs_module, name, None) or {}
@@ -387,6 +462,10 @@ def _build_process_registry() -> Any:
     registry["aggregate_temporal_period"] = Process(
         spec=getattr(specs_module, "aggregate_temporal_period", {}),
         implementation=_make_sorted_atp(impls_module.aggregate_temporal_period),
+    )
+    registry["aggregate_spatial"] = Process(
+        spec=getattr(specs_module, "aggregate_spatial", {}),
+        implementation=_make_feature_aware_aggregate_spatial(impls_module.aggregate_spatial),
     )
     registry["merge_cubes"] = Process(
         spec=getattr(specs_module, "merge_cubes", {}),
@@ -538,14 +617,62 @@ def _temporal_to_list(extent: Any) -> list[str | None] | None:
     return result
 
 
+def _spatial_extent_with_crs(extent: Any) -> dict[str, Any] | None:
+    """The bbox as `load_features` takes it: west/south/east/north, plus the CRS when declared.
+
+    A plain object passes through unchanged for `load_features` to validate, so a missing or
+    non-numeric coordinate is reported against `spatial_extent`. `load_collection` is registered
+    without a process spec, so any other value can arrive here too and is refused by name.
+    """
+    if extent is None or isinstance(extent, dict):
+        return extent
+    if not all(hasattr(extent, key) for key in ("west", "south", "east", "north")):
+        raise ValueError(f"load_collection: spatial_extent must be a bounding box object, got {type(extent).__name__}")
+    bbox: dict[str, Any] | None = _bbox_to_dict(extent)
+    if bbox is None:
+        return None
+    crs = getattr(extent, "crs", None)
+    if crs is not None:
+        bbox["crs"] = crs
+    return bbox
+
+
+def _load_vector_collection(id: str, artifact: Any, spatial_extent: Any, bands: Any) -> dict[str, Any]:
+    """Load a published feature collection, returning what `load_features` returns (CLIM-1326).
+
+    `temporal_extent` is not applied: a feature collection is static geometry with no time
+    dimension, and the openEO editor passes `temporal_extent: null` for a collection whose
+    temporal extent is open, as a feature collection's is. `bands` is refused rather than
+    ignored, because a vector collection has none and silently dropping a selection would
+    return more than was asked for. Any `bands` is refused, also an empty list or a malformed
+    value, as the process contract says to omit it.
+
+    The record read is the published `artifact` that `/collections` advertises, not one found
+    again from the collection's feature template, so every advertised collection stays loadable
+    also after its template is removed or renamed on the instance.
+    """
+    from open_climate_service.plugins.processes.load_features import load_feature_record
+
+    if bands is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"load_collection: '{id}' is a vector collection and has no bands; omit `bands`",
+        )
+    return load_feature_record(
+        id, artifact, spatial_extent=_spatial_extent_with_crs(spatial_extent), process="load_collection"
+    )
+
+
 def _load_collection_impl(
     id: str,
     spatial_extent: Any = None,
     temporal_extent: Any = None,
     bands: Any = None,
-) -> xr.DataArray:
-    """Load a published dataset as an openEO data cube (xr.DataArray)."""
+) -> xr.DataArray | dict[str, Any]:
+    """Load a published dataset: a raster as a data cube, a feature collection as a vector cube."""
     artifact = _get_published_artifact(id)
+    if artifact.format == ArtifactFormat.GEOPARQUET:
+        return _load_vector_collection(id, artifact, spatial_extent, bands)
     ds = _ensure_crs(_open_artifact(artifact))
     from open_climate_service.shared.provenance import record_source
 
@@ -694,9 +821,9 @@ def _get_published_artifact(collection_id: str) -> Any:
 
 
 def _eligible_artifacts() -> dict[str, Any]:
-    # The raster gate, not the STAC one: this resolves what load_collection will open as a
-    # datacube, which is a narrower question than what the catalogue describes.
-    return ingestion_services.latest_published_raster_artifacts_by_dataset()
+    # openEO's own gate: what /collections advertises is what load_collection loads, rasters
+    # as datacubes and feature collections as vector cubes (CLIM-1326).
+    return ingestion_services.openeo_collection_artifacts_by_dataset()
 
 
 def _open_artifact(artifact: Any) -> xr.Dataset:
@@ -827,6 +954,21 @@ def _naive_temporal_scalar(value: Any) -> Any:
     return text
 
 
+def _check_cancellation(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a process so a cancelled job stops before running it (CLIM-1221).
+
+    The outermost wrapper, so the check precedes argument resolution and the process itself.
+    Throttled, and a no-op outside a job's cancellation scope.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        raise_if_cancelled()
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def _normalise_temporal_arguments(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a process so scalar date arguments arrive timezone-naive.
 
@@ -895,7 +1037,8 @@ def run_process_graph(
             if isinstance(result, SaveResultEnvelope):
                 result.provenance = evidence.describe()
             return result
-    except HTTPException:
+    except (HTTPException, ExecutionCancelled):
+        # A cancellation is not a failure of the graph: never report it as a 400 or 500.
         raise
     except (TypeError, ValueError, KeyError) as exc:
         # Still a 400 for a synchronous caller, but raised while running, where a ValueError

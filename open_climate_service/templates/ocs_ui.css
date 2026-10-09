@@ -790,6 +790,7 @@ p.note.table-title {
 }
 .field input[type="text"],
 .field input[type="number"],
+.field input[type="time"],
 .field select {
   font: inherit;
   color: var(--colors-grey900);
@@ -895,13 +896,14 @@ button.primary:disabled {
   background: var(--colors-green100);
 }
 
-/* Pipeline builder and delivery review */
+/* Record pages: a listing tab beside an add-or-edit form tab (sync schedules). */
 .page-tabs {
   display: flex;
   gap: var(--spacers-dp24);
   border-bottom: 1px solid var(--colors-grey400);
   margin-bottom: var(--spacers-dp24);
 }
+
 .page-tabs a {
   padding: var(--spacers-dp8) var(--spacers-dp4);
   border-bottom: 3px solid transparent;
@@ -909,13 +911,42 @@ button.primary:disabled {
   font-weight: var(--font-weight-medium);
   text-decoration: none;
 }
+
 .page-tabs a:hover {
   color: var(--theme-primary800);
 }
+
 .page-tabs a[aria-current="page"] {
   border-bottom-color: var(--theme-primary600);
   color: var(--theme-primary800);
 }
+
+.records-table {
+  margin-bottom: var(--spacers-dp24);
+}
+
+.records-table th,
+.records-table .mono {
+  white-space: nowrap;
+}
+
+.records-table td .form-actions {
+  margin-top: 0;
+  flex-wrap: wrap;
+  gap: var(--spacers-dp8);
+  min-width: 11rem;
+}
+
+.notice + .records-table,
+.notice + .empty-state {
+  margin-top: var(--spacers-dp16);
+}
+
+.records-table td form {
+  display: inline;
+}
+
+/* Pipeline builder and delivery review */
 .pipeline-table {
   margin-bottom: var(--spacers-dp24);
 }
@@ -924,14 +955,22 @@ button.primary:disabled {
   padding: var(--spacers-dp32);
   margin-bottom: var(--spacers-dp24);
 }
+
 .empty-state-action {
   display: inline-block;
   margin-top: var(--spacers-dp16);
 }
+
+.record-form-panel {
+  border-top: var(--spacers-dp4) solid var(--theme-primary600);
+}
+
 .pipeline-create {
   border-top: var(--spacers-dp4) solid var(--theme-primary600);
 }
-.pipeline-form {
+
+.pipeline-form,
+.record-form {
   display: flex;
   flex-direction: column;
   gap: var(--spacers-dp24);
@@ -966,16 +1005,19 @@ button.primary:disabled {
   display: block;
   margin: var(--spacers-dp4) 0 0 var(--spacers-dp32);
 }
-.pipeline-form .form-grid {
+.pipeline-form .form-grid,
+.record-form .form-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.pipeline-form .field-wide {
+.pipeline-form .field-wide,
+.record-form .field-wide {
   grid-column: 1 / -1;
 }
 .pipeline-form .compact-grid {
   grid-template-columns: minmax(240px, 2fr) minmax(150px, 1fr) minmax(120px, 1fr);
 }
-.pipeline-form > .form-actions {
+.pipeline-form > .form-actions,
+.record-form > .form-actions {
   margin-top: 0;
   padding-top: var(--spacers-dp16);
   border-top: 1px solid var(--colors-grey300);
@@ -1091,6 +1133,99 @@ button.primary:disabled {
   padding: 0;
 }
 
+/* Progressive enhancement: without scripts both sync and schedule stay visible. */
+.sync-tab-list[hidden] ~ .schedule-block {
+  margin-top: var(--spacers-dp16);
+  padding-top: var(--spacers-dp16);
+  border-top: 1px solid var(--colors-grey300);
+}
+
+.sync-tab-list:not([hidden]) {
+  display: flex;
+  gap: var(--spacers-dp16);
+  margin: var(--spacers-dp8) 0 var(--spacers-dp16);
+  border-bottom: 1px solid var(--colors-grey400);
+}
+
+.sync-tab-list button {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  padding: var(--spacers-dp8) var(--spacers-dp4);
+  color: var(--colors-grey700);
+  font-weight: var(--font-weight-medium);
+}
+
+.sync-tab-list button[aria-selected="true"] {
+  border-bottom-color: var(--theme-primary600);
+  color: var(--theme-primary800);
+}
+
+.sync-tab-list button:focus-visible {
+  outline: 2px solid var(--theme-focus);
+  outline-offset: 2px;
+}
+
+.schedule-block h4 {
+  margin: 0 0 var(--spacers-dp4);
+  font-size: var(--font-size-h3);
+}
+
+.sync-tab-list:not([hidden]) ~ .schedule-block h4 {
+  display: none;
+}
+
+.schedule-editor {
+  margin-top: var(--spacers-dp8);
+}
+
+.schedule-editor summary {
+  cursor: pointer;
+  color: var(--theme-primary800);
+  font-weight: var(--font-weight-medium);
+}
+
+/* A confirmation before a destructive action, styled as a panel over a dimmed page. */
+dialog {
+  /* The page reset zeroes margins; the native dialog centres itself with auto margins. */
+  margin: auto;
+  width: min(32rem, calc(100vw - 2 * var(--spacers-dp16)));
+  border: 1px solid var(--colors-grey300);
+  border-radius: var(--radius);
+  box-shadow: var(--elevations-e100);
+  padding: var(--spacers-dp24);
+  color: var(--colors-grey900);
+  background: var(--colors-white);
+}
+
+dialog::backdrop {
+  background: rgba(33, 41, 52, 0.4);
+}
+
+dialog h3 {
+  margin: 0 0 var(--spacers-dp8);
+  font-size: var(--font-size-h3);
+}
+
+dialog p {
+  margin: 0;
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+}
+
+button.danger {
+  background: var(--colors-red600);
+  border-color: var(--colors-red600);
+  color: var(--colors-white);
+  padding: var(--spacers-dp8) var(--spacers-dp16);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--colors-red800);
+}
+
 @media (max-width: 720px) {
   .dataset-page {
     grid-template-columns: minmax(0, 1fr);
@@ -1132,5 +1267,8 @@ button.primary:disabled {
   }
   .pipeline-flow li:not(:last-child)::after {
     display: none;
+  }
+  .record-form .form-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

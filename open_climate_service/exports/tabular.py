@@ -6,15 +6,25 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
+from open_climate_service.shared.vectors import FEATURE_ID_COORD, feature_id_field, holds_shapes
 
-_NON_VALUE_FIELDS = frozenset({"geometry", GEOMETRY_WKT_COORD, "spatial_ref", "index", "band", "bands"})
+_NON_VALUE_FIELDS = frozenset({"geometry", FEATURE_ID_COORD, "spatial_ref", "index", "band", "bands"})
 """Columns that are never a data value once a cube is flattened to a dataframe.
 
 Shared by the tabular exports rather than repeated in each: they identify their value column by
 elimination, so a coordinate missing from one of these lists is not a cosmetic slip - it either
 becomes a bogus value column or makes the export refuse an otherwise valid cube.
 """
+
+
+def non_value_fields(frame: Any) -> set[str]:
+    """`_NON_VALUE_FIELDS` plus any column of shapes in *frame*.
+
+    A vector cube's features keep their dimension's name, which openEO's `target_dimension` can
+    set to anything, so its shapes are recognised by what they hold rather than by name.
+    """
+    shapes = {str(column) for column in frame.columns if holds_shapes(frame[column])}
+    return {*_NON_VALUE_FIELDS, *shapes}
 
 
 def _build_dhis2_json_payload(df: Any, options: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
@@ -27,6 +37,7 @@ def _build_dhis2_json_payload(df: Any, options: dict[str, Any]) -> dict[str, lis
     category_option_combo = _optional_str_option(options, "category_option_combo")
 
     frame = pd.DataFrame(df).copy()
+    org_unit_field = feature_id_field(frame, org_unit_field)
     if org_unit_field not in frame.columns:
         raise ValueError(f"Missing org unit field '{org_unit_field}' in aggregated result")
     if period_field not in frame.columns:
@@ -77,7 +88,7 @@ def _optional_str_option(options: dict[str, Any], key: str) -> str | None:
 
 
 def _select_dhis2_value_field(frame: Any, org_unit_field: str, period_field: str) -> str:
-    excluded = {org_unit_field, period_field, *_NON_VALUE_FIELDS}
+    excluded = {org_unit_field, period_field, *non_value_fields(frame)}
     candidates = [str(c) for c in frame.columns if c not in excluded and not str(c).startswith("level_")]
     if len(candidates) != 1:
         raise ValueError(

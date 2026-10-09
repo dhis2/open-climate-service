@@ -88,6 +88,9 @@ class OpenEOJobRecord(BaseModel):
     attempt: int = Field(default=0, exclude=True)
     max_attempts: int = Field(default=1, exclude=True)
     retry_at: datetime | None = Field(default=None, exclude=True)
+    # Set once the running attempt has passed its point of no return (a managed store commit):
+    # from then on the job finishes rather than being cancelled half-published.
+    publishing: bool = Field(default=False, exclude=True)
 
 
 class OpenEOJobCreate(BaseModel):

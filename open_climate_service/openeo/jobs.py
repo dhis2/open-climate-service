@@ -43,6 +43,9 @@ from open_climate_service.exports.tabular import (
 from open_climate_service.exports.tabular import (
     _to_dhis2_value_string as _to_dhis2_value_string,
 )
+from open_climate_service.exports.tabular import (
+    non_value_fields as _non_value_fields,
+)
 from open_climate_service.openeo.schemas import (
     OpenEOJobCreate,
     OpenEOJobListResponse,
@@ -51,14 +54,27 @@ from open_climate_service.openeo.schemas import (
     OpenEOJobStatus,
     OpenEOJobUpdate,
 )
+from open_climate_service.shared.cancellation import (
+    ExecutionCancelled,
+    cancellation_scope,
+    enter_publication,
+    raise_if_cancelled,
+)
 from open_climate_service.shared.cf import is_temperature_like
+from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
-from open_climate_service.shared.vectors import GEOMETRY_WKT_COORD
-from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, zarr_media_type
+from open_climate_service.shared.vectors import (
+    FEATURE_ID_COORD,
+    dimension_holds_shapes,
+    encode_vector_cube,
+    feature_id_field,
+    vector_dim,
+)
+from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
 _T = TypeVar("_T")
 
@@ -191,6 +207,7 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data["attempt"] = record.attempt
     data["max_attempts"] = record.max_attempts
     data["retry_at"] = record.retry_at.isoformat() if record.retry_at is not None else None
+    data["publishing"] = record.publishing
     return data
 
 
@@ -382,6 +399,7 @@ class OpenEOJobService:
                     update={
                         "status": OpenEOJobStatus.QUEUED,
                         "updated": utc_now(),
+                        "publishing": False,
                         "logs": _append_log(
                             r, f"attempt {r.attempt} of {r.max_attempts} interrupted by a server restart; requeued"
                         ),
@@ -397,6 +415,7 @@ class OpenEOJobService:
                     "status": OpenEOJobStatus.ERROR,
                     "error_message": _with_attempts("Interrupted by server restart", r),
                     "updated": utc_now(),
+                    "publishing": False,
                     "logs": _append_log(r, f"attempt {r.attempt} of {r.max_attempts} interrupted by a server restart")
                     if r.max_attempts > 1
                     else r.logs,
@@ -652,6 +671,11 @@ class OpenEOJobService:
             # its delivery may already have been submitted.
             if r.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
                 raise HTTPException(status_code=400, detail="Job is not running or queued")
+            if r.publishing:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Job is publishing its result and can no longer be cancelled",
+                )
             if cancelled_before_start and r.status == OpenEOJobStatus.QUEUED:
                 # future.cancel() returned True: the job was still queued in the thread pool
                 # and will never start, or its retry timer was stopped.
@@ -725,7 +749,7 @@ class OpenEOJobService:
                             # after a takeover: wait out the rest instead of retrying early.
                             retry_after = wait
                         else:
-                            retry_after = self._execute(job_id)
+                            retry_after = self._execute_in_slot(job_id)
         finally:
             with self._lock:
                 self._futures.pop(job_id, None)
@@ -735,6 +759,21 @@ class OpenEOJobService:
             self._watch_for_takeover(job_id)
         elif retry_after is not None:
             self._schedule_retry(job_id, retry_after)
+
+    def _execute_in_slot(self, job_id: str) -> float | None:
+        """Run one attempt holding a shared job slot, so ingests and openEO jobs share one limit.
+
+        The job waits QUEUED for the slot. One cancelled meanwhile is still handed to `_execute`,
+        which records the cancellation without computing; one still waiting at shutdown stays
+        QUEUED for the next start to re-enqueue.
+        """
+        slots = get_job_slots()
+        if not slots.acquire(should_stop=lambda: self._stopping.is_set() or _cancel_requested(job_id)):
+            return None if self._stopping.is_set() else self._execute(job_id)
+        try:
+            return self._execute(job_id)
+        finally:
+            slots.release()
 
     def _schedule_retry(self, job_id: str, seconds: float) -> None:
         """Requeue a job once its retry backoff has passed, holding no worker meanwhile.
@@ -825,24 +864,40 @@ class OpenEOJobService:
                     "updated": utc_now(),
                     "attempt": r.attempt + 1,
                     "retry_at": None,
+                    "publishing": False,
                 }
             ),
         )
 
         saving = False
         try:
-            result = run_process_graph(record.process)
-            # Re-read record — cancellation may have been requested while running.
-            current = store_get_job(job_id)
-            if current is not None and current.cancel_requested:
-                store_update_job(
-                    job_id,
-                    lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()}),
-                )
-                return None
-            saving = True
-            output_path = self._persist_result(job_id, result)
+            # Each attempt owns a fresh result directory. Without this, a successful rerun in
+            # another format made files left by an earlier or cancelled attempt downloadable.
+            import shutil
+
+            results_dir = _JOBS_DIR / job_id / "results"
+            shutil.rmtree(results_dir, ignore_errors=True)
+            results_dir.mkdir(parents=True, exist_ok=True)
+            # Cancellation is checked before every process and dask task, and once more,
+            # atomically, at the point of no return of any publication (CLIM-1221).
+            with cancellation_scope(
+                lambda: _cancel_requested(job_id),
+                enter_publication=lambda: self._enter_publication(job_id),
+            ):
+                result = run_process_graph(record.process)
+                raise_if_cancelled(force=True)
+                saving = True
+                output_path = self._persist_result(job_id, result)
             finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
+        except ExecutionCancelled:
+            logger.info("openEO job %s was cancelled while running; nothing was published", job_id)
+            store_update_job(
+                job_id,
+                lambda r: r.model_copy(
+                    update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now(), "publishing": False}
+                ),
+            )
+            return None
         except Exception as job_exc:
             logger.exception("openEO job %s failed", job_id)
             return self._record_failure(job_id, started, job_exc, while_saving=saving)
@@ -851,6 +906,21 @@ class OpenEOJobService:
         if finished.status == OpenEOJobStatus.FINISHED:
             self._notify_finished(finished)
         return None
+
+    def _enter_publication(self, job_id: str) -> None:
+        """Pass the point of no return, or raise if the job was cancelled first.
+
+        One store mutation, so it is atomic with `cancel_job`: whichever lands first decides.
+        If the cancellation did, nothing is published. If this did, the attempt finishes,
+        and a later cancel request is refused rather than leaving a half-published result.
+        """
+
+        def _gate(r: OpenEOJobRecord) -> OpenEOJobRecord:
+            if r.cancel_requested:
+                raise ExecutionCancelled("The job was cancelled before it could publish")
+            return r.model_copy(update={"publishing": True, "updated": utc_now()})
+
+        store_update_job(job_id, _gate)
 
     def _record_failure(
         self, job_id: str, started: OpenEOJobRecord, exc: Exception, *, while_saving: bool = False
@@ -878,6 +948,7 @@ class OpenEOJobService:
                         "status": OpenEOJobStatus.QUEUED,
                         "error_message": error,
                         "retry_at": retry_at,
+                        "publishing": False,
                         "updated": utc_now(),
                         "logs": _append_log(
                             r,
@@ -897,6 +968,7 @@ class OpenEOJobService:
                     "status": OpenEOJobStatus.ERROR,
                     "error_message": _with_attempts(error, r),
                     "updated": utc_now(),
+                    "publishing": False,
                     "logs": _append_log(r, f"attempt {r.attempt} of {r.max_attempts} {outcome}: {error}")
                     if r.max_attempts > 1
                     else r.logs,
@@ -926,6 +998,7 @@ class OpenEOJobService:
                 "updated": now,
                 "finished_at": now,
                 "usage": usage,
+                "publishing": False,
                 # The attempt history ends with the outcome that counts, in the same write.
                 "logs": _append_log(record, f"attempt {record.attempt} of {record.max_attempts} finished")
                 if record.max_attempts > 1
@@ -996,7 +1069,7 @@ class OpenEOJobService:
                 return f"managed://{options['dataset_id']}"
             if fmt in _TABULAR_EXPORT_FORMATS:
                 return _write_dataset_tabular_export(result, results_dir, fmt, options)
-            return _write_raster(result, results_dir, fmt)
+            return _write_xarray(result, results_dir, fmt)
 
         try:
             import geopandas as gpd
@@ -1009,7 +1082,7 @@ class OpenEOJobService:
                         fmt,
                         options,
                     )
-                return _write_vector(result, results_dir, fmt)
+                return _write_geodataframe(result, results_dir, fmt)
         except ImportError:
             pass
 
@@ -1144,15 +1217,22 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
 
     variable = _derive_variable(ds, options)
     source_template = _resolve_source_template(options)
+    _publish_raw = options.get("publish", True)
+    if not isinstance(_publish_raw, bool):
+        raise ValueError(f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}")
     template = _reg.get_dataset(dataset_id)
+    # A template this call registers, so a cancellation before publication can remove it again.
+    created_template: Path | None = None
     if template is None:
         # Validate the candidate before it reaches disk. Persisting first left an incompatible
         # template behind when publication then failed, and the corrected retry reloaded that
         # template and failed again — the operator had to delete a YAML to get unstuck.
         candidate = _derive_managed_dataset_template(ds, options, source_template, t_dim)
         _reject_incompatible_template_units(ds, variable, cf_attrs_from_template(candidate))
+        # Nothing reaches disk for a job that is already cancelled.
+        raise_if_cancelled(force=True)
         try:
-            _reg.write_dataset_template(candidate)
+            created_template = _reg.write_dataset_template(candidate)
         except FileExistsError:
             pass
         template = _reg.get_dataset(dataset_id)
@@ -1184,6 +1264,28 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
     store_path = downloader.DOWNLOAD_DIR / f"{dataset_id}.icechunk"
     store_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Validate the complete record before crossing the store commit's point of no return.
+    # Only its measured byte size depends on the committed store and is filled in afterwards.
+    record = ArtifactRecord(
+        artifact_id=str(uuid.uuid4()),
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        variable=variable,
+        period_type=period_type,
+        format=ArtifactFormat.ICECHUNK,
+        path=str(store_path),
+        asset_paths=[str(store_path)],
+        size_bytes=0,
+        variables=[str(v) for v in ds.data_vars],
+        request_scope=ArtifactRequestScope(
+            start=coverage.temporal.start,
+            end=coverage.temporal.end,
+        ),
+        coverage=coverage,
+        created_at=datetime.now(UTC),
+        publication=ArtifactPublication(),
+    )
+
     # The same writer lock as ingestion and sync. Publishing into a store while one of those
     # writes it would make one of them fail with an Icechunk commit conflict.
     store_lock = ingestion_services._acquire_store_lock(store_path)
@@ -1193,16 +1295,26 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             "run this job again once that finishes"
         )
     try:
-        downloader.write_to_icechunk_store(
-            _strip_non_serializable_attrs(ds),
-            store_path,
-            x_dim,
-            y_dim,
-            t_dim,
-            crs=crs,
-            pyramid_method=downloader.resampling_method_from_template(template),
-            commit_message=f"Published from openEO job: {dataset_id}",
-        )
+        try:
+            downloader.write_to_icechunk_store(
+                _strip_non_serializable_attrs(ds),
+                store_path,
+                x_dim,
+                y_dim,
+                t_dim,
+                crs=crs,
+                pyramid_method=downloader.resampling_method_from_template(template),
+                commit_message=f"Published from openEO job: {dataset_id}",
+                # The point of no return: a cancelled job stops here, before the commit, so
+                # the store keeps its previous state and nothing is published.
+                before_commit=enter_publication,
+            )
+        except ExecutionCancelled:
+            if created_template is not None:
+                # Registered by this attempt for a dataset that now will not exist.
+                created_template.unlink(missing_ok=True)
+                _reg.reset_template_caches()
+            raise
 
         # A derived product is a published dataset and appears in the same lists, so it gets a
         # thumbnail on the same terms. One write, so this is already the once-per-run render the
@@ -1212,30 +1324,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             {**template, "id": dataset_id, "variable": variable},
         )
 
-        record = ArtifactRecord(
-            artifact_id=str(uuid.uuid4()),
-            dataset_id=dataset_id,
-            dataset_name=dataset_name,
-            variable=variable,
-            period_type=period_type,
-            format=ArtifactFormat.ICECHUNK,
-            path=str(store_path),
-            asset_paths=[str(store_path)],
-            size_bytes=stored_bytes(store_path),
-            variables=[str(v) for v in ds.data_vars],
-            request_scope=ArtifactRequestScope(
-                start=coverage.temporal.start,
-                end=coverage.temporal.end,
-            ),
-            coverage=coverage,
-            created_at=datetime.now(UTC),
-            publication=ArtifactPublication(),
-        )
-        _publish_raw = options.get("publish", True)
-        if not isinstance(_publish_raw, bool):
-            raise ValueError(
-                f"'publish' option must be a boolean, got {type(_publish_raw).__name__!r}: {_publish_raw!r}"
-            )
+        record = record.model_copy(update={"size_bytes": stored_bytes(store_path)})
         ingestion_services.register_artifact_record(record, publish=_publish_raw)
     finally:
         store_lock.release()
@@ -1728,13 +1817,16 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
                     "roles": ["metadata"],
                 }
                 # Keep the claim in step with the STAC collection's zarr asset, so a client
-                # sees the same media type from either surface. Uncached, unlike the STAC
-                # side — a job-result read is rare enough not to warrant one.
+                # sees the same media type and open arguments from either surface. Uncached,
+                # unlike the STAC side — a job-result read is rare enough not to warrant one.
                 store_path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
                 if store_path:
-                    assets["zarr"]["type"] = zarr_media_type(
-                        store_path, icechunk=artifact.format == ArtifactFormat.ICECHUNK
-                    )
+                    media_type = zarr_media_type(store_path, icechunk=artifact.format == ArtifactFormat.ICECHUNK)
+                    assets["zarr"]["type"] = media_type
+                    assets["zarr"]["xarray:open_kwargs"] = {
+                        **assets["zarr"]["xarray:open_kwargs"],
+                        **data_group_open_kwargs(media_type),
+                    }
         except Exception:
             logger.debug("Could not resolve STAC publication for managed dataset '%s'", dataset_id, exc_info=True)
         return assets
@@ -1809,11 +1901,15 @@ _TABULAR_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
 }
 
 
-def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
+def _write_xarray(ds: Any, results_dir: Any, fmt: str) -> str | None:
     """Write an xr.Dataset to disk in the requested format. Returns the output path."""
-    # aggregate_spatial returns a vector datacube. A format that carries geometry gets the real
-    # shapes written out, rather than a table that has to be joined back to a boundary file.
-    geom_dim = _vector_dim(ds)
+    # A format that carries geometry gets the real shapes written out, rather than a table
+    # that has to be joined back to a boundary file. E.g. `aggregate_spatial_weighted` returns
+    # a vector datacube.
+    geom_dim = vector_dim(ds)
+    # The vector dimension once its shapes are dropped for a table: `feature_id` names the
+    # features, and the bare dimension would only add row numbers beside it.
+    shapeless_dim: str | None = None
     if geom_dim is not None:
         # CSV is listed as a vector format but carries no shapes, so it must not demand them: a
         # cube with feature ids and no geometry is still a perfectly good table.
@@ -1828,10 +1924,16 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
                 raise ValueError(f"Cannot write {fmt}: the vector datacube has no usable geometry ({exc})") from exc
             # Outside the try, so a write failure still cannot fall through to a raster writer: a
             # request for GeoParquet coming back as a Zarr directory is worse than an error.
-            return _write_vector(frame, results_dir, fmt)
-        # A raster or tabular format was asked for, so honour it — but the WKT companion
-        # coordinate is neither wanted nor writeable there.
-        ds = ds.drop_vars(GEOMETRY_WKT_COORD, errors="ignore")
+            return _write_geodataframe(frame, results_dir, fmt)
+        # A raster or tabular format was asked for, so honour it. Its shapes are not numbers or
+        # strings: Zarr and NetCDF get them encoded as CF geometry, a table goes without them
+        # and keeps each feature's id.
+        if _RASTER_FORMATS.get(fmt, ("",))[0] in (".zarr", ".nc"):
+            ds = encode_vector_cube(ds)
+        elif dimension_holds_shapes(ds, geom_dim):
+            ds = ds.drop_vars(geom_dim)
+            if FEATURE_ID_COORD in ds.coords:
+                shapeless_dim = geom_dim
 
     if fmt not in _RASTER_FORMATS:
         # Defaulting an unwritable format to Zarr wrote a `result.zarr` directory and called it
@@ -1841,7 +1943,7 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
         if fmt in _VECTOR_FORMATS:
             raise ValueError(
                 f"Format '{fmt}' describes vector features, but this result is a raster datacube "
-                "with no geometry dimension. Aggregate to geometries first (e.g. aggregate_spatial), "
+                "with no geometry dimension. Aggregate to geometries first (e.g. aggregate_spatial_weighted), "
                 "or request a raster format: " + ", ".join(sorted(_RASTER_FORMATS))
             )
         raise ValueError(f"Unsupported output format '{fmt}'. Supported: " + ", ".join(sorted(_RASTER_FORMATS)))
@@ -1887,8 +1989,9 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     if ext == ".csv":
         path = str(results_dir / "result.csv")
         df = ds.to_dataframe().reset_index()
-        # Drop internal Zarr artefacts (spatial_ref, index) that add noise for consumers
-        drop = [c for c in df.columns if c in ("spatial_ref", "index", GEOMETRY_WKT_COORD) or c.startswith("level_")]
+        # Drop internal Zarr artefacts (spatial_ref, index) that add noise for consumers, and the
+        # shapeless vector dimension (see above). Any other unlabelled axis keeps its positions.
+        drop = [c for c in df.columns if c in ("spatial_ref", "index", shapeless_dim) or str(c).startswith("level_")]
         df.drop(columns=drop, errors="ignore").to_csv(path, index=False)
         return path
 
@@ -1898,30 +2001,11 @@ def _write_raster(ds: Any, results_dir: Any, fmt: str) -> str | None:
     raise ValueError(f"Unsupported raster format '{fmt}'. Known formats: {known}")
 
 
-def _vector_dim(ds: Any) -> str | None:
-    """The dimension a vector datacube's features live on, or None for a raster cube.
-
-    Found through the `geometry_wkt` carrier first, because `aggregate_spatial` names the
-    dimension after its `target_dimension` argument — a cube aggregated onto `regions` is just as
-    much a vector cube as one aggregated onto `geometry`. The name is the fallback for a cube from
-    elsewhere that carries shapes on `geometry` directly.
-    """
-    coords = getattr(ds, "coords", {})
-    if GEOMETRY_WKT_COORD in coords:
-        dims = coords[GEOMETRY_WKT_COORD].dims
-        if len(dims) == 1:
-            return str(dims[0])
-    if "geometry" in getattr(ds, "dims", {}):
-        return "geometry"
-    return None
-
-
 def _vector_crs(ds: Any, geom_dim: str) -> Any:
-    """The CRS the cube's shapes are in.
+    """Return the CRS of the cube's geometries.
 
-    An xvec cube declares it on the GeometryIndex of its geometry coordinate. The `geometry_wkt`
-    carrier from `aggregate_spatial` has none to declare: its shapes are the GeoJSON the request
-    supplied, which RFC 7946 fixes to WGS 84.
+    Uses the CRS declared on the geometry coordinate's GeometryIndex, which the
+    aggregations set; a cube without one is taken as WGS 84, as GeoJSON is.
     """
     index = getattr(ds, "xindexes", {}).get(geom_dim)
     crs = getattr(index, "crs", None)
@@ -1929,13 +2013,11 @@ def _vector_crs(ds: Any, geom_dim: str) -> Any:
 
 
 def _vector_frame(ds: Any, geom_dim: str) -> Any:
-    """Build a GeoDataFrame from a vector datacube, keeping the feature labels as a column.
+    """Build a GeoDataFrame from a vector datacube, preserving feature IDs.
 
-    Geometry comes from the `geometry_wkt` companion coordinate that `aggregate_spatial`
-    attaches. A cube from elsewhere may instead carry WKT or shapely objects directly on the
-    geometry dimension, so that is tried second — and if neither yields geometry, this raises
-    rather than inventing an empty column, because a caller asking for GeoParquet is asking for
-    the shapes.
+    The shapes come from the geometry dimension, as Shapely geometries or WKT; each
+    feature's id stays a column. Repeated geometries are parsed once and reused
+    across rows. Raises if any row has no geometry.
     """
     import geopandas as gpd
     import pandas as pd
@@ -1949,7 +2031,7 @@ def _vector_frame(ds: Any, geom_dim: str) -> Any:
             return value
         return shapely_wkt.loads(str(value))
 
-    source = GEOMETRY_WKT_COORD if GEOMETRY_WKT_COORD in frame.columns else geom_dim
+    source = geom_dim
     # A flattened vector cube has one row per (feature, timestep), so the same handful of polygons
     # repeat once per step: a daily year over 500 districts is 182,500 rows carrying 500 distinct
     # shapes. Parse each distinct value once and fan it back out, rather than paying WKT parsing per
@@ -1961,12 +2043,8 @@ def _vector_frame(ds: Any, geom_dim: str) -> Any:
         raise ValueError(f"{int((codes < 0).sum())} rows have no geometry in '{source}'")
     parsed = [_as_geometry(value) for value in uniques]
     geoms = [parsed[code] for code in codes]
-    attributes = frame.drop(columns=[c for c in (GEOMETRY_WKT_COORD, geom_dim) if c in frame.columns])
-    # The label survives as a plain column: it is the feature id every consumer joins on. It keeps
-    # the dimension's name unless that is `geometry`, which the shapes now occupy.
-    if source != geom_dim:
-        label_column = "geometry_id" if geom_dim == "geometry" else geom_dim
-        attributes.insert(0, label_column, frame[geom_dim])
+    # `feature_id` is an ordinary column here, the id every consumer joins on.
+    attributes = frame.drop(columns=[geom_dim])
     return gpd.GeoDataFrame(attributes, geometry=geoms, crs=crs)
 
 
@@ -1984,7 +2062,7 @@ def _as_wgs84(gdf: Any) -> Any:
     return gdf.to_crs("EPSG:4326")
 
 
-def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
+def _write_geodataframe(gdf: Any, results_dir: Any, fmt: str) -> str | None:
     """Write a GeoDataFrame to disk in the requested format. Returns the output path."""
     ext, _ = _VECTOR_FORMATS.get(fmt, (".geojson", "application/geo+json"))
 
@@ -2000,14 +2078,8 @@ def _write_vector(gdf: Any, results_dir: Any, fmt: str) -> str | None:
 
     if ext == ".csv":
         path = str(results_dir / "result.csv")
-        # CSV drops the shapes, so nothing is competing for the name: the label column goes back to
-        # `geometry`, which is what it is called on the cube, what a CSV of a vector cube contained
-        # before, and what the tabular exports default `location_field` to. Only the formats that
-        # actually carry geometry need the label to stand aside under `geometry_id`.
-        flat = gdf.drop(columns="geometry", errors="ignore")
-        if "geometry_id" in flat.columns:
-            flat = flat.rename(columns={"geometry_id": "geometry"})
-        flat.to_csv(path, index=False)
+        # CSV drops the shapes; each feature's id stays as `feature_id`.
+        gdf.drop(columns="geometry", errors="ignore").to_csv(path, index=False)
         return path
 
     # Fallback to GeoJSON
@@ -2095,15 +2167,16 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
     import pandas as pd
 
     period_field = _optional_str_option(options, "period_field") or "t"
-    location_field = _optional_str_option(options, "location_field") or "geometry"
+    location_field = _optional_str_option(options, "location_field") or FEATURE_ID_COORD
     period_type = _optional_str_option(options, "period_type")
     cube_labels_raw = options.get("cube_labels")
 
     frame = pd.DataFrame(df).copy()
+    location_field = feature_id_field(frame, location_field)
     if location_field not in frame.columns:
-        if location_field == "geometry":
+        if location_field == FEATURE_ID_COORD:
             raise ValueError(
-                "Missing location field 'geometry' in aggregated result; "
+                f"Missing location field '{FEATURE_ID_COORD}' in aggregated result; "
                 "for GeoDataFrame inputs set save_result option 'location_field' explicitly"
             )
         raise ValueError(f"Missing location field '{location_field}' in aggregated result")
@@ -2114,7 +2187,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
     # label dimension. Pivot that long form to one CHAP value column per cube.
     if "__cubes__" in frame.columns:
         cube_field = "__cubes__"
-        non_value_fields = {location_field, period_field, cube_field, *_NON_VALUE_FIELDS}
+        non_value_fields = {location_field, period_field, cube_field, *_non_value_fields(frame)}
         candidate_value_fields = [
             str(c) for c in frame.columns if c not in non_value_fields and not str(c).startswith("level_")
         ]
@@ -2165,7 +2238,7 @@ def _build_chap_csv_frame(df: Any, options: dict[str, Any]) -> Any:
 
 
 def _select_chap_value_fields(frame: Any, location_field: str, period_field: str) -> list[str]:
-    excluded = {location_field, period_field, "__cubes__", *_NON_VALUE_FIELDS}
+    excluded = {location_field, period_field, "__cubes__", *_non_value_fields(frame)}
     candidates = [str(c) for c in frame.columns if c not in excluded and not str(c).startswith("level_")]
     if not candidates:
         raise ValueError("CHAPCSV export requires at least one value column")
