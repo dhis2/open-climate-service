@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -74,7 +74,7 @@ def _connect() -> sqlite3.Connection:
 
 
 @contextmanager
-def read() -> Iterator[sqlite3.Connection]:
+def read() -> Generator[sqlite3.Connection]:
     """A connection for reading; sees the last committed state."""
     connection = _connect()
     try:
@@ -86,7 +86,7 @@ def read() -> Iterator[sqlite3.Connection]:
 
 
 @contextmanager
-def write(*, configuration: bool = False) -> Iterator[sqlite3.Connection]:
+def write(*, configuration: bool = False) -> Generator[sqlite3.Connection]:
     """One write transaction, taken immediately so two writers queue rather than conflict.
 
     ``configuration`` marks a change to what the instance runs (tasks, exports): the revision
