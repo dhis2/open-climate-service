@@ -11,15 +11,6 @@ if TYPE_CHECKING:
 
 _Cube = TypeVar("_Cube", "xr.Dataset", "xr.DataArray")
 
-GEOMETRY_WKT_COORD = "geometry_wkt"
-"""Companion coordinate on a vector cube's geometry dimension, holding each feature's WKT.
-
-Defined here because both sides need it and neither may import the other: `aggregate_spatial`
-is a discovered plugin process that writes it, and the openEO job writers read it. The
-dimension itself carries feature *labels* (ids) — which the DHIS2 and CHAP exports use as
-their location column — so the shapes ride alongside rather than replacing them.
-"""
-
 FEATURE_ID_COORD = "feature_id"
 """Companion coordinate on a vector cube's geometry dimension, holding each feature's id.
 
@@ -68,6 +59,35 @@ def geometries_to_frame(geometries: Any) -> gpd.GeoDataFrame:
     raise ValueError(f"geometries must be GeoJSON, a GeoDataFrame or a vector cube, got {type(geometries).__name__}")
 
 
+def explicit_feature_collection(geometries: Any) -> Any:
+    """*geometries* as a GeoJSON FeatureCollection when it carries explicit feature ids.
+
+    A GeoDataFrame with an index of its own (not pandas' default 0, 1, 2...) or a vector cube
+    with `feature_id` names its features as clearly as GeoJSON `id`s do; this lets the GeoJSON
+    validators and fingerprints apply to them. Anything else, GeoJSON included, comes back as
+    it is, so positional ids are still refused where ids are required.
+    """
+    import geopandas as gpd
+    import pandas as pd
+    import xarray as xr
+    from shapely.geometry import mapping
+
+    frame: gpd.GeoDataFrame | None = None
+    if isinstance(geometries, gpd.GeoDataFrame) and not isinstance(geometries.index, pd.RangeIndex):
+        frame = geometries
+    elif isinstance(geometries, (xr.Dataset, xr.DataArray)) and FEATURE_ID_COORD in geometries.coords:
+        frame = _frame_from_vector_cube(geometries)
+    if frame is None:
+        return geometries
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "id": str(label), "geometry": mapping(shape), "properties": {}}
+            for label, shape in zip(frame.index, frame.geometry, strict=True)
+        ],
+    }
+
+
 def _feature_id(feature: dict[str, Any], position: int) -> str:
     """A GeoJSON Feature's `id`, or its position when it has none: a null `id` is no id."""
     value = feature.get("id")
@@ -78,7 +98,7 @@ def _frame_from_vector_cube(cube: xr.Dataset | xr.DataArray) -> gpd.GeoDataFrame
     """The features of an xvec cube: the shapes on its geometry dimension, ids beside them."""
     for name in cube.dims:
         values = cube[name].values
-        if len(values) and all(hasattr(value, "geom_type") for value in values):
+        if holds_shapes(values):
             index = cube.xindexes.get(name)
             if FEATURE_ID_COORD in cube.coords and cube[FEATURE_ID_COORD].dims == (name,):
                 ids = [str(value) for value in cube[FEATURE_ID_COORD].values]
@@ -100,14 +120,186 @@ def attach_feature_ids(result: _Cube, ids: Iterable[Any], dim: str) -> _Cube:
     return result.assign_coords({FEATURE_ID_COORD: (dim, [str(value) for value in ids])})
 
 
-def feature_id_field(columns: Iterable[Any], requested: str) -> str:
-    """The column an export reads feature ids from, when it asked for *requested*.
+def feature_id_field(frame: Any, requested: str) -> str:
+    """The column of *frame* an export reads feature ids from, when it asked for *requested*.
 
-    `geometry` is the exports' default location field, and means the feature's identity. When the
-    result carries `feature_id`, that is where the identity is, whatever the geometry labels
-    hold: an aggregation that labels its dimension with shapes (as openEO does) still exports
-    org-unit ids. Any other field name is taken as given.
+    `feature_id` is the exports' default location field. Asking for `geometry`, or for any column
+    of shapes (the features' dimension after an aggregation, whatever openEO's `target_dimension`
+    named it), means the feature's identity too, and reads `feature_id` when the result has it.
+    Shapes are never used as ids: a time series repeats every shape once per period, which bloats
+    the output, so a result with shapes and no `feature_id` is refused. A result without
+    `feature_id` whose `geometry` holds plain labels still keys on them. Any other field name is
+    taken as given.
     """
-    if requested == GEOMETRY_FIELD and FEATURE_ID_COORD in {str(column) for column in columns}:
+    columns = {str(column) for column in frame.columns}
+    if FEATURE_ID_COORD in columns and (
+        requested == GEOMETRY_FIELD or (requested in frame.columns and holds_shapes(frame[requested]))
+    ):
         return FEATURE_ID_COORD
-    return requested
+    field = requested
+    if requested == FEATURE_ID_COORD and FEATURE_ID_COORD not in columns and GEOMETRY_FIELD in columns:
+        field = GEOMETRY_FIELD
+    if field in frame.columns and holds_shapes(frame[field]):
+        raise ValueError(
+            f"'{field}' holds geometries, not feature ids, and the result carries no `{FEATURE_ID_COORD}`; "
+            "give each feature an id (a GeoJSON Feature `id`) so the export can key on it"
+        )
+    return field
+
+
+def single_raster(data: Any) -> xr.DataArray:
+    """*data* as one raster DataArray with a CRS, for a process that works on a single variable.
+
+    A single-variable Dataset becomes its variable; more than one is refused. A raster without
+    a CRS is taken as WGS 84, the CRS of GeoJSON, which is what a grid without one has always
+    been compared against.
+    """
+    import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
+    import xarray as xr
+
+    if isinstance(data, xr.Dataset):
+        if len(data.data_vars) != 1:
+            raise ValueError(f"expected a single-variable raster, got {list(data.data_vars)}")
+        data = data[next(iter(data.data_vars))]
+    raster: xr.DataArray = data
+    if raster.rio.crs is None:
+        raster = raster.rio.write_crs("EPSG:4326")
+    return raster
+
+
+def features_in_crs(geometries: Any, crs: Any) -> gpd.GeoDataFrame:
+    """The features of a `geometries` argument, indexed by feature id, reprojected to *crs*.
+
+    See :func:`geometries_to_frame` for what is accepted. Features without a CRS are WGS 84.
+    """
+    frame = geometries_to_frame(geometries)
+    if frame.crs is None:
+        frame = frame.set_crs("EPSG:4326")
+    return frame.to_crs(crs)
+
+
+def vector_result(
+    result: xr.DataArray, data: xr.DataArray, ids: Iterable[Any], dim: str = GEOMETRY_FIELD
+) -> xr.DataArray:
+    """An aggregation's output as a vector cube: the shapes on *dim*, each feature's id beside them.
+
+    *result* is xvec's, with the shapes on `geometry` under xvec's geometry index (which carries
+    their CRS), as openEO describes a vector cube. Three things are added: the dimension takes
+    *dim*'s name (openEO's `target_dimension`), the feature ids ride along as `feature_id`, which
+    the DHIS2 and CHAP exports key on, and the result is named after the input variable, so a
+    tabular export has a value column. The input's cadence is kept, since a spatial aggregation
+    changes nothing about time. Writers encode the shapes for formats that cannot hold them
+    (:func:`encode_vector_cube`).
+    """
+    from open_climate_service.shared.time import cadence_of, stamp_cadence
+
+    if dim != GEOMETRY_FIELD:
+        result = result.rename({GEOMETRY_FIELD: dim})
+    index = result.xindexes.get(dim)
+    if type(index).__name__ != "GeometryIndex" or getattr(index, "crs", None) is None:
+        # The shapes are in the raster's CRS, which the features were reprojected to. openEO's
+        # built-in hands xvec a plain list of shapes, so its index has no CRS to carry.
+        import xvec  # type: ignore[import-untyped]  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+        result = result.xvec.set_geom_indexes(dim, crs=data.rio.crs)
+    # Scalar coordinates describe the raster's grid (its grid mapping, `spatial_ref`), not the
+    # features; left on, a table gets a column per grid mapping and the exports, which find
+    # their value column by elimination, take it for a second value.
+    result = result.drop_vars([name for name, coord in result.coords.items() if coord.ndim == 0])
+    named = attach_feature_ids(result, ids, dim).rename(str(data.name or "data"))
+    stamp_cadence(named, cadence_of(data))
+    return named
+
+
+def vector_dim(cube: Any) -> str | None:
+    """The dimension a vector cube's features live on, or None for a raster cube.
+
+    The dimension under xvec's geometry index, whatever it is called (openEO's
+    `target_dimension` can rename it); otherwise one whose labels are all shapes; otherwise a
+    dimension named `geometry`, so a cube that says it is vector but carries no usable shapes
+    is refused as such rather than written as a raster.
+    """
+    indexes = getattr(cube, "xindexes", {})
+    dims = getattr(cube, "dims", ())
+    for name in dims:
+        if type(indexes.get(name)).__name__ == "GeometryIndex":
+            return str(name)
+    for name in dims:
+        if dimension_holds_shapes(cube, str(name)):
+            return str(name)
+    return GEOMETRY_FIELD if GEOMETRY_FIELD in dims else None
+
+
+def holds_shapes(values: Any) -> bool:
+    """Whether *values* (a column, a coordinate's values) are geometries.
+
+    A GeoPandas geometry column says so in its dtype. Shapes flattened out of an xarray cube sit in
+    a plain object column instead, so those are judged by their first value that is not null: a
+    column is one kind throughout, and a flattened cube repeats each shape once per time step, so
+    scanning every row would cost millions of checks for one answer. A null first value (a feature
+    with no geometry) does not decide it.
+    """
+    from geopandas.array import GeometryDtype
+
+    dtype = getattr(values, "dtype", None)
+    if isinstance(dtype, GeometryDtype):
+        return True
+    if dtype is not None and dtype.kind != "O":
+        return False
+    for value in values:
+        if value is None or (isinstance(value, float) and value != value):  # None or NaN
+            continue
+        return hasattr(value, "geom_type")
+    return False
+
+
+def dimension_holds_shapes(cube: Any, dim: str) -> bool:
+    """Whether *dim*'s labels are geometries, as on an xvec cube."""
+    return dim in getattr(cube, "coords", {}) and holds_shapes(cube[dim].values)
+
+
+def encode_vector_cube(ds: xr.Dataset) -> xr.Dataset:
+    """*ds* with its shapes encoded as CF geometry, for writers that cannot hold shapely objects.
+
+    Zarr and NetCDF store arrays of numbers and strings, not geometry objects. xvec's CF encoding
+    turns the shapes into the CF conventions' geometry container, which xvec, and any CF-aware
+    reader, decodes back; the feature ids stay as `feature_id`. A cube with no geometry index is
+    returned unchanged.
+    """
+    dim = vector_dim(ds)
+    if dim is None or type(ds.xindexes.get(dim)).__name__ != "GeometryIndex":
+        return ds
+    import xvec  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+    encoded: xr.Dataset = ds.xvec.encode_cf()
+    return encoded
+
+
+def labelled_by_feature_id(cube: Any) -> tuple[Any, gpd.GeoSeries | None]:
+    """*cube* with its features labelled by `feature_id` instead of their shapes, and the shapes.
+
+    For operations that compare or sort labels, which shapes do not support (openEO's
+    `merge_cubes` takes set differences of them). :func:`with_shapes` puts the shapes back. A
+    cube that is not a vector cube with ids comes back unchanged, with None.
+    """
+    import geopandas as gpd
+
+    dim = vector_dim(cube)
+    if dim is None or not dimension_holds_shapes(cube, dim) or FEATURE_ID_COORD not in cube.coords:
+        return cube, None
+    ids = [str(value) for value in cube[FEATURE_ID_COORD].values]
+    crs = getattr(cube.xindexes.get(dim), "crs", None)
+    shapes = gpd.GeoSeries(list(cube[dim].values), index=ids, crs=crs, name=dim)
+    return cube.drop_indexes(dim).assign_coords({dim: ids}), shapes
+
+
+def with_shapes(cube: Any, shapes: gpd.GeoSeries) -> Any:
+    """Undo :func:`labelled_by_feature_id`: shapes back on the dimension, under xvec's index."""
+    import xvec  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+    dim = str(shapes.name)
+    if dim not in getattr(cube, "dims", ()):
+        return cube
+    ids = [str(value) for value in cube[dim].values]
+    restored = cube.assign_coords({dim: [shapes[label] for label in ids], FEATURE_ID_COORD: (dim, ids)})
+    return restored.xvec.set_geom_indexes(dim, crs=shapes.crs)

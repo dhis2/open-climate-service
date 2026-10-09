@@ -301,8 +301,9 @@ def test_a_vector_collection_feeds_aggregate_spatial_through_a_process_graph(rai
     result = execution.run_process_graph(graph)
 
     data = result if isinstance(result, xr.DataArray) else next(iter(result.data_vars.values()))
-    means = data.isel(t=0).to_series()
-    assert means.to_dict() == {"WEST": 1.0, "EAST": 3.0}
+    # The shapes label the dimension, as in openEO; each feature's id is `feature_id`.
+    means = dict(zip(data.feature_id.values, data.isel(t=0).values.tolist(), strict=True))
+    assert means == {"WEST": 1.0, "EAST": 3.0}
 
 
 def test_the_python_client_graph_runs(rain_and_regions: None) -> None:
@@ -317,7 +318,7 @@ def test_the_python_client_graph_runs(rain_and_regions: None) -> None:
     result = execution.run_process_graph({"process_graph": graph})
 
     data = result if isinstance(result, xr.DataArray) else next(iter(result.data_vars.values()))
-    assert data.isel(t=1).to_series().to_dict() == {"WEST": 1.0, "EAST": 3.0}
+    assert dict(zip(data.feature_id.values, data.isel(t=1).values.tolist(), strict=True)) == {"WEST": 1.0, "EAST": 3.0}
 
 
 def test_raster_collections_load_as_before(rain_and_regions: None) -> None:

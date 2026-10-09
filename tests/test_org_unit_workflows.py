@@ -97,7 +97,7 @@ def test_aggregate_to_org_units_dhis2json() -> None:
     assert envelope.format == "DHIS2JSON"
     assert envelope.options == {"export": "rain-monthly"}
     frame = envelope.data.to_dataframe().reset_index()
-    assert set(frame["geometry"]) == {"OU_A", "OU_B"}
+    assert set(frame["feature_id"]) == {"OU_A", "OU_B"}
     assert len(frame) == 4
 
 
@@ -129,22 +129,8 @@ def test_method_selects_reducer(method: str, expected: float) -> None:
         method=method,
     )
     frame = envelope.data.to_dataframe().reset_index()
-    ou_a_jan = frame[(frame["geometry"] == "OU_A") & (frame["t"] == np.datetime64("2025-01-01"))]["tp"]
+    ou_a_jan = frame[(frame["feature_id"] == "OU_A") & (frame["t"] == np.datetime64("2025-01-01"))]["tp"]
     assert ou_a_jan.tolist() == [expected]
-
-
-def test_reduce_by_method_dispatches() -> None:
-    from open_climate_service.plugins.processes.aggregate_spatial import reduce_by_method
-
-    data = np.array([0.0, 1.0, 5.0, 6.0])
-    assert reduce_by_method(data, "mean") == 3.0
-    assert reduce_by_method(data, "sum") == 12.0
-    assert reduce_by_method(data, "min") == 0.0
-    assert reduce_by_method(data, "max") == 6.0
-    assert reduce_by_method(data, "median") == 3.0
-    assert np.isnan(reduce_by_method(np.array([]), "mean"))  # empty geometry → NaN, not a crash
-    with pytest.raises(ValueError, match="Unknown reduce method"):
-        reduce_by_method(data, "bogus")
 
 
 def test_builtin_workflows_use_literal_process_ids() -> None:

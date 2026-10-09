@@ -12,13 +12,13 @@ from typing import Any
 from open_climate_service.exports.base import BaseExportPlugin, DeliveryContext, RenderedExport
 from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
 from open_climate_service.exports.tabular import (
-    _NON_VALUE_FIELDS,
     _is_nullish,
     _normalise_period_type,
     _to_dhis2_period_string,
     _to_dhis2_value_string,
+    non_value_fields,
 )
-from open_climate_service.shared.vectors import feature_id_field
+from open_climate_service.shared.vectors import FEATURE_ID_COORD, feature_id_field
 
 
 class _RetryableTransportError(Exception):
@@ -111,11 +111,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 if field in entry:
                     validated[field] = _uid(entry[field], f"{prefix}.{field}")
             validated_series.append(validated)
-        for field, default in (("org_unit_field", "geometry"), ("period_field", "t")):
+        for field, default in (("org_unit_field", FEATURE_ID_COORD), ("period_field", "t")):
             value = mapping.get(field, default)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field} must be a non-empty field name")
-        if mapping.get("org_unit_field", "geometry") == mapping.get("period_field", "t"):
+        if mapping.get("org_unit_field", FEATURE_ID_COORD) == mapping.get("period_field", "t"):
             raise ValueError("Organisation unit and period fields must be distinct")
         if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max", "median"):
             raise ValueError("aggregation must be mean, sum, min, max, or median; it declares upstream computation")
@@ -144,12 +144,12 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         import numpy as np
 
         entries = mapping["series"]
-        org_field = mapping.get("org_unit_field", "geometry")
+        org_field = mapping.get("org_unit_field", FEATURE_ID_COORD)
         period_field = mapping.get("period_field", "t")
         kind = mapping["period_type"]
 
         frame, value_columns = self._to_frame(data, org_field, period_field, kind)
-        org_field = feature_id_field(frame.columns, org_field)
+        org_field = feature_id_field(frame, org_field)
         if org_field not in frame.columns or period_field not in frame.columns:
             raise ValueError("DHIS2 result is missing organisation-unit or period fields")
         if not frame.columns.is_unique:
@@ -157,12 +157,13 @@ class Dhis2ExportPlugin(BaseExportPlugin):
 
         residual_dims: list[str] = []
         if value_columns is not None:
+            excluded = non_value_fields(frame)
             residual_dims = [
                 str(column)
                 for column in frame.columns
                 if column not in {org_field, period_field}
                 and str(column) not in value_columns
-                and str(column) not in _NON_VALUE_FIELDS
+                and str(column) not in excluded
             ]
 
         data_values: list[dict[str, str]] = []
@@ -305,7 +306,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     ) -> list[str]:
         if value_columns is not None:
             return [column for column in value_columns if column in frame.columns]
-        excluded = {org_field, period_field, *_NON_VALUE_FIELDS, "quantile"}
+        excluded = {org_field, period_field, *non_value_fields(frame), "quantile"}
         return [
             str(column) for column in frame.columns if column not in excluded and not str(column).startswith("level_")
         ]

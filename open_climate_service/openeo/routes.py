@@ -467,9 +467,9 @@ def execute_synchronous(
         _VECTOR_FORMATS,
         _as_wgs84,
         _write_dataset_tabular_export,
-        _write_raster,
+        _write_geodataframe,
         _write_tabular_export,
-        _write_vector,
+        _write_xarray,
     )
 
     # Unwrap save_result envelope to get requested format
@@ -527,7 +527,7 @@ def execute_synchronous(
                 "text/csv",
             )
         return _sync_export_response(
-            lambda tmp_dir: _write_raster(result, tmp_dir, fmt),
+            lambda tmp_dir: _write_xarray(result, tmp_dir, fmt),
             fmt,
         )
 
@@ -560,7 +560,7 @@ def execute_synchronous(
                 with tempfile.TemporaryDirectory() as tmp:
                     from pathlib import Path
 
-                    output = _write_vector(result, Path(tmp), fmt)
+                    output = _write_geodataframe(result, Path(tmp), fmt)
                     if output is None:
                         raise HTTPException(
                             status_code=500,
