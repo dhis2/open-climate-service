@@ -1,5 +1,7 @@
 # Dataset-update workflow automation
 
+> In the [steps](steps.md) reference implementation (CLIM-1378), workflow triggers and their deliveries are workflow and deliver steps managed through `/steps`, and sync schedules are sync steps in the same store, `<data_dir>/steps.json`. The `automation` block below is no longer read.
+
 An OCS instance can run an existing openEO workflow when a successful ingestion or sync operation
 changes stored data. This is event-driven: it does not guess that an operation has finished by
 scheduling a second cron expression.

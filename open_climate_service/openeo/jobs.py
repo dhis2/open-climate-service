@@ -199,6 +199,7 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data["max_attempts"] = record.max_attempts
     data["retry_at"] = record.retry_at.isoformat() if record.retry_at is not None else None
     data["publishing"] = record.publishing
+    data["chain_depth"] = record.chain_depth
     return data
 
 
@@ -488,6 +489,7 @@ class OpenEOJobService:
         source_event_id: str,
         trigger_id: str,
         max_attempts: int = 1,
+        chain_depth: int = 0,
     ) -> tuple[OpenEOJobRecord, bool]:
         """Create at most one job for a durable event and automation trigger.
 
@@ -522,6 +524,7 @@ class OpenEOJobService:
             trigger_id=trigger_id,
             source_event_id=source_event_id,
             max_attempts=max_attempts,
+            chain_depth=chain_depth,
         )
 
         def _create_once(records: list[dict[str, object]]) -> tuple[OpenEOJobRecord, bool]:
@@ -1053,7 +1056,10 @@ class OpenEOJobService:
         if isinstance(result, xr.Dataset):
             # Zarr format with dataset_id → write directly to managed Icechunk/Zarr store
             if fmt == "ZARR" and options.get("dataset_id"):
-                _write_managed_zarr(result, options)
+                record = store_get_job(job_id)
+                _write_managed_zarr(
+                    result, options, job_id=job_id, chain_depth=record.chain_depth if record is not None else 0
+                )
                 # Managed datasets are not served as job-local files; advertise the
                 # managed dataset via a marker that _result_assets expands into
                 # /datasets, /zarr (and /stac when published) result links.
@@ -1157,8 +1163,13 @@ def _netcdf_safe_attrs(ds: Any) -> Any:
     return ds
 
 
-def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
-    """Write a computed xr.Dataset to the managed Icechunk/Zarr store and register it."""
+def _write_managed_zarr(ds: Any, options: dict[str, Any], *, job_id: str | None = None, chain_depth: int = 0) -> None:
+    """Write a computed xr.Dataset to the managed Icechunk/Zarr store, register it, and say so.
+
+    A publish emits ``dataset.updated`` for the output dataset like a sync does (CLIM-1243), so a
+    step can run after a derived dataset changed. The store is rewritten whole, so the event says
+    ``rematerialize`` with no ``previous_end``: every period up to ``current_end`` may have changed.
+    """
     import uuid
     from datetime import UTC, datetime
 
@@ -1319,6 +1330,29 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
         ingestion_services.register_artifact_record(record, publish=_publish_raw)
     finally:
         store_lock.release()
+    _record_publish_event(record, job_id=job_id, chain_depth=chain_depth)
+
+
+def _record_publish_event(record: Any, *, job_id: str | None, chain_depth: int) -> None:
+    """Make a workflow publish durable as a ``dataset.updated`` event, for the steps after it."""
+    from open_climate_service.ingestions.processes import dataset_update_event, record_inline_update
+
+    event = dataset_update_event(
+        dataset_id=record.dataset_id,
+        artifact_id=record.artifact_id,
+        action="rematerialize",
+        previous_end=None,
+        current_start=record.coverage.temporal.start if record.coverage.temporal else None,
+        current_end=record.coverage.temporal.end if record.coverage.temporal else None,
+    )
+    event.data["chain_depth"] = chain_depth
+    event.data["producing_job_id"] = job_id
+    record_inline_update(
+        label="workflow-publish",
+        request={"dataset_id": record.dataset_id, "openeo_job_id": job_id},
+        result={"artifact_id": record.artifact_id},
+        events=[event],
+    )
 
 
 def _recover_temporal_from_attrs(ds: Any) -> tuple[str | None, str | None]:

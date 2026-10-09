@@ -302,8 +302,28 @@ def execute_feature_refresh(
     template = refreshable_feature_template_or_error(collection_id)
     if on_progress is not None:
         on_progress(None, None, f"Fetching {template.get('name') or collection_id}")
-    refresh_feature_collection_from_provider(collection_id, publish=publish)
+    artifact = refresh_feature_collection_from_provider(collection_id, publish=publish)
+    _record_collection_update(collection_id, artifact.artifact_id)
     return get_feature_collection_or_404(collection_id)
+
+
+def _record_collection_update(collection_id: str, artifact_id: str) -> None:
+    """Persist ``collection.updated``, so a workflow step can run after org units change (CLIM-1378)."""
+    from open_climate_service.ingestions.processes import record_inline_update
+    from open_climate_service.jobs.models import COLLECTION_UPDATED_EVENT_TYPE, JobEventDraft
+
+    record_inline_update(
+        label="feature-refresh",
+        request={"collection_id": collection_id},
+        result={"artifact_id": artifact_id},
+        events=[
+            JobEventDraft(
+                type=COLLECTION_UPDATED_EVENT_TYPE,
+                source=f"/features/{collection_id}",
+                data={"collection_id": collection_id, "artifact_id": artifact_id, "action": "refresh"},
+            )
+        ],
+    )
 
 
 def refresh_feature_collection_from_provider(

@@ -91,6 +91,9 @@ class OpenEOJobRecord(BaseModel):
     # Set once the running attempt has passed its point of no return (a managed store commit):
     # from then on the job finishes rather than being cancelled half-published.
     publishing: bool = Field(default=False, exclude=True)
+    # How many workflow runs separate this job from the sync or refresh that started its chain
+    # (CLIM-1243). A publish passes it on in its dataset.updated event, so a cycle stops.
+    chain_depth: int = Field(default=0, exclude=True)
 
 
 class OpenEOJobCreate(BaseModel):

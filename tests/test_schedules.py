@@ -117,8 +117,11 @@ def test_store_refuses_an_unreadable_file(instance: None) -> None:
     path.write_text("not json", encoding="utf-8")
     with pytest.raises(ScheduleStoreUnreadable, match="not valid JSON"):
         store.list_schedules()
-    path.write_text('{"chirps": {"dataset_id": "era5", "cron": "0 6 * * *"}}', encoding="utf-8")
-    with pytest.raises(ScheduleStoreUnreadable, match="names dataset"):
+    path.write_text(
+        '{"sync-chirps": {"id": "sync-era5", "kind": "sync", "target": "era5", "cron": "0 6 * * *"}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ScheduleStoreUnreadable, match="has id"):
         store.get_schedule("chirps")
 
 

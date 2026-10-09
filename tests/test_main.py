@@ -40,6 +40,9 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         def start(self) -> None:
             calls.append("automation-start")
 
+        def reload(self) -> None:
+            calls.append("automation-reload")
+
         def on_job_finished(self, record: object) -> None:
             pass
 
@@ -59,6 +62,9 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         def shutdown(self) -> None:
             calls.append("scheduler-shutdown")
 
+        def add_reload_listener(self, listener: object) -> None:
+            calls.append("scheduler-listener")
+
     monkeypatch.setattr(main, "get_job_service", lambda: FakeJobService())
     monkeypatch.setattr(main, "get_openeo_job_service", lambda: FakeOpenEOJobService())
     monkeypatch.setattr(main, "get_workflow_automation_service", lambda: FakeAutomationService())
@@ -74,6 +80,7 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
             "openeo-recover",
             "automation-reconcile",
             "automation-replay",
+            "scheduler-listener",
             "scheduler-start",
         ]
 
@@ -86,6 +93,7 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         "openeo-recover",
         "automation-reconcile",
         "automation-replay",
+        "scheduler-listener",
         "scheduler-start",
         "consumer-unset",
         "finished-listener-cleared",

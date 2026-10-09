@@ -116,6 +116,7 @@ def test_matching_update_submits_and_starts_workflow_once() -> None:
         "source_event_id": "native-job:0",
         "trigger_id": "chap-after-chirps",
         "max_attempts": 3,  # the trigger default
+        "chain_depth": 1,  # one workflow run from the sync that started it
     }
     openeo.start_triggered_job.assert_called_once_with("triggered-job")
 

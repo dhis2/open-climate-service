@@ -9,7 +9,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 DATASET_UPDATED_EVENT_TYPE = "dataset.updated"
-"""Event type persisted when an ingestion or sync changes a managed dataset."""
+"""Event type persisted when an ingestion, a sync or a workflow publish changes a managed dataset."""
+
+COLLECTION_UPDATED_EVENT_TYPE = "collection.updated"
+"""Event type persisted when a feature collection is refreshed from its provider (CLIM-1378)."""
+
+STEP_EVENT_TYPES = frozenset({DATASET_UPDATED_EVENT_TYPE, COLLECTION_UPDATED_EVENT_TYPE})
+"""Events a step can wait for."""
 
 
 class JobCancelledError(Exception):

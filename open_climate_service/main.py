@@ -26,6 +26,7 @@ from open_climate_service.scheduler import routes as scheduler_routes
 from open_climate_service.scheduler.service import get_scheduler_service
 from open_climate_service.shared import urls
 from open_climate_service.stac import routes as stac_routes
+from open_climate_service.steps import routes as steps_routes
 from open_climate_service.system import routes as system_routes
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,9 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         # above still handles every newly persisted event.
         logger.exception("Workflow automation replay failed; continuing startup")
     scheduler_service = get_scheduler_service()
+    # A change to the steps store, through /steps or by another process, reaches automation
+    # through the clock's reload, so workflow and deliver steps apply without a restart.
+    scheduler_service.add_reload_listener(automation_service.reload)
     scheduler_service.start()
     try:
         yield
@@ -271,6 +275,7 @@ def create_app() -> FastAPI:
     _app.include_router(ingestion_routes.icechunk_router, prefix="/icechunk", tags=["Icechunk"])
     _app.include_router(ingestion_routes.sync_router, prefix="/sync", tags=["Sync"])
     _app.include_router(scheduler_routes.router, prefix="/schedules", tags=["Schedules"])
+    _app.include_router(steps_routes.router, prefix="/steps", tags=["Steps"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
     _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])
 

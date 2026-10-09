@@ -19,7 +19,7 @@ from open_climate_service.automation.config import (
     get_automation_config,
 )
 from open_climate_service.jobs import store as job_store
-from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
+from open_climate_service.jobs.models import STEP_EVENT_TYPES, JobEvent
 from open_climate_service.openeo import workflows
 from open_climate_service.openeo.jobs import (
     OpenEOJobService,
@@ -39,7 +39,15 @@ _EVENT_VALUES = {
     "$event.previous_end": "previous_end",
     "$event.current_start": "current_start",
     "$event.current_end": "current_end",
+    "$event.collection_id": "collection_id",
 }
+
+MAX_CHAIN_DEPTH = 5
+"""How many workflow runs one change may set off in a row (CLIM-1243).
+
+A sync starts at depth 0; each workflow that publishes a dataset passes its depth on, one higher,
+in the event it emits. A chain longer than this is a cycle or a mistake, so it stops there.
+"""
 
 
 def _resolve_event_values(value: Any, event: JobEvent) -> Any:
@@ -332,7 +340,7 @@ def _validate_output_ownership(config: AutomationConfig) -> None:
         output = _resolved_output_dataset(trigger, workflow) if workflow is not None else None
         if output is None:
             continue
-        bindings.setdefault((trigger.on_update_of, output), []).append(trigger.id)
+        bindings.setdefault((trigger.on_update_of or "", output), []).append(trigger.id)
     duplicates = [(key, ids) for key, ids in bindings.items() if len(ids) > 1]
     if duplicates:
         details = "; ".join(
@@ -517,13 +525,7 @@ class WorkflowAutomationService:
             if not api_config.is_read_only():
                 _sync_delivery_activations(self._config)
             return
-        for trigger in self._config.workflow_triggers:
-            if workflows.get_workflow(trigger.workflow_id) is None:
-                raise ValueError(f"Workflow trigger {trigger.id!r} references unknown workflow {trigger.workflow_id!r}")
-        _validate_output_ownership(self._config)
-        _validate_event_references(self._config)
-        _validate_feature_references(self._config)
-        _validate_deliveries(self._config)
+        validate_automation(self._config)
         if api_config.is_read_only():
             return
         self._delivery_steps = _delivery_steps(self._config, _sync_delivery_activations(self._config))
@@ -537,6 +539,44 @@ class WorkflowAutomationService:
         if changed:
             _save_activations(activations)
 
+    def reload(self) -> None:
+        """Apply a change to the steps store without a restart (CLIM-1378).
+
+        Re-reads and re-validates the triggers, stamps an activation boundary for each new one,
+        and re-derives the delivery steps. A step that cannot be loaded leaves the previous
+        triggers in force: the store's write path validates first, so this only happens when the
+        file was edited by hand.
+        """
+        previous = (self._config, self._delivery_steps)
+        try:
+            self.start()
+        except Exception:
+            self._config, self._delivery_steps = previous
+            logger.exception("Workflow steps could not be reloaded; keeping the previous ones")
+
+    def run_now(self, trigger_id: str, cause: str) -> str:
+        """Run one workflow step now, on its cron or by hand, and return the openEO job id.
+
+        ``cause`` names the run (a cron fire time, or a unique id for a run by hand); it makes
+        the job id deterministic, so a cron fire that is repeated after a restart creates no
+        second job. ``$event.*`` references resolve to None: no event started this run.
+        """
+        config = self._config or self._config_loader()
+        trigger = next((item for item in config.workflow_triggers if item.id == trigger_id), None)
+        if trigger is None:
+            raise ValueError(f"No enabled workflow step {trigger_id!r}")
+        if api_config.is_read_only():
+            raise ValueError("This instance is read-only; workflow steps do not run")
+        event = JobEvent(
+            event_id=f"{cause}:{trigger_id}",
+            type="step.started",
+            source=f"/steps/{trigger_id}",
+            time=utc_now(),
+            data={},
+        )
+        service = self._openeo_service or get_openeo_job_service()
+        return self._submit(trigger, event, service)
+
     def replay(self) -> None:
         """Consume persisted events, honouring each trigger's activation boundary."""
         config = self._config or self._config_loader()
@@ -546,10 +586,10 @@ class WorkflowAutomationService:
         activations = _load_activations()
         for record in job_store.list_job_records():
             for event in record.events:
-                if event.type != DATASET_UPDATED_EVENT_TYPE:
+                if event.type not in STEP_EVENT_TYPES:
                     continue
                 for trigger in config.workflow_triggers:
-                    if trigger.on_update_of != event.data.get("dataset_id"):
+                    if not trigger.matches(event.type, event.data):
                         continue
                     if not trigger.replay_existing and _is_before_activation(event, activations.get(trigger.id)):
                         continue
@@ -562,10 +602,10 @@ class WorkflowAutomationService:
             return
         service = self._openeo_service or get_openeo_job_service()
         for event in events:
-            if event.type != DATASET_UPDATED_EVENT_TYPE:
+            if event.type not in STEP_EVENT_TYPES:
                 continue
             for trigger in config.workflow_triggers:
-                if trigger.on_update_of != event.data.get("dataset_id"):
+                if not trigger.matches(event.type, event.data):
                     continue
                 self._submit_safely(trigger, event, service)
 
@@ -683,16 +723,26 @@ class WorkflowAutomationService:
                 event.data.get("dataset_id"),
             )
 
-    def _submit(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> None:
-        """Create and start the deterministic job for one trigger/event pair."""
-        dataset_id = event.data.get("dataset_id")
+    def _submit(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> str:
+        """Create and start the deterministic job for one trigger/event pair; return its id."""
+        depth = int(event.data.get("chain_depth") or 0)
+        if depth >= MAX_CHAIN_DEPTH:
+            raise ValueError(
+                f"Event {event.event_id} is {depth} workflow runs from the change that started it; "
+                f"chains stop at {MAX_CHAIN_DEPTH} (a cycle between steps?)"
+            )
+        dataset_id = event.data.get("dataset_id") or event.data.get("collection_id")
         resolved = _resolve_event_values(trigger.arguments, event)
         versions = _feature_versions(resolved)
         provenance = _feature_provenance(versions)
         feature_nodes: dict[str, Any] = {}
         arguments = _resolve_feature_references(resolved, feature_nodes, versions)
         body = OpenEOJobCreate(
-            title=f"{trigger.workflow_id} after {dataset_id} update",
+            title=(
+                f"{trigger.workflow_id} after {dataset_id} update"
+                if dataset_id
+                else f"{trigger.workflow_id} ({trigger.id})"
+            ),
             description=f"Triggered by {event.event_id} using automation rule {trigger.id}{provenance}",
             process={
                 "process_graph": {
@@ -710,6 +760,7 @@ class WorkflowAutomationService:
             source_event_id=event.event_id,
             trigger_id=trigger.id,
             max_attempts=trigger.max_attempts,
+            chain_depth=depth + 1,
         )
         service.start_triggered_job(job.id)
         if created:
@@ -718,6 +769,34 @@ class WorkflowAutomationService:
                 trigger.workflow_id,
                 job.id,
                 event.event_id,
+            )
+        return job.id
+
+
+def validate_automation(config: AutomationConfig) -> None:
+    """Refuse a set of triggers that could only fail at run time, naming the step.
+
+    Run when the steps store is written, so a bad step is refused before it is saved, and again
+    when the service starts or reloads.
+    """
+    for trigger in config.workflow_triggers:
+        if workflows.get_workflow(trigger.workflow_id) is None:
+            raise ValueError(f"Workflow step {trigger.id!r} references unknown workflow {trigger.workflow_id!r}")
+    _validate_self_trigger(config)
+    _validate_output_ownership(config)
+    _validate_event_references(config)
+    _validate_feature_references(config)
+    _validate_deliveries(config)
+
+
+def _validate_self_trigger(config: AutomationConfig) -> None:
+    """Refuse a step whose workflow writes the dataset it waits for: a loop of length one."""
+    for trigger in config.workflow_triggers:
+        workflow = workflows.get_workflow(trigger.workflow_id)
+        output = _resolved_output_dataset(trigger, workflow) if workflow is not None else None
+        if output is not None and output == trigger.on_update_of and trigger.event == "dataset.updated":
+            raise ValueError(
+                f"Workflow step {trigger.id!r} runs after {output!r} and writes {output!r}; it would start itself"
             )
 
 
