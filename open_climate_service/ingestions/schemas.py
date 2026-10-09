@@ -118,7 +118,10 @@ class ArtifactRequestScope(BaseModel):
 
     start: str | None = Field(
         default=None,
-        description="Requested start period (None for a non-temporal dataset, e.g. a climatology).",
+        description=(
+            "Requested start period. For a climatology, a day-of-year or month ordinal; '1' when "
+            "the request named none, meaning the whole reference period."
+        ),
     )
     end: str | None = Field(default=None, description="Requested end period for the ingestion or sync operation.")
     bbox: tuple[float, float, float, float] | None = Field(
@@ -536,10 +539,17 @@ class CreateIngestionRequest(BaseModel):
         description=(
             "Start period to ingest. Required for historical datasets. May be omitted for a "
             "dataset declaring 'temporal_direction: future' (e.g. a forecast), where it means "
-            "'from now' — a fixed date would be stale by the next day."
+            "'from now' — a fixed date would be stale by the next day — and for a climatology, "
+            "where it means the whole reference period the template declares."
         ),
     )
-    end: str | None = Field(default=None, description="Optional end period to ingest.")
+    end: str | None = Field(
+        default=None,
+        description=(
+            "Optional end period to ingest. Omitted, it means the latest period the source has, or "
+            "for a climatology the end of its reference period."
+        ),
+    )
     overwrite: bool = Field(
         default=False,
         description="Whether to force regeneration of an existing matching artifact.",

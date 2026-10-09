@@ -7,6 +7,8 @@ by the next day, and a scheduled re-ingest would silently drift out of the forec
 
 from __future__ import annotations
 
+import logging
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from open_climate_service.data_registry.services import datasets as registry
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import CreateIngestionRequest
 from open_climate_service.shared.time import utc_today
+from open_climate_service.system import templates as landing
 
 
 def _write_template(tmp_path: Path, body: str, name: str = "forecast.yaml") -> None:
@@ -250,6 +253,89 @@ def test_ingest_form_requires_a_start_for_a_historical_source(client: TestClient
     assert "required" in start_input
 
 
+def test_a_climatology_is_offered_no_dates_and_logs_no_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Its ids are ordinals, so there is no date to prefill and none to demand.
+
+    Asking `datetime_to_period_string` for a climatology raised, which the form caught and
+    logged as an "Unexpected error" on every render of the two ERA5-Land normal templates —
+    while still putting a full date in a field whose period type has no dates.
+    """
+    template = {
+        "id": "era5land_temperature_daily_normal_1991_2020",
+        "period_type": "climatology",
+        "ingestion": {"plugin": "x", "params": {"period": [1991, 2020]}},
+    }
+
+    with caplog.at_level(logging.ERROR):
+        defaults = landing._ingest_defaults(template, date(2026, 9, 22))
+
+    assert defaults == {"start": "", "end": "", "start_required": False, "direction": "ordinal"}
+    assert caplog.records == [], "a period type with no calendar instants is not an error"
+
+
+class _ReachedThePlugin(Exception):
+    """Raised in place of the download, once every refusal on the way has let the request through."""
+
+
+def _stop_at_the_plugin(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    seen: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> None:
+        seen.update(kwargs)
+        raise _ReachedThePlugin("reached the plugin")
+
+    monkeypatch.setattr(ingestion_services, "_create_streaming_artifact", capture)
+    return seen
+
+
+def test_a_climatology_ingest_without_dates_reaches_the_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shared ingest path, not only the form's route, must take a climatology without dates.
+
+    `_resolve_request_start` refused every omitted start that was not a forecast, so the form's
+    route let the request through and the ingest itself then failed with "requires a start
+    period". The scope is the whole reference period: the first and last ordinals.
+    """
+    seen = _stop_at_the_plugin(monkeypatch)
+    template = registry.get_dataset("era5land_temperature_daily_normal_1991_2020")
+    assert template is not None
+
+    with pytest.raises(_ReachedThePlugin):
+        ingestion_services.create_artifact(
+            dataset=template,
+            start=None,
+            end=None,
+            bbox=[10.0, 59.0, 11.0, 60.0],
+            country_code=None,
+            overwrite=False,
+            publish=False,
+        )
+
+    assert (seen["start"], seen["end"]) == ("1", "366")
+
+
+def test_a_climatology_ingest_from_the_form_reaches_the_plugin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The form offers no start, so neither the route nor the ingest behind it may require one.
+
+    `is_future_facing` is False for a climatology: its periods are not ahead of now, they are
+    not on the calendar at all. Followed to the end of the stream, so a refusal anywhere on the
+    way shows up rather than only the route's own.
+    """
+    _stop_at_the_plugin(monkeypatch)
+    response = client.post(
+        "/manage/ingest",
+        data={"dataset_id": "era5land_temperature_daily_normal_1991_2020", "publish": "on"},
+    )
+    body = response.text
+
+    assert "reached the plugin" in body
+    assert "requires a start period" not in body
+    assert "Start period is required" not in body
+
+
 def test_manage_form_start_rejection_is_dataset_aware(client: TestClient) -> None:
     """The unconditional "Start date is required" gate is gone from the ingest route.
 
@@ -263,3 +349,11 @@ def test_manage_form_start_rejection_is_dataset_aware(client: TestClient) -> Non
     source = Path(routes.__file__).read_text(encoding="utf-8")
     assert 'detail="Start date is required"' not in source
     assert "is_future_facing(template)" in source
+
+
+def test_a_climatology_form_has_no_date_fields(client: TestClient) -> None:
+    """A date typed into a climatology's form would be passed along and ignored, so none is asked."""
+    body = client.get("/data-sources/era5land_temperature_daily_normal_1991_2020", headers={"Accept": "text/html"}).text
+
+    assert "No dates to choose: this ingests the reference period the template declares." in body
+    assert 'id="start"' not in body and 'id="end"' not in body
