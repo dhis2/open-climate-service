@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, ValidationError
 
 from open_climate_service import config as api_config
+from open_climate_service.runs.service import RunView
 from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult
 from open_climate_service.tasks import store
 from open_climate_service.tasks.models import Task
@@ -25,14 +26,16 @@ router = APIRouter()
 
 
 class TaskStatus(Task):
-    """A task with how it starts, in words, and its latest run on this process's clock."""
+    """A task with how it starts, in words, when it runs next, and how its latest runs went.
+
+    The last run comes from the stored run records, so it survives a restart; ``next_run`` is
+    known only in the process that runs the clock.
+    """
 
     starts: str
     next_run: datetime | None = None
-    last_run: datetime | None = None
-    last_outcome: CheckOutcome | None = None
-    last_message: str | None = None
-    last_job_id: str | None = None
+    last_run: RunView | None = None
+    consecutive_failures: int = 0
 
 
 class TaskList(BaseModel):
@@ -94,34 +97,23 @@ def _apply() -> None:
 
 
 def _status(task: Task) -> TaskStatus:
+    from open_climate_service.runs import service as runs
     from open_climate_service.scheduler.service import get_scheduler_service
 
     scheduler = get_scheduler_service()
     next_run: Any = None
-    result: CheckResult | None = None
     if task.kind == "sync":
         sync = scheduler.schedule_for(task.target)
-        if sync is not None:
-            next_run, last = sync.next_check, sync
-            return TaskStatus(
-                **task.model_dump(),
-                starts=task.when,
-                next_run=next_run,
-                last_run=last.last_check,
-                last_outcome=last.last_outcome,
-                last_message=last.last_message,
-                last_job_id=last.last_job_id,
-            )
+        next_run = sync.next_check if sync is not None else None
     else:
-        next_run, result = scheduler.task_status(task.id)
+        next_run, _ = scheduler.task_status(task.id)
+    latest = runs.list_runs(task_id=task.id, limit=1)
     return TaskStatus(
         **task.model_dump(),
         starts=task.when,
         next_run=next_run,
-        last_run=result.checked_at if result else None,
-        last_outcome=result.outcome if result else None,
-        last_message=result.message if result else None,
-        last_job_id=result.job_id if result else None,
+        last_run=runs.view(latest[0]) if latest else None,
+        consecutive_failures=runs.consecutive_failures(task.id),
     )
 
 

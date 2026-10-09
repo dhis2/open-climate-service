@@ -40,6 +40,24 @@ LEASE_TTL_SECONDS = 3 * 30
 owner is replaced within this time by a process on standby (CLIM-997)."""
 
 
+def _record(
+    task_id: str, kind: str, cause: str, result: CheckResult, job_kind: str, cause_ref: str | None = None
+) -> None:
+    """Write the run record of a task the clock or a person started (CLIM-1378)."""
+    from open_climate_service.runs.service import record_run
+
+    record_run(
+        task_id=task_id,
+        kind=kind,
+        cause=cause,  # type: ignore[arg-type]
+        outcome=str(result.outcome),
+        message=result.message,
+        job_kind=job_kind if result.job_id else None,  # type: ignore[arg-type]
+        job_id=result.job_id,
+        cause_ref=cause_ref,
+    )
+
+
 def _db_lease(holder: str, ttl: float) -> bool:
     from open_climate_service.state import db
 
@@ -255,6 +273,14 @@ class SchedulerService:
             )
             logger.exception("Task %s failed to start", task.id)
         self._last_results[_TASK_JOB_PREFIX + task.id] = result
+        _record(
+            task.id,
+            task.kind,
+            "manual" if cause.startswith("manual:") else "cron",
+            result,
+            "openeo" if task.kind == "workflow" else "native",
+            cause_ref=cause,
+        )
         return result
 
     def task_status(self, task_id: str) -> tuple[object | None, CheckResult | None]:
@@ -480,6 +506,7 @@ class SchedulerService:
             )
             logger.exception("Scheduled sync check failed for %s", schedule.dataset_id)
         self._last_results[schedule.schedule_id] = result
+        _record(f"sync-{schedule.dataset_id}", "sync", "cron", result, "native")
         log = logger.warning if result.outcome == CheckOutcome.ERROR else logger.info
         log(
             "Scheduled sync check for %s: %s (%s)",

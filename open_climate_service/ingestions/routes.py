@@ -19,7 +19,7 @@ from open_climate_service.ingestions.schemas import (
     SyncDetail,
     SyncResponse,
 )
-from open_climate_service.jobs.models import JobLink, JobRecord
+from open_climate_service.jobs.models import JobLink, JobListResponse, JobRecord
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.shared.thumbnails import thumbnail_path
 from open_climate_service.shared.urls import mount_prefix
@@ -42,6 +42,13 @@ def _with_ingestion_job_self_link(record: JobRecord) -> JobRecord:
     self_link = JobLink(href=f"{INGESTION_JOB_HREF_BASE}/{record.job_id}", rel="self", title="Job detail")
     other_links = [link for link in record.links if link.rel != "self"]
     return record.model_copy(update={"links": [self_link, *other_links]})
+
+
+@ingestions_router.get("/jobs", response_model=JobListResponse)
+def list_ingestion_jobs() -> JobListResponse:
+    """Every native job (ingestion, sync, feature refresh, delivery), newest first (CLIM-1378)."""
+    listing = get_job_service().list_jobs()
+    return listing.model_copy(update={"jobs": [_with_ingestion_job_self_link(record) for record in listing.jobs]})
 
 
 @ingestions_router.get("/jobs/{job_id}", response_model=JobRecord)

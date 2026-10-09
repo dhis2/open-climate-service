@@ -532,7 +532,7 @@ class WorkflowAutomationService:
             data={},
         )
         service = self._openeo_service or get_openeo_job_service()
-        return self._submit(trigger, event, service)
+        return self._submit(trigger, event, service)[0]
 
     def replay(self) -> None:
         """Consume persisted events, honouring each trigger's activation boundary."""
@@ -642,6 +642,7 @@ class WorkflowAutomationService:
             )
         except HTTPException as exc:
             _set_delivery_error(record.id, export_id, str(exc.detail))
+            _record_delivery_refusal(trigger_id, delivery, record.id, str(exc.detail))
             # Verification refusals (changed export, missing manifest, re-run source) are
             # operator-actionable configuration states, not crashes.
             logger.warning(
@@ -654,12 +655,27 @@ class WorkflowAutomationService:
             return
         except Exception as exc:
             _set_delivery_error(record.id, export_id, f"{type(exc).__name__}: {exc}")
+            _record_delivery_refusal(trigger_id, delivery, record.id, f"{type(exc).__name__}: {exc}")
             logger.exception(
                 "Workflow trigger %s failed to deliver job %s to export %s", trigger_id, record.id, export_id
             )
             return
         _set_delivery_error(record.id, export_id, None)
         if not reused:
+            from open_climate_service.runs.service import record_run, run_for_job
+
+            parent = run_for_job(record.id)
+            record_run(
+                task_id=delivery.task_id or f"{trigger_id}:deliver",
+                kind="deliver",
+                cause="event",
+                cause_ref=record.id,
+                parent_run_id=parent.id if parent else None,
+                outcome="submitted",
+                message=f"{'Dry-run' if dry_run else 'Live'} delivery to {export_id} submitted",
+                job_kind="native",
+                job_id=delivery_job_id,
+            )
             logger.info(
                 "Submitted %s delivery %s of job %s to export %s",
                 "dry-run" if dry_run else "live",
@@ -670,18 +686,47 @@ class WorkflowAutomationService:
 
     def _submit_safely(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> None:
         """Submit one trigger/event pair without letting a failure skip its siblings."""
+        from open_climate_service.runs.service import record_run, run_for_job
+
+        parent = run_for_job(event.data.get("producing_job_id") or event.event_id.rsplit(":", 1)[0])
         try:
-            self._submit(trigger, event, service)
-        except Exception:
+            job_id, created = self._submit(trigger, event, service)
+        except Exception as exc:
+            record_run(
+                task_id=trigger.id,
+                kind="workflow",
+                cause="event",
+                cause_ref=event.event_id,
+                parent_run_id=parent.id if parent else None,
+                outcome="error",
+                message=f"{type(exc).__name__}: {exc}",
+            )
             logger.exception(
                 "Workflow trigger %s failed for event %s (dataset %s)",
                 trigger.id,
                 event.event_id,
                 event.data.get("dataset_id"),
             )
+            return
+        if created:
+            record_run(
+                task_id=trigger.id,
+                kind="workflow",
+                cause="event",
+                cause_ref=event.event_id,
+                parent_run_id=parent.id if parent else None,
+                outcome="submitted",
+                message=f"Workflow {trigger.workflow_id} submitted",
+                job_kind="openeo",
+                job_id=job_id,
+            )
 
-    def _submit(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> str:
-        """Create and start the deterministic job for one trigger/event pair; return its id."""
+    def _submit(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> tuple[str, bool]:
+        """Create and start the deterministic job for one trigger/event pair.
+
+        Returns its id and whether this call created it: a replayed event finds the job it
+        already made, and is not a new run.
+        """
         depth = int(event.data.get("chain_depth") or 0)
         if depth >= MAX_CHAIN_DEPTH:
             raise ValueError(
@@ -727,7 +772,7 @@ class WorkflowAutomationService:
                 job.id,
                 event.event_id,
             )
-        return job.id
+        return job.id, created
 
 
 def validate_automation(config: AutomationConfig) -> None:
@@ -755,6 +800,22 @@ def _validate_self_trigger(config: AutomationConfig) -> None:
             raise ValueError(
                 f"Workflow task {trigger.id!r} runs after {output!r} and writes {output!r}; it would start itself"
             )
+
+
+def _record_delivery_refusal(trigger_id: str, delivery: TriggerDelivery, source_job_id: str, message: str) -> None:
+    """A delivery that could not even be submitted is a failed run of its deliver task."""
+    from open_climate_service.runs.service import record_run, run_for_job
+
+    parent = run_for_job(source_job_id)
+    record_run(
+        task_id=delivery.task_id or f"{trigger_id}:deliver",
+        kind="deliver",
+        cause="event",
+        cause_ref=source_job_id,
+        parent_run_id=parent.id if parent else None,
+        outcome="error",
+        message=message,
+    )
 
 
 def _lists_delivery(record: OpenEOJobRecord, export_id: str) -> bool:

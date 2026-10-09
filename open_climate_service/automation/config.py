@@ -30,6 +30,8 @@ class TriggerDelivery(BaseModel):
     export: str = Field(min_length=1)
     # Writing to a production DHIS2 is an explicit opt-in.
     dry_run: bool = True
+    # The deliver task this delivery comes from, for its run records.
+    task_id: str | None = None
 
 
 class WorkflowTrigger(BaseModel):
@@ -116,7 +118,7 @@ def compile_tasks(tasks: list[Task]) -> AutomationConfig:
                 arguments=task.arguments,
                 max_attempts=task.max_attempts,
                 deliver=(
-                    TriggerDelivery(export=delivery.target, dry_run=delivery.dry_run)
+                    TriggerDelivery(export=delivery.target, dry_run=delivery.dry_run, task_id=delivery.id)
                     if delivery is not None and delivery.enabled
                     else None
                 ),

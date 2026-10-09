@@ -22,6 +22,7 @@ from open_climate_service.jobs.service import get_job_service
 from open_climate_service.openeo import routes as openeo_routes
 from open_climate_service.openeo.jobs import get_openeo_job_service
 from open_climate_service.read_only import read_only_middleware
+from open_climate_service.runs import routes as runs_routes
 from open_climate_service.scheduler import routes as scheduler_routes
 from open_climate_service.scheduler.service import get_scheduler_service
 from open_climate_service.shared import urls
@@ -276,6 +277,7 @@ def create_app() -> FastAPI:
     _app.include_router(ingestion_routes.sync_router, prefix="/sync", tags=["Sync"])
     _app.include_router(scheduler_routes.router, prefix="/schedules", tags=["Schedules"])
     _app.include_router(tasks_routes.router, prefix="/tasks", tags=["Tasks"])
+    _app.include_router(runs_routes.router, prefix="/runs", tags=["Runs"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
     _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])
 
