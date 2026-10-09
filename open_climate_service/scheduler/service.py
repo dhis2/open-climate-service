@@ -27,27 +27,27 @@ from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult,
 from open_climate_service.scheduler.schemas import ScheduleListResponse, ScheduleStatus
 from open_climate_service.scheduler.store import StoredSchedule, list_schedules, store_stamp
 from open_climate_service.shared.time import utc_now
-from open_climate_service.steps.models import Step
+from open_climate_service.tasks.models import Task
 
 logger = logging.getLogger(__name__)
 
 _WATCH_JOB_ID = "scheduler:store-watch"
-_STEP_JOB_PREFIX = "step:"
+_TASK_JOB_PREFIX = "task:"
 
 
-def _cron_steps() -> list[Step]:
-    """Enabled refresh and workflow steps on a cron: the steps the clock runs besides syncs."""
-    from open_climate_service.steps.store import list_steps
+def _cron_tasks() -> list[Task]:
+    """Enabled refresh and workflow tasks on a cron: the tasks the clock runs besides syncs."""
+    from open_climate_service.tasks.store import list_tasks
 
     return [
-        step for step in list_steps() if step.kind in ("refresh", "workflow") and step.cron is not None and step.enabled
+        task for task in list_tasks() if task.kind in ("refresh", "workflow") and task.cron is not None and task.enabled
     ]
 
 
-def _run_step(step: Step, cause: str) -> CheckResult:
-    from open_climate_service.steps.dispatch import run_step
+def _run_task(task: Task, cause: str) -> CheckResult:
+    from open_climate_service.tasks.dispatch import run_task
 
-    return run_step(step, cause)
+    return run_task(task, cause)
 
 
 WATCH_SECONDS = 30
@@ -102,8 +102,8 @@ class _Plan:
     runnable: list[tuple[EffectiveSchedule, CronTrigger]]
     refused: dict[str, CheckResult]
     stamp: str | None = None
-    # Refresh and workflow steps on a cron (CLIM-1378), each with its trigger.
-    steps: tuple[tuple[Step, CronTrigger], ...] = ()
+    # Refresh and workflow tasks on a cron (CLIM-1378), each with its trigger.
+    tasks: tuple[tuple[Task, CronTrigger], ...] = ()
 
 
 class SchedulerService:
@@ -123,13 +123,13 @@ class SchedulerService:
         dispatcher: Callable[[DatasetSyncSchedule], CheckResult] = enqueue_sync,
         template_loader: Callable[[str], dict[str, Any] | None] | None = None,
         stamp_loader: Callable[[], str | None] = store_stamp,
-        steps_loader: Callable[[], list[Step]] = _cron_steps,
-        step_runner: Callable[[Step, str], CheckResult] = _run_step,
+        tasks_loader: Callable[[], list[Task]] = _cron_tasks,
+        task_runner: Callable[[Task, str], CheckResult] = _run_task,
     ) -> None:
-        self._steps_loader = steps_loader
-        self._step_runner = step_runner
-        self._steps: tuple[tuple[Step, CronTrigger], ...] = ()
-        # Called after every reload, so automation sees a step change made by another process.
+        self._tasks_loader = tasks_loader
+        self._task_runner = task_runner
+        self._tasks: tuple[tuple[Task, CronTrigger], ...] = ()
+        # Called after every reload, so automation sees a task change made by another process.
         self._reload_listeners: list[Callable[[], None]] = []
         self._config_loader = config_loader
         self._store_loader = store_loader
@@ -183,55 +183,55 @@ class SchedulerService:
         config = config if config is not None else self._config_loader()
         stored = self._store_loader()
         plan = self._plan(config, effective_schedules(stored))
-        steps = tuple(
-            (step, CronTrigger.from_crontab(step.cron, timezone=config.timezone_info))
-            for step in self._steps_loader()
-            if step.cron is not None
+        tasks = tuple(
+            (task, CronTrigger.from_crontab(task.cron, timezone=config.timezone_info))
+            for task in self._tasks_loader()
+            if task.cron is not None
         )
-        return _Plan(plan.config, plan.effective, plan.runnable, plan.refused, stamp, steps)
+        return _Plan(plan.config, plan.effective, plan.runnable, plan.refused, stamp, tasks)
 
     def add_reload_listener(self, listener: Callable[[], None]) -> None:
         """Call ``listener`` after each reload of the store, in this process or after another's write."""
         self._reload_listeners.append(listener)
 
-    def _apply_steps(self, scheduler: AsyncIOScheduler, steps: tuple[tuple[Step, CronTrigger], ...]) -> None:
-        """Make the clock run exactly ``steps`` among the step jobs."""
-        wanted = {_STEP_JOB_PREFIX + step.id for step, _ in steps}
+    def _apply_tasks(self, scheduler: AsyncIOScheduler, tasks: tuple[tuple[Task, CronTrigger], ...]) -> None:
+        """Make the clock run exactly ``tasks`` among the task jobs."""
+        wanted = {_TASK_JOB_PREFIX + task.id for task, _ in tasks}
         for job in list(scheduler.get_jobs()):
-            if job.id.startswith(_STEP_JOB_PREFIX) and job.id not in wanted:
+            if job.id.startswith(_TASK_JOB_PREFIX) and job.id not in wanted:
                 scheduler.remove_job(job.id)
-        for step, trigger in steps:
+        for task, trigger in tasks:
             scheduler.add_job(
-                self.run_step_now,
+                self.run_task_now,
                 trigger=trigger,
-                args=[step],
-                id=_STEP_JOB_PREFIX + step.id,
+                args=[task],
+                id=_TASK_JOB_PREFIX + task.id,
                 coalesce=True,
                 max_instances=1,
                 replace_existing=True,
             )
 
-    def run_step_now(self, step: Step, cause: str | None = None) -> CheckResult:
-        """Run one cron step and keep its result for the status, as for a sync."""
+    def run_task_now(self, task: Task, cause: str | None = None) -> CheckResult:
+        """Run one cron task and keep its result for the status, as for a sync."""
         if cause is None:
             cause = f"cron:{utc_now().replace(second=0, microsecond=0).isoformat()}"
         try:
-            result = self._step_runner(step, cause)
+            result = self._task_runner(task, cause)
         except Exception as exc:
             result = CheckResult(
-                schedule_id=step.id,
-                dataset_id=step.target,
+                schedule_id=task.id,
+                dataset_id=task.target,
                 outcome=CheckOutcome.ERROR,
                 message=f"{type(exc).__name__}: {exc}",
             )
-            logger.exception("Step %s failed to start", step.id)
-        self._last_results[_STEP_JOB_PREFIX + step.id] = result
+            logger.exception("Task %s failed to start", task.id)
+        self._last_results[_TASK_JOB_PREFIX + task.id] = result
         return result
 
-    def step_status(self, step_id: str) -> tuple[object | None, CheckResult | None]:
-        """The next fire time of a cron step on this clock, and its last result."""
-        job = self._scheduler.get_job(_STEP_JOB_PREFIX + step_id) if self._scheduler is not None else None
-        return getattr(job, "next_run_time", None), self._last_results.get(_STEP_JOB_PREFIX + step_id)
+    def task_status(self, task_id: str) -> tuple[object | None, CheckResult | None]:
+        """The next fire time of a cron task on this clock, and its last result."""
+        job = self._scheduler.get_job(_TASK_JOB_PREFIX + task_id) if self._scheduler is not None else None
+        return getattr(job, "next_run_time", None), self._last_results.get(_TASK_JOB_PREFIX + task_id)
 
     def _apply(
         self, scheduler: AsyncIOScheduler, runnable: list[tuple[EffectiveSchedule, CronTrigger]], known: set[str]
@@ -283,11 +283,11 @@ class SchedulerService:
                 logger.info("Dataset scheduler will not start on a read-only instance")
                 return
 
-            self._steps = plan.steps
+            self._tasks = plan.tasks
             scheduler = AsyncIOScheduler(timezone=plan.config.timezone_info)
             for entry, trigger in plan.runnable:
                 self._add(scheduler, entry, trigger)
-            self._apply_steps(scheduler, plan.steps)
+            self._apply_tasks(scheduler, plan.tasks)
             # Writes from another process on the shared data directory reach this clock through
             # the store file, not through this process's routes; watch it.
             scheduler.add_job(
@@ -331,7 +331,7 @@ class SchedulerService:
                 known = previous | {entry.schedule_id for entry in plan.effective}
                 try:
                     self._apply(scheduler, plan.runnable, known)
-                    self._apply_steps(scheduler, plan.steps)
+                    self._apply_tasks(scheduler, plan.tasks)
                 except Exception as exc:
                     # The plan was sound, so this is the clock itself refusing. Put the
                     # previous jobs back so the status keeps describing what runs.
@@ -360,8 +360,8 @@ class SchedulerService:
             self._stamp = plan.stamp
             self._last_results = {key: value for key, value in self._last_results.items() if key in runnable_ids}
             self._last_results.update(plan.refused)
-            self._steps = plan.steps
-            logger.info("Schedules reloaded: %d runnable, %d other cron steps", len(plan.runnable), len(plan.steps))
+            self._tasks = plan.tasks
+            logger.info("Schedules reloaded: %d runnable, %d other cron tasks", len(plan.runnable), len(plan.tasks))
         for listener in self._reload_listeners:
             try:
                 listener()

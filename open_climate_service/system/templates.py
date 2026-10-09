@@ -1396,7 +1396,7 @@ _API_GROUP_NOTES = {
     "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
     "Extent": "The area this instance covers.",
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
-    "Steps": "Every automated step: sync, refresh, workflow and deliver, each on a cron, after a change, or by hand.",
+    "Tasks": "Every automated task: sync, refresh, workflow and deliver, each on a cron, after a change, or by hand.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "System": "Health, version and the landing page's JSON form.",
 }

@@ -80,7 +80,7 @@ nav:
       - Processes: processes.md
       - Climate indices: climate_indices.md
       - Workflows: workflows.md
-      - "Steps: automating a flow from source to DHIS2": steps.md
+      - "Tasks: automating a flow from source to DHIS2": tasks.md
       - Scheduled dataset synchronization: scheduled_sync.md
       - Dataset-update workflow automation: workflow_automation.md
       - Import to DHIS2 and Chap: importing_to_dhis2.md

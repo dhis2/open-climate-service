@@ -1,9 +1,9 @@
-"""Workflow triggers, compiled from the workflow and deliver steps in the steps store (CLIM-1378).
+"""Workflow triggers, compiled from the workflow and deliver tasks in the tasks store (CLIM-1378).
 
-A trigger is the runtime shape of a workflow step: what it waits for (a dataset update, a
+A trigger is the runtime shape of a workflow task: what it waits for (a dataset update, a
 collection refresh, or nothing when it runs on a cron or by hand), the workflow and arguments,
-and the delivery a deliver step after it asks for. The automation service consumes triggers, so
-the event, replay, retry and delivery machinery is the same whichever way a step was written.
+and the delivery a deliver task after it asks for. The automation service consumes triggers, so
+the event, replay, retry and delivery machinery is the same whichever way a task was written.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from open_climate_service.jobs.models import COLLECTION_UPDATED_EVENT_TYPE
 from open_climate_service.openeo.jobs import MAX_TRIGGERED_ATTEMPTS
 
 if TYPE_CHECKING:
-    from open_climate_service.steps.models import Step
+    from open_climate_service.tasks.models import Task
 
 TriggerEvent = Literal["dataset.updated", "collection.updated"]
 
@@ -39,7 +39,7 @@ class WorkflowTrigger(BaseModel):
 
     id: str = Field(min_length=1)
     # The dataset (or, for collection.updated, the feature collection) whose change starts the
-    # workflow. None for a step that runs on a cron or by hand.
+    # workflow. None for a task that runs on a cron or by hand.
     on_update_of: str | None = Field(default=None, min_length=1)
     event: TriggerEvent = "dataset.updated"
     workflow_id: str = Field(min_length=1)
@@ -74,47 +74,47 @@ class AutomationConfig(BaseModel):
         return self
 
 
-def compile_steps(steps: list[Step]) -> AutomationConfig:
-    """Turn the enabled workflow steps, and the deliver steps after them, into triggers.
+def compile_tasks(tasks: list[Task]) -> AutomationConfig:
+    """Turn the enabled workflow tasks, and the deliver tasks after them, into triggers.
 
-    A deliver step after a workflow step becomes that trigger's delivery; at most one deliver
-    step may follow a workflow step, and it must follow one that exists. A paused workflow step
-    is left out, and so is a paused deliver step (the workflow then runs without delivering).
+    A deliver task after a workflow task becomes that trigger's delivery; at most one deliver
+    task may follow a workflow task, and it must follow one that exists. A paused workflow task
+    is left out, and so is a paused deliver task (the workflow then runs without delivering).
     """
-    workflows = {step.id: step for step in steps if step.kind == "workflow"}
-    deliveries: dict[str, Step] = {}
-    for step in steps:
-        if step.kind != "deliver" or step.after is None or step.after.step is None:
+    workflows = {task.id: task for task in tasks if task.kind == "workflow"}
+    deliveries: dict[str, Task] = {}
+    for task in tasks:
+        if task.kind != "deliver" or task.after is None or task.after.task is None:
             continue
-        upstream = step.after.step
+        upstream = task.after.task
         if upstream not in workflows:
-            raise ValueError(f"Deliver step {step.id!r} runs after {upstream!r}, which is not a workflow step")
+            raise ValueError(f"Deliver task {task.id!r} runs after {upstream!r}, which is not a workflow task")
         if upstream in deliveries:
             raise ValueError(
-                f"Workflow step {upstream!r} is followed by two deliver steps, "
-                f"{deliveries[upstream].id!r} and {step.id!r}; one workflow result is delivered once"
+                f"Workflow task {upstream!r} is followed by two deliver tasks, "
+                f"{deliveries[upstream].id!r} and {task.id!r}; one workflow result is delivered once"
             )
-        deliveries[upstream] = step
+        deliveries[upstream] = task
     triggers: list[WorkflowTrigger] = []
-    for step in workflows.values():
-        if not step.enabled:
+    for task in workflows.values():
+        if not task.enabled:
             continue
         on_update_of: str | None = None
         event: TriggerEvent = "dataset.updated"
-        if step.after is not None and step.after.dataset is not None:
-            on_update_of = step.after.dataset
-        elif step.after is not None and step.after.collection is not None:
-            on_update_of = step.after.collection
+        if task.after is not None and task.after.dataset is not None:
+            on_update_of = task.after.dataset
+        elif task.after is not None and task.after.collection is not None:
+            on_update_of = task.after.collection
             event = "collection.updated"
-        delivery = deliveries.get(step.id)
+        delivery = deliveries.get(task.id)
         triggers.append(
             WorkflowTrigger(
-                id=step.id,
+                id=task.id,
                 on_update_of=on_update_of,
                 event=event,
-                workflow_id=step.target,
-                arguments=step.arguments,
-                max_attempts=step.max_attempts,
+                workflow_id=task.target,
+                arguments=task.arguments,
+                max_attempts=task.max_attempts,
                 deliver=(
                     TriggerDelivery(export=delivery.target, dry_run=delivery.dry_run)
                     if delivery is not None and delivery.enabled
@@ -126,7 +126,7 @@ def compile_steps(steps: list[Step]) -> AutomationConfig:
 
 
 def get_automation_config() -> AutomationConfig:
-    """Compile workflow automation from the steps store.
+    """Compile workflow automation from the tasks store.
 
     The ``automation`` block of ``climate-service.yaml`` is refused rather than merged: the store
     is the one source, so there is no precedence rule to explain.
@@ -134,8 +134,8 @@ def get_automation_config() -> AutomationConfig:
     if "automation" in api_config.get_config():
         raise ValueError(
             "automation in climate-service.yaml is no longer supported; workflow triggers and their "
-            "deliveries are workflow and deliver steps, managed through /steps (CLIM-1378)"
+            "deliveries are workflow and deliver tasks, managed through /tasks (CLIM-1378)"
         )
-    from open_climate_service.steps.store import list_steps
+    from open_climate_service.tasks.store import list_tasks
 
-    return compile_steps(list_steps())
+    return compile_tasks(list_tasks())

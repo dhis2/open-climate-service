@@ -12,15 +12,15 @@ extent:
 
 data_dir: ./data   # required — directory for downloaded NetCDF files and Zarr stores
 
-# The clock. What runs on it, and what runs after a change, are steps managed through /steps
-# and stored in <data_dir>/steps.json, not here (see docs/steps.md). Only one OCS process may
+# The clock. What runs on it, and what runs after a change, are tasks managed through /tasks
+# and stored in <data_dir>/tasks.json, not here (see docs/tasks.md). Only one OCS process may
 # enable the scheduler.
 # scheduler:
 #   enabled: true
 #   timezone: UTC
 
 # Named feature collections (org unit polygons, facility points) live in plugins/vectors/*.yaml
-# templates, not here -- see the instance guide. A workflow step references one by id with
+# templates, not here -- see the instance guide. A workflow task references one by id with
 # {from_features: <id>} instead of embedding a FeatureCollection inline.
 
 # The named export owns the DHIS2 mapping and connection. The job it produces carries a

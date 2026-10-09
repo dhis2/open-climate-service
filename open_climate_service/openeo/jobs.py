@@ -1167,7 +1167,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any], *, job_id: str | None 
     """Write a computed xr.Dataset to the managed Icechunk/Zarr store, register it, and say so.
 
     A publish emits ``dataset.updated`` for the output dataset like a sync does (CLIM-1243), so a
-    step can run after a derived dataset changed. The store is rewritten whole, so the event says
+    task can run after a derived dataset changed. The store is rewritten whole, so the event says
     ``rematerialize`` with no ``previous_end``: every period up to ``current_end`` may have changed.
     """
     import uuid
@@ -1334,7 +1334,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any], *, job_id: str | None 
 
 
 def _record_publish_event(record: Any, *, job_id: str | None, chain_depth: int) -> None:
-    """Make a workflow publish durable as a ``dataset.updated`` event, for the steps after it."""
+    """Make a workflow publish durable as a ``dataset.updated`` event, for the tasks after it."""
     from open_climate_service.ingestions.processes import dataset_update_event, record_inline_update
 
     event = dataset_update_event(

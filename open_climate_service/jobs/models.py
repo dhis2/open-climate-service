@@ -14,8 +14,8 @@ DATASET_UPDATED_EVENT_TYPE = "dataset.updated"
 COLLECTION_UPDATED_EVENT_TYPE = "collection.updated"
 """Event type persisted when a feature collection is refreshed from its provider (CLIM-1378)."""
 
-STEP_EVENT_TYPES = frozenset({DATASET_UPDATED_EVENT_TYPE, COLLECTION_UPDATED_EVENT_TYPE})
-"""Events a step can wait for."""
+TASK_EVENT_TYPES = frozenset({DATASET_UPDATED_EVENT_TYPE, COLLECTION_UPDATED_EVENT_TYPE})
+"""Events a task can wait for."""
 
 
 class JobCancelledError(Exception):

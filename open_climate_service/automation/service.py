@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from open_climate_service import config as api_config
@@ -19,7 +16,7 @@ from open_climate_service.automation.config import (
     get_automation_config,
 )
 from open_climate_service.jobs import store as job_store
-from open_climate_service.jobs.models import STEP_EVENT_TYPES, JobEvent
+from open_climate_service.jobs.models import TASK_EVENT_TYPES, JobEvent
 from open_climate_service.openeo import workflows
 from open_climate_service.openeo.jobs import (
     OpenEOJobService,
@@ -61,53 +58,24 @@ def _resolve_event_values(value: Any, event: JobEvent) -> Any:
     return value
 
 
-def _automation_dir() -> Path:
-    data_dir = api_config.get_data_dir()
-    if data_dir is not None:
-        base = data_dir
-    else:
-        xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-        base = xdg_data / "climate-service"
-    return base / "automation"
-
-
-def _activation_path() -> Path:
-    """Return the file recording each trigger's activation boundary."""
-    return _automation_dir() / "activation.json"
-
-
-def _delivery_activation_path() -> Path:
-    """Return the file recording when each trigger's delivery step became active."""
-    return _automation_dir() / "delivery_activation.json"
-
-
 def _delivery_mode(dry_run: bool) -> str:
     return "dry-run" if dry_run else "live"
 
 
 def _load_delivery_activations() -> dict[str, dict[str, str]]:
-    """Return ``{trigger_id: {"export", "mode", "activated_at"}}``, tolerating a missing or corrupt file.
+    """Return ``{trigger_id: {"export", "mode", "activated_at"}}`` from the operational database.
 
-    A lost or incomplete entry is re-stamped at the next start, which delivers nothing finished
-    before it: the safe reading, since pushing history is the failure this boundary prevents.
+    An incomplete entry is dropped and re-stamped at the next start, which delivers nothing
+    finished before it: the safe reading, since pushing history is the failure this boundary
+    prevents.
     """
-    path = _delivery_activation_path()
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # ValueError covers invalid JSON and non-UTF-8 bytes (UnicodeDecodeError).
-        logger.warning("Could not read delivery activation file %s; deliveries restart from now", path)
-        return {}
-    if not isinstance(payload, dict):
-        return {}
+    from open_climate_service.state import db
+
     fields = ("export", "mode", "activated_at")
     return {
         key: {field: value[field] for field in fields}
-        for key, value in payload.items()
-        if isinstance(key, str)
-        and isinstance(value, dict)
+        for key, value in db.load_activations("delivery").items()
+        if isinstance(value, dict)
         and all(isinstance(value.get(field), str) for field in fields)
         and _parse_time(value["activated_at"]) is not None
     }
@@ -121,11 +89,9 @@ def _parse_time(value: str) -> datetime | None:
 
 
 def _save_delivery_activations(activations: dict[str, dict[str, str]]) -> None:
-    path = _delivery_activation_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(activations, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temp, path)
+    from open_climate_service.state import db
+
+    db.save_activations("delivery", activations)
 
 
 def _sync_delivery_activations(config: AutomationConfig) -> dict[str, dict[str, str]]:
@@ -263,29 +229,20 @@ def _validate_deliveries(config: AutomationConfig) -> None:
 
 
 def _load_activations() -> dict[str, str]:
-    """Return persisted trigger activation times, tolerating a missing or corrupt file."""
-    path = _activation_path()
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # ValueError covers invalid JSON and non-UTF-8 bytes (UnicodeDecodeError).
-        logger.warning("Could not read automation activation file %s; triggers will not replay history", path)
-        return {}
-    if not isinstance(payload, dict):
-        logger.warning("Automation activation file %s is not a mapping; triggers will not replay history", path)
-        return {}
-    return {key: value for key, value in payload.items() if isinstance(key, str) and isinstance(value, str)}
+    """Return each trigger's activation time from the operational database.
+
+    One transaction writes them, so a crash leaves the previous set or the new one, never a
+    truncated file read back as empty (which replayed every historical event, CLIM-927).
+    """
+    from open_climate_service.state import db
+
+    return {key: value for key, value in db.load_activations("trigger").items() if isinstance(value, str)}
 
 
 def _save_activations(activations: dict[str, str]) -> None:
-    """Persist trigger activation times atomically so a crash cannot leave a truncated file."""
-    path = _activation_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(activations, indent=2) + "\n", encoding="utf-8")
-    os.replace(temp, path)
+    from open_climate_service.state import db
+
+    db.save_activations("trigger", activations)
 
 
 def _is_before_activation(event: JobEvent, activation_iso: str | None) -> bool:
@@ -540,10 +497,10 @@ class WorkflowAutomationService:
             _save_activations(activations)
 
     def reload(self) -> None:
-        """Apply a change to the steps store without a restart (CLIM-1378).
+        """Apply a change to the tasks store without a restart (CLIM-1378).
 
         Re-reads and re-validates the triggers, stamps an activation boundary for each new one,
-        and re-derives the delivery steps. A step that cannot be loaded leaves the previous
+        and re-derives the delivery steps. A task that cannot be loaded leaves the previous
         triggers in force: the store's write path validates first, so this only happens when the
         file was edited by hand.
         """
@@ -552,10 +509,10 @@ class WorkflowAutomationService:
             self.start()
         except Exception:
             self._config, self._delivery_steps = previous
-            logger.exception("Workflow steps could not be reloaded; keeping the previous ones")
+            logger.exception("Workflow tasks could not be reloaded; keeping the previous ones")
 
     def run_now(self, trigger_id: str, cause: str) -> str:
-        """Run one workflow step now, on its cron or by hand, and return the openEO job id.
+        """Run one workflow task now, on its cron or by hand, and return the openEO job id.
 
         ``cause`` names the run (a cron fire time, or a unique id for a run by hand); it makes
         the job id deterministic, so a cron fire that is repeated after a restart creates no
@@ -564,13 +521,13 @@ class WorkflowAutomationService:
         config = self._config or self._config_loader()
         trigger = next((item for item in config.workflow_triggers if item.id == trigger_id), None)
         if trigger is None:
-            raise ValueError(f"No enabled workflow step {trigger_id!r}")
+            raise ValueError(f"No enabled workflow task {trigger_id!r}")
         if api_config.is_read_only():
-            raise ValueError("This instance is read-only; workflow steps do not run")
+            raise ValueError("This instance is read-only; workflow tasks do not run")
         event = JobEvent(
             event_id=f"{cause}:{trigger_id}",
-            type="step.started",
-            source=f"/steps/{trigger_id}",
+            type="task.started",
+            source=f"/tasks/{trigger_id}",
             time=utc_now(),
             data={},
         )
@@ -586,7 +543,7 @@ class WorkflowAutomationService:
         activations = _load_activations()
         for record in job_store.list_job_records():
             for event in record.events:
-                if event.type not in STEP_EVENT_TYPES:
+                if event.type not in TASK_EVENT_TYPES:
                     continue
                 for trigger in config.workflow_triggers:
                     if not trigger.matches(event.type, event.data):
@@ -602,7 +559,7 @@ class WorkflowAutomationService:
             return
         service = self._openeo_service or get_openeo_job_service()
         for event in events:
-            if event.type not in STEP_EVENT_TYPES:
+            if event.type not in TASK_EVENT_TYPES:
                 continue
             for trigger in config.workflow_triggers:
                 if not trigger.matches(event.type, event.data):
@@ -729,7 +686,7 @@ class WorkflowAutomationService:
         if depth >= MAX_CHAIN_DEPTH:
             raise ValueError(
                 f"Event {event.event_id} is {depth} workflow runs from the change that started it; "
-                f"chains stop at {MAX_CHAIN_DEPTH} (a cycle between steps?)"
+                f"chains stop at {MAX_CHAIN_DEPTH} (a cycle between tasks?)"
             )
         dataset_id = event.data.get("dataset_id") or event.data.get("collection_id")
         resolved = _resolve_event_values(trigger.arguments, event)
@@ -774,14 +731,14 @@ class WorkflowAutomationService:
 
 
 def validate_automation(config: AutomationConfig) -> None:
-    """Refuse a set of triggers that could only fail at run time, naming the step.
+    """Refuse a set of triggers that could only fail at run time, naming the task.
 
-    Run when the steps store is written, so a bad step is refused before it is saved, and again
+    Run when the tasks store is written, so a bad task is refused before it is saved, and again
     when the service starts or reloads.
     """
     for trigger in config.workflow_triggers:
         if workflows.get_workflow(trigger.workflow_id) is None:
-            raise ValueError(f"Workflow step {trigger.id!r} references unknown workflow {trigger.workflow_id!r}")
+            raise ValueError(f"Workflow task {trigger.id!r} references unknown workflow {trigger.workflow_id!r}")
     _validate_self_trigger(config)
     _validate_output_ownership(config)
     _validate_event_references(config)
@@ -790,13 +747,13 @@ def validate_automation(config: AutomationConfig) -> None:
 
 
 def _validate_self_trigger(config: AutomationConfig) -> None:
-    """Refuse a step whose workflow writes the dataset it waits for: a loop of length one."""
+    """Refuse a task whose workflow writes the dataset it waits for: a loop of length one."""
     for trigger in config.workflow_triggers:
         workflow = workflows.get_workflow(trigger.workflow_id)
         output = _resolved_output_dataset(trigger, workflow) if workflow is not None else None
         if output is not None and output == trigger.on_update_of and trigger.event == "dataset.updated":
             raise ValueError(
-                f"Workflow step {trigger.id!r} runs after {output!r} and writes {output!r}; it would start itself"
+                f"Workflow task {trigger.id!r} runs after {output!r} and writes {output!r}; it would start itself"
             )
 
 

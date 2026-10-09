@@ -1,6 +1,6 @@
 # Scheduled dataset synchronization
 
-> In the [steps](steps.md) reference implementation (CLIM-1378), sync schedules are `sync` steps in `<data_dir>/steps.json`, next to refresh, workflow and deliver steps.
+> In the [tasks](tasks.md) reference implementation (CLIM-1378), sync schedules are `sync` tasks in `<data_dir>/tasks.json`, next to refresh, workflow and deliver tasks.
 
 Open Climate Service can periodically check whether an existing managed dataset has new
 source periods and submit an asynchronous sync job when work is required. The scheduler is

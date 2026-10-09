@@ -308,7 +308,7 @@ def execute_feature_refresh(
 
 
 def _record_collection_update(collection_id: str, artifact_id: str) -> None:
-    """Persist ``collection.updated``, so a workflow step can run after org units change (CLIM-1378)."""
+    """Persist ``collection.updated``, so a workflow task can run after org units change (CLIM-1378)."""
     from open_climate_service.ingestions.processes import record_inline_update
     from open_climate_service.jobs.models import COLLECTION_UPDATED_EVENT_TYPE, JobEventDraft
 

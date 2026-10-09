@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,29 +111,23 @@ def test_store_creates_updates_pauses_and_deletes(instance: None) -> None:
 
 
 def test_store_refuses_an_unreadable_file(instance: None) -> None:
-    path = store.schedules_path()
-    path.parent.mkdir(parents=True)
-    path.write_text("not json", encoding="utf-8")
-    with pytest.raises(ScheduleStoreUnreadable, match="not valid JSON"):
-        store.list_schedules()
-    path.write_text(
-        '{"sync-chirps": {"id": "sync-era5", "kind": "sync", "target": "era5", "cron": "0 6 * * *"}}',
-        encoding="utf-8",
-    )
+    from open_climate_service.state import db
+
+    with db.write() as connection:
+        db.put_document(connection, "tasks", "sync-chirps", {"id": "sync-era5", "kind": "sync", "target": "era5"})
     with pytest.raises(ScheduleStoreUnreadable, match="has id"):
         store.get_schedule("chirps")
+    store.schedules_path().write_text("not a database", encoding="utf-8")
+    with pytest.raises(ScheduleStoreUnreadable, match="cannot be"):
+        store.list_schedules()
 
 
-def test_store_stamp_detects_equal_size_replacement_with_unchanged_mtime(instance: None) -> None:
-    path = store.schedules_path()
-    path.parent.mkdir(parents=True)
-    path.write_text("a", encoding="utf-8")
+def test_store_stamp_moves_with_every_write(instance: None) -> None:
+    assert store.store_stamp() is None
+    store.save_schedule(_stored("chirps"), create=True)
     first = store.store_stamp()
-    mtime_ns = path.stat().st_mtime_ns
-    path.write_text("b", encoding="utf-8")
-    os.utime(path, ns=(mtime_ns, mtime_ns))
-    assert path.stat().st_size == 1 and path.stat().st_mtime_ns == mtime_ns
-    assert store.store_stamp() != first
+    store.set_enabled("chirps", False)
+    assert first is not None and store.store_stamp() != first
 
 
 def test_legacy_yaml_is_rejected_at_runtime_with_recreation_instruction(
@@ -828,9 +821,9 @@ def test_a_process_without_the_clock_lists_what_another_process_saved(instance: 
 
 def test_an_unreadable_store_is_reported_and_writes_answer_503(client: TestClient) -> None:
     assert client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"}).status_code == 201
-    store.schedules_path().write_text("not json", encoding="utf-8")
+    store.schedules_path().write_text("not a database", encoding="utf-8")
     listed = client.get("/schedules").json()
-    assert listed["reload_error"] and "not valid JSON" in listed["reload_error"]
+    assert listed["reload_error"] and "cannot be" in listed["reload_error"]
     assert [item["dataset_id"] for item in listed["schedules"]] == ["era5"]
     created = client.post("/schedules/sync", json={"dataset_id": "chirps", "cron": "0 6 * * *"})
     assert created.status_code == 503 and "cannot be read" in created.text

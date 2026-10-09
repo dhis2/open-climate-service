@@ -453,7 +453,7 @@ def test_read_only_instance_validates_delivery_but_keeps_it_inactive(instance: d
     service.start()
 
     assert service._delivery_steps == {}
-    assert not automation_module._delivery_activation_path().exists()
+    assert automation_module._load_delivery_activations() == {}
     finished = utc_now()
     record = OpenEOJobRecord(
         id="read-only",
@@ -582,14 +582,14 @@ def test_cancel_arriving_while_the_result_is_saved_wins(
 @pytest.mark.parametrize(
     "content",
     [
-        b"\xff\xfe not utf-8",
-        b'{"rain-to-districts": {"export": "rain-monthly", "mode": "dry-run", "activated_at": "yesterday"}}',
+        "not a mapping",
+        {"export": "rain-monthly", "mode": "dry-run", "activated_at": "yesterday"},
     ],
 )
-def test_corrupt_boundary_is_restamped(instance: dict[str, Any], content: bytes) -> None:
-    path = automation_module._delivery_activation_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
+def test_corrupt_boundary_is_restamped(instance: dict[str, Any], content: Any) -> None:
+    from open_climate_service.state import db
+
+    db.save_activations("delivery", {_TRIGGER: content})
 
     _service(instance, TriggerDelivery(export=_EXPORT))
 

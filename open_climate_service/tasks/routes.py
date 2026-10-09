@@ -1,0 +1,235 @@
+"""The tasks API: list, create, change, pause, run and remove every kind of task (CLIM-1378).
+
+One resource for what used to be three: sync schedules, workflow triggers in
+``climate-service.yaml`` and their delivery blocks. A write is validated against the whole set
+of tasks under the store lock, then applied at once: the clock reloads, and automation picks up
+the change through the clock's reload listener. No restart.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException, Response
+from pydantic import BaseModel, ValidationError
+
+from open_climate_service import config as api_config
+from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult
+from open_climate_service.tasks import store
+from open_climate_service.tasks.models import Task
+from open_climate_service.tasks.store import TaskStoreUnreadable
+
+router = APIRouter()
+
+
+class TaskStatus(Task):
+    """A task with how it starts, in words, and its latest run on this process's clock."""
+
+    starts: str
+    next_run: datetime | None = None
+    last_run: datetime | None = None
+    last_outcome: CheckOutcome | None = None
+    last_message: str | None = None
+    last_job_id: str | None = None
+
+
+class TaskList(BaseModel):
+    """Every task, by id."""
+
+    tasks: list[TaskStatus]
+
+
+def _require_writable() -> None:
+    if api_config.is_read_only():
+        raise HTTPException(status_code=403, detail="This instance is read-only; tasks cannot be changed")
+
+
+def _validate_structure(tasks: list[Task]) -> None:
+    """Rules across tasks: one sync schedule per dataset, a deliver task after an existing workflow task."""
+    from open_climate_service.automation.config import compile_tasks
+    from open_climate_service.scheduler.store import _one_per_dataset
+
+    _one_per_dataset(tasks)
+    compile_tasks(tasks)
+
+
+def _validator(written: Task) -> Any:
+    """Check a write: the structure of all tasks, and everything the written task depends on.
+
+    Only the written task's own target is resolved, so a task whose dataset has since gone does
+    not block editing an unrelated one. Raises ValueError, naming the task.
+    """
+
+    def check(tasks: list[Task]) -> None:
+        from open_climate_service.automation.config import AutomationConfig, compile_tasks
+        from open_climate_service.automation.service import validate_automation
+        from open_climate_service.scheduler.service import resolve_schedule_template, validate_schedule_target
+
+        _validate_structure(tasks)
+        if written.kind == "sync":
+            validate_schedule_target(resolve_schedule_template(written.target), written.target)
+        elif written.kind == "refresh":
+            from open_climate_service.features.services import refreshable_feature_template_or_error
+
+            try:
+                refreshable_feature_template_or_error(written.target)
+            except HTTPException as exc:
+                raise ValueError(f"Refresh task {written.id!r}: {exc.detail}") from None
+        involved = {written.id}
+        if written.kind == "deliver" and written.after is not None and written.after.task is not None:
+            involved.add(written.after.task)
+        triggers = [trigger for trigger in compile_tasks(tasks).workflow_triggers if trigger.id in involved]
+        validate_automation(AutomationConfig(workflow_triggers=triggers))
+
+    return check
+
+
+def _apply() -> None:
+    """Make the clock and automation run what the store now holds."""
+    from open_climate_service.scheduler.service import get_scheduler_service
+
+    get_scheduler_service().reload()
+
+
+def _status(task: Task) -> TaskStatus:
+    from open_climate_service.scheduler.service import get_scheduler_service
+
+    scheduler = get_scheduler_service()
+    next_run: Any = None
+    result: CheckResult | None = None
+    if task.kind == "sync":
+        sync = scheduler.schedule_for(task.target)
+        if sync is not None:
+            next_run, last = sync.next_check, sync
+            return TaskStatus(
+                **task.model_dump(),
+                starts=task.when,
+                next_run=next_run,
+                last_run=last.last_check,
+                last_outcome=last.last_outcome,
+                last_message=last.last_message,
+                last_job_id=last.last_job_id,
+            )
+    else:
+        next_run, result = scheduler.task_status(task.id)
+    return TaskStatus(
+        **task.model_dump(),
+        starts=task.when,
+        next_run=next_run,
+        last_run=result.checked_at if result else None,
+        last_outcome=result.outcome if result else None,
+        last_message=result.message if result else None,
+        last_job_id=result.job_id if result else None,
+    )
+
+
+def _get_or_404(task_id: str) -> Task:
+    try:
+        task = store.get_task(task_id)
+    except TaskStoreUnreadable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"No task with id '{task_id}'")
+    return task
+
+
+def _write(action: Any) -> Any:
+    try:
+        return action()
+    except TaskStoreUnreadable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("", response_model=TaskList)
+def list_tasks() -> TaskList:
+    """Every task, with how it starts and its latest run."""
+    try:
+        tasks = store.list_tasks()
+    except TaskStoreUnreadable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return TaskList(tasks=[_status(task) for task in tasks])
+
+
+@router.post("", response_model=TaskStatus, status_code=201)
+def create_task(body: dict[str, Any]) -> TaskStatus:
+    """Save a new task and start running it."""
+    _require_writable()
+    try:
+        task = Task.model_validate(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    saved = _write(lambda: store.save_task(task, create=True, check=_validator(task)))
+    _apply()
+    return _status(saved)
+
+
+@router.get("/{task_id}", response_model=TaskStatus)
+def get_task(task_id: str) -> TaskStatus:
+    """One task, with how it starts and its latest run."""
+    return _status(_get_or_404(task_id))
+
+
+@router.put("/{task_id}", response_model=TaskStatus)
+def update_task(task_id: str, body: dict[str, Any]) -> TaskStatus:
+    """Replace a task. Fields left out keep their stored value; the id cannot change."""
+    _require_writable()
+    existing = _get_or_404(task_id)
+    merged = {**existing.model_dump(), **body, "id": task_id}
+    try:
+        task = Task.model_validate(merged)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    saved = _write(lambda: store.save_task(task, create=False, check=_validator(task)))
+    _apply()
+    return _status(saved)
+
+
+@router.post("/{task_id}/pause", response_model=TaskStatus)
+def pause_task(task_id: str) -> TaskStatus:
+    """Stop a task from running without removing it."""
+    _require_writable()
+    _get_or_404(task_id)
+    saved = _write(lambda: store.set_enabled(task_id, False))
+    _apply()
+    return _status(saved)
+
+
+@router.post("/{task_id}/resume", response_model=TaskStatus)
+def resume_task(task_id: str) -> TaskStatus:
+    """Let a paused task run again."""
+    _require_writable()
+    _get_or_404(task_id)
+    saved = _write(lambda: store.set_enabled(task_id, True))
+    _apply()
+    return _status(saved)
+
+
+@router.post("/{task_id}/run", response_model=CheckResult, status_code=202)
+def run_task(task_id: str) -> CheckResult:
+    """Run a task now, by hand. A deliver task runs after its workflow task and cannot be run alone."""
+    _require_writable()
+    from open_climate_service.scheduler.service import get_scheduler_service
+
+    task = _get_or_404(task_id)
+    if task.kind == "deliver":
+        raise HTTPException(status_code=409, detail="A deliver task runs after its workflow task; run that instead")
+    if not task.enabled:
+        raise HTTPException(status_code=409, detail=f"Task '{task_id}' is paused")
+    result = get_scheduler_service().run_task_now(task, cause=f"manual:{uuid4()}")
+    if result.outcome == CheckOutcome.ERROR:
+        raise HTTPException(status_code=409, detail=result.message)
+    return result
+
+
+@router.delete("/{task_id}", status_code=204)
+def delete_task(task_id: str) -> Response:
+    """Remove a task. A workflow task that a deliver task follows cannot be removed first."""
+    _require_writable()
+    _get_or_404(task_id)
+    _write(lambda: store.delete_task(task_id, check=_validate_structure))
+    _apply()
+    return Response(status_code=204)
