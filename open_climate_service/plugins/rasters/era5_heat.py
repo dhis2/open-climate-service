@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -42,6 +41,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
         self.variable = variable
         self._cached_ds: xr.Dataset | None = None
         self._cached_cutoff: datetime | None = None
+        self._time_chunk_size: int | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         # NOTE: Does not take into account local UTC offset hour which may include the previous or next day
@@ -85,6 +85,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
         if self._cached_ds is None:
             # Get data
             ds = _open_cds_zarr(_CDS_ZARR_URL)
+            self._time_chunk_size = ds[self.variable].encoding["chunks"][0]
 
             # Add crs needed later
             ds = ds.rio.write_crs("EPSG:4326")
@@ -115,6 +116,8 @@ class ERA5HeatZarrDailyFromHourlyPlugin(ERA5HeatZarrHourlyPlugin):
     def __init__(self, temporal_aggregation: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._temporal_aggregation = temporal_aggregation
+        self._cached_block_start: int | None = None
+        self._cached_block: xr.Dataset | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         cutoff = super()._fetch_cutoff()
@@ -123,22 +126,24 @@ class ERA5HeatZarrDailyFromHourlyPlugin(ERA5HeatZarrHourlyPlugin):
         return periods
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
-        """Fetches xarray dataset for a single day snapshot, aggregated from relevant hourly snapshots.
+        """Fetch a day by reusing the loaded source time chunk."""
+        ds = self._fetch_ds(bbox)
+        day_start = np.datetime64(period_id, "D").astype("datetime64[ns]")
+        day_index = int(np.searchsorted(ds.t.values, day_start))
+        assert self._time_chunk_size is not None
+        chunk_size = self._time_chunk_size
+        block_start = day_index // chunk_size * chunk_size
+        day_end = day_index - block_start + 24
 
-        Downloads or reuses cache of relevant monthly CDS NetCDF file.
-        """
-        # get hourly periods for the day
-        hour_periods = asyncio.run(super().periods(start=period_id, end=period_id))
+        if self._cached_block_start != block_start or (
+            self._cached_block is not None and self._cached_block.sizes["t"] < day_end
+        ):
+            block_end = block_start + ((day_end + chunk_size - 1) // chunk_size) * chunk_size
+            self._cached_block = ds.isel(t=slice(block_start, block_end)).load()
+            self._cached_block_start = block_start
 
-        # load each hour dataset and merge
-        # NOTE: this is probably not very efficient but should reuse code and produce correct results
-        hourly_ds = xr.concat(
-            [super().fetch_period(period_id=hour_period, bbox=bbox) for hour_period in hour_periods],
-            dim="t",
-        )
-
-        # load into memory for efficiency
-        hourly_ds = hourly_ds.load()
+        assert self._cached_block is not None
+        hourly_ds = self._cached_block.isel(t=slice(day_index - block_start, day_index - block_start + 24))
 
         # aggregate to daily
         daily_ds = daily_reduce(

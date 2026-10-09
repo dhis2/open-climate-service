@@ -4,6 +4,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+import numpy as np
 import pytest
 import xarray as xr
 
@@ -65,6 +66,39 @@ def test_daily_periods(monkeypatch: pytest.MonkeyPatch):
     days = asyncio.run(plugin.periods(start, end))
     assert days[0] == start
     assert days[-1] < end
+
+
+def test_daily_fetch_reuses_loaded_time_chunk():
+    plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
+    times = np.arange("2020-01-01", "2020-01-03", dtype="datetime64[h]").astype("datetime64[ns]")
+    values = np.arange(48, dtype=float).reshape(48, 1, 1)
+    plugin._cached_ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
+    plugin._time_chunk_size = 48
+
+    first_day = plugin.fetch_period("2020-01-01", _TEST_BBOX)
+    cached_block = plugin._cached_block
+    second_day = plugin.fetch_period("2020-01-02", _TEST_BBOX)
+
+    assert plugin._cached_block is cached_block
+    assert first_day.utci.item() == pytest.approx(11.5)
+    assert second_day.utci.item() == pytest.approx(35.5)
+
+
+def test_daily_fetch_loads_next_chunk_when_day_crosses_boundary():
+    plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
+    times = np.arange("2020-01-01", "2020-01-04", dtype="datetime64[h]").astype("datetime64[ns]")
+    values = np.arange(72, dtype=float).reshape(72, 1, 1)
+    plugin._cached_ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
+    plugin._time_chunk_size = 30
+
+    plugin.fetch_period("2020-01-01", _TEST_BBOX)
+    assert plugin._cached_block is not None
+    assert plugin._cached_block.sizes["t"] == 30
+
+    second_day = plugin.fetch_period("2020-01-02", _TEST_BBOX)
+
+    assert plugin._cached_block.sizes["t"] == 60
+    assert second_day.utci.item() == pytest.approx(35.5)
 
 
 # Functional integrations tests
