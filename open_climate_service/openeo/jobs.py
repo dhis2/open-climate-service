@@ -69,9 +69,9 @@ from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.vectors import (
     FEATURE_ID_COORD,
+    dimension_holds_shapes,
     encode_vector_cube,
     feature_id_field,
-    holds_shapes,
     vector_dim,
 )
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
@@ -1930,7 +1930,7 @@ def _write_xarray(ds: Any, results_dir: Any, fmt: str) -> str | None:
         # and keeps each feature's id.
         if _RASTER_FORMATS.get(fmt, ("",))[0] in (".zarr", ".nc"):
             ds = encode_vector_cube(ds)
-        elif holds_shapes(ds, geom_dim):
+        elif dimension_holds_shapes(ds, geom_dim):
             ds = ds.drop_vars(geom_dim)
             if FEATURE_ID_COORD in ds.coords:
                 shapeless_dim = geom_dim

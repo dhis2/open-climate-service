@@ -418,3 +418,21 @@ def test_a_vector_cube_does_not_merge_with_a_raster() -> None:
     merge_cubes = execution._build_process_registry()["merge_cubes"].implementation
     with pytest.raises(ValueError, match="only be merged with another vector cube"):
         merge_cubes(cube1=aggregate_spatial_weighted(_grid(), _districts(), "mean"), cube2=_grid().t2m)
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (gpd.GeoSeries([box(0, 0, 1, 1), box(1, 1, 2, 2)]), True),  # a geometry column, by its dtype
+        (pd.Series([None, box(0, 0, 1, 1)], dtype=object), True),  # a null first feature does not decide it
+        (pd.Series([box(0, 0, 1, 1), box(1, 1, 2, 2)], dtype=object), True),  # shapes flattened from xarray
+        (pd.Series(["MW.N", "MW.S"], dtype=object), False),
+        (pd.Series([1.0, 2.0]), False),
+        (pd.Series([None, None], dtype=object), False),
+        (np.array([box(0, 0, 1, 1)], dtype=object), True),  # a coordinate's values
+    ],
+)
+def test_holds_shapes_reads_the_dtype_or_the_first_value_that_is_not_null(values: Any, expected: bool) -> None:
+    from open_climate_service.shared.vectors import holds_shapes
+
+    assert holds_shapes(values) is expected

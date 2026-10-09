@@ -98,7 +98,7 @@ def _frame_from_vector_cube(cube: xr.Dataset | xr.DataArray) -> gpd.GeoDataFrame
     """The features of an xvec cube: the shapes on its geometry dimension, ids beside them."""
     for name in cube.dims:
         values = cube[name].values
-        if len(values) and all(hasattr(value, "geom_type") for value in values):
+        if holds_shapes(values):
             index = cube.xindexes.get(name)
             if FEATURE_ID_COORD in cube.coords and cube[FEATURE_ID_COORD].dims == (name,):
                 ids = [str(value) for value in cube[FEATURE_ID_COORD].values]
@@ -132,24 +132,19 @@ def feature_id_field(frame: Any, requested: str) -> str:
     taken as given.
     """
     columns = {str(column) for column in frame.columns}
-    if FEATURE_ID_COORD in columns and (requested == GEOMETRY_FIELD or _column_holds_shapes(frame, requested)):
+    if FEATURE_ID_COORD in columns and (
+        requested == GEOMETRY_FIELD or (requested in frame.columns and holds_shapes(frame[requested]))
+    ):
         return FEATURE_ID_COORD
     field = requested
     if requested == FEATURE_ID_COORD and FEATURE_ID_COORD not in columns and GEOMETRY_FIELD in columns:
         field = GEOMETRY_FIELD
-    if _column_holds_shapes(frame, field):
+    if field in frame.columns and holds_shapes(frame[field]):
         raise ValueError(
             f"'{field}' holds geometries, not feature ids, and the result carries no `{FEATURE_ID_COORD}`; "
             "give each feature an id (a GeoJSON Feature `id`) so the export can key on it"
         )
     return field
-
-
-def _column_holds_shapes(frame: Any, column: str) -> bool:
-    if column not in frame.columns:
-        return False
-    values = frame[column]
-    return bool(len(values)) and all(hasattr(value, "geom_type") for value in values)
 
 
 def single_raster(data: Any) -> xr.DataArray:
@@ -230,17 +225,37 @@ def vector_dim(cube: Any) -> str | None:
         if type(indexes.get(name)).__name__ == "GeometryIndex":
             return str(name)
     for name in dims:
-        if holds_shapes(cube, str(name)):
+        if dimension_holds_shapes(cube, str(name)):
             return str(name)
     return GEOMETRY_FIELD if GEOMETRY_FIELD in dims else None
 
 
-def holds_shapes(cube: Any, dim: str) -> bool:
-    """Whether *dim*'s labels are all geometries, as on an xvec cube."""
-    if dim not in getattr(cube, "coords", {}):
+def holds_shapes(values: Any) -> bool:
+    """Whether *values* (a column, a coordinate's values) are geometries.
+
+    A GeoPandas geometry column says so in its dtype. Shapes flattened out of an xarray cube sit in
+    a plain object column instead, so those are judged by their first value that is not null: a
+    column is one kind throughout, and a flattened cube repeats each shape once per time step, so
+    scanning every row would cost millions of checks for one answer. A null first value (a feature
+    with no geometry) does not decide it.
+    """
+    from geopandas.array import GeometryDtype
+
+    dtype = getattr(values, "dtype", None)
+    if isinstance(dtype, GeometryDtype):
+        return True
+    if dtype is not None and dtype.kind != "O":
         return False
-    values = cube[dim].values
-    return bool(len(values)) and all(hasattr(value, "geom_type") for value in values)
+    for value in values:
+        if value is None or (isinstance(value, float) and value != value):  # None or NaN
+            continue
+        return hasattr(value, "geom_type")
+    return False
+
+
+def dimension_holds_shapes(cube: Any, dim: str) -> bool:
+    """Whether *dim*'s labels are geometries, as on an xvec cube."""
+    return dim in getattr(cube, "coords", {}) and holds_shapes(cube[dim].values)
 
 
 def encode_vector_cube(ds: xr.Dataset) -> xr.Dataset:
@@ -270,7 +285,7 @@ def labelled_by_feature_id(cube: Any) -> tuple[Any, gpd.GeoSeries | None]:
     import geopandas as gpd
 
     dim = vector_dim(cube)
-    if dim is None or not holds_shapes(cube, dim) or FEATURE_ID_COORD not in cube.coords:
+    if dim is None or not dimension_holds_shapes(cube, dim) or FEATURE_ID_COORD not in cube.coords:
         return cube, None
     ids = [str(value) for value in cube[FEATURE_ID_COORD].values]
     crs = getattr(cube.xindexes.get(dim), "crs", None)
