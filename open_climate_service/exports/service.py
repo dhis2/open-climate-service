@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-from open_climate_service import config
 from open_climate_service.exports.base import BaseExportPlugin, RenderedExport
 from open_climate_service.exports.registry import load_export_plugins
 
@@ -29,8 +28,10 @@ class ResolvedExport:
 
 
 def _configured_export_definitions() -> dict[str, dict[str, Any]]:
-    """Validate configured export definitions and index them by ID."""
-    definitions = config.get_config().get("exports", [])
+    """Validate the stored export definitions and index them by ID (CLIM-1089)."""
+    from open_climate_service.exports import store
+
+    definitions = store.list_definitions()
     if not isinstance(definitions, list):
         raise ValueError("exports must be a list of named mappings")
     by_id: dict[str, dict[str, Any]] = {}
@@ -54,8 +55,13 @@ def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
     by_id = _configured_export_definitions()
     if export_id not in by_id:
         raise ValueError(f"Unknown export '{export_id}'")
-    definition = deepcopy(by_id[export_id])
-    definition.pop("id")
+    return _resolve_definition(export_id, by_id[export_id], fmt)
+
+
+def _resolve_definition(export_id: str, stored: dict[str, Any], fmt: str) -> ResolvedExport:
+    """Validate one definition through its plugin and bind its references."""
+    definition = deepcopy(stored)
+    definition.pop("id", None)
     plugin_id = definition.pop("plugin", None)
     if not isinstance(plugin_id, str):
         raise ValueError("Export definition requires a plugin ID")
@@ -521,3 +527,31 @@ def read_export_metadata(path: Path) -> dict[str, Any] | None:
     if metadata["filename"] != path.name:
         return None
     return metadata
+
+
+def resolve_definition(definition: dict[str, Any]) -> ResolvedExport:
+    """Validate one definition as it would be saved, without storing it.
+
+    Used by the export API before a write: the same checks a stored definition passes when a
+    workflow or a delivery resolves it, so what is saved is what will run.
+    """
+    identifier = definition.get("id")
+    if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", identifier):
+        raise ValueError("An export requires an ID containing letters, digits, underscores, or hyphens")
+    plugin_id = definition.get("plugin")
+    plugin = load_export_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
+    if plugin is None:
+        raise ValueError(f"Export '{identifier}' names an unknown plugin {plugin_id!r}")
+    return _resolve_definition(identifier, definition, plugin.format)
+
+
+def resolve_export_by_id(export_id: str) -> ResolvedExport:
+    """Resolve a stored export in its own plugin's format, whatever that plugin is."""
+    definition = _configured_export_definitions().get(export_id)
+    if definition is None:
+        raise ValueError(f"Unknown export '{export_id}'")
+    plugin_id = definition.get("plugin")
+    plugin = load_export_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
+    if plugin is None:
+        raise ValueError(f"Export '{export_id}' names an unknown plugin {plugin_id!r}")
+    return resolve_named_export(plugin.format, {"export": export_id})

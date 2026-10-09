@@ -197,14 +197,17 @@ def _set_delivery_error(job_id: str, export_id: str, message: str | None) -> Non
 
 
 def _validate_deliveries(config: AutomationConfig) -> None:
-    """Refuse a delivery step that could only fail per job, naming its trigger."""
-    from open_climate_service.exports.dhis2 import get_connection_config
-    from open_climate_service.exports.service import resolve_named_export
+    """Refuse a delivery that could only fail per job, naming its task.
+
+    The export is resolved in its own plugin's format and the plugin decides what its deliveries
+    need (CLIM-1289): no plugin id or format is named here.
+    """
+    from open_climate_service.exports.service import resolve_export_by_id
 
     deliveries = [(trigger, trigger.deliver) for trigger in config.workflow_triggers if trigger.deliver is not None]
     for trigger, delivery in deliveries:
         export_id = delivery.export
-        prefix = f"Workflow trigger {trigger.id!r} delivers export {export_id!r}"
+        prefix = f"Workflow task {trigger.id!r} delivers export {export_id!r}"
         workflow_export = trigger.arguments.get("export")
         if isinstance(workflow_export, str) and workflow_export != export_id:
             raise ValueError(
@@ -212,20 +215,13 @@ def _validate_deliveries(config: AutomationConfig) -> None:
                 "the workflow and delivery must use the same named export"
             )
         try:
-            resolved = resolve_named_export("DHIS2JSON", {"export": export_id})
+            resolved = resolve_export_by_id(export_id)
         except ValueError as exc:
             raise ValueError(f"{prefix}, which is invalid: {exc}") from None
-        if resolved.plugin.id != "dhis2":
-            raise ValueError(f"{prefix}, whose plugin is {resolved.plugin.id!r}; only dhis2 exports deliver")
-        connection = resolved.references.get("connection")
-        if connection is None:
-            raise ValueError(f"{prefix}, which has no DHIS2 connection")
         try:
-            get_connection_config(connection)
-        except ValueError:
-            raise ValueError(
-                f"{prefix}, whose connection {connection!r} is not configured under dhis2_connections"
-            ) from None
+            resolved.plugin.check_delivery_target(resolved.references)
+        except ValueError as exc:
+            raise ValueError(f"{prefix}, {exc}") from None
 
 
 def _load_activations() -> dict[str, str]:

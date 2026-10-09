@@ -432,7 +432,7 @@ def test_invalid_delivery_is_rejected_at_startup_naming_the_trigger(
     )
     with pytest.raises(ValueError, match=message) as error:
         service.start()
-    assert f"Workflow trigger '{_TRIGGER}' delivers export '{_EXPORT}'" in str(error.value)
+    assert f"Workflow task '{_TRIGGER}' delivers export '{_EXPORT}'" in str(error.value)
 
 
 def test_workflow_and_delivery_exports_must_match(instance: dict[str, Any]) -> None:

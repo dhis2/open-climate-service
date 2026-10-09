@@ -65,6 +65,27 @@ def _own_operational_database(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 @pytest.fixture(autouse=True)
+def _exports_declared_in_the_config_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read named exports from the config cache when a test declares them there.
+
+    Exports live in the operational database (CLIM-1378), and ``climate-service.yaml`` refuses an
+    ``exports`` block. Many tests predate that and declare, then mutate, exports in the config
+    cache; for those, this reads the cache. A test that does not put exports there uses the store.
+    """
+    from open_climate_service.exports import store
+
+    stored = store.list_definitions
+
+    def definitions() -> list[dict[str, object]]:
+        cache = api_config._cache
+        if isinstance(cache, dict) and "exports" in cache:
+            return cache["exports"]  # type: ignore[no-any-return]
+        return stored()
+
+    monkeypatch.setattr(store, "list_definitions", definitions)
+
+
+@pytest.fixture(autouse=True)
 def _unset_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Serve tests from the request's own origin, whatever the developer's environment says.
 

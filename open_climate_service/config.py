@@ -68,9 +68,11 @@ def _load_config() -> dict[str, Any]:
 
         parse_connections(loaded["dhis2_connections"])
     if loaded is not None and "exports" in loaded:
-        from open_climate_service.exports.manifest import validate_public_mapping
-
-        validate_public_mapping(loaded["exports"])
+        raise ValueError(
+            "exports in climate-service.yaml is no longer supported; named exports are managed through "
+            "/exports and kept in the operational database (CLIM-1378). Connections stay here, under "
+            "dhis2_connections"
+        )
     _cache = dict(loaded or {})
     return _cache
 

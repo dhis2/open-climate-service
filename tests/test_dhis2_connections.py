@@ -124,9 +124,10 @@ def test_legacy_yaml_fragment_interpolation_without_connections(connection_file:
     assert config.get_config()["extent"]["bbox"] == [-13.5, 6.9, -10.1, 10.0]
 
 
-def test_exports_can_be_added_to_config_with_yaml_fragment_interpolation(
+def test_exports_in_the_config_file_are_refused_and_connections_stay(
     connection_file: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """CLIM-1378: exports are managed through /exports; the file keeps connections only."""
     monkeypatch.setenv("WEST", "-13.5")
     connection_file.write_text(
         "extent:\n"
@@ -142,9 +143,8 @@ def test_exports_can_be_added_to_config_with_yaml_fragment_interpolation(
         "    url: https://hmis.example.org/dhis\n"
         "    token_env: TEST_DHIS2_TOKEN\n"
     )
-    loaded = config.get_config()
-    assert loaded["extent"]["bbox"] == [-13.5, 6.9, -10.1, 10.0]
-    assert loaded["exports"][0]["id"] == "rainfall"
+    with pytest.raises(ValueError, match="exports in climate-service.yaml is no longer supported"):
+        config.get_config()
 
 
 @pytest.mark.parametrize("block", ["exports", "dhis2_connections"])

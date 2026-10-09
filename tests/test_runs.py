@@ -87,3 +87,36 @@ def test_the_last_run_survives_a_restart(client: TestClient) -> None:  # noqa: F
 def test_native_jobs_can_be_listed(client: TestClient) -> None:  # noqa: F811
     response = client.get("/ingestions/jobs")
     assert response.status_code == 200 and "jobs" in response.json()
+
+
+# --- exports in the store (CLIM-1089, CLIM-1289) -------------------------------------------------------
+
+
+def test_exports_are_saved_live_and_checked_by_their_plugin(
+    client: TestClient,  # noqa: F811
+    monkeypatch: Any,
+) -> None:
+    from open_climate_service import config as api_config
+
+    monkeypatch.setattr(
+        api_config,
+        "_cache",
+        {"dhis2_connections": [{"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "T"}]},
+    )
+    definition = {
+        "plugin": "dhis2",
+        "connection": "hmis",
+        "period_type": "monthly",
+        "series": [{"select": {}, "data_element": "BXgDHhPdFVU"}],
+    }
+    assert client.put("/exports/rain-monthly", json=definition).status_code == 200
+    assert [item["id"] for item in client.get("/exports").json()["exports"]] == ["rain-monthly"]
+
+    unknown = client.put("/exports/other", json={**definition, "connection": "nowhere"})
+    assert unknown.status_code == 409 and "not configured under dhis2_connections" in unknown.json()["detail"]
+
+    bad_mapping = client.put("/exports/bad", json={**definition, "series": []})
+    assert bad_mapping.status_code == 409
+
+    assert client.delete("/exports/rain-monthly").status_code == 204
+    assert client.get("/exports").json()["exports"] == []

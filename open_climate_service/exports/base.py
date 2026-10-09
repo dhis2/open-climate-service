@@ -93,3 +93,14 @@ class BaseExportPlugin(ABC):
         silently treated as a no-op delivery.
         """
         raise NotImplementedError(f"Export plugin '{self.id}' does not support delivery")
+
+    def check_delivery_target(self, references: dict[str, str]) -> None:
+        """Refuse, with a ValueError naming why, a delivery this plugin could only fail at.
+
+        Called when an export that delivers, or a deliver task, is saved, so a missing connection
+        or a target the plugin cannot reach is refused then, not on the first night it runs
+        (CLIM-1289). The core names no plugin: each one says what its own deliveries need. The
+        default refuses a plugin that does not deliver at all.
+        """
+        if not self.supports_delivery:
+            raise ValueError(f"export plugin '{self.id}' renders files only and does not deliver")

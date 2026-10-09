@@ -37,6 +37,8 @@ _MUTATING_ROUTES = [
     ("POST", "/schedules/sync/{dataset_id}/resume"),
     ("DELETE", "/schedules/sync/{dataset_id}"),
     ("POST", "/schedules/sync/{dataset_id}/delete"),
+    ("PUT", "/exports/{export_id}"),
+    ("DELETE", "/exports/{export_id}"),
     ("POST", "/tasks"),
     ("PUT", "/tasks/{task_id}"),
     ("POST", "/tasks/{task_id}/pause"),

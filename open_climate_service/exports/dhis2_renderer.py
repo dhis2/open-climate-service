@@ -46,6 +46,19 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     media_type = "application/json"
     version = "1"
     supports_delivery = True
+
+    def check_delivery_target(self, references: dict[str, str]) -> None:
+        """A DHIS2 delivery needs a named connection configured under ``dhis2_connections``."""
+        from open_climate_service.exports.dhis2 import get_connection_config
+
+        connection = references.get("connection")
+        if connection is None:
+            raise ValueError("which has no DHIS2 connection")
+        try:
+            get_connection_config(connection)
+        except ValueError:
+            raise ValueError(f"whose connection {connection!r} is not configured under dhis2_connections") from None
+
     # Upper bound for one dataValueSets POST; larger payloads are split into
     # deterministic chunks. Tune against the supported DHIS2 versions.
     max_chunk_size: int = 1000
