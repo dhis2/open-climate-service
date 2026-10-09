@@ -97,6 +97,11 @@ plugin import surface), alongside `BaseDatasetPlugin`.
   `time`/`valid_time` → `t`), clips to `bbox` (reprojecting the bbox from `bbox_crs` — WGS84
   by default — onto the source CRS, so a projected/UTM grid clips correctly), drops a
   singleton `band`, masks the nodata sentinel, and stamps the period onto the time axis.
+- **`bbox_slices(obj, bbox, *, x_dim, y_dim)`** — label slices covering every cell the
+  bbox touches, for a plugin that selects from a remote store itself rather than reading it
+  whole. A plain `slice(xmin, xmax)` selects on cell centres and drops the cells straddling
+  each edge. `bbox_slice` does one axis, and `cell_pad` returns the half cell they pad by,
+  derived from the grid.
 - **`daily_period_ids(start, end)`** — enumerate the inclusive ISO day strings for a daily
   `periods()` implementation; apply your own availability clamp around it (accepts ISO
   strings or `date` objects, returns `[]` when `start > end`).

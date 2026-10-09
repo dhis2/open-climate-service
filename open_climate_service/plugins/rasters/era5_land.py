@@ -29,7 +29,7 @@ from open_climate_service.shared.time import (
     datetime_to_period_string,
     parse_period_string_to_datetime,
 )
-from open_climate_service.streaming import BaseDatasetPlugin, monthly_period_ids
+from open_climate_service.streaming import BaseDatasetPlugin, cell_pad, monthly_period_ids
 from open_climate_service.transforms.climatology import circular_rolling_mean
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
 
@@ -44,9 +44,10 @@ _CDS_VARIABLE_NAMES: dict[str, str] = {
 # The grid (0.1° resolution, EPSG:4326, float32) is inferred by the orchestrator
 # from the first fetched period.
 
-# Half a grid step. Earth Data Hub selections and the CDS requests that fill in the
-# days Earth Data Hub has not published yet both widen the bbox by this much, so
-# they cover the same grid points and a dataset's two sources agree on its shape.
+# Half a grid step of ERA5-Land's 0.1 degree grid. Earth Data Hub selections widen the
+# bbox by half a step (cell_pad, from the grid itself), and the CDS requests that fill in
+# the days Earth Data Hub has not published yet widen it by this much, so they cover the
+# same grid points and a dataset's two sources agree on its shape.
 _HALF_GRID_STEP = 0.05
 
 
@@ -626,18 +627,21 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
             self._close_cached_locked()
             xmin, ymin, xmax, ymax = bbox_tuple
             ds = _edh_open_zarr(self._edh_url)
-            # Extend bbox by half a grid step to avoid floating-point boundary
-            # exclusion (e.g. 360 - 10.1 = 349.8999... misses the 349.9 grid point).
-            # The CDS fallback requests pad the same way (_cds_fallback_area), so
-            # both sources return the same spatial grid.
-            _eps = _HALF_GRID_STEP
+            # Extend the bbox by half a grid step, derived from the axis rather than assumed.
+            # This does two jobs: it keeps the cells straddling each bbox edge, which a plain
+            # label slice drops because it selects on cell centres, and it avoids
+            # floating-point boundary exclusion (e.g. 360 - 10.1 = 349.8999... misses the
+            # 349.9 grid point). The CDS fallback requests pad by the same half step
+            # (_cds_fallback_area), so both sources return the same spatial grid.
+            lat_pad = cell_pad(ds["latitude"])
+            lon_pad = cell_pad(ds["longitude"])
             if self._edh_lon_360:
-                xmin_sel = (xmin % 360) - _eps
-                xmax_sel = (xmax % 360) + _eps
+                xmin_sel = (xmin % 360) - lon_pad
+                xmax_sel = (xmax % 360) + lon_pad
             else:
-                xmin_sel, xmax_sel = xmin - _eps, xmax + _eps
+                xmin_sel, xmax_sel = xmin - lon_pad, xmax + lon_pad
             self._cached_region = ds[[self.variable]].sel(
-                latitude=slice(ymax + _eps, ymin - _eps),
+                latitude=slice(ymax + lat_pad, ymin - lat_pad),
                 longitude=slice(xmin_sel, xmax_sel),
             )
             self._cached_bbox = bbox_tuple
@@ -1127,12 +1131,16 @@ class ERA5LandNormalsPlugin(BaseDatasetPlugin):
     def _load_reference(self, bbox: list[float]) -> xr.Dataset:
         """Load the reference-period ERA5-Land data from EDH as a (valid_time, y, x) dataset."""
         start_year, end_year = self.period
-        eps = 0.05
         xmin, ymin, xmax, ymax = map(float, bbox)
         ds = _edh_open_zarr(_EDH_DAILY_URL)
         try:
+            # Half a grid step, derived from the axis: label selection is on cell centres, so
+            # without it the cells straddling each bbox edge are dropped and the reference
+            # period covers less than the requested extent.
+            eps = cell_pad(ds["longitude"])
+            lat_pad = cell_pad(ds["latitude"])
             base = ds[[self.edh_variable]].sel(
-                latitude=slice(ymax + eps, ymin - eps),
+                latitude=slice(ymax + lat_pad, ymin - lat_pad),
                 valid_time=slice(f"{start_year}-01-01", f"{end_year}-12-31"),
             )
             # EDH stores longitude in [0, 360). Map the WGS84 (-180/180) bbox onto it.
