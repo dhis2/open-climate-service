@@ -191,7 +191,9 @@ dhis2_connections:
     token_env: DHIS2_IMPORT_TOKEN
 ```
 
-**2. Declare a template** in `plugins/vectors/`, for example `plugins/vectors/districts.yaml`:
+**2. Declare a template** in the `vectors/` folder of your `plugins_dir`. Templates there are
+read only when `plugins_dir` is set in `climate-service.yaml`, for example `plugins_dir: ./plugins`;
+then add `plugins/vectors/districts.yaml`:
 
 ```yaml
 - id: districts

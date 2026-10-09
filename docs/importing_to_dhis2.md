@@ -118,7 +118,7 @@ For reusable destination mappings and pure rendering through `save_result`, see
 Pull the org unit boundaries as GeoJSON. Each feature's `id` is the org unit UID, which the workflow uses as the `orgUnit`.
 
 !!! tip
-    On a running instance, let OCS fetch and store them instead, with the built-in `dhis2` feature provider: see [DHIS2 organisation units](built_in_datasets.md#dhis2-organisation-units-feature-collection). Workflows then refer to them by id rather than carrying the GeoJSON.
+    On a running instance, let OCS fetch and store them instead, with the built-in `dhis2` feature provider: see [DHIS2 organisation units](built_in_datasets.md#dhis2-organisation-units-feature-collection). A workflow then takes them as a `load_collection` node passed as `geometries`, or, in a workflow trigger's arguments, as `{from_features: districts}`. The collection id on its own is not geometry, so it cannot replace `org_units` in the example below.
 
 ```python
 from dhis2_client import DHIS2Client
