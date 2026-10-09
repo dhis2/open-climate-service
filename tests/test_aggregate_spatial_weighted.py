@@ -298,26 +298,26 @@ def _series(steps: int = 6) -> xr.DataArray:
     return da.rio.write_crs("EPSG:4326").chunk({"t": 2})
 
 
-def test_a_long_series_is_read_in_blocks_and_gives_the_same_result(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_long_series_is_read_in_chunks_and_gives_the_same_result(monkeypatch: pytest.MonkeyPatch) -> None:
     from open_climate_service.plugins.processes import aggregate_spatial_weighted as module
 
     geom = _box(0.0, 0.0, 2.0, 2.0)
     whole = aggregate_spatial_weighted(_series(), geom, "mean")
-    # One day is 128 bytes; a 300-byte bound reads two days at a time, one chunk per block.
-    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 300)
-    assert module._blocks(_series())[1] == [slice(0, 2), slice(2, 4), slice(4, 6)]
+    # One day is 128 bytes; a 300-byte bound reads two days at a time, one store chunk per read.
+    monkeypatch.setattr(module, "READ_CHUNK_BYTES", 300)
+    assert module._read_chunks(_series())[1] == [slice(0, 2), slice(2, 4), slice(4, 6)]
 
-    blocked = aggregate_spatial_weighted(_series(), geom, "mean")
-    assert blocked.sizes["t"] == 6
-    assert blocked.isel(geometry=0).values.tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-    xr.testing.assert_identical(blocked, whole)
+    chunked = aggregate_spatial_weighted(_series(), geom, "mean")
+    assert chunked.sizes["t"] == 6
+    assert chunked.isel(geometry=0).values.tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    xr.testing.assert_identical(chunked, whole)
 
 
-def test_blocks_group_chunks_and_split_one_that_is_too_large(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_chunks_group_store_chunks_and_split_one_that_is_too_large(monkeypatch: pytest.MonkeyPatch) -> None:
     from open_climate_service.plugins.processes import aggregate_spatial_weighted as module
 
     # A day is 128 bytes, so 700 bytes holds five days.
-    monkeypatch.setattr(module, "READ_BLOCK_BYTES", 700)
-    assert module._blocks(_series(12).chunk({"t": 2}))[1] == [slice(0, 4), slice(4, 8), slice(8, 12)]
-    assert module._blocks(_series(12).chunk({"t": 12}))[1] == [slice(0, 5), slice(5, 10), slice(10, 12)]
-    assert module._blocks(_series().isel(t=0))[1] == [slice(None)]
+    monkeypatch.setattr(module, "READ_CHUNK_BYTES", 700)
+    assert module._read_chunks(_series(12).chunk({"t": 2}))[1] == [slice(0, 4), slice(4, 8), slice(8, 12)]
+    assert module._read_chunks(_series(12).chunk({"t": 12}))[1] == [slice(0, 5), slice(5, 10), slice(10, 12)]
+    assert module._read_chunks(_series().isel(t=0))[1] == [slice(None)]

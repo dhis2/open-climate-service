@@ -11,45 +11,46 @@ from open_climate_service.process import process
 REDUCERS = ("mean", "sum", "min", "max", "median")
 """The statistics the weighted aggregation offers: the methods a DHIS2 export can declare."""
 
-READ_BLOCK_BYTES = 512 * 2**20
+READ_CHUNK_BYTES = 512 * 2**20
 """The most raster data read into memory at once, the same bound as the reference implementation.
 
 exactextract reads a cube one step of its non-spatial axis at a time. Handed a lazy cube, each of
-those reads goes back to the store and decompresses whole chunks for one step, so a store chunked
-61 days deep had each chunk decompressed 61 times: a year of daily seNorge over Norway's 357
-municipalities took 300 s. Reading a block of steps at once, aligned to the store's chunks, reads
-each chunk once (20 s), and the bound keeps a long series from being loaded whole.
+those reads goes back to the store and decompresses whole store chunks for one step, so a store
+chunked 61 days deep had each chunk decompressed 61 times: a year of daily seNorge over Norway's
+357 municipalities took 300 s. Reading a chunk of steps at once, made of whole store chunks, reads
+each store chunk once (20 s), and the bound keeps a long series from being loaded whole.
 """
 
 
-def _blocks(raster: xr.DataArray) -> tuple[str | None, list[slice]]:
-    """Slices of the longest non-spatial axis, each within `READ_BLOCK_BYTES`, along the chunks.
+def _read_chunks(raster: xr.DataArray) -> tuple[str | None, list[slice]]:
+    """Slices of the longest non-spatial axis, each within `READ_CHUNK_BYTES`, along the store chunks.
 
-    Consecutive chunks are grouped while they fit, so a block never splits a chunk unless that
-    chunk alone is over the bound; then it is split into steps that fit. A 2-D raster is one block.
+    Consecutive store chunks are grouped while they fit, so a read chunk never splits a store chunk
+    unless that store chunk alone is over the bound; then it is split into steps that fit. A 2-D
+    raster is read in one go.
     """
     other = [dim for dim in raster.dims if dim not in ("x", "y")]
     if not other:
         return None, [slice(None)]
     dim = str(max(other, key=lambda name: raster.sizes[name]))
     step_bytes = raster.dtype.itemsize * raster.size // raster.sizes[dim]
-    per_block = max(1, READ_BLOCK_BYTES // max(1, step_bytes))
-    chunks = raster.chunksizes.get(dim) if raster.chunks else None
-    sizes = list(chunks) if chunks else [raster.sizes[dim]]
+    per_read = max(1, READ_CHUNK_BYTES // max(1, step_bytes))
+    store_chunks = raster.chunksizes.get(dim) if raster.chunks else None
+    sizes = list(store_chunks) if store_chunks else [raster.sizes[dim]]
 
-    blocks: list[slice] = []
+    reads: list[slice] = []
     start = end = 0
     for size in sizes:
-        if end > start and end - start + size > per_block:
-            blocks.append(slice(start, end))
+        if end > start and end - start + size > per_read:
+            reads.append(slice(start, end))
             start = end
         end += size
-        while end - start > per_block:
-            blocks.append(slice(start, start + per_block))
-            start += per_block
+        while end - start > per_read:
+            reads.append(slice(start, start + per_read))
+            start += per_read
     if end > start:
-        blocks.append(slice(start, end))
-    return dim, blocks
+        reads.append(slice(start, end))
+    return dim, reads
 
 
 @process(
@@ -133,12 +134,12 @@ def aggregate_spatial_weighted(
     x_dim, y_dim = get_x_y_dims(raster)
     if (x_dim, y_dim) != ("x", "y"):
         raster = raster.rename({x_dim: "x", y_dim: "y"}).rio.set_spatial_dims(x_dim="x", y_dim="y")
-    dim, blocks = _blocks(raster)
+    dim, reads = _read_chunks(raster)
     parts = [
-        (raster if dim is None else raster.isel({dim: block}))
+        (raster if dim is None else raster.isel({dim: read}))
         .load()
         .xvec.zonal_stats(frame.geometry, x_coords="x", y_coords="y", method="exactextract", stats=reducer)
-        for block in blocks
+        for read in reads
     ]
     vec_cube: xr.DataArray = parts[0] if len(parts) == 1 else cast(xr.DataArray, xr.concat(parts, dim=str(dim)))
     # The named method, so a DHIS2 export can check the aggregation it declares against this one.
