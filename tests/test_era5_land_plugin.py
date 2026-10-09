@@ -695,3 +695,31 @@ def test_a_year_spanning_the_product_type_boundary_is_split(monkeypatch: pytest.
     by_product = {params["product_type"][0]: [int(m) for m in params["month"]] for params in submitted}
     assert by_product["monthly_averaged_reanalysis"] == [1, 2, 3, 4, 5, 6, 7, 8]
     assert by_product["monthly_averaged_reanalysis_by_hour_of_day"] == [9, 10, 11, 12]
+
+
+def test_cds_daily_fallback_requests_the_same_grid_points_as_edh(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 0.1 degree grid like ERA5-Land's, and a bbox (the Lao PDR extent) whose edges fall
+    # between grid points: 13.91 must still take the 13.9 row from both sources.
+    lat = np.round(np.arange(30.0, -0.05, -0.1), 1)
+    lon = np.round(np.arange(90.0, 120.05, 0.1), 1)
+    grid = xr.Dataset(
+        {"t2m": (("latitude", "longitude"), np.full((lat.size, lon.size), 300.0, dtype=np.float32))},
+        coords={"latitude": lat, "longitude": lon},
+    )
+    bbox = (100.09, 13.91, 107.63, 22.5)
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._edh_open_zarr", lambda _url: grid)
+    edh = ERA5LandEDHDailyPlugin(variable="t2m")._region_for_bbox(list(bbox))
+
+    client = MagicMock()
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._CdsClient", lambda: client)
+    monkeypatch.setattr(
+        "open_climate_service.plugins.rasters.era5_land._daily_availability_cutoff", lambda: date(2026, 10, 1)
+    )
+    downloaded = grid.expand_dims(valid_time=np.array(["2026-09-16"], dtype="datetime64[ns]"))
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land.xr.open_dataset", lambda *a, **k: downloaded)
+    ERA5LandDailyTemperaturePlugin()._fetch_month(2026, 9, bbox)
+
+    # CDS keeps the grid points inside the requested area.
+    north, west, south, east = client.submit.call_args.args[1]["area"]
+    np.testing.assert_array_equal(lat[(lat <= north) & (lat >= south)], edh.latitude.values)
+    np.testing.assert_array_equal(lon[(lon >= west) & (lon <= east)], edh.longitude.values)
