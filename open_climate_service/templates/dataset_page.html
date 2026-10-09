@@ -287,6 +287,46 @@
               {% endif %}
             </section>
 
+            {% if flow is not none %}
+            <section class="panel" id="flow" aria-labelledby="flow-title">
+              <h3 id="flow-title">Flow</h3>
+              {% set incoming = flow.edges | selectattr('target', 'equalto', 'dataset:' ~ dataset.id) | list %}
+              {% set outgoing = flow.edges | selectattr('source', 'equalto', 'dataset:' ~ dataset.id) | list %}
+              {% if not incoming and not outgoing %}
+              <p class="note">Nothing is automated for this dataset yet. Schedule a sync above, or send it to DHIS2 below.</p>
+              {% else %}
+              <dl class="facts">
+                {% if incoming %}<dt>Comes from</dt><dd>{% for e in incoming %}{{ flow_labels[e.source].label }}{% if e.label %} ({{ e.label }}){% endif %}{% if flow_labels[e.source].status %} · {{ flow_labels[e.source].status }}{% endif %}{% if not loop.last %}<br />{% endif %}{% endfor %}</dd>{% endif %}
+                {% if outgoing %}<dt>Feeds</dt><dd>{% for e in outgoing %}{{ flow_labels[e.target].label }}{% if flow_labels[e.target].detail %} <small class="mono">{{ flow_labels[e.target].detail }}</small>{% endif %}{% if flow_labels[e.target].status %} · {{ flow_labels[e.target].status }}{% endif %}{% if not loop.last %}<br />{% endif %}{% endfor %}</dd>{% endif %}
+              </dl>
+              {% endif %}
+              <p class="note"><a href="{{ mount }}/flows#dataset:{{ dataset.id }}">See the whole flow</a> · <a href="{{ mount }}/tasks">Automation</a></p>
+            </section>
+
+            {% if not read_only %}
+            <section class="panel" id="send-to" aria-labelledby="send-to-title">
+              <h3 id="send-to-title">Send to DHIS2</h3>
+              <p class="note">After each update, aggregate this dataset to the org units and send the values to a DHIS2 data element. Starts as a dry run: DHIS2 checks the values and stores nothing until you switch the delivery to live on the Automation page.</p>
+              {% if send_error %}<div class="notice error" role="alert">{{ send_error }}</div>{% endif %}
+              {% if not send_options.connections %}
+              <p class="note">No DHIS2 connection is configured. Add one under <span class="mono">dhis2_connections</span> in <span class="mono">climate-service.yaml</span>.</p>
+              {% elif not send_options.collections %}
+              <p class="note">No org units are registered yet. Fetch them from a feature source first.</p>
+              {% else %}
+              <form method="post" action="{{ mount }}/datasets/{{ dataset.id }}/send-to" class="record-form">
+                <label>DHIS2 connection <select name="connection">{% for c in send_options.connections %}<option {{ 'selected' if send_draft.connection == c }}>{{ c }}</option>{% endfor %}</select></label>
+                <label>Org units <select name="collection">{% for c in send_options.collections %}<option {{ 'selected' if send_draft.collection == c }}>{{ c }}</option>{% endfor %}</select></label>
+                <label>Data element UID <input name="data_element" required minlength="11" maxlength="11" value="{{ send_draft.data_element or '' }}" /></label>
+                <label>Statistic <select name="statistic">{% for s in send_options.statistics %}<option {{ 'selected' if (send_draft.statistic or 'mean') == s }}>{{ s }}</option>{% endfor %}</select></label>
+                <label>Period type <input name="period_type" placeholder="{{ dataset.period_type or '' }}" value="{{ send_draft.period_type or '' }}" /><small>Leave blank to send at the dataset's own cadence.</small></label>
+                <label><input type="checkbox" name="dry_run" value="true" checked /> Dry run first</label>
+                <div class="form-actions"><button type="submit" class="primary">Send to DHIS2</button></div>
+              </form>
+              {% endif %}
+            </section>
+            {% endif %}
+            {% endif %}
+
             <section class="panel" aria-labelledby="access-title">
               <h3 id="access-title">Access</h3>
               <div class="actions">

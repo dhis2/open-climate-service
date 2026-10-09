@@ -31,6 +31,7 @@ from open_climate_service.stac import routes as stac_routes
 from open_climate_service.system import routes as system_routes
 from open_climate_service.tasks import document as configuration_document
 from open_climate_service.tasks import routes as tasks_routes
+from open_climate_service.tasks import send_to as send_to_routes
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +282,7 @@ def create_app() -> FastAPI:
     _app.include_router(tasks_routes.router, prefix="/tasks", tags=["Tasks"])
     _app.include_router(runs_routes.router, prefix="/runs", tags=["Runs"])
     _app.include_router(flows_routes.router, prefix="/flows", tags=["Flows"])
+    _app.include_router(send_to_routes.router, prefix="/datasets", tags=["Datasets"])
     _app.include_router(configuration_document.router, prefix="/configuration", tags=["Configuration"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
     _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])

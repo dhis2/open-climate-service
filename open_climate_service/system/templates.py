@@ -446,6 +446,8 @@ def render_dataset_page(
     *,
     schedule_error: str | None = None,
     schedule_draft: dict[str, Any] | None = None,
+    send_error: str | None = None,
+    send_draft: dict[str, Any] | None = None,
 ) -> str:
     """Render the HTML page for one managed dataset, linked from the landing page.
 
@@ -489,7 +491,23 @@ def render_dataset_page(
             stored_schedule = schedule
         except Exception:
             _log.exception("The schedule for dataset '%s' could not be read", record.dataset_id)
+    flow: Any = None
+    send_options: dict[str, list[str]] = {}
+    if record.item_type != "feature":
+        try:
+            from open_climate_service.flows.service import current_graph
+            from open_climate_service.tasks.send_to import options
+
+            flow = current_graph().around(f"dataset:{record.dataset_id}")
+            send_options = options()
+        except Exception:
+            _log.exception("The flow around dataset '%s' could not be read", record.dataset_id)
     return get_template("dataset_page.html").render(
+        flow=flow,
+        flow_labels={node.id: node for node in flow.nodes} if flow is not None else {},
+        send_options=send_options,
+        send_error=send_error,
+        send_draft=send_draft or {},
         schedule=schedule,
         stored_schedule=stored_schedule,
         scheduler_status=scheduler_status,

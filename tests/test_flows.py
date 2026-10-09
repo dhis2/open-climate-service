@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 from open_climate_service.flows.service import build_graph
@@ -79,3 +81,51 @@ def test_the_automation_page_adds_pauses_and_removes_tasks(client: TestClient) -
 
     assert client.post("/tasks/nightly/delete", follow_redirects=False).status_code == 303
     assert client.get("/tasks").json()["tasks"] == []
+
+
+# --- Send to DHIS2 from the dataset page (CLIM-1290) --------------------------------------------------------
+
+
+def test_send_to_creates_an_export_and_two_tasks_as_one_path(
+    client: TestClient,  # noqa: F811
+    monkeypatch: Any,
+) -> None:
+    from types import SimpleNamespace
+
+    from open_climate_service import config as api_config
+    from open_climate_service.features import templates as feature_templates
+    from open_climate_service.ingestions import services as ingestion_services
+
+    monkeypatch.setattr(
+        api_config,
+        "_cache",
+        {
+            "scheduler": {"enabled": False},
+            "dhis2_connections": [{"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "T"}],
+        },
+    )
+    monkeypatch.setattr(feature_templates, "list_feature_templates", lambda: [{"id": "districts"}])
+    monkeypatch.setattr(
+        ingestion_services, "get_dataset_or_404", lambda dataset_id: SimpleNamespace(period_type="monthly")
+    )
+    body = {"connection": "hmis", "collection": "districts", "data_element": "BXgDHhPdFVU", "statistic": "mean"}
+
+    created = client.post("/datasets/chirps/send-to", json=body)
+    assert created.status_code == 200, created.text
+    assert created.json() == {
+        "export": "chirps-BXgDHhPdFVU",
+        "tasks": ["chirps-BXgDHhPdFVU-aggregate", "chirps-BXgDHhPdFVU-deliver"],
+    }
+    assert client.get("/tasks/chirps-BXgDHhPdFVU-deliver").json()["dry_run"] is True
+
+    edges = {(edge["source"], edge["target"]) for edge in client.get("/flows").json()["edges"]}
+    assert ("dataset:chirps", "task:chirps-BXgDHhPdFVU-aggregate") in edges
+    assert ("task:chirps-BXgDHhPdFVU-aggregate", "export:chirps-BXgDHhPdFVU") in edges
+    assert ("export:chirps-BXgDHhPdFVU", "destination:hmis") in edges
+
+    again = client.post("/datasets/chirps/send-to", json=body)
+    assert again.status_code == 409 and "already sent" in again.json()["detail"]
+
+    refused = client.post("/datasets/era5/send-to", json={**body, "statistic": "mode"})
+    assert refused.status_code == 409
+    assert [item["id"] for item in client.get("/exports").json()["exports"]] == ["chirps-BXgDHhPdFVU"]

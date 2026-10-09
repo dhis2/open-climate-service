@@ -42,6 +42,7 @@ _MUTATING_ROUTES = [
     ("PUT", "/configuration"),
     ("POST", "/tasks"),
     ("POST", "/tasks/form"),
+    ("POST", "/datasets/{dataset_id}/send-to"),
     ("POST", "/tasks/{task_id}/delete"),
     ("PUT", "/tasks/{task_id}"),
     ("POST", "/tasks/{task_id}/pause"),
