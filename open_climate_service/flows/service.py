@@ -137,6 +137,11 @@ def build_graph(tasks: list[Task], exports: dict[str, dict[str, Any]], names: di
                 edges.append(FlowEdge(source=dataset(task.after.dataset), target=workflow))
             if task.after is not None and task.after.collection is not None:
                 edges.append(FlowEdge(source=collection(task.after.collection), target=workflow))
+            read = task.arguments.get("dataset_id")
+            reads_after = task.after is not None and task.after.dataset is not None
+            if isinstance(read, str) and not read.startswith("$event") and not reads_after:
+                # A task on a schedule or by hand names its input in its arguments.
+                edges.append(FlowEdge(source=dataset(read), target=workflow, label="reads"))
             for feature_id in _from_features(task.arguments):
                 edges.append(FlowEdge(source=collection(feature_id), target=workflow, label="org units"))
             output = task.arguments.get("output_dataset_id")

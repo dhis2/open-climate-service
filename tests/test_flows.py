@@ -47,6 +47,8 @@ def test_the_graph_follows_a_source_through_a_derived_dataset_to_dhis2(instance:
     assert ("export:anomaly-kommuner", "destination:hmis") in edges
     labels = {node.id: node.label for node in graph.nodes}
     assert labels["dataset:temp_daily"] == "Temperature, daily"
+    nightly = _task(id="nightly", kind="workflow", target=_WORKFLOW, cron="0 2 * * *", arguments={"dataset_id": "era5"})
+    assert ("dataset:era5", "task:nightly") in {(e.source, e.target) for e in build_graph([nightly], {}, {}).edges}
     around = graph.around("dataset:temp_anomaly")
     assert {node.id for node in around.nodes} == {"dataset:temp_anomaly", "task:anomaly", "task:to-kommuner"}
 
