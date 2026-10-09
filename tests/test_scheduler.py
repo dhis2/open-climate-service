@@ -356,6 +356,7 @@ def test_schedules_endpoint_is_read_only_status(client: TestClient) -> None:
         "enabled": False,
         "running": False,
         "timezone": "UTC",
+        "clock_holder": None,
         "reload_error": None,
         "schedules": [],
     }

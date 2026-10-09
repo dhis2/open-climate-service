@@ -19,7 +19,7 @@ import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any
+from typing import Any, Literal
 
 import dask.config
 from dask.threaded import ContextAwareThreadPoolExecutor
@@ -29,6 +29,25 @@ logger = logging.getLogger(__name__)
 MAX_CONCURRENT_JOBS_ENV = "CLIMATE_SERVICE_MAX_CONCURRENT_JOBS"
 DEFAULT_MAX_CONCURRENT_JOBS = 2
 """An ingest and the workflow it triggers. Memory, not CPU, is what a laptop runs out of first."""
+
+MAX_CONCURRENT_DELIVERIES_ENV = "CLIMATE_SERVICE_MAX_CONCURRENT_DELIVERIES"
+DEFAULT_MAX_CONCURRENT_DELIVERIES = 2
+"""Deliveries send a payload already computed; they wait on the network, not on cores or memory."""
+
+SlotClass = Literal["compute", "delivery"]
+"""What a job mostly waits on (CLIM-1378).
+
+Heavy work (ingestion, sync, feature refresh, openEO workflows) shares the compute slots, so
+however many tasks fire at once, only that many heavy jobs run and the rest queue. A delivery
+only sends a payload, so it has slots of its own: it neither waits behind an hour of
+aggregation nor takes the slot that aggregation needs.
+"""
+
+
+def slot_class_for(process_id: str) -> SlotClass:
+    """The slots a native job runs in, from its process id: ``export:<id>`` is a delivery."""
+    return "delivery" if process_id.startswith("export:") else "compute"
+
 
 _SLOT_POLL_SECONDS = 2.0
 
@@ -144,21 +163,37 @@ class JobSlots:
         self._semaphore.release()
 
 
-_slots: JobSlots | None = None
+_slots: dict[SlotClass, JobSlots] = {}
 _slots_mutex = threading.Lock()
 
 
-def get_job_slots() -> JobSlots:
-    """The process's job slots, sized from `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS`."""
-    global _slots
+def _max_concurrent_deliveries() -> int:
+    raw = os.environ.get(MAX_CONCURRENT_DELIVERIES_ENV, "").strip()
+    if not raw:
+        return DEFAULT_MAX_CONCURRENT_DELIVERIES
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{MAX_CONCURRENT_DELIVERIES_ENV} must be a positive integer, got {raw!r}") from None
+    if value < 1:
+        raise ValueError(f"{MAX_CONCURRENT_DELIVERIES_ENV} must be a positive integer, got {raw!r}")
+    return value
+
+
+def get_job_slots(slot_class: SlotClass = "compute") -> JobSlots:
+    """The process's slots of one class.
+
+    Compute slots are sized from `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS`, delivery slots from
+    `CLIMATE_SERVICE_MAX_CONCURRENT_DELIVERIES`.
+    """
     with _slots_mutex:
-        if _slots is None:
-            _slots = JobSlots(max_concurrent_jobs())
-        return _slots
+        if slot_class not in _slots:
+            size = max_concurrent_jobs() if slot_class == "compute" else _max_concurrent_deliveries()
+            _slots[slot_class] = JobSlots(size)
+        return _slots[slot_class]
 
 
 def reset_job_slots() -> None:
-    """Forget the slots so the next job reads the limit again; for tests."""
-    global _slots
+    """Forget the slots so the next job reads the limits again; for tests."""
     with _slots_mutex:
-        _slots = None
+        _slots.clear()

@@ -34,6 +34,23 @@ logger = logging.getLogger(__name__)
 _WATCH_JOB_ID = "scheduler:store-watch"
 _TASK_JOB_PREFIX = "task:"
 
+CLOCK_LEASE = "scheduler"
+LEASE_TTL_SECONDS = 3 * 30
+"""How long the clock's owner keeps it without renewing. Renewed every watch, so a crashed
+owner is replaced within this time by a process on standby (CLIM-997)."""
+
+
+def _db_lease(holder: str, ttl: float) -> bool:
+    from open_climate_service.state import db
+
+    return db.acquire_lease(CLOCK_LEASE, holder, ttl)
+
+
+def _db_release(holder: str) -> None:
+    from open_climate_service.state import db
+
+    db.release_lease(CLOCK_LEASE, holder)
+
 
 def _cron_tasks() -> list[Task]:
     """Enabled refresh and workflow tasks on a cron: the tasks the clock runs besides syncs."""
@@ -125,7 +142,19 @@ class SchedulerService:
         stamp_loader: Callable[[], str | None] = store_stamp,
         tasks_loader: Callable[[], list[Task]] = _cron_tasks,
         task_runner: Callable[[Task, str], CheckResult] = _run_task,
+        lease: Callable[[str, float], bool] = _db_lease,
+        release: Callable[[str], None] = _db_release,
     ) -> None:
+        # Every process with the scheduler enabled starts a clock, but only the lease holder runs
+        # jobs on it; the others stand by and take over when the holder stops renewing. So
+        # several replicas, or several workers on one machine, fire each schedule once.
+        import socket
+        from uuid import uuid4
+
+        self._holder = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+        self._lease = lease
+        self._release = release
+        self._leader = False
         self._tasks_loader = tasks_loader
         self._task_runner = task_runner
         self._tasks: tuple[tuple[Task, CronTrigger], ...] = ()
@@ -285,13 +314,12 @@ class SchedulerService:
 
             self._tasks = plan.tasks
             scheduler = AsyncIOScheduler(timezone=plan.config.timezone_info)
-            for entry, trigger in plan.runnable:
-                self._add(scheduler, entry, trigger)
-            self._apply_tasks(scheduler, plan.tasks)
-            # Writes from another process on the shared data directory reach this clock through
-            # the store file, not through this process's routes; watch it.
+            self._leader = self._try_lease()
+            if self._leader:
+                self._activate(scheduler)
+            # Every watch renews or seeks the lease, and picks up writes another process made.
             scheduler.add_job(
-                self.reload_if_changed,
+                self.watch,
                 trigger=IntervalTrigger(seconds=WATCH_SECONDS),
                 id=_WATCH_JOB_ID,
                 coalesce=True,
@@ -300,12 +328,51 @@ class SchedulerService:
             )
             scheduler.start()
             self._scheduler = scheduler
-            logger.warning(
-                "Dataset scheduler enabled in process %d with %d schedule(s); "
-                "exactly one OCS process may enable scheduling",
-                os.getpid(),
-                len(plan.runnable),
-            )
+            if self._leader:
+                logger.warning(
+                    "Scheduler clock owned by %s with %d schedule(s) and %d other cron task(s)",
+                    self._holder,
+                    len(plan.runnable),
+                    len(plan.tasks),
+                )
+            else:
+                logger.warning("Scheduler on standby in %s; another process owns the clock", self._holder)
+
+    def _try_lease(self) -> bool:
+        try:
+            return self._lease(self._holder, LEASE_TTL_SECONDS)
+        except Exception:
+            logger.exception("Could not reach the clock lease; this process runs no schedules meanwhile")
+            return False
+
+    def _activate(self, scheduler: AsyncIOScheduler) -> None:
+        for entry, trigger in self._runnable:
+            self._add(scheduler, entry, trigger)
+        self._apply_tasks(scheduler, self._tasks)
+
+    def _deactivate(self, scheduler: AsyncIOScheduler) -> None:
+        for job in list(scheduler.get_jobs()):
+            if job.id != _WATCH_JOB_ID:
+                scheduler.remove_job(job.id)
+
+    def watch(self) -> None:
+        """Renew or take the clock lease, then reload if another process changed the store.
+
+        A process that wins the lease starts running every schedule; one that loses it (it was
+        paused too long, or the database moved on without it) stops, so two clocks never fire
+        the same schedule.
+        """
+        held = self._try_lease()
+        with self._lock:
+            scheduler = self._scheduler
+            if scheduler is not None and held and not self._leader:
+                self._activate(scheduler)
+                logger.warning("Scheduler clock taken over by %s", self._holder)
+            elif scheduler is not None and not held and self._leader:
+                self._deactivate(scheduler)
+                logger.warning("Scheduler clock lost by %s; standing by", self._holder)
+            self._leader = held
+        self.reload_if_changed()
 
     def reload(self) -> None:
         """Re-read the store, resolve the whole list, then reconcile the running jobs.
@@ -326,7 +393,7 @@ class SchedulerService:
                 return
             previous = {entry.schedule_id for entry in self._effective}
             runnable_ids = {entry.schedule_id for entry, _ in plan.runnable}
-            scheduler = self._scheduler
+            scheduler = self._scheduler if self._leader else None
             if scheduler is not None:
                 known = previous | {entry.schedule_id for entry in plan.effective}
                 try:
@@ -390,6 +457,12 @@ class SchedulerService:
             return
         self._scheduler.shutdown(wait=False)
         self._scheduler = None
+        if self._leader:
+            self._leader = False
+            try:
+                self._release(self._holder)
+            except Exception:
+                logger.exception("Could not give up the clock lease; it expires on its own")
         logger.info("Dataset scheduler stopped")
 
     # --- running -------------------------------------------------------------------------------
@@ -475,7 +548,8 @@ class SchedulerService:
             )
         return ScheduleListResponse(
             enabled=config.enabled,
-            running=self._scheduler is not None,
+            running=self._scheduler is not None and self._leader,
+            clock_holder=self._holder if self._leader else None,
             timezone=config.timezone,
             reload_error=self._reload_error,
             schedules=schedules,

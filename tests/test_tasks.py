@@ -244,6 +244,7 @@ def test_the_clock_runs_refresh_and_workflow_tasks_beside_syncs(instance: None) 
     scheduler.get_jobs.return_value = []
     service = SchedulerService(tasks_loader=lambda: tasks, task_runner=runner)
     service._scheduler = scheduler
+    service._leader = True
     service.reload()
 
     added = {call.kwargs["id"] for call in scheduler.add_job.call_args_list}
@@ -305,3 +306,57 @@ def test_a_deliver_task_cannot_run_alone(client: TestClient) -> None:  # noqa: F
     assert client.post("/tasks/send/run").status_code == 409
     removing_upstream = client.delete("/tasks/agg")
     assert removing_upstream.status_code == 409 and "not a workflow task" in removing_upstream.json()["detail"]
+
+
+# --- one clock across processes (CLIM-997) ----------------------------------------------------------
+
+
+def test_the_clock_lease_has_one_holder_until_it_expires() -> None:
+    from open_climate_service.state import db
+
+    assert db.acquire_lease("scheduler", "a", 90, now=1000)
+    assert not db.acquire_lease("scheduler", "b", 90, now=1050)
+    assert db.acquire_lease("scheduler", "a", 90, now=1050)  # renewed
+    assert db.lease_holder("scheduler", now=1100) == "a"
+    assert db.acquire_lease("scheduler", "b", 90, now=1141)  # a stopped renewing
+    db.release_lease("scheduler", "b")
+    assert db.lease_holder("scheduler", now=1142) is None
+
+
+def test_two_processes_run_one_clock_and_the_standby_takes_over(
+    instance: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from open_climate_service.state import db
+
+    monkeypatch.setattr(api_config, "_cache", {"scheduler": {"enabled": True}})
+    store.save_task(_task(id="nightly", kind="workflow", target=_WORKFLOW, cron="0 2 * * *"), create=True)
+    clock = {"now": 1000.0}
+
+    def lease(holder: str, ttl: float) -> bool:
+        return db.acquire_lease("scheduler", holder, ttl, now=clock["now"])
+
+    clocks: list[MagicMock] = []
+
+    def fake_scheduler(**_: Any) -> MagicMock:
+        fake = MagicMock()
+        fake.get_jobs.return_value = []
+        clocks.append(fake)
+        return fake
+
+    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", fake_scheduler)
+    first = SchedulerService(lease=lease)
+    second = SchedulerService(lease=lease)
+    first.start()
+    second.start()
+
+    def task_jobs(fake: MagicMock) -> set[str]:
+        return {call.kwargs["id"] for call in fake.add_job.call_args_list if call.kwargs["id"].startswith("task:")}
+
+    assert task_jobs(clocks[0]) == {"task:nightly"} and task_jobs(clocks[1]) == set()
+    assert first.status().running and not second.status().running
+
+    clock["now"] += 200  # the first process hangs past the lease's expiry
+    second.watch()
+    assert task_jobs(clocks[1]) == {"task:nightly"}
+    assert second.status().clock_holder is not None

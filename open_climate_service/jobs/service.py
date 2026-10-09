@@ -27,7 +27,7 @@ from open_climate_service.jobs.models import (
     JobRecord,
     JobStatus,
 )
-from open_climate_service.shared.compute import get_job_slots
+from open_climate_service.shared.compute import get_job_slots, slot_class_for
 from open_climate_service.shared.dynamic_import import get_dynamic_function
 from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.time import utc_now
@@ -543,7 +543,7 @@ class JobService:
                 )
                 return None
 
-            slots = get_job_slots()
+            slots = get_job_slots(slot_class_for(record.process_id))
             if not slots.acquire(
                 should_stop=lambda: self._stopping.is_set() or self._cancel_requested(job_id),
                 on_wait=lambda: self._report_waiting_for_slot(job_id),

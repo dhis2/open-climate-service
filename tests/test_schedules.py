@@ -179,7 +179,7 @@ def test_start_registers_active_stored_entries_only(monkeypatch: pytest.MonkeyPa
     registered = _added(scheduler)
     assert registered == ["dataset-sync:chirps", "dataset-sync:era5"]
     watch = next(call for call in scheduler.add_job.call_args_list if call.kwargs["id"] == "scheduler:store-watch")
-    assert watch.args[0] == service.reload_if_changed
+    assert watch.args[0] == service.watch
     status = service.status()
     assert [(item.dataset_id, item.effective) for item in status.schedules] == [
         ("chirps", True),

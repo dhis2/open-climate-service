@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_by_task ON runs (task_id, started_at);
 CREATE INDEX IF NOT EXISTS runs_by_job ON runs (job_id);
+CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at REAL NOT NULL);
 """
 
 
@@ -85,19 +86,22 @@ def read() -> Iterator[sqlite3.Connection]:
 
 
 @contextmanager
-def write() -> Iterator[sqlite3.Connection]:
+def write(*, configuration: bool = False) -> Iterator[sqlite3.Connection]:
     """One write transaction, taken immediately so two writers queue rather than conflict.
 
-    The revision moves on commit, so readers in other processes see that something changed.
+    ``configuration`` marks a change to what the instance runs (tasks, exports): the revision
+    moves on commit, so the clock and automation in every process reload. Bookkeeping such as
+    runs, activations and lease renewals leaves it alone.
     """
     connection = _connect()
     try:
         connection.execute("BEGIN IMMEDIATE")
         yield connection
-        connection.execute(
-            "INSERT INTO meta (key, value) VALUES ('revision', '1') "
-            "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1"
-        )
+        if configuration:
+            connection.execute(
+                "INSERT INTO meta (key, value) VALUES ('revision', '1') "
+                "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1"
+            )
         connection.execute("COMMIT")
     except BaseException:
         if connection.in_transaction:
@@ -186,3 +190,46 @@ def save_activations(scope: str, values: dict[str, Any]) -> None:
             connection.execute(
                 "INSERT INTO activations (scope, key, body) VALUES (?, ?, ?)", (scope, key, json.dumps(value))
             )
+
+
+# --- leases -----------------------------------------------------------------------------------------
+
+
+def acquire_lease(name: str, holder: str, ttl_seconds: float, now: float | None = None) -> bool:
+    """Take or renew the lease ``name`` for ``holder``; False while another holder's is unexpired.
+
+    One transaction reads and writes it, so two processes asking at once cannot both win. A
+    holder that stops renewing loses the lease when it expires, and the next asker takes it,
+    with no operator action (CLIM-997).
+    """
+    import time
+
+    moment = time.time() if now is None else now
+    with write() as connection:
+        row = connection.execute("SELECT holder, expires_at FROM leases WHERE name = ?", (name,)).fetchone()
+        if row is not None and row["holder"] != holder and row["expires_at"] > moment:
+            return False
+        connection.execute(
+            "INSERT INTO leases (name, holder, expires_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET holder = excluded.holder, expires_at = excluded.expires_at",
+            (name, holder, moment + ttl_seconds),
+        )
+    return True
+
+
+def release_lease(name: str, holder: str) -> None:
+    """Give the lease up at once, so another process need not wait for it to expire."""
+    with write() as connection:
+        connection.execute("DELETE FROM leases WHERE name = ? AND holder = ?", (name, holder))
+
+
+def lease_holder(name: str, now: float | None = None) -> str | None:
+    """Who holds ``name`` now, or None when nobody does."""
+    import time
+
+    moment = time.time() if now is None else now
+    if not database_path().exists():
+        return None
+    with read() as connection:
+        row = connection.execute("SELECT holder, expires_at FROM leases WHERE name = ?", (name,)).fetchone()
+    return str(row["holder"]) if row is not None and row["expires_at"] > moment else None

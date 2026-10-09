@@ -1,5 +1,6 @@
 import os
 from collections.abc import Callable, Generator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -48,6 +49,19 @@ def _reset_config_cache() -> Generator[None, None, None]:
     xclim_processes._cache = None
     earthkit_processes._cache = None
     urls._forget_base_url_warnings()
+
+
+@pytest.fixture(autouse=True)
+def _own_operational_database(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Give each test an empty operational database: tasks, exports, runs and the clock lease.
+
+    The session shares one data directory, so without this a task, an export or an unexpired
+    clock lease one test leaves behind would decide what the next test sees.
+    """
+    from open_climate_service.state import db
+
+    path = tmp_path / "ocs.db"
+    monkeypatch.setattr(db, "database_path", lambda: path)
 
 
 @pytest.fixture(autouse=True)

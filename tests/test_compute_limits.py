@@ -239,6 +239,27 @@ def test_a_native_job_waits_accepted_for_a_free_slot(persisted: dict[str, JobRec
     assert _slot_is_free(one_slot), "the job gave its slot back"
 
 
+def test_a_delivery_runs_while_heavy_work_holds_every_compute_slot(
+    persisted: dict[str, JobRecord], one_slot: JobSlots
+) -> None:
+    """CLIM-1378: a delivery only sends a payload, so it never waits behind an aggregation."""
+    service = JobService()
+    assert one_slot.acquire(should_stop=lambda: False)  # a long workflow is running
+    heavy = service.submit_callable_job(func=_job_callable, label="ingestion", request={})
+    delivery = service.submit_callable_job(func=_job_callable, label="export:rain-monthly", request={})
+
+    waiting = _run_in_background(lambda: service._execute_job(heavy.job_id))
+    _wait_until(lambda: persisted[heavy.job_id].progress.message == "Waiting for a free job slot")
+
+    _run_in_background(lambda: service._execute_job(delivery.job_id)).join(timeout=5)
+    assert persisted[delivery.job_id].status == JobStatus.SUCCESSFUL
+    assert persisted[heavy.job_id].status == JobStatus.ACCEPTED
+
+    one_slot.release()
+    waiting.join(timeout=5)
+    assert persisted[heavy.job_id].status == JobStatus.SUCCESSFUL
+
+
 def test_a_native_job_cancelled_while_waiting_never_runs(persisted: dict[str, JobRecord], one_slot: JobSlots) -> None:
     service = JobService()
     job = service.submit_callable_job(func=_job_callable, label="ingestion", request={})

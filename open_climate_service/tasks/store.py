@@ -69,7 +69,7 @@ def save_task(task: Task, *, create: bool, check: Check | None = None) -> Task:
     the write transaction, so a rule that spans tasks (one sync task per dataset, a deliver task
     after an existing workflow task) holds whoever writes. It raises ValueError to refuse.
     """
-    with db.write() as connection:
+    with db.write(configuration=True) as connection:
         tasks = _parse(db.list_documents("tasks", connection))
         existing = tasks.get(task.id)
         if create and existing is not None:
@@ -91,7 +91,7 @@ def save_task(task: Task, *, create: bool, check: Check | None = None) -> Task:
 
 def set_enabled(task_id: str, enabled: bool) -> Task:
     """Pause or resume one task."""
-    with db.write() as connection:
+    with db.write(configuration=True) as connection:
         existing = _parse(db.list_documents("tasks", connection)).get(task_id)
         if existing is None:
             raise ValueError(f"No task with id '{task_id}'")
@@ -104,7 +104,7 @@ def set_enabled(task_id: str, enabled: bool) -> Task:
 
 def delete_task(task_id: str, *, check: Check | None = None) -> bool:
     """Remove one task; True when something was removed. ``check`` as for ``save_task``."""
-    with db.write() as connection:
+    with db.write(configuration=True) as connection:
         tasks = _parse(db.list_documents("tasks", connection))
         if task_id not in tasks:
             return False
@@ -117,7 +117,7 @@ def delete_task(task_id: str, *, check: Check | None = None) -> bool:
 
 def replace_tasks(tasks: list[Task], *, check: Check | None = None) -> None:
     """Replace every task at once, for importing an operational configuration document."""
-    with db.write() as connection:
+    with db.write(configuration=True) as connection:
         if check is not None:
             check(sorted(tasks, key=lambda task: task.id))
         db.replace_documents(connection, "tasks", {task.id: _dump(task) for task in tasks})

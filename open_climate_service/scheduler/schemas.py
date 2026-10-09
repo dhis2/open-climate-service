@@ -37,6 +37,10 @@ class ScheduleListResponse(BaseModel):
     enabled: bool
     running: bool
     timezone: str
+    clock_holder: str | None = Field(
+        default=None,
+        description="The process running the clock, when it is this one. Others stand by and take over if it stops.",
+    )
     reload_error: str | None = Field(
         default=None,
         description="Why the last reload was refused; the previous working schedules stay in force until it is fixed.",
