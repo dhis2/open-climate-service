@@ -1,5 +1,7 @@
 # Export plugins and named mappings
 
+> In the [tasks](tasks.md) reference implementation (CLIM-1378), named exports are managed through `/exports` and kept in `<data_dir>/ocs.db`; an `exports` block in `climate-service.yaml` is refused. A plugin says what its deliveries need through `check_delivery_target`.
+
 Named exports render a computed aggregate using a mapping in instance configuration.
 They work with synchronous `POST /result` and batch jobs. Rendering does not contact
 DHIS2, resolve a credential, fetch organisation units, or run another aggregation.

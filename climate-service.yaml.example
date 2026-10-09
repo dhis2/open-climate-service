@@ -23,22 +23,13 @@ data_dir: ./data   # required — directory for downloaded NetCDF files and Zarr
 # templates, not here -- see the instance guide. A workflow task references one by id with
 # {from_features: <id>} instead of embedding a FeatureCollection inline.
 
-# The named export owns the DHIS2 mapping and connection. The job it produces carries a
-# delivery manifest, so the saved result can be submitted to POST /exports/chirps-daily.
+# Connections to DHIS2, with their tokens in the environment. What is sent where, the named
+# exports, and when, the tasks, are managed through /exports and /tasks or from a dataset's
+# Send to DHIS2 panel, and kept in <data_dir>/ocs.db (see docs/tasks.md).
 # dhis2_connections:
 #   - id: national-hmis
 #     url: https://hmis.example.org/dhis
 #     token_env: DHIS2_IMPORT_TOKEN
-# exports:
-#   - id: chirps-daily
-#     plugin: dhis2
-#     dataset: chirps3_precipitation_daily
-#     connection: national-hmis
-#     aggregation: mean
-#     period_type: daily
-#     series:
-#       - select: {}
-#         data_element: BXgDHhPdFVU
 
 # plugins_dir: ./plugins/   # optional — plugin root: dataset templates in rasters/ and vectors/, Python modules importable by dotted path
 # crs: EPSG:4326             # optional — CRS for stored GeoZarr files (default: EPSG:4326); use e.g. EPSG:25833 for UTM33

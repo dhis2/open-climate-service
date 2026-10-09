@@ -1,6 +1,6 @@
 # Dataset-update workflow automation
 
-> In the [tasks](tasks.md) reference implementation (CLIM-1378), workflow triggers and their deliveries are workflow and deliver tasks managed through `/tasks`, and sync schedules are sync tasks in the same store, `<data_dir>/tasks.json`. The `automation` block below is no longer read.
+> In the [tasks](tasks.md) reference implementation (CLIM-1378), workflow triggers and their deliveries are workflow and deliver tasks managed through `/tasks`, and a workflow that publishes a dataset emits `dataset.updated`, so the two-trigger chain described below runs. The `automation` block is no longer read.
 
 An OCS instance can run an existing openEO workflow when a successful ingestion or sync operation
 changes stored data. This is event-driven: it does not guess that an operation has finished by

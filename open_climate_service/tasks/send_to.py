@@ -57,7 +57,7 @@ def plan(dataset_id: str, period_type: str | None, request: SendTo) -> tuple[dic
         id=f"{export_id}-aggregate",
         kind="workflow",
         target=WORKFLOW,
-        after={"dataset": dataset_id},  # type: ignore[arg-type]
+        after={"dataset": dataset_id},  # pyright: ignore[reportArgumentType]
         arguments={
             "dataset_id": "$event.dataset_id",
             "temporal_extent": ["$event.previous_end", "$event.current_end"],
@@ -70,7 +70,7 @@ def plan(dataset_id: str, period_type: str | None, request: SendTo) -> tuple[dic
         id=f"{export_id}-deliver",
         kind="deliver",
         target=export_id,
-        after={"task": workflow.id},  # type: ignore[arg-type]
+        after={"task": workflow.id},  # pyright: ignore[reportArgumentType]
         dry_run=request.dry_run,
     )
     return export, workflow, deliver
