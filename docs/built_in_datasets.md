@@ -175,17 +175,11 @@ them is a breach, and share-alike attaches to a publicly served derived database
 
 ## DHIS2 — organisation units (feature collection)
 
-| Property             | Value                                                                   |
-| -------------------- | ----------------------------------------------------------------------- |
-| **Collection ID**    | Your choice: no template is shipped, since the DHIS2 instance is yours  |
-| **Item type**        | Feature collection (GeoParquet), not a raster                           |
-| **Identity**         | `id_property: id` — the organisation unit UID                           |
-| **Coverage**         | The level or subtree you select                                         |
-| **Requires**         | The `dhis2` extra (`open-climate-service[dhis2]`) and a named connection |
-
 The built-in `dhis2` provider fetches organisation units with their boundaries from a DHIS2
-instance and stores them as a feature collection. Because each feature's id is the DHIS2 UID,
-values aggregated to these boundaries can go straight back into DHIS2 as `orgUnit`.
+instance and stores them as a feature collection (GeoParquet). Each feature's id is the DHIS2 UID
+(`id_property: id`), so values aggregated to these boundaries can go straight back into DHIS2 as
+`orgUnit`. It needs the `dhis2` extra (`open-climate-service[dhis2]`) and a named connection. No
+template is shipped, since the DHIS2 instance is yours: you declare one, as below.
 
 **1. Configure the connection** in `climate-service.yaml`, with the token in the environment (see
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)):
