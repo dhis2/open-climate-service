@@ -62,12 +62,12 @@ A raster collection includes `cube:dimensions` (spatial `x`/`y`, temporal `t`, `
 
 Published vector datasets, such as administrative boundaries or DHIS2 org units, are collections too. Their `cube:dimensions` has a single `geometry` dimension (with its bbox, `geometry_types` and reference system, always WGS 84), and their feature properties are listed in `table:columns`. A client that only handles rasters can tell them apart by that `geometry` dimension.
 
-`load_collection` loads a vector collection as a vector cube of its features, the same result as `load_features`, which stays available. It can be passed straight to `aggregate_spatial` as `geometries`:
+`load_collection` loads a vector collection as a vector cube of its features, the same result as `load_features`, which stays available. It can be passed straight to `aggregate_spatial_weighted` as `geometries` to compute, for each feature, a weighted statistic over the cells covered by that geometry:
 
 ```python
 rain = conn.load_collection("chirps3_precipitation_monthly", temporal_extent=["2025-01-01", "2025-12-31"])
 districts = conn.load_collection("overture_divisions")
-zonal = rain.aggregate_spatial(geometries=districts, reducer="mean")
+zonal = rain.aggregate_spatial_weighted(geometries=districts, reducer="mean")
 ```
 
 A vector collection has no time dimension and no bands: `temporal_extent` is ignored, and `bands` is refused. `spatial_extent` narrows the features loaded.
@@ -197,7 +197,7 @@ run, but never served as its results.
 
 ## Available processes
 
-`GET /processes` returns all 120+ standard openEO processes from [openeo-processes-dask](https://github.com/Open-EO/openeo-processes-dask), plus `load_collection` and `save_result` which are implemented by this backend. All processes listed are callable from process graphs.
+`GET /processes` returns all 120+ standard openEO processes from [openeo-processes-dask](https://github.com/Open-EO/openeo-processes-dask), plus `load_collection`, `save_result`, and the custom `aggregate_spatial_weighted` process implemented by this backend. All processes listed are callable from process graphs.
 
 Key processes for climate work:
 
@@ -210,7 +210,7 @@ Key processes for climate work:
 | `apply`                     | Apply an element-wise callback to every pixel             |
 | `reduce_dimension`          | Collapse a dimension with a reducer (e.g. mean, sum)      |
 | `aggregate_temporal_period` | Group by calendar period (month, season, year) and reduce |
-| `aggregate_spatial`         | Zonal statistics over GeoJSON geometries                  |
+| `aggregate_spatial_weighted` | Weighted zonal statistics over GeoJSON geometries         |
 | `resample_cube_spatial`     | Reproject and resample to a target grid                   |
 | `merge_cubes`               | Combine two aligned cubes                                 |
 | `save_result`               | Finalise the result — controls the output format          |
@@ -228,7 +228,7 @@ The `format` argument of `save_result` controls what the server writes. `GET /fi
 | `GTIFF`    | GeoTIFF    | Raster          | Raw float values with embedded CRS — compatible with QGIS, GDAL                        |
 | `PNG`      | PNG        | Raster          | Styled image using the collection's colormap and rescale range; transparent background |
 | `CSV`      | CSV        | Raster / Vector | Tabular — ideal for time series and zonal statistics output                            |
-| `GEOJSON`  | GeoJSON    | Vector          | Default for `aggregate_spatial` results; one feature per geometry                      |
+| `GEOJSON`  | GeoJSON    | Vector          | Default for `aggregate_spatial_weighted` results; one feature per geometry            |
 | `PARQUET`  | GeoParquet | Vector          | Columnar binary — efficient for large vector datasets                                  |
 | `DHIS2JSON` | DHIS2 JSON | Tabular        | DHIS2 `dataValueSet` — one value per org unit, period and data element                 |
 | `CHAPCSV`  | CHAP CSV   | Tabular         | Wide CSV for CHAP: `time_period`, `location`, one column per variable                   |
@@ -245,7 +245,7 @@ periods or locations must be aligned before merging. An overlap resolver and its
 context are supported on the initial two-cube merge. They are not supported when
 extending an already stacked named-predictor group.
 
-An `aggregate_spatial` result keeps the geometry it was aggregated over, so `GEOJSON` and `PARQUET` output carries the real shapes — mappable in QGIS or geopandas without joining back to a boundary file — alongside each feature's id in `feature_id`. `CSV` and the tabular exports drop the shapes and keep `feature_id`, which the DHIS2 and CHAP exports use for location. `ZARR` and `NETCDF` store the shapes as CF geometry, which xvec's `decode_cf` reads back. Asking for `GEOJSON` or `PARQUET` for a cube with no usable geometry is a `400` error rather than a silent fallback to another format. `GEOJSON` output is always WGS 84, as RFC 7946 requires, so a projected cube is reprojected on the way out; `PARQUET` records the CRS in the file and keeps the native coordinates.
+An `aggregate_spatial_weighted` result keeps the geometry it was aggregated over, so `GEOJSON` and `PARQUET` output carries the real shapes — mappable in QGIS or geopandas without joining back to a boundary file — alongside each feature's id in `feature_id`. The weighted reducer uses the relative overlap between each raster cell and each feature, which is important for irregular polygons and partial coverage. `CSV` and the tabular exports drop the shapes and keep `feature_id`, which the DHIS2 and CHAP exports use for location. `ZARR` and `NETCDF` store the shapes as CF geometry, which xvec's `decode_cf` reads back. Asking for `GEOJSON` or `PARQUET` for a cube with no usable geometry is a `400` error rather than a silent fallback to another format. `GEOJSON` output is always WGS 84, as RFC 7946 requires, so a projected cube is reprojected on the way out; `PARQUET` records the CRS in the file and keeps the native coordinates.
 
 ```bash
 # Monthly precipitation totals as NetCDF
@@ -361,7 +361,6 @@ openEO is an additional access layer on top of the existing dataset store — th
 ## Examples
 
 - [`examples/openeo_process_graph.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/openeo_process_graph.py) — full end-to-end walkthrough using the openEO Python client
-- [`examples/zonal_statistics.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/zonal_statistics.py) — district-level statistics with DHIS2 organisation unit IDs via `aggregate_spatial` and `rename_labels`
 
 ---
 

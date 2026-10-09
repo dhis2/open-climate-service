@@ -25,7 +25,7 @@ _GEOJSON_GEOMETRY_TYPES = (
     "GeometryCollection",
 )
 GEOMETRY_DIMENSION = "geometry"
-"""The vector dimension of a feature collection, named as `aggregate_spatial` names its output's."""
+"""The vector dimension of a feature collection."""
 
 
 def _normalize_cube_dimensions(collection: dict[str, Any]) -> dict[str, Any]:
