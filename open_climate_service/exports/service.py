@@ -31,7 +31,7 @@ def _configured_export_definitions() -> dict[str, dict[str, Any]]:
     """Validate the stored export definitions and index them by ID (CLIM-1089)."""
     from open_climate_service.exports import store
 
-    definitions = store.list_definitions()
+    definitions: Any = store.list_definitions()
     if not isinstance(definitions, list):
         raise ValueError("exports must be a list of named mappings")
     by_id: dict[str, dict[str, Any]] = {}

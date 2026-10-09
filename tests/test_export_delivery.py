@@ -142,7 +142,10 @@ def test_build_dhis2_report_outcomes() -> None:
 def test_deliver_named_export_calls_plugin_send(saved: Path, fake_send: list[dict[str, Any]]) -> None:
     with lease_export_input("rain", "source") as verified:
         digest = json_digest(verified.manifest.model_dump(mode="json"))
-    report = deliver_named_export("rain", "source", dry_run=True, expected_manifest_sha256=digest)
+    delivered = deliver_named_export("rain", "source", dry_run=True, expected_manifest_sha256=digest)
+    (event,) = delivered.events
+    assert event.type == "export.delivered" and event.data["export_id"] == "rain" and event.data["dry_run"] is True
+    report = delivered.result
     assert report["outcome"] == ExportOutcome.DRY_RUN
     assert len(fake_send) == 1
     assert fake_send[0]["target"] == "hmis"

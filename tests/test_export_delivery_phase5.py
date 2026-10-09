@@ -669,6 +669,6 @@ def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.Monk
     )
     with lease_export_input("chunky", "source") as verified:
         digest = json_digest(verified.manifest.model_dump(mode="json"))
-    report = deliver_named_export("chunky", "source", expected_manifest_sha256=digest)
+    report = deliver_named_export("chunky", "source", expected_manifest_sha256=digest).result
     assert report["outcome"] == "success"
     assert report["imported"] == 5

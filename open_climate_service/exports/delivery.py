@@ -12,6 +12,7 @@ from open_climate_service import config
 from open_climate_service.exports.base import DeliveryContext
 from open_climate_service.exports.delivery_input import VerifiedExport, lease_export_input
 from open_climate_service.exports.report import ExportOutcome, ExportReport
+from open_climate_service.jobs.models import JobExecutionResult
 from open_climate_service.shared.persistence import AlreadyLocked, try_index_lock
 from open_climate_service.shared.provenance import json_digest
 
@@ -80,7 +81,7 @@ def deliver_named_export(
     save_cursor: Any = None,
     load_cursor: Any = None,
     expected_manifest_sha256: str | None = None,
-) -> dict[str, Any]:
+) -> JobExecutionResult:
     """Send a completed source job's saved payload through its export plugin.
 
     Module-level so the native job store can re-import it on restart. Runs on the
@@ -114,7 +115,21 @@ def deliver_named_export(
         from open_climate_service.jobs.models import JobCancelledError
 
         raise JobCancelledError("Export delivery was cancelled", result=report.model_dump(mode="json"))
-    return report.model_dump(mode="json")
+    from open_climate_service.jobs.models import EXPORT_DELIVERED_EVENT_TYPE, JobEventDraft
+
+    # Every task says what it did (CLIM-1378): a delivery's event names the export, the job it
+    # sent and the outcome, so a webhook or a later task can act on a delivery.
+    event = JobEventDraft(
+        type=EXPORT_DELIVERED_EVENT_TYPE,
+        source=f"/exports/{export_id}",
+        data={
+            "export_id": export_id,
+            "source_job_id": job_id,
+            "dry_run": dry_run,
+            "outcome": str(report.outcome),
+        },
+    )
+    return JobExecutionResult(result=report.model_dump(mode="json"), events=[event])
 
 
 def _deliver(verified: VerifiedExport, export_id: str, dry_run: bool, context: DeliveryContext) -> ExportReport:
