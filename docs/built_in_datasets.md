@@ -172,6 +172,62 @@ name `type` outright. Only `divisions` is shipped as a template.
 `attribution` fields are the obligation, not decoration: publishing an extract without surfacing
 them is a breach, and share-alike attaches to a publicly served derived database.
 
+
+## DHIS2 — organisation units (feature collection)
+
+| Property             | Value                                                                   |
+| -------------------- | ----------------------------------------------------------------------- |
+| **Collection ID**    | Your choice: no template is shipped, since the DHIS2 instance is yours  |
+| **Item type**        | Feature collection (GeoParquet), not a raster                           |
+| **Identity**         | `id_property: id` — the organisation unit UID                           |
+| **Coverage**         | The level or subtree you select                                         |
+| **Requires**         | The `dhis2` extra (`open-climate-service[dhis2]`) and a named connection |
+
+The built-in `dhis2` provider fetches organisation units with their boundaries from a DHIS2
+instance and stores them as a feature collection. Because each feature's id is the DHIS2 UID,
+values aggregated to these boundaries can go straight back into DHIS2 as `orgUnit`.
+
+**1. Configure the connection** in `climate-service.yaml`, with the token in the environment (see
+[named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)):
+
+```yaml
+dhis2_connections:
+  - id: national-hmis
+    url: https://hmis.example.org/dhis
+    token_env: DHIS2_IMPORT_TOKEN
+```
+
+**2. Declare a template** in `plugins/vectors/`, for example `plugins/vectors/districts.yaml`:
+
+```yaml
+- id: districts
+  name: Districts (DHIS2)
+  id_property: id
+  provider: dhis2
+  params:
+    connection: national-hmis
+    level: 2
+```
+
+`level` and `parent` select the organisation units as DHIS2's own queries do: `level: 2` for every
+unit at level 2, `parent: <UID>` for the units under one parent, or both. With neither, DHIS2
+returns level 1.
+
+**3. Fetch it** with **Fetch** on the template's page, or `POST /features/districts/refresh` (add
+`Prefer: respond-async` to run it as a background job). Fetch again when the hierarchy changes in
+DHIS2.
+
+**4. Use it** in a process graph with `load_features` (`{"process_id": "load_features",
+"arguments": {"id": "districts"}}`), or in a workflow trigger's arguments as
+`geometries: {from_features: districts}`. The built-in `aggregate_to_dhis2_json` workflow takes it
+that way.
+
+**What it checks.** DHIS2 leaves out organisation units that have no geometry. The provider counts
+them with a second request and logs how many were skipped, naming a few, so a gap is visible
+rather than silent; if none of the selected units has a geometry, the fetch fails. A unit with no
+UID, or the same UID twice, is refused with its name. The other DHIS2 properties (`code`, `name`,
+`level`, `parent`, `parentGraph`, `groups`) are kept on each feature.
+
 ---
 
 ## Temporal resampling
