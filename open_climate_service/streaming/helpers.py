@@ -42,48 +42,44 @@ def cell_pad(coord: xr.DataArray | np.ndarray) -> float:
     return float(np.max(np.abs(np.diff(values)))) / 2.0
 
 
-def bbox_slice(coord: xr.DataArray | np.ndarray, low: float, high: float) -> slice:
-    """Return a label slice covering every cell on ``coord`` whose footprint meets ``[low, high]``.
-
-    Use this instead of ``slice(low, high)`` when selecting a bbox from a source grid. Label
-    selection keeps only cells whose centre lies inside the bounds, so the cells straddling
-    each edge are dropped and the result covers *less* than the bbox — up to half a cell short
-    on every side. On a coarse grid that is kilometres of missing coverage at the edge of the
-    instance extent, which shows up as an uncovered strip on the map and as border districts
-    aggregated from partial data.
-
-    The returned slice follows the coordinate's own direction, so it works unchanged on a
-    descending latitude axis (as most geographic sources have).
-
-    Plugins that read a remote store and cannot afford to fetch it whole should slice with
-    this: over-selecting by a cell is free once `normalize_period` clips exactly, whereas
-    under-selecting cannot be recovered downstream.
-    """
+def _axis_slice(coord: xr.DataArray, low: float, high: float) -> slice:
+    """A label slice on ``coord`` padded by `cell_pad`, in the axis's own direction."""
     pad = cell_pad(coord)
-    values = np.asarray(getattr(coord, "values", coord), dtype="float64").ravel()
-    descending = values.size > 1 and values[0] > values[-1]
-    if descending:
+    values = np.asarray(coord.values, dtype="float64").ravel()
+    if values.size > 1 and values[0] > values[-1]:
         return slice(high + pad, low - pad)
     return slice(low - pad, high + pad)
 
 
-def bbox_slices(
+def bbox_slice(
     obj: xr.Dataset | xr.DataArray,
     bbox: list[float] | tuple[float, float, float, float],
     *,
     x_dim: str,
     y_dim: str,
 ) -> dict[str, slice]:
-    """Return ``{x_dim: slice, y_dim: slice}`` covering every cell that meets ``bbox``.
+    """Return ``{x_dim: slice, y_dim: slice}`` covering every cell on ``obj`` that meets ``bbox``.
 
-    A convenience over :func:`bbox_slice` for the common case, so a plugin can write
-    ``ds.sel(**bbox_slices(ds, bbox, x_dim="longitude", y_dim="latitude"))``. Takes the bbox in
-    the source's own coordinate values — reproject first if the source is not in the bbox CRS.
+    Use this instead of ``slice(xmin, xmax)`` when selecting a bbox from a source grid:
+    ``ds.sel(bbox_slice(ds, bbox, x_dim="longitude", y_dim="latitude"))``. Label selection
+    keeps only cells whose centre lies inside the bounds, so the cells straddling each edge
+    are dropped and the result covers *less* than the bbox — up to half a cell short on every
+    side. On a coarse grid that is kilometres of missing coverage at the edge of the instance
+    extent, which shows up as an uncovered strip on the map and as border districts
+    aggregated from partial data.
+
+    Each slice follows its coordinate's own direction, so a descending latitude axis (as most
+    geographic sources have) needs nothing special. Takes the bbox in the source's own
+    coordinate values — reproject first if the source is not in the bbox CRS.
+
+    Plugins that read a remote store and cannot afford to fetch it whole should select with
+    this: over-selecting by a cell is free once `normalize_period` clips exactly, whereas
+    under-selecting cannot be recovered downstream.
     """
     xmin, ymin, xmax, ymax = (float(value) for value in bbox)
     return {
-        x_dim: bbox_slice(obj[x_dim], xmin, xmax),
-        y_dim: bbox_slice(obj[y_dim], ymin, ymax),
+        x_dim: _axis_slice(obj[x_dim], xmin, xmax),
+        y_dim: _axis_slice(obj[y_dim], ymin, ymax),
     }
 
 

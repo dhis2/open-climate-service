@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.streaming import bbox_slice, bbox_slices, cell_pad
+from open_climate_service.streaming import bbox_slice, cell_pad
 
 # Nepal's configured extent, which aligns to no regular grid.
 NEPAL = (80.05, 26.35, 88.20, 30.45)
@@ -24,6 +24,12 @@ def _grid(step: float, *, descending: bool) -> xr.DataArray:
     if descending:
         values = values[::-1]
     return xr.DataArray(values, dims="lat", coords={"lat": values})
+
+
+def _lat_slice(coord: xr.DataArray, low: float, high: float) -> slice:
+    """The latitude slice `bbox_slice` gives for a bbox spanning ``low`` to ``high``."""
+    ds = xr.Dataset(coords={"lat": coord, "lon": [0.0, 1.0]})
+    return bbox_slice(ds, (0.0, low, 1.0, high), x_dim="lon", y_dim="lat")["lat"]
 
 
 def _covered(coord: xr.DataArray, selector: slice) -> tuple[float, float]:
@@ -39,7 +45,7 @@ def test_selection_covers_the_whole_requested_span(step: float, descending: bool
     coord = _grid(step, descending=descending)
     low, high = NEPAL[1], NEPAL[3]
 
-    south, north = _covered(coord, bbox_slice(coord, low, high))
+    south, north = _covered(coord, _lat_slice(coord, low, high))
 
     assert south <= low, f"{south} > {low}: south edge uncovered on a {step}° grid"
     assert north >= high, f"{north} < {high}: north edge uncovered on a {step}° grid"
@@ -64,13 +70,13 @@ def test_selection_adds_at_most_one_cell_per_side() -> None:
     coord = _grid(0.25, descending=True)
     low, high = NEPAL[1], NEPAL[3]
 
-    picked = coord.sel(lat=bbox_slice(coord, low, high)).size
+    picked = coord.sel(lat=_lat_slice(coord, low, high)).size
     naive = coord.sel(lat=slice(high, low)).size
 
     assert picked - naive <= 2, f"grew by {picked - naive} cells; expected at most one per side"
 
 
-def test_bbox_slices_returns_both_axes_in_their_own_direction() -> None:
+def test_bbox_slice_returns_both_axes_in_their_own_direction() -> None:
     lat = np.arange(30.75, 26.0, -0.25)
     lon = np.arange(80.0, 88.5, 0.25)
     ds = xr.Dataset(
@@ -78,7 +84,7 @@ def test_bbox_slices_returns_both_axes_in_their_own_direction() -> None:
         coords={"latitude": lat, "longitude": lon},
     )
 
-    selectors = bbox_slices(ds, list(NEPAL), x_dim="longitude", y_dim="latitude")
+    selectors = bbox_slice(ds, list(NEPAL), x_dim="longitude", y_dim="latitude")
     picked = ds.sel(selectors)
 
     y = np.asarray(picked["latitude"].values)
