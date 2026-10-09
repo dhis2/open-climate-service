@@ -17,6 +17,7 @@ from open_climate_service.data_registry import routes as data_source_routes
 from open_climate_service.exports import routes as exports_routes
 from open_climate_service.extents import routes as extent_routes
 from open_climate_service.features import routes as feature_routes
+from open_climate_service.flows import routes as flows_routes
 from open_climate_service.ingestions import routes as ingestion_routes
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.openeo import routes as openeo_routes
@@ -279,6 +280,7 @@ def create_app() -> FastAPI:
     _app.include_router(scheduler_routes.router, prefix="/schedules", tags=["Schedules"])
     _app.include_router(tasks_routes.router, prefix="/tasks", tags=["Tasks"])
     _app.include_router(runs_routes.router, prefix="/runs", tags=["Runs"])
+    _app.include_router(flows_routes.router, prefix="/flows", tags=["Flows"])
     _app.include_router(configuration_document.router, prefix="/configuration", tags=["Configuration"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
     _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])

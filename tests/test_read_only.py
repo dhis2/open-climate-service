@@ -41,6 +41,8 @@ _MUTATING_ROUTES = [
     ("DELETE", "/exports/{export_id}"),
     ("PUT", "/configuration"),
     ("POST", "/tasks"),
+    ("POST", "/tasks/form"),
+    ("POST", "/tasks/{task_id}/delete"),
     ("PUT", "/tasks/{task_id}"),
     ("POST", "/tasks/{task_id}/pause"),
     ("POST", "/tasks/{task_id}/resume"),

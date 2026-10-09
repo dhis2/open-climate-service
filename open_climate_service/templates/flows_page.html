@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flows · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+      .flow-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.75rem; align-items: start; }
+      .flow-column h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.5rem; color: var(--muted, #5b6b73); }
+      .flow-node { border: 1px solid var(--border, #dbe2e6); border-radius: 8px; padding: 0.6rem 0.7rem; margin-bottom: 0.6rem; background: var(--surface, #fff); }
+      .flow-node .label { font-weight: 600; overflow-wrap: anywhere; }
+      .flow-node small { display: block; overflow-wrap: anywhere; }
+      .flow-node .feeds { margin-top: 0.35rem; font-size: 0.8rem; }
+      .status-failed, .status-refused { color: #b3261e; }
+      .status-succeeded { color: #2f7d4f; }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <div class="page-title">
+          <h2 id="flows-title" tabindex="-1">Flows</h2>
+          <span class="chip">{{ graph.nodes | length }} step{{ 's' if graph.nodes | length != 1 }}</span>
+        </div>
+        <p class="lead">How data moves on this instance: from each source, through the datasets and workflows that use it, to the exports that send it on. Each box shows how it is kept current and how its latest run went. A failed box is where a broken path starts.</p>
+
+        {% if not graph.nodes %}
+        <div class="panel empty-state">
+          <h3>Nothing is automated yet</h3>
+          <p class="note">Open a dataset to sync it on a schedule, or to send it to DHIS2 after each update.</p>
+          <a class="button-link primary empty-state-action" href="{{ mount }}/datasets">Datasets</a>
+        </div>
+        {% else %}
+        <div class="flow-columns">
+          {% for column, title in columns %}
+          {% set members = graph.nodes | selectattr('type', 'equalto', column) | list %}
+          {% if members %}
+          <section class="flow-column" aria-label="{{ title }}">
+            <h3>{{ title }}</h3>
+            {% for n in members %}
+            <div class="flow-node" id="{{ n.id }}">
+              <div class="label">{% if n.href %}<a href="{{ mount }}{{ n.href }}">{{ n.label }}</a>{% else %}{{ n.label }}{% endif %}</div>
+              {% if n.detail %}<small class="mono">{{ n.detail }}</small>{% endif %}
+              {% if n.status %}<small class="status-{{ n.status }}">{{ n.status }}{% if n.task_id %} · <a href="{{ mount }}/runs?task={{ n.task_id }}">runs</a>{% endif %}</small>{% endif %}
+              {% set out = graph.edges | selectattr('source', 'equalto', n.id) | list %}
+              {% if out %}<div class="feeds">{% for e in out %}→ {% if e.label %}{{ e.label }}: {% endif %}<a href="#{{ e.target }}">{{ labels[e.target] }}</a>{% if not loop.last %}<br />{% endif %}{% endfor %}</div>{% endif %}
+            </div>
+            {% endfor %}
+          </section>
+          {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+        <p class="note">The same graph as JSON: <a class="mono" href="{{ mount }}/flows?format=json">/flows</a>.</p>
+      </main>
+    </div>
+  </body>
+</html>

@@ -12,7 +12,8 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ValidationError
 
 from open_climate_service import config as api_config
@@ -142,14 +143,82 @@ def _write(action: Any) -> Any:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("", response_model=TaskList)
-def list_tasks() -> TaskList:
-    """Every task, with how it starts and its latest run."""
+def _listing() -> TaskList:
     try:
         tasks = store.list_tasks()
     except TaskStoreUnreadable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return TaskList(tasks=[_status(task) for task in tasks])
+
+
+def _page(request: Request, *, error: str | None = None, draft: dict[str, Any] | None = None) -> HTMLResponse:
+    from open_climate_service.scheduler.service import get_scheduler_service
+    from open_climate_service.shared.urls import mount_prefix
+    from open_climate_service.system.templates import render_tasks_page
+
+    html = render_tasks_page(
+        _listing().tasks, get_scheduler_service().status(), mount_prefix(request), error=error, draft=draft
+    )
+    return HTMLResponse(html, status_code=400 if error else 200)
+
+
+def _back(request: Request) -> RedirectResponse:
+    from open_climate_service.shared.urls import mount_prefix
+
+    return RedirectResponse(f"{mount_prefix(request)}/tasks", status_code=303)
+
+
+@router.get("", response_model=TaskList)
+def list_tasks(request: Request) -> Any:
+    """Every task, with how it starts and its latest run, as JSON, or the Automation page."""
+    from open_climate_service.system.templates import wants_json
+
+    if not wants_json(request):
+        return _page(request)
+    return _listing()
+
+
+@router.post("/form", include_in_schema=False)
+async def create_task_form(request: Request) -> Response:
+    """The Automation page's Add a task form."""
+    import json
+
+    _require_writable()
+    form = {key: str(value).strip() for key, value in (await request.form()).items() if isinstance(value, str)}
+    body: dict[str, Any] = {"id": form.get("id", ""), "kind": form.get("kind", ""), "target": form.get("target", "")}
+    if form.get("cron"):
+        body["cron"] = form["cron"]
+    if form.get("after_type") and form.get("after_id"):
+        body["after"] = {form["after_type"]: form["after_id"]}
+    if form.get("arguments"):
+        try:
+            body["arguments"] = json.loads(form["arguments"])
+        except json.JSONDecodeError as exc:
+            return _page(request, error=f"Workflow arguments are not valid JSON: {exc}", draft=form)
+    if body["kind"] == "deliver":
+        body["dry_run"] = form.get("dry_run") == "true"
+    try:
+        task = Task.model_validate(body)
+        store.save_task(task, create=True, check=_validator(task))
+    except ValidationError as exc:
+        return _page(request, error="; ".join(str(error["msg"]) for error in exc.errors()), draft=form)
+    except ValueError as exc:
+        return _page(request, error=str(exc), draft=form)
+    _apply()
+    return _back(request)
+
+
+@router.post("/{task_id}/delete", include_in_schema=False)
+def delete_task_form(request: Request, task_id: str) -> Response:
+    """The Automation page's Delete button."""
+    _require_writable()
+    _get_or_404(task_id)
+    try:
+        store.delete_task(task_id, check=_validate_structure)
+    except ValueError as exc:
+        return _page(request, error=str(exc))
+    _apply()
+    return _back(request)
 
 
 @router.post("", response_model=TaskStatus, status_code=201)
@@ -187,27 +256,27 @@ def update_task(task_id: str, body: dict[str, Any]) -> TaskStatus:
 
 
 @router.post("/{task_id}/pause", response_model=TaskStatus)
-def pause_task(task_id: str) -> TaskStatus:
+def pause_task(task_id: str, request: Request) -> Any:
     """Stop a task from running without removing it."""
     _require_writable()
     _get_or_404(task_id)
     saved = _write(lambda: store.set_enabled(task_id, False))
     _apply()
-    return _status(saved)
+    return _back(request) if request.query_params.get("next") else _status(saved)
 
 
 @router.post("/{task_id}/resume", response_model=TaskStatus)
-def resume_task(task_id: str) -> TaskStatus:
+def resume_task(task_id: str, request: Request) -> Any:
     """Let a paused task run again."""
     _require_writable()
     _get_or_404(task_id)
     saved = _write(lambda: store.set_enabled(task_id, True))
     _apply()
-    return _status(saved)
+    return _back(request) if request.query_params.get("next") else _status(saved)
 
 
 @router.post("/{task_id}/run", response_model=CheckResult, status_code=202)
-def run_task(task_id: str) -> CheckResult:
+def run_task(task_id: str, request: Request) -> Any:
     """Run a task now, by hand. A deliver task runs after its workflow task and cannot be run alone."""
     _require_writable()
     from open_climate_service.scheduler.service import get_scheduler_service
@@ -219,8 +288,10 @@ def run_task(task_id: str) -> CheckResult:
         raise HTTPException(status_code=409, detail=f"Task '{task_id}' is paused")
     result = get_scheduler_service().run_task_now(task, cause=f"manual:{uuid4()}")
     if result.outcome == CheckOutcome.ERROR:
+        if request.query_params.get("next"):
+            return _page(request, error=result.message)
         raise HTTPException(status_code=409, detail=result.message)
-    return result
+    return _back(request) if request.query_params.get("next") else result
 
 
 @router.delete("/{task_id}", status_code=204)

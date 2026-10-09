@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Automation · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+      .status-failed, .status-refused { color: #b3261e; }
+      .status-succeeded { color: #2f7d4f; }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <div class="page-title">
+          <h2 id="automation-title" tabindex="-1">Automation</h2>
+          <span class="chip">{{ tasks | length }} task{{ 's' if tasks | length != 1 }}</span>
+          <span class="chip {{ 'chip-published' if clock.running else 'chip-unpublished' }}">{{ 'Clock running here' if clock.running else ('Scheduler off' if not clock.enabled else 'Clock on standby or stopped') }}</span>
+        </div>
+        <p class="lead">Every task this instance runs by itself. A task syncs a dataset, refreshes org units, runs a workflow or delivers an export, on a schedule, after something it depends on changed, or when you press Run. <a href="{{ mount }}/flows">Flows</a> shows how they connect.</p>
+
+        {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+        {% if not clock.enabled %}
+        <div class="notice">Scheduled tasks do not run: set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span> and restart. Tasks that run after a change, or by hand, still run.</div>
+        {% endif %}
+
+        {% if tasks %}
+        <div class="panel table-wrap records-table">
+          <table>
+            <thead>
+              <tr><th>Task</th><th>Does</th><th>Starts</th><th>Next run</th><th>Last run</th>{% if not read_only %}<th>Actions</th>{% endif %}</tr>
+            </thead>
+            <tbody>
+              {% for t in tasks %}
+              <tr>
+                <td class="mono">{{ t.id }}</td>
+                <td>{{ t.kind | capitalize }} <span class="mono">{{ t.target }}</span>{% if t.kind == 'deliver' %}<br /><small>{{ 'Dry run' if t.dry_run else 'Live' }}</small>{% endif %}</td>
+                <td>{{ t.starts_words }}{% if not t.enabled %}<br /><span class="chip chip-unpublished">Paused</span>{% endif %}</td>
+                <td>{{ t.next_run or '' }}</td>
+                <td>
+                  {% if t.last_run %}
+                  <span class="status-{{ t.last_run.status }}">{{ t.last_run.status }}</span> · {{ t.last_run.cause }}<br />
+                  <small>{{ t.last_run.started_at }}{% if t.last_run.job_href %} · <a href="{{ mount }}{{ t.last_run.job_href }}">job</a>{% endif %} · <a href="{{ mount }}/runs/{{ t.last_run.id }}">what it set off</a></small>
+                  {% if t.consecutive_failures > 1 %}<br /><small class="status-failed">Failed {{ t.consecutive_failures }} times in a row</small>{% endif %}
+                  {% else %}<span class="note">Not run yet</span>{% endif %}
+                </td>
+                {% if not read_only %}
+                <td>
+                  <div class="form-actions">
+                    {% if t.kind != 'deliver' and t.enabled %}
+                    <form method="post" action="{{ mount }}/tasks/{{ t.id }}/run?next=tasks"><button type="submit">Run now</button></form>
+                    {% endif %}
+                    <form method="post" action="{{ mount }}/tasks/{{ t.id }}/{{ 'pause' if t.enabled else 'resume' }}?next=tasks"><button type="submit">{{ 'Pause' if t.enabled else 'Resume' }}</button></form>
+                    <form method="post" action="{{ mount }}/tasks/{{ t.id }}/delete"><button type="submit">Delete</button></form>
+                  </div>
+                </td>
+                {% endif %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="panel empty-state">
+          <h3>No tasks yet</h3>
+          <p class="note">Open a dataset to sync it on a schedule or send it to DHIS2, or add any task below.</p>
+        </div>
+        {% endif %}
+
+        {% if not read_only %}
+        <section class="panel" aria-labelledby="add-task-title">
+          <h3 id="add-task-title">Add a task</h3>
+          <form method="post" action="{{ mount }}/tasks/form" class="record-form">
+            <label>Id <input name="id" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" value="{{ draft.id or '' }}" /></label>
+            <label>Kind
+              <select name="kind">
+                {% for kind in ['sync', 'refresh', 'workflow', 'deliver'] %}<option value="{{ kind }}" {{ 'selected' if draft.kind == kind }}>{{ kind }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Target <input name="target" required value="{{ draft.target or '' }}" /><small>A dataset (sync), a feature collection (refresh), a workflow (workflow) or an export (deliver).</small></label>
+            <label>On a schedule <input name="cron" placeholder="0 6 * * *" value="{{ draft.cron or '' }}" /></label>
+            <label>Or after <select name="after_type"><option value="">nothing (schedule or by hand)</option><option value="dataset">dataset</option><option value="collection">feature collection</option><option value="task">task</option></select> <input name="after_id" placeholder="id" /></label>
+            <label>Workflow arguments (JSON) <textarea name="arguments" rows="4">{{ draft.arguments or '' }}</textarea></label>
+            <label><input type="checkbox" name="dry_run" value="true" checked /> Deliveries are dry runs</label>
+            <div class="form-actions"><button type="submit" class="primary">Add task</button></div>
+          </form>
+        </section>
+        {% endif %}
+        <p class="note">Times use {{ clock.timezone }}. Every task and export as one document: <a class="mono" href="{{ mount }}/configuration?format=yaml">/configuration</a>.</p>
+      </main>
+    </div>
+  </body>
+</html>

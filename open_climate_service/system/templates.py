@@ -153,7 +153,8 @@ _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
     ("workflows", "Workflows", "/workflows"),
-    ("schedules", "Schedules", "/schedules"),
+    ("automation", "Automation", "/tasks"),
+    ("flows", "Flows", "/flows"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -537,7 +538,7 @@ def render_schedules_page(status: Any, mount: str, *, change_warning: str | None
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "schedules"),
+        nav=page_nav(mount, "automation"),
         read_only=api_config.is_read_only(),
         status=status,
         schedules=rows,
@@ -553,7 +554,7 @@ def render_schedule_delete_page(dataset_id: str, mount: str) -> str:
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "schedules"),
+        nav=page_nav(mount, "automation"),
         dataset_id=dataset_id,
     )
 
@@ -1399,6 +1400,7 @@ _API_GROUP_NOTES = {
     "Tasks": "Every automated task: sync, refresh, workflow and deliver, each on a cron, after a change, or by hand.",
     "Runs": "What each task did: one record per run, with its job's status and the runs it set off.",
     "Configuration": "Every task and export as one document, to export, commit and import on another instance.",
+    "Flows": "How data moves from each source to each destination, with each step's latest run.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "System": "Health, version and the landing page's JSON form.",
 }
@@ -1873,4 +1875,64 @@ def render_landing(version: str, mount: str) -> str:
         workflows=catalogue["workflows"],
         # Shown on the overview, so a visitor knows why no page offers ingest or sync.
         read_only=api_config.is_read_only(),
+    )
+
+
+def _starts_in_words(task: Any, timezone: str) -> str:
+    if task.cron is not None:
+        return schedule_description(task.cron, timezone) or f"{task.cron} ({timezone})"
+    if task.after is not None:
+        return f"After {task.after.describe} changed" if task.after.task is None else f"After task {task.after.task}"
+    return "By hand"
+
+
+def render_tasks_page(
+    statuses: list[Any], clock: Any, mount: str, *, error: str | None = None, draft: dict[str, Any] | None = None
+) -> str:
+    """Render every task with how it starts and its latest run (CLIM-1378)."""
+    rows = [
+        {
+            **item.model_dump(mode="json"),
+            "starts_words": _starts_in_words(item, clock.timezone),
+            "last_run": item.last_run,
+        }
+        for item in statuses
+    ]
+    return get_template("tasks_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "automation"),
+        read_only=api_config.is_read_only(),
+        tasks=rows,
+        clock=clock,
+        error=error,
+        draft=draft or {},
+    )
+
+
+_FLOW_COLUMNS = (
+    ("source", "Sources"),
+    ("dataset", "Datasets"),
+    ("collection", "Org units and features"),
+    ("workflow", "Workflows"),
+    ("export", "Exports"),
+    ("destination", "Destinations"),
+)
+
+
+def render_flows_page(graph: Any, mount: str) -> str:
+    """Render the flow graph a column per kind of step, left to right (CLIM-1377)."""
+    return get_template("flows_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "flows"),
+        graph=graph,
+        columns=_FLOW_COLUMNS,
+        labels={node.id: node.label for node in graph.nodes},
     )
