@@ -629,7 +629,7 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
             xmin, ymin, xmax, ymax = bbox_tuple
             ds = _edh_open_zarr(self._edh_url)
             # Extend the bbox by half a grid step. This keeps the cells straddling each bbox
-            # edge, which a plain label slice drops because it selects on cell centres, and
+            # edge, which a plain coordinate slice drops because it selects on cell centres, and
             # avoids floating-point boundary exclusion (e.g. 360 - 10.1 = 349.8999... misses
             # the 349.9 grid point). The fixed step rather than cell_pad: the CDS fallback
             # requests (_cds_fallback_area) pad by exactly the same amount, so both sources
@@ -1134,7 +1134,7 @@ class ERA5LandNormalsPlugin(BaseDatasetPlugin):
         xmin, ymin, xmax, ymax = map(float, bbox)
         ds = _edh_open_zarr(_EDH_DAILY_URL)
         try:
-            # Half a grid step, derived from the axis: label selection is on cell centres, so
+            # Half a grid step, derived from the axis: selecting by coordinate value keeps cell centres, so
             # without it the cells straddling each bbox edge are dropped and the reference
             # period covers less than the requested extent.
             eps = cell_pad(ds["longitude"])
