@@ -29,16 +29,18 @@ On a dataset's page:
 2. **Send to DHIS2** asks for a connection, the org units, a data element and a statistic, and
    creates the three things a delivery needs: a named export (the mapping), a workflow task that
    aggregates the dataset to the org units after each update, and a deliver task, a dry run.
-3. **Flow** shows where the dataset comes from and what it feeds, with the latest status of each.
+3. **Flow** draws each path through the dataset, from where it comes from to what it feeds, with
+   the latest status of each step.
 
 When the dry-run reports look right, switch the deliver task to live on the **Automation** page.
 
-## Pages
+## The Automation page
 
-* **Automation** lists every task: how it starts, when it runs next, its last run and how many
-  times in a row it has failed. Run, pause and delete it there, or add any kind of task.
-* **Flows** draws every configured path from a source to a destination, a column per kind of step,
-  with the latest status on each box. A failed box is where a broken path starts.
+* **Flows** draws every configured path as a row of boxes joined by arrows, from where the data
+  comes in to where it goes, with the latest status on each box. A failed box is where a broken
+  path starts.
+* **Tasks** lists every task: how it starts, when it runs next, its last run and how many times in
+  a row it has failed. Run, pause and delete it there, or add any kind of task.
 
 ## The API
 

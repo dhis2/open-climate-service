@@ -49,19 +49,47 @@ def test_the_graph_follows_a_source_through_a_derived_dataset_to_dhis2(instance:
     assert labels["dataset:temp_daily"] == "Temperature, daily"
     nightly = _task(id="nightly", kind="workflow", target=_WORKFLOW, cron="0 2 * * *", arguments={"dataset_id": "era5"})
     assert ("dataset:era5", "task:nightly") in {(e.source, e.target) for e in build_graph([nightly], {}, {}).edges}
-    around = graph.around("dataset:temp_anomaly")
-    assert {node.id for node in around.nodes} == {"dataset:temp_anomaly", "task:anomaly", "task:to-kommuner"}
 
 
-def test_flows_are_json_for_clients_and_a_page_for_browsers(client: TestClient) -> None:  # noqa: F811
+def test_chains_read_one_path_per_row_with_org_units_on_the_workflow(instance: None) -> None:  # noqa: F811
+    tasks = [
+        _task(id="sync-temp", kind="sync", target="temp_daily", cron="0 6 * * *"),
+        _task(id="kommuner", kind="refresh", target="kommuner", cron="0 5 * * 1"),
+        _task(
+            id="to-kommuner",
+            kind="workflow",
+            target="aggregate_to_dhis2_json",
+            after={"dataset": "temp_daily"},
+            arguments={"geometries": {"from_features": "kommuner"}, "export": "temp-kommuner"},
+        ),
+        _task(id="send", kind="deliver", target="temp-kommuner", after={"task": "to-kommuner"}),
+        _task(id="anomaly", kind="workflow", target="climate_anomaly", after={"dataset": "temp_daily"}),
+    ]
+    exports = {"temp-kommuner": {"id": "temp-kommuner", "plugin": "dhis2", "connection": "hmis"}}
+    graph = build_graph(tasks, exports, {"temp_daily": "Temperature, daily"})
+
+    rows = [[step.node.id for step in row] for row in graph.chains()]
+    assert rows == [
+        ["dataset:temp_daily", "task:to-kommuner", "export:temp-kommuner", "destination:hmis"],
+        ["dataset:temp_daily", "task:anomaly"],
+        ["collection:kommuner"],
+    ]
+    workflow = graph.chains()[0][1]
+    assert workflow.via is None and [node.id for node in workflow.inputs] == ["collection:kommuner"]
+    assert workflow.node.label == "Aggregate to DHIS2 JSON" and workflow.node.detail == "to-kommuner"
+    assert graph.chains()[0][0].node.starts == "Synced every day at 06:00 (UTC)"
+    assert len(graph.chains(through="task:anomaly")) == 1
+
+
+def test_the_automation_page_draws_the_flows_and_the_graph_stays_json(client: TestClient) -> None:  # noqa: F811
     client.post("/tasks", json={"id": "sync-chirps", "kind": "sync", "target": "chirps", "cron": "0 6 * * *"})
     client.post("/tasks", json={"id": "agg", "kind": "workflow", "target": _WORKFLOW, "after": {"dataset": "chirps"}})
 
-    graph = client.get("/flows").json()
+    graph = client.get("/flows", headers=BROWSER).json()
     assert {"dataset:chirps", "task:agg"} <= {node["id"] for node in graph["nodes"]}
 
-    page = client.get("/flows", headers=BROWSER)
-    assert page.status_code == 200 and "Flows" in page.text and _WORKFLOW in page.text
+    page = client.get("/tasks", headers=BROWSER).text
+    assert 'class="flow-chain"' in page and _WORKFLOW in page and "agg" in page
 
 
 def test_the_automation_page_adds_pauses_and_removes_tasks(client: TestClient) -> None:  # noqa: F811

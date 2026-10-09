@@ -1,3 +1,4 @@
+{% from "flow_chains.html" import flow_chains %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -28,11 +29,19 @@
           <span class="chip">{{ tasks | length }} task{{ 's' if tasks | length != 1 }}</span>
           <span class="chip {{ 'chip-published' if clock.running else 'chip-unpublished' }}">{{ 'Clock running here' if clock.running else ('Scheduler off' if not clock.enabled else 'Clock on standby or stopped') }}</span>
         </div>
-        <p class="lead">Every task this instance runs by itself. A task syncs a dataset, refreshes org units, runs a workflow or delivers an export, on a schedule, after something it depends on changed, or when you press Run. <a href="{{ mount }}/flows">Flows</a> shows how they connect.</p>
+        <p class="lead">Every task this instance runs by itself. A task syncs a dataset, refreshes org units, runs a workflow or delivers an export, on a schedule, after something it depends on changed, or when you press Run.</p>
 
         {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
         {% if not clock.enabled %}
         <div class="notice">Scheduled tasks do not run: set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span> and restart. Tasks that run after a change, or by hand, still run.</div>
+        {% endif %}
+
+        {% if chains %}
+        <section class="panel" id="flows" aria-labelledby="flows-title">
+          <h3 id="flows-title">Flows</h3>
+          <p class="note">How the tasks connect, one row per path from where data comes in to where it goes, with each step's latest run.</p>
+          {{ flow_chains(chains, mount) }}
+        </section>
         {% endif %}
 
         {% if tasks %}
@@ -97,7 +106,7 @@
           </form>
         </section>
         {% endif %}
-        <p class="note">Times use {{ clock.timezone }}. Every task and export as one document: <a class="mono" href="{{ mount }}/configuration?format=yaml">/configuration</a>.</p>
+        <p class="note">Times use {{ clock.timezone }}. Every task and export as one document: <a class="mono" href="{{ mount }}/configuration?format=yaml">/configuration</a>. The flows as a graph: <a class="mono" href="{{ mount }}/flows">/flows</a>.</p>
       </main>
     </div>
   </body>

@@ -154,7 +154,6 @@ _NAV_ITEMS = (
     ("data-sources", "Data sources", "/data-sources"),
     ("workflows", "Workflows", "/workflows"),
     ("automation", "Automation", "/tasks"),
-    ("flows", "Flows", "/flows"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -498,13 +497,12 @@ def render_dataset_page(
             from open_climate_service.flows.service import current_graph
             from open_climate_service.tasks.send_to import options
 
-            flow = current_graph().around(f"dataset:{record.dataset_id}")
+            flow = current_graph().chains(through=f"dataset:{record.dataset_id}")
             send_options = options()
         except Exception:
             _log.exception("The flow around dataset '%s' could not be read", record.dataset_id)
     return get_template("dataset_page.html").render(
         flow=flow,
-        flow_labels={node.id: node for node in flow.nodes} if flow is not None else {},
         send_options=send_options,
         send_error=send_error,
         send_draft=send_draft or {},
@@ -1040,7 +1038,7 @@ def _load_processes() -> list[dict[str, Any]]:
     return sorted(views, key=lambda view: (order.index(view["origin"]), view["id"]))
 
 
-def _workflow_title(workflow_id: str) -> str:
+def workflow_title(workflow_id: str) -> str:
     """`aggregate_to_chap_csv` → `Aggregate to CHAP CSV`: workflows declare no title of their own."""
     words = [_TITLE_WORDS.get(word, word) for word in workflow_id.split("_")]
     return " ".join([words[0][:1].upper() + words[0][1:], *words[1:]]) if words else workflow_id
@@ -1294,7 +1292,7 @@ def _workflow_page_context(
     return {
         "workflow": {
             "id": record.id,
-            "title": _workflow_title(record.id),
+            "title": workflow_title(record.id),
             "summary": record.summary or "",
             "results": _workflow_results(record),
         },
@@ -1382,7 +1380,7 @@ def _process_page_context(process: dict[str, Any], origin_label: str, workflows:
             if isinstance(link, dict) and str(link.get("href", "")).startswith(("http://", "https://"))
         ],
         "used_by": [
-            {"id": workflow.id, "title": _workflow_title(workflow.id)}
+            {"id": workflow.id, "title": workflow_title(workflow.id)}
             for workflow in workflows
             if _uses_process(workflow.process_graph, process["id"])
         ],
@@ -1417,8 +1415,8 @@ _API_GROUP_NOTES = {
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
     "Tasks": "Every automated task: sync, refresh, workflow and deliver, each on a cron, after a change, or by hand.",
     "Runs": "What each task did: one record per run, with its job's status and the runs it set off.",
+    "Flows": "How the tasks connect, as nodes and edges with each step's latest run. The Automation page draws it.",
     "Configuration": "Every task and export as one document, to export, commit and import on another instance.",
-    "Flows": "How data moves from each source to each destination, with each step's latest run.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "System": "Health, version and the landing page's JSON form.",
 }
@@ -1759,7 +1757,7 @@ def _landing_catalogue(
         "workflows": [
             {
                 "record": workflow,
-                "title": _workflow_title(workflow.id),
+                "title": workflow_title(workflow.id),
                 "results": _workflow_results(workflow),
                 "outputs": outputs[workflow.id],
             }
@@ -1916,6 +1914,13 @@ def render_tasks_page(
         }
         for item in statuses
     ]
+    chains: list[Any] = []
+    try:
+        from open_climate_service.flows.service import current_graph
+
+        chains = current_graph().chains()
+    except Exception:
+        _log.exception("The flows could not be read")
     return get_template("tasks_page.html").render(
         version=app_version,
         mount=mount,
@@ -1925,32 +1930,8 @@ def render_tasks_page(
         nav=page_nav(mount, "automation"),
         read_only=api_config.is_read_only(),
         tasks=rows,
+        chains=chains,
         clock=clock,
         error=error,
         draft=draft or {},
-    )
-
-
-_FLOW_COLUMNS = (
-    ("source", "Sources"),
-    ("dataset", "Datasets"),
-    ("collection", "Org units and features"),
-    ("workflow", "Workflows"),
-    ("export", "Exports"),
-    ("destination", "Destinations"),
-)
-
-
-def render_flows_page(graph: Any, mount: str) -> str:
-    """Render the flow graph a column per kind of step, left to right (CLIM-1377)."""
-    return get_template("flows_page.html").render(
-        version=app_version,
-        mount=mount,
-        name=api_config.get_name(),
-        logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "flows"),
-        graph=graph,
-        columns=_FLOW_COLUMNS,
-        labels={node.id: node.label for node in graph.nodes},
     )

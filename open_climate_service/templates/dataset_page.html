@@ -1,3 +1,4 @@
+{% from "flow_chains.html" import flow_chains %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -290,17 +291,12 @@
             {% if flow is not none %}
             <section class="panel" id="flow" aria-labelledby="flow-title">
               <h3 id="flow-title">Flow</h3>
-              {% set incoming = flow.edges | selectattr('target', 'equalto', 'dataset:' ~ dataset.id) | list %}
-              {% set outgoing = flow.edges | selectattr('source', 'equalto', 'dataset:' ~ dataset.id) | list %}
-              {% if not incoming and not outgoing %}
+              {% if not flow %}
               <p class="note">Nothing is automated for this dataset yet. Schedule a sync above, or send it to DHIS2 below.</p>
               {% else %}
-              <dl class="facts">
-                {% if incoming %}<dt>Comes from</dt><dd>{% for e in incoming %}{{ flow_labels[e.source].label }}{% if e.label %} ({{ e.label }}){% endif %}{% if flow_labels[e.source].status %} · {{ flow_labels[e.source].status }}{% endif %}{% if not loop.last %}<br />{% endif %}{% endfor %}</dd>{% endif %}
-                {% if outgoing %}<dt>Feeds</dt><dd>{% for e in outgoing %}{{ flow_labels[e.target].label }}{% if flow_labels[e.target].detail %} <small class="mono">{{ flow_labels[e.target].detail }}</small>{% endif %}{% if flow_labels[e.target].status %} · {{ flow_labels[e.target].status }}{% endif %}{% if not loop.last %}<br />{% endif %}{% endfor %}</dd>{% endif %}
-              </dl>
+              {{ flow_chains(flow, mount, current='dataset:' ~ dataset.id) }}
               {% endif %}
-              <p class="note"><a href="{{ mount }}/flows#dataset:{{ dataset.id }}">See the whole flow</a> · <a href="{{ mount }}/tasks">Automation</a></p>
+              <p class="note"><a href="{{ mount }}/tasks#flows">All flows on the Automation page</a></p>
             </section>
 
             {% if not read_only %}

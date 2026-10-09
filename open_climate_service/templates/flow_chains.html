@@ -1,0 +1,27 @@
+{#- Flow chains (CLIM-1377): one row per path from a start to an end, boxes joined by arrows.
+    Used by the Automation page and a dataset's Flow panel; the styles are in ocs_ui.css. -#}
+{% macro flow_chains(chains, mount, current=None) %}
+{% set kinds = {"source": "Source", "dataset": "Dataset", "collection": "Org units", "workflow": "Workflow", "export": "Export", "destination": "Destination"} %}
+<div class="flow-chains">
+  {% for row in chains %}
+  <ol class="flow-chain">
+    {% for step in row %}
+    {% set n = step.node %}
+    {% if not loop.first %}
+    <li class="flow-arrow"><span>{{ step.via or '' }}</span></li>
+    {% endif %}
+    <li class="flow-step flow-{{ n.type }}{% if n.id == current %} is-current{% endif %}">
+      <span class="flow-kind">{{ kinds[n.type] }}</span>
+      <span class="flow-label">{% if n.href and n.id != current %}<a href="{{ mount }}{{ n.href }}">{{ n.label }}</a>{% else %}{{ n.label }}{% endif %}</span>
+      {% if n.detail %}<small class="mono">{{ n.detail }}</small>{% endif %}
+      {% for input in step.inputs %}<small>with <a href="{{ mount }}{{ input.href }}">{{ input.label }}</a></small>{% endfor %}
+      {% if n.starts %}<small>{{ n.starts }}</small>{% endif %}
+      {% if n.status %}
+      {% if n.task_id %}<a class="flow-status status-{{ n.status }}" href="{{ mount }}/runs?task={{ n.task_id }}">{{ n.status }}</a>{% else %}<span class="flow-status status-{{ n.status }}">{{ n.status }}</span>{% endif %}
+      {% elif n.task_id %}<span class="flow-status">not run yet</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% endfor %}
+</div>
+{% endmacro %}

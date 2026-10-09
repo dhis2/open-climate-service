@@ -1106,3 +1106,97 @@ button.danger:hover:not(:disabled) {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Flow chains (CLIM-1377): one row per path, boxes joined by arrows. A long row scrolls on
+   its own, so the page never scrolls sideways. */
+.flow-chains {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacers-dp12);
+}
+.flow-chain {
+  display: flex;
+  align-items: stretch;
+  margin: 0;
+  padding: var(--spacers-dp4) 0 var(--spacers-dp8);
+  list-style: none;
+  overflow-x: auto;
+}
+.flow-step {
+  display: flex;
+  flex: 0 0 11rem;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--spacers-dp8) var(--spacers-dp12);
+  border: 1px solid var(--colors-grey300);
+  border-top: 3px solid var(--colors-grey500);
+  border-radius: var(--radius);
+  background: var(--colors-white);
+}
+.flow-step small,
+.flow-step .flow-label {
+  overflow-wrap: anywhere;
+}
+.flow-step small {
+  color: var(--colors-grey700);
+}
+.flow-label {
+  font-weight: var(--font-weight-medium);
+}
+.flow-kind {
+  font-size: 0.7rem;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--colors-grey600);
+}
+.flow-dataset { border-top-color: var(--colors-blue600); }
+.flow-collection { border-top-color: var(--colors-teal800); }
+.flow-workflow { border-top-color: var(--colors-blue900); }
+.flow-export { border-top-color: var(--colors-green800); }
+.flow-destination { border-top-color: var(--colors-grey800); }
+.flow-step.is-current {
+  background: var(--colors-blue050);
+  box-shadow: 0 0 0 2px var(--colors-blue600);
+}
+.flow-arrow {
+  display: flex;
+  flex: 0 0 3.75rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: var(--font-size-small);
+  color: var(--colors-grey600);
+}
+.flow-arrow::after {
+  content: "";
+  width: 100%;
+  height: 10px;
+  background:
+    linear-gradient(var(--colors-grey500), var(--colors-grey500)) left center / calc(100% - 8px) 2px no-repeat,
+    conic-gradient(from -135deg at 100% 50%, var(--colors-grey500) 90deg, transparent 0) right center / 8px 10px no-repeat;
+}
+.flow-status {
+  margin-top: var(--spacers-dp4);
+  font-size: var(--font-size-small);
+  color: var(--colors-grey700);
+}
+.flow-status::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--colors-grey400);
+}
+.flow-status.status-succeeded::before { background: var(--colors-green800); }
+.flow-status.status-failed::before,
+.flow-status.status-refused::before { background: var(--colors-red600); }
+.flow-status.status-running::before,
+.flow-status.status-queued::before,
+.flow-status.status-retrying::before { background: var(--colors-blue600); }
+.flow-status.status-failed,
+.flow-status.status-refused { color: var(--colors-red800); }
