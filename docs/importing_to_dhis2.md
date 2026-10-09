@@ -117,6 +117,9 @@ For reusable destination mappings and pure rendering through `save_result`, see
 
 Pull the org unit boundaries as GeoJSON. Each feature's `id` is the org unit UID, which the workflow uses as the `orgUnit`.
 
+!!! tip
+    On a running instance, let OCS fetch and store them instead, with the built-in `dhis2` feature provider: see [DHIS2 organisation units](built_in_datasets.md#dhis2-organisation-units-feature-collection). A workflow then takes them as a `load_collection` node passed as `geometries`, or, in a workflow trigger's arguments, as `{from_features: districts}`. The collection id on its own is not geometry, so it cannot replace `org_units` in the example below.
+
 ```python
 from dhis2_client import DHIS2Client
 from dhis2_client.settings import ClientSettings
@@ -247,15 +250,11 @@ pass the mapping as `save_result` options:
     "arguments": {"id": "era5land_precipitation_monthly", "temporal_extent": ["2025-01-01", "2025-12-31"]}
   },
   "zonal": {
-    "process_id": "aggregate_spatial",
+    "process_id": "aggregate_spatial_weighted",
     "arguments": {
       "data": {"from_node": "load"},
       "geometries": {"type": "FeatureCollection", "features": ["...org units..."]},
-      "reducer": {
-        "process_graph": {
-          "mean": {"process_id": "mean", "arguments": {"data": {"from_parameter": "data"}}, "result": true}
-        }
-      }
+      "reducer": "mean"
     }
   },
   "save": {
@@ -263,14 +262,17 @@ pass the mapping as `save_result` options:
     "arguments": {
       "data": {"from_node": "zonal"},
       "format": "DHIS2JSON",
-      "options": {"data_element_id": "BXgDHhPdFVU", "org_unit_field": "geometry", "period_type": "month"}
+      "options": {"data_element_id": "BXgDHhPdFVU", "org_unit_field": "feature_id", "period_type": "month"}
     },
     "result": true
   }
 }
 ```
 
-This is a lower-level escape hatch for experiments and one-off imports. The payload
+This is the aggregation the built-in workflows run: each cell is weighted by the share of it
+an org unit covers. openEO's standard `aggregate_spatial`, with a reducer process such as
+`mean`, counts a cell wholly or not at all instead. This is a lower-level escape hatch for
+experiments and one-off imports. The payload
 is downloadable but has no delivery manifest, so OCS cannot deliver it.
 
 ## Producing a CHAP CSV instead

@@ -181,7 +181,7 @@ def test_netcdf_export_survives_a_store_carrying_geozarr_metadata(tmp_path) -> N
     import numpy as np
     import xarray as xr
 
-    from open_climate_service.openeo.jobs import _write_raster
+    from open_climate_service.openeo.jobs import _write_xarray
 
     ds = xr.Dataset(
         {"v": (("t", "y", "x"), np.zeros((1, 2, 2), dtype="float32"))},
@@ -190,7 +190,7 @@ def test_netcdf_export_survives_a_store_carrying_geozarr_metadata(tmp_path) -> N
     ds.attrs["zarr_conventions"] = [{"uuid": "689b58e2", "schema_url": "https://example.invalid/geozarr"}]
     ds.attrs["spatial:transform"] = [1.0, 0.0, 33.0, 0.0, -1.0, -9.0]
 
-    path = _write_raster(ds, tmp_path, "NETCDF")
+    path = _write_xarray(ds, tmp_path, "NETCDF")
 
     assert path is not None
     written = xr.open_dataset(path)

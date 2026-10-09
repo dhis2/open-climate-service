@@ -447,7 +447,7 @@ def _builtin_workflow() -> dict[str, Any]:
 
 
 def _explicit_graph(reducer: str = "sum") -> dict[str, Any]:
-    """load -> aggregate_temporal_period(month) -> aggregate_spatial(mean) -> named export."""
+    """load -> aggregate_temporal_period(month) -> aggregate_spatial_weighted(mean) -> named export."""
     return {
         "process_graph": {
             "load": {
@@ -471,20 +471,8 @@ def _explicit_graph(reducer: str = "sum") -> dict[str, Any]:
                 },
             },
             "zonal": {
-                "process_id": "aggregate_spatial",
-                "arguments": {
-                    "data": {"from_node": "monthly"},
-                    "geometries": _GEOMETRIES,
-                    "reducer": {
-                        "process_graph": {
-                            "m": {
-                                "process_id": "reduce_by_method",
-                                "arguments": {"data": {"from_parameter": "data"}, "method": "mean"},
-                                "result": True,
-                            }
-                        }
-                    },
-                },
+                "process_id": "aggregate_spatial_weighted",
+                "arguments": {"data": {"from_node": "monthly"}, "geometries": _GEOMETRIES, "reducer": "mean"},
             },
             "save": {
                 "process_id": "save_result",
