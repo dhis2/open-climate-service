@@ -56,9 +56,15 @@ def _cds_fallback_area(bbox: tuple[float, float, float, float]) -> list[float]:
     CDS keeps only the grid points inside ``area``, so an edge between two points
     (a bbox ending at 13.91° drops the 13.9° row) gives one row or column fewer than
     the Earth Data Hub selection, which pads by half a step, and the append fails.
+    The padding stops at the poles and at ±180°, where CDS refuses the area.
     """
     xmin, ymin, xmax, ymax = bbox
-    return [ymax + _HALF_GRID_STEP, xmin - _HALF_GRID_STEP, ymin - _HALF_GRID_STEP, xmax + _HALF_GRID_STEP]
+    return [
+        min(ymax + _HALF_GRID_STEP, 90.0),
+        max(xmin - _HALF_GRID_STEP, -180.0),
+        max(ymin - _HALF_GRID_STEP, -90.0),
+        min(xmax + _HALF_GRID_STEP, 180.0),
+    ]
 
 
 class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):

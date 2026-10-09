@@ -14,6 +14,7 @@ from open_climate_service.plugins.rasters.era5_land import (
     ERA5LandMonthlyPrecipitationPlugin,
     ERA5LandPrecipDailyPlugin,
     ERA5LandPrecipitationPlugin,
+    _cds_fallback_area,
     _collapse_expver,
     _daily_availability_cutoff,
     _edh_open_zarr,
@@ -723,3 +724,8 @@ def test_cds_daily_fallback_requests_the_same_grid_points_as_edh(monkeypatch: py
     north, west, south, east = client.submit.call_args.args[1]["area"]
     np.testing.assert_array_equal(lat[(lat <= north) & (lat >= south)], edh.latitude.values)
     np.testing.assert_array_equal(lon[(lon >= west) & (lon <= east)], edh.longitude.values)
+
+
+def test_cds_fallback_area_stays_within_the_globe() -> None:
+    # A worldwide extent pads to the poles and the antimeridian, not past them.
+    assert _cds_fallback_area((-180.0, -90.0, 180.0, 90.0)) == [90.0, -180.0, -90.0, 180.0]
