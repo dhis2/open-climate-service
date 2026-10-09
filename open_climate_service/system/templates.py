@@ -497,7 +497,7 @@ def render_dataset_page(
             from open_climate_service.flows.service import current_graph
             from open_climate_service.tasks.send_to import options
 
-            flow = current_graph().chains(through=f"dataset:{record.dataset_id}")
+            flow = current_graph().around(f"dataset:{record.dataset_id}").layout()
             send_options = options()
         except Exception:
             _log.exception("The flow around dataset '%s' could not be read", record.dataset_id)
@@ -1044,7 +1044,7 @@ def workflow_title(workflow_id: str) -> str:
     return " ".join([words[0][:1].upper() + words[0][1:], *words[1:]]) if words else workflow_id
 
 
-def _workflow_results(record: Any) -> list[tuple[str, str]]:
+def workflow_results(record: Any) -> list[tuple[str, str]]:
     """What the workflow's `save_result` nodes produce, as (kind, label) pairs."""
     results = []
     for node in (getattr(record, "process_graph", None) or {}).values():
@@ -1277,9 +1277,10 @@ def _parameter_views(record: Any) -> list[dict[str, Any]]:
 
 
 def _workflow_page_context(
-    record: Any, templates: list[dict[str, Any]], datasets: list[Any], triggers: list[Any]
+    record: Any, templates: list[dict[str, Any]], datasets: list[Any], tasks: list[Any], timezone: str = "UTC"
 ) -> dict[str, Any]:
     held = {dataset.dataset_id for dataset in datasets}
+    names = {dataset.dataset_id: getattr(dataset, "dataset_name", None) or dataset.dataset_id for dataset in datasets}
     outputs = sorted(
         (
             {"id": t["id"], "name": t.get("name") or t["id"], "ingested": t["id"] in held}
@@ -1294,31 +1295,31 @@ def _workflow_page_context(
             "id": record.id,
             "title": workflow_title(record.id),
             "summary": record.summary or "",
-            "results": _workflow_results(record),
+            "results": workflow_results(record),
         },
         "blocks": _description_blocks(record.description),
         "parameters": parameters,
         "outputs": outputs,
-        "triggers": [
+        "tasks": [
             {
-                "id": trigger.id,
-                "on_update_of": trigger.on_update_of,
-                "held": trigger.on_update_of in held,
-                "arguments": json.dumps(trigger.arguments, indent=2) if trigger.arguments else "",
+                "id": task.id,
+                "starts": _starts_in_words(task, timezone),
+                "input": names.get(_reads(task), _reads(task)),
+                "enabled": task.enabled,
             }
-            for trigger in triggers
-            if trigger.workflow_id == record.id
+            for task in tasks
+            if task.kind == "workflow" and task.target == record.id
         ],
     }
 
 
-def _load_triggers() -> list[Any]:
+def _load_tasks() -> list[Any]:
     try:
-        from open_climate_service.automation.config import get_automation_config
+        from open_climate_service.tasks import store as task_store
 
-        return list(get_automation_config().workflow_triggers)
+        return task_store.list_tasks()
     except Exception:
-        _log.exception("Unexpected error loading workflow triggers")
+        _log.exception("Unexpected error loading tasks")
         return []
 
 
@@ -1331,7 +1332,7 @@ def render_workflow_page(record: Any, mount: str) -> str:
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "workflows"),
-        **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_triggers()),
+        **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_tasks(), _timezone()),
     )
 
 
@@ -1758,7 +1759,7 @@ def _landing_catalogue(
             {
                 "record": workflow,
                 "title": workflow_title(workflow.id),
-                "results": _workflow_results(workflow),
+                "results": workflow_results(workflow),
                 "outputs": outputs[workflow.id],
             }
             for workflow in workflows
@@ -1894,38 +1895,81 @@ def render_landing(version: str, mount: str) -> str:
     )
 
 
+def _timezone() -> str:
+    try:
+        return str((api_config.get_config().get("scheduler") or {}).get("timezone") or "UTC")
+    except Exception:
+        return "UTC"
+
+
 def _starts_in_words(task: Any, timezone: str) -> str:
     if task.cron is not None:
-        return schedule_description(task.cron, timezone) or f"{task.cron} ({timezone})"
+        return schedule_description(task.cron, timezone) or f"On cron {task.cron} ({timezone})"
     if task.after is not None:
         return f"After {task.after.describe} changed" if task.after.task is None else f"After task {task.after.task}"
     return "By hand"
 
 
-_DOES = {
-    "sync": ("Syncs the dataset", "Dataset"),
-    "refresh": ("Refreshes the feature collection", "Feature collection"),
-    "workflow": ("Runs the workflow", "Workflow"),
-    "deliver": ("Delivers the export", "Export"),
-}
+def _reads(task: Any) -> str | None:
+    """The dataset a workflow task reads: what it waits for, or the one its arguments name."""
+    if task.after is not None and task.after.dataset is not None:
+        return str(task.after.dataset)
+    read = task.arguments.get("dataset_id") if task.kind == "workflow" else None
+    return str(read) if isinstance(read, str) and not read.startswith("$event") else None
 
 
-def _does_in_words(task: Any) -> str:
-    """What a task does, in a short sentence: "Runs the workflow Aggregate to CHAP CSV"."""
-    does, _ = _DOES[task.kind]
-    target = workflow_title(task.target) if task.kind == "workflow" else task.target
-    words = f"{does} {target}"
-    if task.kind == "deliver":
-        words += ", as a dry run" if task.dry_run else ", live"
-    return words
+_TARGET_LABELS = {"sync": "Dataset", "refresh": "Feature collection", "workflow": "Workflow", "deliver": "Export"}
 
 
-def _target_href(task: Any) -> str | None:
+def _task_words(task: Any, names: dict[str, str], exports: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """How a task is named on its tile and page: a title that says what it does, and a line under it."""
+    from open_climate_service.flows.service import _from_features
+
+    if task.kind == "sync":
+        title, subtitle = f"Sync {names.get(task.target, task.target)}", task.target
+    elif task.kind == "refresh":
+        title, subtitle = f"Refresh {task.target}", "Feature collection"
+    elif task.kind == "workflow":
+        title = workflow_title(task.target)
+        read = _reads(task)
+        parts = [f"on {names.get(read, read)}"] if read is not None else []
+        parts += [f"with {feature_id}" for feature_id in _from_features(task.arguments)]
+        subtitle = ", ".join(parts)
+    else:
+        connection = exports.get(task.target, {}).get("connection")
+        title = f"Deliver {task.target}" + (f" to {connection}" if connection else "")
+        subtitle = f"After task {task.after.task}" if task.after is not None else ""
     return {
-        "sync": f"/datasets/{task.target}",
-        "refresh": f"/data-sources/{task.target}",
-        "workflow": f"/workflows/{task.target}",
-    }.get(task.kind)
+        "title": title,
+        "subtitle": subtitle,
+        "does_words": {
+            "sync": f"Syncs the dataset {names.get(task.target, task.target)}",
+            "refresh": f"Refreshes the feature collection {task.target}",
+            "workflow": f"Runs the workflow {workflow_title(task.target)}",
+            "deliver": f"Delivers the export {task.target}" + (", as a dry run" if task.dry_run else ", live"),
+        }[task.kind],
+        "target_label": _TARGET_LABELS[task.kind],
+        "target_title": workflow_title(task.target) if task.kind == "workflow" else task.target,
+        "target_href": {
+            "sync": f"/datasets/{task.target}",
+            "refresh": f"/data-sources/{task.target}",
+            "workflow": f"/workflows/{task.target}",
+        }.get(task.kind),
+    }
+
+
+def _dataset_names() -> dict[str, str]:
+    return {dataset.dataset_id: dataset.dataset_name for dataset in _load_datasets()}
+
+
+def _export_definitions() -> dict[str, dict[str, Any]]:
+    try:
+        from open_climate_service.exports import store as export_store
+
+        return {str(item.get("id")): item for item in export_store.list_definitions()}
+    except Exception:
+        _log.exception("Unexpected error loading exports")
+        return {}
 
 
 def _flow_node_id(task: Any) -> str:
@@ -1937,32 +1981,35 @@ def _flow_node_id(task: Any) -> str:
     }.get(task.kind, f"task:{task.id}")
 
 
+def _page_context(mount: str, current: str) -> dict[str, Any]:
+    return {
+        "version": app_version,
+        "mount": mount,
+        "name": api_config.get_name(),
+        "logo": LOGO,
+        "styles": _read_asset("ocs_ui.css"),
+        "nav": page_nav(mount, current),
+        "read_only": api_config.is_read_only(),
+    }
+
+
 def render_task_page(status: Any, runs: list[Any], clock: Any, mount: str, *, error: str | None = None) -> str:
-    """Render one task: what it does, how it starts, the flows it is part of and its runs (CLIM-1378)."""
-    chains: list[Any] = []
+    """Render one task: what it does, how it starts, the flow it is part of and its runs (CLIM-1378)."""
+    from open_climate_service.flows.service import FlowGraph, current_graph
+
     current = _flow_node_id(status)
     try:
-        from open_climate_service.flows.service import current_graph
-
-        chains = current_graph().chains(through=current)
+        flow = current_graph().around(current).layout()
     except Exception:
-        _log.exception("The flows of task '%s' could not be read", status.id)
+        _log.exception("The flow around task '%s' could not be read", status.id)
+        flow = FlowGraph(nodes=[], edges=[]).layout()
     return get_template("task_page.html").render(
-        version=app_version,
-        mount=mount,
-        name=api_config.get_name(),
-        logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "tasks"),
-        read_only=api_config.is_read_only(),
+        **_page_context(mount, "tasks"),
+        **_task_words(status, _dataset_names(), _export_definitions()),
         task=status,
-        does_words=_does_in_words(status),
         starts_words=_starts_in_words(status, clock.timezone),
-        target_label=_DOES[status.kind][1],
-        target_title=workflow_title(status.target) if status.kind == "workflow" else status.target,
-        target_href=_target_href(status),
         arguments=json.dumps(status.arguments, indent=2) if status.arguments else None,
-        chains=chains,
+        flow=flow,
         current=current,
         runs=runs,
         clock=clock,
@@ -1970,37 +2017,74 @@ def render_task_page(status: Any, runs: list[Any], clock: Any, mount: str, *, er
     )
 
 
-def render_tasks_page(
-    statuses: list[Any], clock: Any, mount: str, *, error: str | None = None, draft: dict[str, Any] | None = None
-) -> str:
-    """Render every task with how it starts and its latest run (CLIM-1378)."""
-    rows = [
-        {
-            **item.model_dump(mode="json"),
-            "starts_words": _starts_in_words(item, clock.timezone),
-            "does_words": _does_in_words(item),
-            "last_run": item.last_run,
-        }
-        for item in statuses
-    ]
-    chains: list[Any] = []
-    try:
-        from open_climate_service.flows.service import current_graph
+def render_tasks_page(statuses: list[Any], clock: Any, mount: str, *, error: str | None = None) -> str:
+    """Render every task as a tile, and the flow they make as a diagram (CLIM-1378, CLIM-1377)."""
+    from open_climate_service.flows.service import FlowGraph, current_graph
 
-        chains = current_graph().chains()
+    names, exports = _dataset_names(), _export_definitions()
+    rows = []
+    for item in statuses:
+        words = _task_words(item, names, exports)
+        last = item.last_run
+        if not item.enabled:
+            filter_status = "paused"
+        elif last is None:
+            filter_status = "never"
+        else:
+            filter_status = "failed" if last.status in ("failed", "refused") else last.status
+        rows.append(
+            {
+                **item.model_dump(mode="json"),
+                **words,
+                "last_run": last,
+                "starts_words": _starts_in_words(item, clock.timezone),
+                "filter_status": filter_status,
+                "search": " ".join([item.id, words["title"], words["subtitle"], item.target, item.kind]).lower(),
+            }
+        )
+    try:
+        flow = current_graph().layout()
     except Exception:
-        _log.exception("The flows could not be read")
+        _log.exception("The flow could not be read")
+        flow = FlowGraph(nodes=[], edges=[]).layout()
     return get_template("tasks_page.html").render(
-        version=app_version,
-        mount=mount,
-        name=api_config.get_name(),
-        logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "tasks"),
-        read_only=api_config.is_read_only(),
+        **_page_context(mount, "tasks"),
+        list_script=_read_asset("ocs_list.js"),
         tasks=rows,
-        chains=chains,
+        flow=flow,
         clock=clock,
         error=error,
-        draft=draft or {},
+    )
+
+
+def render_task_new_page(mount: str, *, error: str | None = None, draft: dict[str, Any] | None = None) -> str:
+    """Render the form that adds any kind of task, with what it can choose from (CLIM-1378)."""
+    from open_climate_service.scheduler.presets import _WEEKDAY_NAMES, _WEEKDAYS
+
+    draft = draft or {}
+    options: dict[str, list[Any]] = {"datasets": [], "collections": [], "workflows": [], "exports": [], "tasks": []}
+    try:
+        options["datasets"] = sorted(_dataset_names().items(), key=lambda item: item[1].lower())
+        options["workflows"] = [(record.id, workflow_title(record.id)) for record in _load_workflows()]
+        options["exports"] = sorted(_export_definitions())
+        options["tasks"] = [task.id for task in _load_tasks() if task.kind == "workflow"]
+        from open_climate_service.features.services import registered_collections
+
+        options["collections"] = sorted(registered_collections())
+    except Exception:
+        _log.exception("The choices for a new task could not all be read")
+    return get_template("task_new_page.html").render(
+        **_page_context(mount, "tasks"),
+        kinds=(
+            ("sync", "Sync a dataset"),
+            ("refresh", "Refresh a feature collection"),
+            ("workflow", "Run a workflow"),
+            ("deliver", "Deliver an export"),
+        ),
+        options=options,
+        draft=draft,
+        schedule_form=form_values(str(draft.get("cron") or "") or None, None, draft),
+        weekdays=list(zip(_WEEKDAYS, _WEEKDAY_NAMES)),
+        timezone=_timezone(),
+        error=error,
     )

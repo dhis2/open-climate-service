@@ -29,19 +29,21 @@ On a dataset's page:
 2. **Send to DHIS2** asks for a connection, the org units, a data element and a statistic, and
    creates the three things a delivery needs: a named export (the mapping), a workflow task that
    aggregates the dataset to the org units after each update, and a deliver task, a dry run.
-3. **Flow** draws each path through the dataset, from where it comes from to what it feeds, with
-   the latest status of each step.
+3. **Flow** draws where the dataset comes from and what it feeds, with each step's latest run.
 
 When the dry-run reports look right, open the deliver task's page and press **Go live**.
 
 ## The Tasks pages
 
-* **Tasks** draws every configured flow as a row of boxes joined by arrows, from where the data
-  comes in to where it goes, with the latest status on each box; a failed box is where a broken
-  flow starts. Below it, every task with how it starts and its last run, and a form to add any
+* **Tasks** lists every task as a tile: what it does, how it starts and its last run, with a
+  search and filters by kind and status. **Flow** switches the list to a diagram of how the tasks
+  connect: from each dataset, through the workflows that read it, to where the result goes, each
+  box with its latest run, so a failed box is where a broken flow starts. **New task** adds any
   kind of task.
-* **A task's page** shows what it does, when it runs next, the flows it is part of and its recent
-  runs. Run it, pause it, delete it, or switch a delivery between dry run and live there.
+* **A task's page** shows what it does, when it runs next, the part of the flow it is in and its
+  recent runs. Run it, pause it, delete it, or switch a delivery between dry run and live there.
+* A **dataset's page** draws the part of the flow through that dataset, and a **workflow's page**
+  lists the tasks that run it.
 
 ## The API
 

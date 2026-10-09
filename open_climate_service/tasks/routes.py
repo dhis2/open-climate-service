@@ -8,6 +8,7 @@ the change through the clock's reload listener. No restart.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -151,15 +152,31 @@ def _listing() -> TaskList:
     return TaskList(tasks=[_status(task) for task in tasks])
 
 
-def _page(request: Request, *, error: str | None = None, draft: dict[str, Any] | None = None) -> HTMLResponse:
+def _page(request: Request, *, error: str | None = None) -> HTMLResponse:
     from open_climate_service.scheduler.service import get_scheduler_service
     from open_climate_service.shared.urls import mount_prefix
     from open_climate_service.system.templates import render_tasks_page
 
-    html = render_tasks_page(
-        _listing().tasks, get_scheduler_service().status(), mount_prefix(request), error=error, draft=draft
-    )
+    html = render_tasks_page(_listing().tasks, get_scheduler_service().status(), mount_prefix(request), error=error)
     return HTMLResponse(html, status_code=400 if error else 200)
+
+
+def _new_page(request: Request, *, error: str | None = None, draft: dict[str, Any] | None = None) -> HTMLResponse:
+    from open_climate_service.shared.urls import mount_prefix
+    from open_climate_service.system.templates import render_task_new_page
+
+    html = render_task_new_page(mount_prefix(request), error=error, draft=draft)
+    return HTMLResponse(html, status_code=400 if error else 200)
+
+
+def _free_id(kind: str, target: str) -> str:
+    """An id for a task added without one: the kind and target, numbered if that is taken."""
+    base = f"{kind}-{re.sub(r'[^A-Za-z0-9_.-]+', '-', target).strip('-')[:80] or 'task'}"
+    taken = {task.id for task in store.list_tasks()}
+    candidate, number = base, 2
+    while candidate in taken:
+        candidate, number = f"{base}-{number}", number + 1
+    return candidate
 
 
 def _detail(request: Request, task_id: str, *, error: str | None = None) -> HTMLResponse:
@@ -193,34 +210,64 @@ def list_tasks(request: Request) -> Any:
     return _listing()
 
 
+@router.get("/new", include_in_schema=False)
+def new_task_page(request: Request) -> HTMLResponse:
+    """The form that adds any kind of task."""
+    _require_writable()
+    return _new_page(request)
+
+
 @router.post("/form", include_in_schema=False)
 async def create_task_form(request: Request) -> Response:
-    """The Tasks page's Add a task form."""
+    """The New task form.
+
+    A schedule comes as the simple fields or as a cron; the target as the field for its kind.
+    """
     import json
+
+    from open_climate_service.scheduler.presets import cron_from_form
 
     _require_writable()
     form = {key: str(value).strip() for key, value in (await request.form()).items() if isinstance(value, str)}
-    body: dict[str, Any] = {"id": form.get("id", ""), "kind": form.get("kind", ""), "target": form.get("target", "")}
-    if form.get("cron"):
-        body["cron"] = form["cron"]
-    if form.get("after_type") and form.get("after_id"):
+    kind = form.get("kind", "")
+    target = form.get(f"target_{kind}") or form.get("target", "")
+    draft = {**form, "target": target}
+    body: dict[str, Any] = {"id": form.get("id", ""), "kind": kind, "target": target}
+    starts = form.get("starts") or (
+        "schedule" if form.get("cron") or form.get("frequency") else "after" if form.get("after_type") else "manual"
+    )
+    draft["starts"] = starts
+    if starts == "schedule":
+        try:
+            body["cron"] = cron_from_form(form) if form.get("frequency") else form.get("cron", "")
+        except ValueError as exc:
+            return _new_page(request, error=str(exc), draft=draft)
+        if not body["cron"]:
+            return _new_page(request, error="Choose how often the task runs", draft=draft)
+    elif starts == "after":
+        if not (form.get("after_type") and form.get("after_id")):
+            return _new_page(request, error="Say what the task runs after", draft=draft)
         body["after"] = {form["after_type"]: form["after_id"]}
-    if form.get("arguments"):
+    if kind == "workflow" and form.get("arguments"):
         try:
             body["arguments"] = json.loads(form["arguments"])
         except json.JSONDecodeError as exc:
-            return _page(request, error=f"Workflow arguments are not valid JSON: {exc}", draft=form)
-    if body["kind"] == "deliver":
+            return _new_page(request, error=f"Workflow arguments are not valid JSON: {exc}", draft=draft)
+    if kind == "deliver":
         body["dry_run"] = form.get("dry_run") == "true"
+    if not body["id"] and kind and target:
+        body["id"] = _free_id(kind, target)
     try:
         task = Task.model_validate(body)
         store.save_task(task, create=True, check=_validator(task))
     except ValidationError as exc:
-        return _page(request, error="; ".join(str(error["msg"]) for error in exc.errors()), draft=form)
+        return _new_page(request, error="; ".join(str(error["msg"]) for error in exc.errors()), draft=draft)
     except ValueError as exc:
-        return _page(request, error=str(exc), draft=form)
+        return _new_page(request, error=str(exc), draft=draft)
     _apply()
-    return _back(request)
+    from open_climate_service.shared.urls import mount_prefix
+
+    return RedirectResponse(f"{mount_prefix(request)}/tasks/{task.id}", status_code=303)
 
 
 @router.post("/{task_id}/delete", include_in_schema=False)

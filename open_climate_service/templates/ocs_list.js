@@ -68,11 +68,19 @@
       });
     var views = root.getAttribute("data-views");
     var target = root.querySelector("[data-view-target]");
+    // A third view some lists have: the same items drawn as a diagram rather than listed.
+    var flow = root.querySelector("[data-view-flow]");
+    var listOnly = Array.prototype.slice.call(root.querySelectorAll("[data-list-only]"));
     var viewButtons = Array.prototype.slice.call(root.querySelectorAll("[data-view-button]"));
     function setView(view) {
       if (!target) return;
       target.classList.toggle("view-tiles", view !== "list");
       target.classList.toggle("view-list", view === "list");
+      target.hidden = view === "flow";
+      if (flow) flow.hidden = view !== "flow";
+      listOnly.forEach(function (element) {
+        element.classList.toggle("is-off", view === "flow");
+      });
       viewButtons.forEach(function (button) {
         button.setAttribute("aria-pressed", String(button.getAttribute("data-view-button") === view));
       });
@@ -82,7 +90,9 @@
       try {
         stored = window.localStorage.getItem("ocs.view." + views);
       } catch (e) {}
-      setView(stored === "list" ? "list" : "tiles");
+      // A link can open the diagram directly: /tasks#flow.
+      var requested = flow && window.location.hash === "#flow" ? "flow" : null;
+      setView(requested || (stored === "list" || (stored === "flow" && flow) ? stored : "tiles"));
       viewButtons.forEach(function (button) {
         button.addEventListener("click", function () {
           var view = button.getAttribute("data-view-button");

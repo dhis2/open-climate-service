@@ -382,6 +382,16 @@ a.card h3 {
   background: var(--colors-red050);
   color: var(--colors-red800);
 }
+.page-title-action {
+  margin-left: auto;
+}
+.item .task-id {
+  font-size: var(--font-size-small);
+  color: var(--colors-grey700);
+}
+.is-off {
+  display: none !important;
+}
 
 .toolbar {
   display: none;
@@ -1111,81 +1121,121 @@ button.danger:hover:not(:disabled) {
   }
 }
 
-/* Flow chains (CLIM-1377): one row per path, boxes joined by arrows. A long row scrolls on
-   its own, so the page never scrolls sideways. */
-.flow-chains {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--spacers-dp12);
+/* The flow diagram (CLIM-1377): boxes placed by FlowGraph.layout, arrows in an SVG beneath
+   them. A wide diagram scrolls inside its panel, so the page never scrolls sideways. */
+.flow-panel .note {
+  margin-bottom: var(--spacers-dp12);
 }
-.flow-chain {
+.dataset-page + .flow-panel {
+  margin-top: var(--spacers-dp16);
+}
+/* The New task form: wide enough to read what is chosen, one field per line. */
+#new-task select,
+#new-task input:not([type="checkbox"]),
+#new-task textarea {
+  display: block;
+  margin-top: var(--spacers-dp4);
+  width: 100%;
+  max-width: 32rem;
+  box-sizing: border-box;
+}
+#new-task .form-grid > label,
+#new-task .field-wide label {
+  display: block;
+}
+#new-task label:has(input[type="checkbox"]) {
   display: flex;
-  align-items: stretch;
-  margin: 0;
-  padding: var(--spacers-dp4) 0 var(--spacers-dp8);
-  list-style: none;
+  gap: var(--spacers-dp8);
+  align-items: center;
+}
+.flow-scroll {
   overflow-x: auto;
+  padding: 2px;
 }
-.flow-step {
+.flow {
+  position: relative;
+}
+.flow-edges {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.flow-edges path {
+  fill: none;
+  stroke: var(--colors-grey500);
+  stroke-width: 2;
+}
+.flow-edges marker path {
+  fill: var(--colors-grey500);
+  stroke: none;
+}
+.flow-edge-label {
+  position: absolute;
+  transform: translate(-50%, calc(-50% - 9px));
+  padding: 0 var(--spacers-dp4);
+  background: var(--colors-white);
+  border-radius: var(--radius);
+  font-size: var(--font-size-small);
+  color: var(--colors-grey700);
+  white-space: nowrap;
+}
+.flow-node {
+  position: absolute;
+  box-sizing: border-box;
   display: flex;
-  flex: 0 0 11rem;
   flex-direction: column;
   gap: 2px;
-  min-width: 0;
+  width: 200px;
+  height: 120px;
   padding: var(--spacers-dp8) var(--spacers-dp12);
   border: 1px solid var(--colors-grey300);
   border-top: 3px solid var(--colors-grey500);
   border-radius: var(--radius);
   background: var(--colors-white);
-}
-.flow-step small,
-.flow-step .flow-label {
-  overflow-wrap: anywhere;
-}
-.flow-step small {
-  color: var(--colors-grey700);
-}
-.flow-label {
-  font-weight: var(--font-weight-medium);
+  box-shadow: var(--elevations-e100);
+  overflow: hidden;
 }
 .flow-kind {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: var(--font-weight-bold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--colors-grey600);
 }
+.flow-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.flow-node small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--colors-grey700);
+}
 .flow-dataset { border-top-color: var(--colors-blue600); }
 .flow-collection { border-top-color: var(--colors-teal800); }
 .flow-workflow { border-top-color: var(--colors-blue900); }
-.flow-export { border-top-color: var(--colors-green800); }
+.flow-export,
+.flow-result { border-top-color: var(--colors-green800); }
 .flow-destination { border-top-color: var(--colors-grey800); }
-.flow-step.is-current {
+.flow-node.is-current {
   background: var(--colors-blue050);
   box-shadow: 0 0 0 2px var(--colors-blue600);
 }
-.flow-arrow {
-  display: flex;
-  flex: 0 0 3.75rem;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  font-size: var(--font-size-small);
-  color: var(--colors-grey600);
-}
-.flow-arrow::after {
-  content: "";
-  width: 100%;
-  height: 10px;
-  background:
-    linear-gradient(var(--colors-grey500), var(--colors-grey500)) left center / calc(100% - 8px) 2px no-repeat,
-    conic-gradient(from -135deg at 100% 50%, var(--colors-grey500) 90deg, transparent 0) right center / 8px 10px no-repeat;
-}
 .flow-status {
-  margin-top: var(--spacers-dp4);
+  margin-top: auto;
   font-size: var(--font-size-small);
   color: var(--colors-grey700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .flow-status::before {
   content: "";
@@ -1195,6 +1245,7 @@ button.danger:hover:not(:disabled) {
   margin-right: 6px;
   border-radius: 50%;
   background: var(--colors-grey400);
+  vertical-align: 0;
 }
 .flow-status.status-succeeded::before { background: var(--colors-green800); }
 .flow-status.status-failed::before,

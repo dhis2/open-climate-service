@@ -1,4 +1,4 @@
-{% from "flow_chains.html" import flow_chains %}
+{% from "flow_graph.html" import flow_graph %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -288,18 +288,7 @@
               {% endif %}
             </section>
 
-            {% if flow is not none %}
-            <section class="panel" id="flow" aria-labelledby="flow-title">
-              <h3 id="flow-title">Flow</h3>
-              {% if not flow %}
-              <p class="note">Nothing is automated for this dataset yet. Schedule a sync above, or send it to DHIS2 below.</p>
-              {% else %}
-              {{ flow_chains(flow, mount, current='dataset:' ~ dataset.id) }}
-              {% endif %}
-              <p class="note"><a href="{{ mount }}/tasks#flows">All flows on the Tasks page</a></p>
-            </section>
-
-            {% if not read_only %}
+            {% if not read_only and flow is not none %}
             <section class="panel" id="send-to" aria-labelledby="send-to-title">
               <h3 id="send-to-title">Send to DHIS2</h3>
               <p class="note">After each update, aggregate this dataset to the org units and send the values to a DHIS2 data element. Starts as a dry run: DHIS2 checks the values and stores nothing until you switch the delivery to live on its task page.</p>
@@ -320,7 +309,6 @@
               </form>
               {% endif %}
             </section>
-            {% endif %}
             {% endif %}
 
             <section class="panel" aria-labelledby="access-title">
@@ -355,6 +343,18 @@
             </section>
           </div>
         </div>
+
+        {% if flow is not none %}
+        <section class="panel flow-panel" id="flow" aria-labelledby="flow-title">
+          <h3 id="flow-title">Flow</h3>
+          {% if not flow.nodes %}
+          <p class="note">Nothing is automated for this dataset yet. Schedule a sync above, or send it to DHIS2.</p>
+          {% else %}
+          <p class="note">Where this dataset comes from and what it feeds, with each step's latest run. <a href="{{ mount }}/tasks#flow">The whole flow</a>.</p>
+          {{ flow_graph(flow, mount, current='dataset:' ~ dataset.id) }}
+          {% endif %}
+        </section>
+        {% endif %}
         {% if syncable and stored_schedule %}{% set delete_return_to = "dataset" %}{% include "_schedule_delete_dialog.html" %}{% endif %}
       </main>
     </div>

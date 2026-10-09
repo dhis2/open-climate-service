@@ -93,21 +93,16 @@
               {% endif %}
             </section>
 
-            <section class="panel" aria-labelledby="triggers-title">
-              <h3 id="triggers-title">Automation</h3>
-              {% if triggers %}
-              {% for t in triggers %}
-              <div class="trigger">
-                <p>
-                  <strong>{{ t.id }}</strong> runs when
-                  {% if t.held %}<a href="{{ mount }}/datasets/{{ t.on_update_of }}">{{ t.on_update_of }}</a>{% else %}<code>{{ t.on_update_of }}</code>{% endif %}
-                  is updated.
-                </p>
-                {% if t.arguments %}<pre class="code"><code>{{ t.arguments }}</code></pre>{% endif %}
-              </div>
-              {% endfor %}
+            <section class="panel" aria-labelledby="tasks-title">
+              <h3 id="tasks-title">Tasks</h3>
+              {% if tasks %}
+              <ul class="bullets">
+                {% for t in tasks %}
+                <li><a href="{{ mount }}/tasks/{{ t.id }}">{{ t.id }}</a>{% if t.input %} on {{ t.input }}{% endif %}: {{ t.starts[:1] | lower }}{{ t.starts[1:] }}{% if not t.enabled %} (paused){% endif %}</li>
+                {% endfor %}
+              </ul>
               {% else %}
-              <p class="note">No automation runs this workflow on this instance.</p>
+              <p class="note">No task runs this workflow on this instance. <a href="{{ mount }}/tasks">Tasks</a> is where one is added.</p>
               {% endif %}
             </section>
 

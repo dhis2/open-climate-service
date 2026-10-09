@@ -6,14 +6,15 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from open_climate_service.flows.service import build_graph
+from open_climate_service.flows.service import BOX_HEIGHT, BOX_WIDTH, COLUMN_GAP, ROW_GAP, WorkflowInfo, build_graph
 from tests.test_schedules import client, instance  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from tests.test_tasks import _WORKFLOW, _task
 
 BROWSER = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
 
 
-def test_the_graph_follows_a_source_through_a_derived_dataset_to_dhis2(instance: None) -> None:  # noqa: F811
+def _norway() -> tuple[list[Any], dict[str, Any], dict[str, str], dict[str, WorkflowInfo]]:
+    """Daily temperature, an anomaly derived from it, and the anomaly aggregated to kommuner and delivered."""
     tasks = [
         _task(id="sync-temp", kind="sync", target="temp_daily", cron="0 6 * * *"),
         _task(id="kommuner", kind="refresh", target="kommuner", cron="0 5 * * 1"),
@@ -34,54 +35,99 @@ def test_the_graph_follows_a_source_through_a_derived_dataset_to_dhis2(instance:
         _task(id="send", kind="deliver", target="anomaly-kommuner", after={"task": "to-kommuner"}, dry_run=False),
     ]
     exports = {"anomaly-kommuner": {"id": "anomaly-kommuner", "plugin": "dhis2", "connection": "hmis"}}
+    names = {"temp_daily": "Temperature, daily", "temp_anomaly": "Temperature anomaly"}
+    workflows = {
+        "climate_anomaly": WorkflowInfo(title="Climate anomaly", results=[("publish", "Publishes a dataset")]),
+        "aggregate_to_dhis2_json": WorkflowInfo(
+            title="Aggregate to DHIS2 JSON", results=[("export", "Exports DHIS2 JSON")]
+        ),
+    }
+    return tasks, exports, names, workflows
 
-    graph = build_graph(tasks, exports, {"temp_daily": "Temperature, daily"})
+
+def test_the_graph_follows_a_dataset_through_a_derived_dataset_to_dhis2(instance: None) -> None:  # noqa: F811
+    tasks, exports, names, workflows = _norway()
+
+    graph = build_graph(tasks, exports, names, workflows)
     edges = {(edge.source, edge.target) for edge in graph.edges}
 
-    assert ("source:temp_daily", "dataset:temp_daily") in edges
-    assert ("dataset:temp_daily", "task:anomaly") in edges
-    assert ("task:anomaly", "dataset:temp_anomaly") in edges  # the derived dataset
-    assert ("dataset:temp_anomaly", "task:to-kommuner") in edges
-    assert ("collection:kommuner", "task:to-kommuner") in edges  # org units as an input
-    assert ("task:to-kommuner", "export:anomaly-kommuner") in edges
-    assert ("export:anomaly-kommuner", "destination:hmis") in edges
-    labels = {node.id: node.label for node in graph.nodes}
-    assert labels["dataset:temp_daily"] == "Temperature, daily"
+    assert edges == {
+        ("dataset:temp_daily", "task:anomaly"),
+        ("task:anomaly", "dataset:temp_anomaly"),  # the derived dataset
+        ("dataset:temp_anomaly", "task:to-kommuner"),
+        ("collection:kommuner", "task:to-kommuner"),  # org units as an input
+        ("task:to-kommuner", "export:anomaly-kommuner"),
+        ("export:anomaly-kommuner", "destination:hmis"),
+    }
+    by_id = {node.id: node for node in graph.nodes}
+    assert by_id["dataset:temp_daily"].label == "Temperature, daily"
+    assert by_id["dataset:temp_daily"].starts == "Synced every day at 06:00 (UTC)"
+    assert by_id["task:to-kommuner"].label == "Aggregate to DHIS2 JSON"
+    assert by_id["task:to-kommuner"].href == "/tasks/to-kommuner"
+    assert by_id["export:anomaly-kommuner"].detail == "Live · dhis2"
+    assert by_id["export:anomaly-kommuner"].task_id == "send"
+
+    # A workflow with no named export writes a file each run; the graph says so.
     nightly = _task(id="nightly", kind="workflow", target=_WORKFLOW, cron="0 2 * * *", arguments={"dataset_id": "era5"})
-    assert ("dataset:era5", "task:nightly") in {(e.source, e.target) for e in build_graph([nightly], {}, {}).edges}
+    info = {_WORKFLOW: WorkflowInfo(title="Aggregate to CHAP CSV", results=[("export", "Exports CHAP CSV")])}
+    chap = build_graph([nightly], {}, {}, info)
+    assert {(e.source, e.target) for e in chap.edges} == {
+        ("dataset:era5", "task:nightly"),
+        ("task:nightly", "result:nightly"),
+    }
+    assert {node.id: node.label for node in chap.nodes}["result:nightly"] == "CHAP CSV"
+
+    # Around a node: everything upstream and downstream of it, and the org units its workflows use.
+    assert {node.id for node in graph.around("collection:kommuner").nodes} == {
+        "collection:kommuner",
+        "task:to-kommuner",
+        "export:anomaly-kommuner",
+        "destination:hmis",
+    }
+    assert {node.id for node in graph.around("task:anomaly").nodes} == {
+        "dataset:temp_daily",
+        "task:anomaly",
+        "dataset:temp_anomaly",
+        "task:to-kommuner",
+        "collection:kommuner",
+        "export:anomaly-kommuner",
+        "destination:hmis",
+    }
+    assert graph.around("dataset:unknown").nodes == []
 
 
-def test_chains_read_one_path_per_row_with_org_units_on_the_workflow(instance: None) -> None:  # noqa: F811
-    tasks = [
-        _task(id="sync-temp", kind="sync", target="temp_daily", cron="0 6 * * *"),
-        _task(id="kommuner", kind="refresh", target="kommuner", cron="0 5 * * 1"),
-        _task(
-            id="to-kommuner",
-            kind="workflow",
-            target="aggregate_to_dhis2_json",
-            after={"dataset": "temp_daily"},
-            arguments={"geometries": {"from_features": "kommuner"}, "export": "temp-kommuner"},
-        ),
-        _task(id="send", kind="deliver", target="temp-kommuner", after={"task": "to-kommuner"}),
-        _task(id="anomaly", kind="workflow", target="climate_anomaly", after={"dataset": "temp_daily"}),
+def test_the_layout_places_each_node_once_with_a_chain_on_one_row(instance: None) -> None:  # noqa: F811
+    tasks, exports, names, workflows = _norway()
+    graph = build_graph(tasks, exports, names, workflows)
+
+    layout = graph.layout()
+    at = {node.id: (node.x, node.y) for node in layout.nodes}
+
+    assert len(layout.nodes) == len(graph.nodes) and len(set(at.values())) == len(at)  # once each, no overlap
+    chain = [
+        "dataset:temp_daily",
+        "task:anomaly",
+        "dataset:temp_anomaly",
+        "task:to-kommuner",
+        "export:anomaly-kommuner",
+        "destination:hmis",
     ]
-    exports = {"temp-kommuner": {"id": "temp-kommuner", "plugin": "dhis2", "connection": "hmis"}}
-    graph = build_graph(tasks, exports, {"temp_daily": "Temperature, daily"})
+    assert [at[node_id][0] for node_id in chain] == [index * (BOX_WIDTH + COLUMN_GAP) for index in range(6)]
+    assert {at[node_id][1] for node_id in chain} == {0}
+    # Org units sit in the column before the workflow that uses them, under the dataset it reads.
+    assert at["collection:kommuner"] == (at["dataset:temp_anomaly"][0], BOX_HEIGHT + ROW_GAP)
+    assert (layout.width, layout.height) == (6 * BOX_WIDTH + 5 * COLUMN_GAP, 2 * BOX_HEIGHT + ROW_GAP)
+    edge = next(e for e in layout.edges if e.source == "collection:kommuner")
+    assert edge.label == "org units" and edge.path.startswith(f"M{BOX_WIDTH * 3 + COLUMN_GAP * 2},")
 
-    rows = [[step.node.id for step in row] for row in graph.chains()]
-    assert rows == [
-        ["dataset:temp_daily", "task:to-kommuner", "export:temp-kommuner", "destination:hmis"],
-        ["dataset:temp_daily", "task:anomaly"],
-        ["collection:kommuner"],
-    ]
-    workflow = graph.chains()[0][1]
-    assert workflow.via is None and [node.id for node in workflow.inputs] == ["collection:kommuner"]
-    assert workflow.node.label == "Aggregate to DHIS2 JSON" and workflow.node.detail == "to-kommuner"
-    assert graph.chains()[0][0].node.starts == "Synced every day at 06:00 (UTC)"
-    assert len(graph.chains(through="task:anomaly")) == 1
+    # A fan-out from one dataset stacks its branches, the first on the dataset's row.
+    weekly = _task(id="weekly", kind="workflow", target="temporal_change", after={"dataset": "temp_daily"})
+    fan = build_graph([tasks[0], tasks[2], weekly], {}, names).layout()
+    rows = {node.id: node.y for node in fan.nodes}
+    assert rows["dataset:temp_daily"] == 0 and rows["task:anomaly"] == 0 and rows["task:weekly"] == BOX_HEIGHT + ROW_GAP
 
 
-def test_the_tasks_page_draws_the_flows_and_the_graph_stays_json(client: TestClient) -> None:  # noqa: F811
+def test_the_tasks_page_lists_tiles_and_draws_the_flow(client: TestClient) -> None:  # noqa: F811
     client.post("/tasks", json={"id": "sync-chirps", "kind": "sync", "target": "chirps", "cron": "0 6 * * *"})
     client.post("/tasks", json={"id": "agg", "kind": "workflow", "target": _WORKFLOW, "after": {"dataset": "chirps"}})
 
@@ -89,19 +135,35 @@ def test_the_tasks_page_draws_the_flows_and_the_graph_stays_json(client: TestCli
     assert {"dataset:chirps", "task:agg"} <= {node["id"] for node in graph["nodes"]}
 
     page = client.get("/tasks", headers=BROWSER).text
-    assert 'class="flow-chain"' in page and _WORKFLOW in page and "agg" in page
+    assert 'data-kind="sync"' in page and 'data-kind="workflow"' in page and 'href="/tasks/agg"' in page
+    assert 'data-view-button="flow"' in page and page.count('class="flow-node') >= 2
 
 
-def test_a_task_is_added_on_the_list_and_paused_and_removed_on_its_own_page(client: TestClient) -> None:  # noqa: F811
+def test_a_task_is_added_from_the_form_and_managed_on_its_own_page(client: TestClient) -> None:  # noqa: F811
+    assert client.get("/tasks/new", headers=BROWSER).status_code == 200
+
     added = client.post(
         "/tasks/form",
-        data={"id": "nightly", "kind": "workflow", "target": _WORKFLOW, "cron": "0 2 * * *", "arguments": ""},
+        data={
+            "kind": "workflow",
+            "target_workflow": _WORKFLOW,
+            "starts": "schedule",
+            "frequency": "daily",
+            "check_time": "02:00",
+        },
         follow_redirects=False,
     )
     assert added.status_code == 303
+    task_id = added.headers["location"].rsplit("/", 1)[1]
+    assert task_id.startswith("workflow-") and client.get(f"/tasks/{task_id}").json()["cron"] == "0 2 * * *"
 
-    listing = client.get("/tasks", headers=BROWSER)
-    assert listing.status_code == 200 and 'href="/tasks/nightly"' in listing.text
+    # The fields the API documents work too: an id, a cron, a plain target.
+    legacy = client.post(
+        "/tasks/form",
+        data={"id": "nightly", "kind": "workflow", "target": _WORKFLOW, "cron": "0 3 * * *", "arguments": ""},
+        follow_redirects=False,
+    )
+    assert legacy.status_code == 303
 
     page = client.get("/tasks/nightly", headers=BROWSER)
     assert page.status_code == 200 and "Runs the workflow" in page.text and "Not run yet" in page.text
@@ -114,7 +176,7 @@ def test_a_task_is_added_on_the_list_and_paused_and_removed_on_its_own_page(clie
     assert refused.status_code == 400 and "unknown workflow" in refused.text
 
     assert client.post("/tasks/nightly/delete", follow_redirects=False).status_code == 303
-    assert client.get("/tasks").json()["tasks"] == []
+    assert [task["id"] for task in client.get("/tasks").json()["tasks"]] == [task_id]
 
 
 # --- Send to DHIS2 from the dataset page (CLIM-1290) --------------------------------------------------------
@@ -152,7 +214,7 @@ def test_send_to_creates_an_export_and_two_tasks_as_one_path(
     }
     assert client.get("/tasks/chirps-BXgDHhPdFVU-deliver").json()["dry_run"] is True
     page = client.get("/tasks/chirps-BXgDHhPdFVU-deliver", headers=BROWSER).text
-    assert "Go live" in page and 'class="flow-step flow-export is-current"' in page
+    assert "Go live" in page and 'class="flow-node flow-export is-current"' in page
     live = client.post(
         "/tasks/chirps-BXgDHhPdFVU-deliver/dry-run?next=task", data={"dry_run": "false"}, follow_redirects=False
     )

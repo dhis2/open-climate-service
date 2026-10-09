@@ -1,4 +1,4 @@
-{% from "flow_chains.html" import flow_chains %}
+{% from "flow_graph.html" import flow_graph %}
 <!doctype html>
 <html lang="en">
   <head>
@@ -25,69 +25,98 @@
         <div class="page-title">
           <h2 id="tasks-title" tabindex="-1">Tasks</h2>
           <span class="chip {{ 'chip-published' if clock.running else 'chip-unpublished' }}">{{ 'Clock running here' if clock.running else ('Scheduler off' if not clock.enabled else 'Clock on standby or stopped') }}</span>
+          {% if not read_only %}<a class="button-link primary page-title-action" href="{{ mount }}/tasks/new">New task</a>{% endif %}
         </div>
-        <p class="lead">The work this instance does by itself. A task syncs a dataset, refreshes org units, runs a workflow or delivers an export, on a schedule, after something it depends on changed, or when you press Run.</p>
+        <p class="lead">The work this instance does by itself: syncing datasets, refreshing org units, running workflows and delivering exports, on a schedule or after something changed.</p>
 
         {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
         {% if not clock.enabled %}
         <div class="notice">Scheduled tasks do not run: set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span> and restart. Tasks that run after a change, or by hand, still run.</div>
         {% endif %}
 
-        <div class="stack">
-        {% if chains %}
-        <section class="panel" id="flows" aria-labelledby="flows-title">
-          <h3 id="flows-title">Flows</h3>
-          <p class="note">How the tasks connect, one row per path from where data comes in to where it goes, with each step's latest run.</p>
-          {{ flow_chains(chains, mount) }}
-        </section>
-        {% endif %}
-
         {% if tasks %}
-        <div class="collection view-tiles">
-          {% for t in tasks %}
-          <article class="panel item clickable">
-            <div class="body">
-              <h3><a class="item-link" href="{{ mount }}/tasks/{{ t.id }}">{{ t.id }}</a></h3>
-              <p class="description">{{ t.does_words }}</p>
-              <div class="meta">
-                <span class="chip">{{ t.starts_words }}</span>
-                {% if not t.enabled %}<span class="chip chip-unpublished">Paused</span>{% endif %}
-                {% if t.last_run %}<span class="chip {{ 'chip-failed' if t.last_run.status in ('failed', 'refused') else ('chip-published' if t.last_run.status == 'succeeded' else '') }}">Last run {{ t.last_run.status }}</span>{% else %}<span class="chip">Not run yet</span>{% endif %}
-                {% if t.consecutive_failures > 1 %}<span class="chip chip-failed">Failed {{ t.consecutive_failures }} times in a row</span>{% endif %}
-              </div>
+        <div data-list data-page-size="12" data-views="tasks">
+          <div class="toolbar">
+            <label
+              >Search
+              <input type="search" data-filter-text placeholder="Name, dataset or workflow" />
+            </label>
+            <label
+              >Kind
+              <select data-filter-field="kind">
+                <option value="">All</option>
+                <option value="sync">Sync</option>
+                <option value="refresh">Refresh</option>
+                <option value="workflow">Workflow</option>
+                <option value="deliver">Deliver</option>
+              </select>
+            </label>
+            <label
+              >Status
+              <select data-filter-field="status">
+                <option value="">All</option>
+                <option value="succeeded">Succeeded</option>
+                <option value="failed">Failed</option>
+                <option value="never">Not run yet</option>
+                <option value="paused">Paused</option>
+              </select>
+            </label>
+            <div class="view-switch" role="group" aria-label="Layout">
+              <button type="button" data-view-button="tiles" aria-pressed="true">Tiles</button>
+              <button type="button" data-view-button="list" aria-pressed="false">List</button>
+              <button type="button" data-view-button="flow" aria-pressed="false">Flow</button>
             </div>
-          </article>
-          {% endfor %}
+            <span class="status" data-status data-list-only aria-live="polite"></span>
+          </div>
+          <div class="collection view-tiles" data-view-target>
+            {% for t in tasks %}
+            <article
+              class="panel item clickable"
+              data-item
+              data-kind="{{ t.kind }}"
+              data-status="{{ t.filter_status }}"
+              data-search="{{ t.search }}"
+            >
+              <div class="body">
+                <h3><a class="item-link" href="{{ mount }}/tasks/{{ t.id }}">{{ t.title }}</a></h3>
+                {% if t.subtitle %}<span class="provider clamp">{{ t.subtitle }}</span>{% endif %}
+                <span class="mono task-id">{{ t.id }}</span>
+                <div class="meta">
+                  <span class="chip">{{ t.kind | capitalize }}</span>
+                  <span class="chip">{{ t.starts_words }}</span>
+                  {% if not t.enabled %}<span class="chip chip-unpublished">Paused</span>
+                  {% elif t.last_run %}<span class="chip {{ 'chip-failed' if t.last_run.status in ('failed', 'refused') else ('chip-published' if t.last_run.status == 'succeeded' else '') }}">Last run {{ t.last_run.status }}</span>
+                  {% else %}<span class="chip">Not run yet</span>{% endif %}
+                  {% if t.kind == 'deliver' %}<span class="chip {{ 'chip-unpublished' if t.dry_run else 'chip-output' }}">{{ 'Dry run' if t.dry_run else 'Live' }}</span>{% endif %}
+                  {% if t.consecutive_failures > 1 %}<span class="chip chip-failed">Failed {{ t.consecutive_failures }} times in a row</span>{% endif %}
+                </div>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          <p class="note" data-empty data-list-only hidden>No tasks match.</p>
+          <div class="pager" data-pager data-list-only>
+            <button type="button" data-prev>Previous</button>
+            <button type="button" data-next>Next</button>
+          </div>
+          <section class="panel flow-panel" data-view-flow aria-labelledby="flow-title">
+            <h3 id="flow-title">Flow</h3>
+            <p class="note">How the tasks connect: from each dataset, through the workflows that read it, to where the result goes. Each box shows how it is kept current and its latest run.</p>
+            {{ flow_graph(flow, mount) }}
+          </section>
         </div>
         {% else %}
         <div class="panel empty-state">
           <h3>No tasks yet</h3>
-          <p class="note">Open a dataset to sync it on a schedule or send it to DHIS2, or add any task below.</p>
+          <p class="note">Open a dataset to sync it on a schedule or send it to DHIS2{% if not read_only %}, or add a task here{% endif %}.</p>
+          {% if not read_only %}<a class="button-link primary empty-state-action" href="{{ mount }}/tasks/new">New task</a>{% endif %}
         </div>
         {% endif %}
-
-        {% if not read_only %}
-        <section class="panel" aria-labelledby="add-task-title">
-          <h3 id="add-task-title">Add a task</h3>
-          <form method="post" action="{{ mount }}/tasks/form" class="record-form">
-            <label>Id <input name="id" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" value="{{ draft.id or '' }}" /></label>
-            <label>Kind
-              <select name="kind">
-                {% for kind in ['sync', 'refresh', 'workflow', 'deliver'] %}<option value="{{ kind }}" {{ 'selected' if draft.kind == kind }}>{{ kind }}</option>{% endfor %}
-              </select>
-            </label>
-            <label>Target <input name="target" required value="{{ draft.target or '' }}" /><small>A dataset (sync), a feature collection (refresh), a workflow (workflow) or an export (deliver).</small></label>
-            <label>On a schedule <input name="cron" placeholder="0 6 * * *" value="{{ draft.cron or '' }}" /></label>
-            <label>Or after <select name="after_type"><option value="">nothing (schedule or by hand)</option><option value="dataset">dataset</option><option value="collection">feature collection</option><option value="task">task</option></select> <input name="after_id" placeholder="id" /></label>
-            <label>Workflow arguments (JSON) <textarea name="arguments" rows="4">{{ draft.arguments or '' }}</textarea></label>
-            <label><input type="checkbox" name="dry_run" value="true" checked /> Deliveries are dry runs</label>
-            <div class="form-actions"><button type="submit" class="primary">Add task</button></div>
-          </form>
-        </section>
-        {% endif %}
-        </div>
-        <p class="note">Times use {{ clock.timezone }}. Every task and export as one document: <a class="mono" href="{{ mount }}/configuration?format=yaml">/configuration</a>. The flows as a graph: <a class="mono" href="{{ mount }}/flows">/flows</a>.</p>
+        <p class="note">Times use {{ clock.timezone }}. Every task and export as one document: <a class="mono" href="{{ mount }}/configuration?format=yaml">/configuration</a>. The flow as a graph: <a class="mono" href="{{ mount }}/flows">/flows</a>.</p>
       </main>
     </div>
+    <script>
+{{ list_script | safe }}
+    </script>
   </body>
 </html>

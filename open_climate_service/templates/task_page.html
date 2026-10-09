@@ -1,10 +1,10 @@
-{% from "flow_chains.html" import flow_chains %}
+{% from "flow_graph.html" import flow_graph %}
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{ task.id }} · Tasks · {{ name }}</title>
+    <title>{{ title }} · {{ name }}</title>
     <style>
 {{ styles | safe }}
     </style>
@@ -24,20 +24,20 @@
       <main id="content">
         <p class="breadcrumb"><a href="{{ mount }}/tasks">Tasks</a> / {{ task.id }}</p>
         <div class="page-title">
-          <h2 id="task-title" tabindex="-1">{{ task.id }}</h2>
+          <h2 id="task-title" tabindex="-1">{{ title }}</h2>
           <span class="chip">{{ task.kind | capitalize }}</span>
           {% if not task.enabled %}<span class="chip chip-unpublished">Paused</span>{% endif %}
-          {% if task.kind == 'deliver' %}<span class="chip {{ 'chip-unpublished' if task.dry_run else 'chip-published' }}">{{ 'Dry run' if task.dry_run else 'Live' }}</span>{% endif %}
+          {% if task.kind == 'deliver' %}<span class="chip {{ 'chip-unpublished' if task.dry_run else 'chip-output' }}">{{ 'Dry run' if task.dry_run else 'Live' }}</span>{% endif %}
         </div>
-        <p class="lead">{{ does_words }}.</p>
+        <p class="lead">{{ does_words }}. {{ starts_words }}.</p>
         {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
 
         <div class="dataset-page">
           <div class="stack">
-            {% if chains %}
+            {% if flow.nodes %}
             <section class="panel" id="flow" aria-labelledby="flow-title">
               <h3 id="flow-title">Flow</h3>
-              {{ flow_chains(chains, mount, current=current) }}
+              {{ flow_graph(flow, mount, current=current) }}
             </section>
             {% endif %}
 
@@ -54,7 +54,7 @@
                     <td>{{ r.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
                     <td>{{ r.cause }}</td>
                     <td><span class="flow-status status-{{ r.status }}">{{ r.status }}</span>{% if r.detail and r.status in ('failed', 'refused', 'skipped') %}<br /><small>{{ r.detail }}</small>{% endif %}</td>
-                    <td>{% if r.job_href %}<a href="{{ mount }}{{ r.job_href }}">job</a> · {% endif %}<a href="{{ mount }}/runs/{{ r.id }}">what it set off</a></td>
+                    <td>{% if r.job_href %}<a href="{{ mount }}{{ r.job_href }}">Job</a> · {% endif %}<a href="{{ mount }}/runs/{{ r.id }}">What it set off</a></td>
                   </tr>
                   {% endfor %}
                 </tbody>
@@ -88,7 +88,7 @@
                 <form method="post" action="{{ mount }}/tasks/{{ task.id }}/run?next=task"><button type="submit" class="primary">Run now</button></form>
                 {% endif %}
                 {% if task.kind == 'deliver' %}
-                <form method="post" action="{{ mount }}/tasks/{{ task.id }}/dry-run?next=task"><input type="hidden" name="dry_run" value="{{ 'false' if task.dry_run else 'true' }}" /><button type="submit">{{ 'Go live' if task.dry_run else 'Back to dry run' }}</button></form>
+                <form method="post" action="{{ mount }}/tasks/{{ task.id }}/dry-run?next=task"><input type="hidden" name="dry_run" value="{{ 'false' if task.dry_run else 'true' }}" /><button type="submit" class="{{ 'primary' if task.dry_run }}">{{ 'Go live' if task.dry_run else 'Back to dry run' }}</button></form>
                 {% endif %}
                 <form method="post" action="{{ mount }}/tasks/{{ task.id }}/{{ 'pause' if task.enabled else 'resume' }}?next=task"><button type="submit">{{ 'Pause' if task.enabled else 'Resume' }}</button></form>
                 <form method="post" action="{{ mount }}/tasks/{{ task.id }}/delete"><button type="submit">Delete</button></form>

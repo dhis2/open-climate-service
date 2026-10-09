@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New task · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/tasks">Tasks</a> / New task</p>
+        <div class="page-title">
+          <h2 id="new-task-title" tabindex="-1">New task</h2>
+        </div>
+        <p class="lead">To sync a dataset or send it to DHIS2, the dataset's own page is the shorter way. This form adds any kind of task.</p>
+        {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+
+        <form method="post" action="{{ mount }}/tasks/form" class="panel record-form" id="new-task">
+          <div class="form-grid">
+            <label>What it does
+              <select name="kind" id="task-kind">
+                {% for value, label in kinds %}<option value="{{ value }}" {{ 'selected' if draft.kind == value }}>{{ label }}</option>{% endfor %}
+              </select>
+            </label>
+
+            <div class="field-wide" data-for-kind="sync">
+              <label>Dataset
+                {% if options.datasets %}
+                <select name="target_sync">{% for id, label in options.datasets %}<option value="{{ id }}" {{ 'selected' if draft.target == id }}>{{ label }}</option>{% endfor %}</select>
+                {% else %}<input name="target_sync" value="{{ draft.target or '' }}" placeholder="dataset id" />{% endif %}
+              </label>
+            </div>
+            <div class="field-wide" data-for-kind="refresh">
+              <label>Feature collection
+                {% if options.collections %}
+                <select name="target_refresh">{% for id in options.collections %}<option value="{{ id }}" {{ 'selected' if draft.target == id }}>{{ id }}</option>{% endfor %}</select>
+                {% else %}<input name="target_refresh" value="{{ draft.target or '' }}" placeholder="collection id" />{% endif %}
+              </label>
+            </div>
+            <div class="field-wide" data-for-kind="workflow">
+              <label>Workflow
+                {% if options.workflows %}
+                <select name="target_workflow">{% for id, label in options.workflows %}<option value="{{ id }}" {{ 'selected' if draft.target == id }}>{{ label }}</option>{% endfor %}</select>
+                {% else %}<input name="target_workflow" value="{{ draft.target or '' }}" placeholder="workflow id" />{% endif %}
+              </label>
+            </div>
+            <div class="field-wide" data-for-kind="deliver">
+              <label>Export
+                {% if options.exports %}
+                <select name="target_deliver">{% for id in options.exports %}<option value="{{ id }}" {{ 'selected' if draft.target == id }}>{{ id }}</option>{% endfor %}</select>
+                {% else %}<input name="target_deliver" value="{{ draft.target or '' }}" placeholder="export id" />{% endif %}
+                <span class="hint">A named export under <span class="mono">/exports</span>. The delivery runs after the workflow task chosen below.</span>
+              </label>
+            </div>
+
+            <label class="field-wide">Starts
+              <select name="starts" id="task-starts">
+                <option value="schedule" {{ 'selected' if draft.starts == 'schedule' }}>On a schedule</option>
+                <option value="after" {{ 'selected' if draft.starts == 'after' }}>After something changed</option>
+                <option value="manual" {{ 'selected' if draft.starts == 'manual' }}>By hand only</option>
+              </select>
+            </label>
+
+            <div class="field-wide" data-for-starts="schedule">
+              <div class="form-grid">
+                <label>How often
+                  <select name="frequency" id="task-frequency">
+                    <option value="daily" {{ 'selected' if schedule_form.frequency == 'daily' }}>Every day</option>
+                    <option value="weekly" {{ 'selected' if schedule_form.frequency == 'weekly' }}>Every week</option>
+                    <option value="monthly" {{ 'selected' if schedule_form.frequency == 'monthly' }}>Every month</option>
+                    <option value="custom" {{ 'selected' if schedule_form.frequency == 'custom' }}>Custom (cron)</option>
+                  </select>
+                </label>
+                <label data-for-frequency="daily weekly monthly">At <input type="time" name="check_time" value="{{ schedule_form.check_time }}" /></label>
+                <label data-for-frequency="weekly">Day of the week
+                  <select name="weekday">{% for key, label in weekdays %}<option value="{{ key }}" {{ 'selected' if schedule_form.weekday == key }}>{{ label }}</option>{% endfor %}</select>
+                </label>
+                <label data-for-frequency="monthly">Day of the month <input type="number" name="month_day" min="1" max="28" value="{{ schedule_form.month_day }}" /></label>
+                <label data-for-frequency="custom">Cron <input type="text" name="cron" placeholder="0 6 * * *" value="{{ schedule_form.cron }}" /><span class="hint">Minute, hour, day, month, weekday in {{ timezone }}.</span></label>
+              </div>
+            </div>
+
+            <div class="field-wide" data-for-starts="after">
+              <div class="form-grid">
+                <label>After
+                  <select name="after_type">
+                    <option value="dataset" {{ 'selected' if draft.after_type == 'dataset' }}>a dataset was updated</option>
+                    <option value="collection" {{ 'selected' if draft.after_type == 'collection' }}>a feature collection was refreshed</option>
+                    <option value="task" {{ 'selected' if draft.after_type == 'task' }}>a workflow task ran</option>
+                  </select>
+                </label>
+                <label>Which <input name="after_id" list="after-ids" value="{{ draft.after_id or '' }}" placeholder="id" />
+                  <datalist id="after-ids">{% for id, label in options.datasets %}<option value="{{ id }}">{{ label }}</option>{% endfor %}{% for id in options.collections %}<option value="{{ id }}"></option>{% endfor %}{% for id in options.tasks %}<option value="{{ id }}"></option>{% endfor %}</datalist>
+                </label>
+              </div>
+            </div>
+
+            <label class="field-wide" data-for-kind="workflow">Workflow arguments (JSON)
+              <textarea name="arguments" rows="6" placeholder='{"dataset_id": "$event.dataset_id"}'>{{ draft.arguments or '' }}</textarea>
+              <span class="hint">The workflow's parameters. <span class="mono">$event.dataset_id</span>, <span class="mono">$event.previous_end</span> and <span class="mono">$event.current_end</span> stand for the update that started the run.</span>
+            </label>
+
+            <label class="field-wide" data-for-kind="deliver"><input type="checkbox" name="dry_run" value="true" {{ 'checked' if draft.dry_run != 'false' }} /> Dry run: DHIS2 checks the values and stores nothing</label>
+
+            <label class="field-wide">Id <input name="id" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" value="{{ draft.id or '' }}" placeholder="Leave blank to name it after what it does" /></label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="primary">Add task</button>
+            <a class="button-link" href="{{ mount }}/tasks">Cancel</a>
+          </div>
+        </form>
+        <script>
+          (function () {
+            var form = document.getElementById("new-task");
+            function show(attribute, value) {
+              Array.prototype.forEach.call(form.querySelectorAll("[" + attribute + "]"), function (field) {
+                var wanted = field.getAttribute(attribute).split(" ");
+                field.hidden = wanted.indexOf(value) === -1;
+              });
+            }
+            function update() {
+              show("data-for-kind", form.querySelector('[name="kind"]').value);
+              show("data-for-starts", form.querySelector('[name="starts"]').value);
+              show("data-for-frequency", form.querySelector('[name="frequency"]').value);
+            }
+            form.addEventListener("change", update);
+            update();
+          })();
+        </script>
+      </main>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+{#- The flow diagram (CLIM-1377): every node drawn once, in the place FlowGraph.layout gave it,
+    with SVG arrows between. Needs no JavaScript. Used by the Tasks page's Flow view, a task's
+    page and a dataset's page; the styles are in ocs_ui.css. -#}
+{% macro flow_graph(flow, mount, current=None) %}
+{% set kinds = {"dataset": "Dataset", "collection": "Org units", "workflow": "Workflow", "export": "Export", "result": "Result", "destination": "Destination"} %}
+<div class="flow-scroll">
+  <div class="flow" style="width: {{ flow.width }}px; height: {{ flow.height }}px">
+    <svg class="flow-edges" width="{{ flow.width }}" height="{{ flow.height }}" aria-hidden="true" focusable="false">
+      <defs>
+        <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" />
+        </marker>
+      </defs>
+      {% for e in flow.edges %}<path d="{{ e.path }}" marker-end="url(#flow-arrow)" />{% endfor %}
+    </svg>
+    {% for e in flow.edges if e.label %}<span class="flow-edge-label" style="left: {{ e.label_x }}px; top: {{ e.label_y }}px">{{ e.label }}</span>{% endfor %}
+    {% for n in flow.nodes %}
+    <div class="flow-node flow-{{ n.type }}{% if n.id == current %} is-current{% endif %}" style="left: {{ n.x }}px; top: {{ n.y }}px">
+      <span class="flow-kind">{{ kinds[n.type] }}</span>
+      <span class="flow-label">{% if n.href and n.id != current %}<a href="{{ mount }}{{ n.href }}">{{ n.label }}</a>{% else %}{{ n.label }}{% endif %}</span>
+      {% if n.detail %}<small class="{{ 'mono' if n.type in ('dataset', 'workflow') }}" title="{{ n.detail }}">{{ n.detail }}</small>{% endif %}
+      {% if n.starts %}<small>{{ n.starts }}</small>{% endif %}
+      {% if n.task_id %}
+      <span class="flow-status status-{{ n.status or 'none' }}">{{ n.status or 'not run yet' }}{% if n.last_run_at %} · {{ n.last_run_at.strftime('%-d %b %H:%M') }}{% endif %}</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}

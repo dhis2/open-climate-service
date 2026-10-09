@@ -132,8 +132,8 @@ def test_workflow_descriptions_are_escaped() -> None:
     assert str(context["blocks"][0]["html"]) == "&lt;script&gt;x&lt;/script&gt; <code>&lt;b&gt;</code>"
 
 
-def test_the_workflow_page_lists_outputs_and_triggers() -> None:
-    from open_climate_service.automation.config import WorkflowTrigger
+def test_the_workflow_page_lists_outputs_and_tasks() -> None:
+    from open_climate_service.tasks.models import Task
 
     record = _workflow_record(id="climate_normal")
     templates = [
@@ -141,16 +141,17 @@ def test_the_workflow_page_lists_outputs_and_triggers() -> None:
         _template("normal_a", name="A normal", produced_by="climate_normal"),
         _template("other", produced_by="temporal_change"),
     ]
-    triggers = [
-        WorkflowTrigger(id="refresh", on_update_of="chirps_monthly", workflow_id="climate_normal", arguments={"x": 1}),
-        WorkflowTrigger(id="elsewhere", on_update_of="chirps_monthly", workflow_id="temporal_change"),
+    tasks = [
+        Task(id="refresh", kind="workflow", target="climate_normal", after={"dataset": "chirps_monthly"}),  # pyright: ignore[reportArgumentType]
+        Task(id="elsewhere", kind="workflow", target="temporal_change", cron="0 2 * * *"),
     ]
 
-    context = landing._workflow_page_context(record, templates, [_record("normal_b")], triggers)
+    context = landing._workflow_page_context(record, templates, [_record("normal_b")], tasks)
 
     assert [(o["id"], o["ingested"]) for o in context["outputs"]] == [("normal_a", False), ("normal_b", True)]
-    assert [t["id"] for t in context["triggers"]] == ["refresh"]
-    assert context["triggers"][0]["held"] is False
+    assert context["tasks"] == [
+        {"id": "refresh", "starts": "After dataset chirps_monthly changed", "input": "chirps_monthly", "enabled": True}
+    ]
 
 
 def test_the_workflow_page_is_served(client: TestClient) -> None:
