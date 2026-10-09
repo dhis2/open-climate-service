@@ -30,6 +30,7 @@ JavaScript.
 | **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
 | **Schedules** (`/schedules`) | Everything on the instance's clock: each dataset's sync schedule, with pause, resume and delete; set up and edited on the dataset page |
+| **Pipelines** (`/pipelines`) | Save, dry-run, run, pause and delete a climate-to-DHIS2 delivery: a dataset aggregated to organisation units and sent to a data element |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
 The overview counts the collections and links to them rather than listing them, so the root
@@ -114,6 +115,63 @@ linked from the row. The timezone is the instance's `scheduler.timezone`. When t
 disabled, schedules can still be saved and are listed, and the page explains that an operator
 enables checks by setting `enabled: true` under `scheduler:` in `climate-service.yaml` and
 restarting OCS. If a change cannot be applied, the page shows why.
+### The pipeline pages (`/pipelines`)
+
+A pipeline binds one published climate dataset to polygon organisation units, a named DHIS2
+connection, a spatial reducer, and one or more DHIS2 data elements, and decides whether, which
+and when values are delivered. It never fetches data: keeping the dataset current is the
+dataset's own sync schedule, configured under `scheduler.dataset_sync`, and the pipeline reacts
+to the dataset's updates. The create page offers only stored polygon collections; a DHIS2
+collection also has to come from the same named connection as the destination. The
+**Configured pipelines** tab lists saved pipelines, while **Create pipeline** opens the form at
+`/pipelines/new` without mixing it into the listing.
+
+**Save** validates before it stores. Every binding is checked, in OCS and in DHIS2: the dataset
+and its cadence, the collection's ids, the connection, the DHIS2 data set's period type, data
+elements and organisation-unit assignments when a data set is declared, and that no configured
+export or trigger already uses the same id differently. The validation also reports how the
+source dataset is kept current: synced on a schedule, scheduled but with the instance scheduler
+disabled, or not scheduled at all, in which case the pipeline runs after a manual sync or when
+run once. A pipeline that fails any check is not saved, and the form comes back with the failed
+checks. The same holds for an edit: **Edit** opens the saved pipeline in the form, and a change
+that fails a check is refused and the stored version kept. A change to the bindings clears the
+last dry run, because that run was judged on bindings that no longer hold. The pipeline page
+keeps the validation it was saved on; **Re-check** repeats it, since the dataset, the collection
+and DHIS2's metadata can all move afterwards.
+
+Delivery is controlled by three settings. The **mode** says whether anything goes out: `dry_run`
+sends every payload with `dryRun=true`, so DHIS2 validates and stores nothing; `live` writes
+values, and is allowed only after a dry run has passed; `paused` keeps the pipeline valid and
+the dataset current and sends nothing. The **values** setting says which periods go: only the
+updated interval, or the complete stored history on every update. The **policy** says when:
+after each dataset update, only when an operator runs or delivers by hand, or at a release time
+of its own. The scheduled release is accepted so the shape is final, but it is not applied yet;
+until stored pipelines are read by the automation it behaves as manual, and the validation says
+so. The page switches the mode with **Go live**, **Pause**, **Back to dry run** and the resume
+buttons; each switch re-validates and is refused when a check fails.
+
+A bounded dry run renders the exact generated named-export mapping and sends it through the DHIS2
+export plugin with `dryRun=true`. **Run once** goes one step further: it submits the aggregation
+over a chosen range as a batch job through the pipeline's own named export, and delivers the
+result when the job finishes, through the same delivery path as `POST /exports/{id}`. A run is
+delivered as a dry run by default; a live run, which writes values into DHIS2, is offered only
+after a dry run has passed. Run once works in every mode, paused included, because it is the
+operator's own action. The page lists each run with its job and its delivery, and offers
+**Deliver** for a finished run whose hand-off did not happen, for example because the instance
+restarted. A saved pipeline whose validation passed is resolvable as a named export without any
+change to the instance configuration.
+
+Unattended delivery stays configuration-based. The page shows the generated `exports` entry and,
+for a pipeline that delivers after each update and is not paused, the `automation` trigger, to
+merge into `climate-service.yaml` before a restart. The dataset's sync schedule is not part of
+the fragment; it is managed with the instance's schedules, and a successful scheduled sync
+triggers processing and delivery, so DHIS2 has no separate delivery clock.
+
+**Delete** removes the pipeline and its run history from OCS after a confirmation. Anything
+already merged into the instance configuration stays until an operator removes it. The API offers
+the same: `POST /pipelines` and `POST /pipelines/{id}` to save, `DELETE /pipelines/{id}`,
+`POST /pipelines/{id}/mode/{dry_run|live|paused}`, `POST /pipelines/{id}/runs` with `start`,
+`end` and `mode`, and `POST /pipelines/{id}/runs/{job_id}/deliver`.
 
 ### The dataset page (`/datasets/{dataset_id}`)
 

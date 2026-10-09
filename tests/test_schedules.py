@@ -763,7 +763,7 @@ def test_the_schedules_page_lists_everything_and_sends_edits_to_the_dataset_page
     page = client.get("/schedules", headers={"Accept": BROWSER})
     assert page.status_code == 200 and "<h2" in page.text and ">Schedules</h2>" in page.text
     assert "No schedules yet" in page.text and "Scheduler off" in page.text
-    assert "Add schedule" not in page.text and "<select" not in page.text and "pipeline" not in page.text.lower()
+    assert "Add schedule" not in page.text and "<select" not in page.text
     assert client.get("/schedules/new", headers={"Accept": BROWSER}).status_code in {404, 405}
 
     store.save_schedule(_stored("era5"), create=True)
