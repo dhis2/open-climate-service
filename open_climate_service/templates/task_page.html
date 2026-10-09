@@ -1,0 +1,105 @@
+{% from "flow_chains.html" import flow_chains %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ task.id }} · Tasks · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/tasks">Tasks</a> / {{ task.id }}</p>
+        <div class="page-title">
+          <h2 id="task-title" tabindex="-1">{{ task.id }}</h2>
+          <span class="chip">{{ task.kind | capitalize }}</span>
+          {% if not task.enabled %}<span class="chip chip-unpublished">Paused</span>{% endif %}
+          {% if task.kind == 'deliver' %}<span class="chip {{ 'chip-unpublished' if task.dry_run else 'chip-published' }}">{{ 'Dry run' if task.dry_run else 'Live' }}</span>{% endif %}
+        </div>
+        <p class="lead">{{ does_words }}.</p>
+        {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+
+        <div class="dataset-page">
+          <div class="stack">
+            {% if chains %}
+            <section class="panel" id="flow" aria-labelledby="flow-title">
+              <h3 id="flow-title">Flow</h3>
+              {{ flow_chains(chains, mount, current=current) }}
+            </section>
+            {% endif %}
+
+            <section class="panel table-wrap" aria-labelledby="runs-title">
+              <h3 id="runs-title" class="table-title">Runs</h3>
+              {% if runs %}
+              <table>
+                <thead>
+                  <tr><th scope="col">Started</th><th scope="col">Cause</th><th scope="col">Status</th><th scope="col"></th></tr>
+                </thead>
+                <tbody>
+                  {% for r in runs %}
+                  <tr>
+                    <td>{{ r.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ r.cause }}</td>
+                    <td><span class="flow-status status-{{ r.status }}">{{ r.status }}</span>{% if r.detail and r.status in ('failed', 'refused', 'skipped') %}<br /><small>{{ r.detail }}</small>{% endif %}</td>
+                    <td>{% if r.job_href %}<a href="{{ mount }}{{ r.job_href }}">job</a> · {% endif %}<a href="{{ mount }}/runs/{{ r.id }}">what it set off</a></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              {% else %}
+              <p class="note table-title">Not run yet.</p>
+              {% endif %}
+            </section>
+          </div>
+
+          <div class="stack">
+            <section class="panel" aria-labelledby="details-title">
+              <h3 id="details-title">Details</h3>
+              <dl class="facts">
+                <dt>{{ target_label }}</dt><dd>{% if target_href %}<a href="{{ mount }}{{ target_href }}">{{ target_title }}</a>{% else %}<span class="mono">{{ task.target }}</span>{% endif %}</dd>
+                <dt>Starts</dt><dd>{{ starts_words }}</dd>
+                {% if task.next_run %}<dt>Next run</dt><dd>{{ task.next_run }}</dd>{% endif %}
+                {% if task.consecutive_failures > 1 %}<dt>Failures</dt><dd class="status-failed">{{ task.consecutive_failures }} in a row</dd>{% endif %}
+              </dl>
+              {% if arguments %}
+              <h4>Workflow arguments</h4>
+              <pre class="code"><code>{{ arguments }}</code></pre>
+              {% endif %}
+            </section>
+
+            {% if not read_only %}
+            <section class="panel" aria-labelledby="actions-title">
+              <h3 id="actions-title">Actions</h3>
+              <div class="form-actions">
+                {% if task.kind != 'deliver' and task.enabled %}
+                <form method="post" action="{{ mount }}/tasks/{{ task.id }}/run?next=task"><button type="submit" class="primary">Run now</button></form>
+                {% endif %}
+                {% if task.kind == 'deliver' %}
+                <form method="post" action="{{ mount }}/tasks/{{ task.id }}/dry-run?next=task"><input type="hidden" name="dry_run" value="{{ 'false' if task.dry_run else 'true' }}" /><button type="submit">{{ 'Go live' if task.dry_run else 'Back to dry run' }}</button></form>
+                {% endif %}
+                <form method="post" action="{{ mount }}/tasks/{{ task.id }}/{{ 'pause' if task.enabled else 'resume' }}?next=task"><button type="submit">{{ 'Pause' if task.enabled else 'Resume' }}</button></form>
+                <form method="post" action="{{ mount }}/tasks/{{ task.id }}/delete"><button type="submit">Delete</button></form>
+              </div>
+              {% if task.kind == 'deliver' %}<p class="note">A delivery runs after its workflow task. A dry run sends the values for DHIS2 to check and stores nothing; live stores them.</p>{% endif %}
+            </section>
+            {% endif %}
+          </div>
+        </div>
+        <p class="note">Times use {{ clock.timezone }}. The same task as JSON: <a class="mono" href="{{ mount }}/tasks/{{ task.id }}?f=json">/tasks/{{ task.id }}</a>.</p>
+      </main>
+    </div>
+  </body>
+</html>

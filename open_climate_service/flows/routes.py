@@ -1,4 +1,4 @@
-"""The flows API (CLIM-1377): the configured graph as JSON. The Automation page draws it."""
+"""The flows API (CLIM-1377): the configured graph as JSON. The Tasks page draws it."""
 
 from __future__ import annotations
 

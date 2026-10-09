@@ -152,8 +152,8 @@ _NAV_ITEMS = (
     ("overview", "Overview", "/"),
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
+    ("tasks", "Tasks", "/tasks"),
     ("workflows", "Workflows", "/workflows"),
-    ("automation", "Automation", "/tasks"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -554,7 +554,7 @@ def render_schedules_page(status: Any, mount: str, *, change_warning: str | None
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "automation"),
+        nav=page_nav(mount, "tasks"),
         read_only=api_config.is_read_only(),
         status=status,
         schedules=rows,
@@ -570,7 +570,7 @@ def render_schedule_delete_page(dataset_id: str, mount: str) -> str:
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "automation"),
+        nav=page_nav(mount, "tasks"),
         dataset_id=dataset_id,
     )
 
@@ -1415,7 +1415,7 @@ _API_GROUP_NOTES = {
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
     "Tasks": "Every automated task: sync, refresh, workflow and deliver, each on a cron, after a change, or by hand.",
     "Runs": "What each task did: one record per run, with its job's status and the runs it set off.",
-    "Flows": "How the tasks connect, as nodes and edges with each step's latest run. The Automation page draws it.",
+    "Flows": "How the tasks connect, as nodes and edges with each step's latest run. The Tasks page draws it.",
     "Configuration": "Every task and export as one document, to export, commit and import on another instance.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "System": "Health, version and the landing page's JSON form.",
@@ -1902,6 +1902,74 @@ def _starts_in_words(task: Any, timezone: str) -> str:
     return "By hand"
 
 
+_DOES = {
+    "sync": ("Syncs the dataset", "Dataset"),
+    "refresh": ("Refreshes the feature collection", "Feature collection"),
+    "workflow": ("Runs the workflow", "Workflow"),
+    "deliver": ("Delivers the export", "Export"),
+}
+
+
+def _does_in_words(task: Any) -> str:
+    """What a task does, in a short sentence: "Runs the workflow Aggregate to CHAP CSV"."""
+    does, _ = _DOES[task.kind]
+    target = workflow_title(task.target) if task.kind == "workflow" else task.target
+    words = f"{does} {target}"
+    if task.kind == "deliver":
+        words += ", as a dry run" if task.dry_run else ", live"
+    return words
+
+
+def _target_href(task: Any) -> str | None:
+    return {
+        "sync": f"/datasets/{task.target}",
+        "refresh": f"/data-sources/{task.target}",
+        "workflow": f"/workflows/{task.target}",
+    }.get(task.kind)
+
+
+def _flow_node_id(task: Any) -> str:
+    """The node a task's box is in the flow graph."""
+    return {
+        "sync": f"dataset:{task.target}",
+        "refresh": f"collection:{task.target}",
+        "deliver": f"export:{task.target}",
+    }.get(task.kind, f"task:{task.id}")
+
+
+def render_task_page(status: Any, runs: list[Any], clock: Any, mount: str, *, error: str | None = None) -> str:
+    """Render one task: what it does, how it starts, the flows it is part of and its runs (CLIM-1378)."""
+    chains: list[Any] = []
+    current = _flow_node_id(status)
+    try:
+        from open_climate_service.flows.service import current_graph
+
+        chains = current_graph().chains(through=current)
+    except Exception:
+        _log.exception("The flows of task '%s' could not be read", status.id)
+    return get_template("task_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "tasks"),
+        read_only=api_config.is_read_only(),
+        task=status,
+        does_words=_does_in_words(status),
+        starts_words=_starts_in_words(status, clock.timezone),
+        target_label=_DOES[status.kind][1],
+        target_title=workflow_title(status.target) if status.kind == "workflow" else status.target,
+        target_href=_target_href(status),
+        arguments=json.dumps(status.arguments, indent=2) if status.arguments else None,
+        chains=chains,
+        current=current,
+        runs=runs,
+        clock=clock,
+        error=error,
+    )
+
+
 def render_tasks_page(
     statuses: list[Any], clock: Any, mount: str, *, error: str | None = None, draft: dict[str, Any] | None = None
 ) -> str:
@@ -1910,6 +1978,7 @@ def render_tasks_page(
         {
             **item.model_dump(mode="json"),
             "starts_words": _starts_in_words(item, clock.timezone),
+            "does_words": _does_in_words(item),
             "last_run": item.last_run,
         }
         for item in statuses
@@ -1927,7 +1996,7 @@ def render_tasks_page(
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "automation"),
+        nav=page_nav(mount, "tasks"),
         read_only=api_config.is_read_only(),
         tasks=rows,
         chains=chains,

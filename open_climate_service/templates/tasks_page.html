@@ -4,11 +4,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Automation · {{ name }}</title>
+    <title>Tasks · {{ name }}</title>
     <style>
 {{ styles | safe }}
-      .status-failed, .status-refused { color: #b3261e; }
-      .status-succeeded { color: #2f7d4f; }
     </style>
   </head>
   <body>
@@ -25,17 +23,17 @@
 
       <main id="content">
         <div class="page-title">
-          <h2 id="automation-title" tabindex="-1">Automation</h2>
-          <span class="chip">{{ tasks | length }} task{{ 's' if tasks | length != 1 }}</span>
+          <h2 id="tasks-title" tabindex="-1">Tasks</h2>
           <span class="chip {{ 'chip-published' if clock.running else 'chip-unpublished' }}">{{ 'Clock running here' if clock.running else ('Scheduler off' if not clock.enabled else 'Clock on standby or stopped') }}</span>
         </div>
-        <p class="lead">Every task this instance runs by itself. A task syncs a dataset, refreshes org units, runs a workflow or delivers an export, on a schedule, after something it depends on changed, or when you press Run.</p>
+        <p class="lead">The work this instance does by itself. A task syncs a dataset, refreshes org units, runs a workflow or delivers an export, on a schedule, after something it depends on changed, or when you press Run.</p>
 
         {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
         {% if not clock.enabled %}
         <div class="notice">Scheduled tasks do not run: set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span> and restart. Tasks that run after a change, or by hand, still run.</div>
         {% endif %}
 
+        <div class="stack">
         {% if chains %}
         <section class="panel" id="flows" aria-labelledby="flows-title">
           <h3 id="flows-title">Flows</h3>
@@ -45,40 +43,21 @@
         {% endif %}
 
         {% if tasks %}
-        <div class="panel table-wrap records-table">
-          <table>
-            <thead>
-              <tr><th>Task</th><th>Does</th><th>Starts</th><th>Next run</th><th>Last run</th>{% if not read_only %}<th>Actions</th>{% endif %}</tr>
-            </thead>
-            <tbody>
-              {% for t in tasks %}
-              <tr>
-                <td class="mono">{{ t.id }}</td>
-                <td>{{ t.kind | capitalize }} <span class="mono">{{ t.target }}</span>{% if t.kind == 'deliver' %}<br /><small>{{ 'Dry run' if t.dry_run else 'Live' }}</small>{% endif %}</td>
-                <td>{{ t.starts_words }}{% if not t.enabled %}<br /><span class="chip chip-unpublished">Paused</span>{% endif %}</td>
-                <td>{{ t.next_run or '' }}</td>
-                <td>
-                  {% if t.last_run %}
-                  <span class="status-{{ t.last_run.status }}">{{ t.last_run.status }}</span> · {{ t.last_run.cause }}<br />
-                  <small>{{ t.last_run.started_at }}{% if t.last_run.job_href %} · <a href="{{ mount }}{{ t.last_run.job_href }}">job</a>{% endif %} · <a href="{{ mount }}/runs/{{ t.last_run.id }}">what it set off</a></small>
-                  {% if t.consecutive_failures > 1 %}<br /><small class="status-failed">Failed {{ t.consecutive_failures }} times in a row</small>{% endif %}
-                  {% else %}<span class="note">Not run yet</span>{% endif %}
-                </td>
-                {% if not read_only %}
-                <td>
-                  <div class="form-actions">
-                    {% if t.kind != 'deliver' and t.enabled %}
-                    <form method="post" action="{{ mount }}/tasks/{{ t.id }}/run?next=tasks"><button type="submit">Run now</button></form>
-                    {% endif %}
-                    <form method="post" action="{{ mount }}/tasks/{{ t.id }}/{{ 'pause' if t.enabled else 'resume' }}?next=tasks"><button type="submit">{{ 'Pause' if t.enabled else 'Resume' }}</button></form>
-                    <form method="post" action="{{ mount }}/tasks/{{ t.id }}/delete"><button type="submit">Delete</button></form>
-                  </div>
-                </td>
-                {% endif %}
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="collection view-tiles">
+          {% for t in tasks %}
+          <article class="panel item clickable">
+            <div class="body">
+              <h3><a class="item-link" href="{{ mount }}/tasks/{{ t.id }}">{{ t.id }}</a></h3>
+              <p class="description">{{ t.does_words }}</p>
+              <div class="meta">
+                <span class="chip">{{ t.starts_words }}</span>
+                {% if not t.enabled %}<span class="chip chip-unpublished">Paused</span>{% endif %}
+                {% if t.last_run %}<span class="chip {{ 'chip-failed' if t.last_run.status in ('failed', 'refused') else ('chip-published' if t.last_run.status == 'succeeded' else '') }}">Last run {{ t.last_run.status }}</span>{% else %}<span class="chip">Not run yet</span>{% endif %}
+                {% if t.consecutive_failures > 1 %}<span class="chip chip-failed">Failed {{ t.consecutive_failures }} times in a row</span>{% endif %}
+              </div>
+            </div>
+          </article>
+          {% endfor %}
         </div>
         {% else %}
         <div class="panel empty-state">
@@ -106,6 +85,7 @@
           </form>
         </section>
         {% endif %}
+        </div>
         <p class="note">Times use {{ clock.timezone }}. Every task and export as one document: <a class="mono" href="{{ mount }}/configuration?format=yaml">/configuration</a>. The flows as a graph: <a class="mono" href="{{ mount }}/flows">/flows</a>.</p>
       </main>
     </div>

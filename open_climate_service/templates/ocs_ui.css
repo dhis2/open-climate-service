@@ -378,6 +378,10 @@ a.card h3 {
   background: var(--colors-teal100);
   color: var(--colors-teal800);
 }
+.chip-failed {
+  background: var(--colors-red050);
+  color: var(--colors-red800);
+}
 
 .toolbar {
   display: none;

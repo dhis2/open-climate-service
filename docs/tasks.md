@@ -32,15 +32,16 @@ On a dataset's page:
 3. **Flow** draws each path through the dataset, from where it comes from to what it feeds, with
    the latest status of each step.
 
-When the dry-run reports look right, switch the deliver task to live on the **Automation** page.
+When the dry-run reports look right, open the deliver task's page and press **Go live**.
 
-## The Automation page
+## The Tasks pages
 
-* **Flows** draws every configured path as a row of boxes joined by arrows, from where the data
-  comes in to where it goes, with the latest status on each box. A failed box is where a broken
-  path starts.
-* **Tasks** lists every task: how it starts, when it runs next, its last run and how many times in
-  a row it has failed. Run, pause and delete it there, or add any kind of task.
+* **Tasks** draws every configured flow as a row of boxes joined by arrows, from where the data
+  comes in to where it goes, with the latest status on each box; a failed box is where a broken
+  flow starts. Below it, every task with how it starts and its last run, and a form to add any
+  kind of task.
+* **A task's page** shows what it does, when it runs next, the flows it is part of and its recent
+  runs. Run it, pause it, delete it, or switch a delivery between dry run and live there.
 
 ## The API
 

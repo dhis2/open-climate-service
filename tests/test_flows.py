@@ -1,4 +1,4 @@
-"""Flows and the Automation page: the configured graph, and the pages that manage and draw it (CLIM-1377, CLIM-1378)."""
+"""Flows and the Tasks pages: the configured graph, and the pages that manage and draw it (CLIM-1377, CLIM-1378)."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def test_chains_read_one_path_per_row_with_org_units_on_the_workflow(instance: N
     assert len(graph.chains(through="task:anomaly")) == 1
 
 
-def test_the_automation_page_draws_the_flows_and_the_graph_stays_json(client: TestClient) -> None:  # noqa: F811
+def test_the_tasks_page_draws_the_flows_and_the_graph_stays_json(client: TestClient) -> None:  # noqa: F811
     client.post("/tasks", json={"id": "sync-chirps", "kind": "sync", "target": "chirps", "cron": "0 6 * * *"})
     client.post("/tasks", json={"id": "agg", "kind": "workflow", "target": _WORKFLOW, "after": {"dataset": "chirps"}})
 
@@ -92,7 +92,7 @@ def test_the_automation_page_draws_the_flows_and_the_graph_stays_json(client: Te
     assert 'class="flow-chain"' in page and _WORKFLOW in page and "agg" in page
 
 
-def test_the_automation_page_adds_pauses_and_removes_tasks(client: TestClient) -> None:  # noqa: F811
+def test_a_task_is_added_on_the_list_and_paused_and_removed_on_its_own_page(client: TestClient) -> None:  # noqa: F811
     added = client.post(
         "/tasks/form",
         data={"id": "nightly", "kind": "workflow", "target": _WORKFLOW, "cron": "0 2 * * *", "arguments": ""},
@@ -100,10 +100,14 @@ def test_the_automation_page_adds_pauses_and_removes_tasks(client: TestClient) -
     )
     assert added.status_code == 303
 
-    page = client.get("/tasks", headers=BROWSER)
-    assert page.status_code == 200 and "nightly" in page.text and "Automation" in page.text
+    listing = client.get("/tasks", headers=BROWSER)
+    assert listing.status_code == 200 and 'href="/tasks/nightly"' in listing.text
 
-    assert client.post("/tasks/nightly/pause?next=tasks", follow_redirects=False).status_code == 303
+    page = client.get("/tasks/nightly", headers=BROWSER)
+    assert page.status_code == 200 and "Runs the workflow" in page.text and "Not run yet" in page.text
+
+    paused = client.post("/tasks/nightly/pause?next=task", follow_redirects=False)
+    assert paused.status_code == 303 and paused.headers["location"] == "/tasks/nightly"
     assert client.get("/tasks/nightly").json()["enabled"] is False
 
     refused = client.post("/tasks/form", data={"id": "bad", "kind": "workflow", "target": "no_such_workflow"})
@@ -147,6 +151,13 @@ def test_send_to_creates_an_export_and_two_tasks_as_one_path(
         "tasks": ["chirps-BXgDHhPdFVU-aggregate", "chirps-BXgDHhPdFVU-deliver"],
     }
     assert client.get("/tasks/chirps-BXgDHhPdFVU-deliver").json()["dry_run"] is True
+    page = client.get("/tasks/chirps-BXgDHhPdFVU-deliver", headers=BROWSER).text
+    assert "Go live" in page and 'class="flow-step flow-export is-current"' in page
+    live = client.post(
+        "/tasks/chirps-BXgDHhPdFVU-deliver/dry-run?next=task", data={"dry_run": "false"}, follow_redirects=False
+    )
+    assert live.status_code == 303
+    assert client.get("/tasks/chirps-BXgDHhPdFVU-deliver").json()["dry_run"] is False
 
     edges = {(edge["source"], edge["target"]) for edge in client.get("/flows").json()["edges"]}
     assert ("dataset:chirps", "task:chirps-BXgDHhPdFVU-aggregate") in edges

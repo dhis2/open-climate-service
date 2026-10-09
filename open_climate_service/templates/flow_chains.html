@@ -1,5 +1,5 @@
 {#- Flow chains (CLIM-1377): one row per path from a start to an end, boxes joined by arrows.
-    Used by the Automation page and a dataset's Flow panel; the styles are in ocs_ui.css. -#}
+    Used by the Tasks pages and a dataset's Flow panel; the styles are in ocs_ui.css. -#}
 {% macro flow_chains(chains, mount, current=None) %}
 {% set kinds = {"source": "Source", "dataset": "Dataset", "collection": "Org units", "workflow": "Workflow", "export": "Export", "destination": "Destination"} %}
 <div class="flow-chains">

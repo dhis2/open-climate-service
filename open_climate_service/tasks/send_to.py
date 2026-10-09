@@ -4,7 +4,7 @@ What the pipelines draft (PR #438) did as a new kind of object is here three ord
 created together: a named export (the mapping and the declaration its gate checks), a workflow
 task that aggregates the dataset to the org units after each update, and a deliver task after it,
 a dry run until someone switches it to live. Each stays visible and editable on its own: on the
-Automation page, in ``/exports``, and in the Flows page as one path.
+Tasks pages, in ``/exports``, and in the flows as one path.
 """
 
 from __future__ import annotations

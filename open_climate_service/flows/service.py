@@ -2,8 +2,8 @@
 
 The graph is configuration, not history: it shows what is set up to run, and puts the latest run
 of each task on its node. Nodes are data sources, datasets, feature collections, workflow tasks,
-exports and destinations; edges say what feeds what. The Automation page draws it as chains, one
-row per path from a start to an end, a dataset page draws the chains through that dataset, and
+exports and destinations; edges say what feeds what. The Tasks page draws it as chains, one row
+per path from a start to an end; a task and a dataset page draw the chains through them; and
 ``GET /flows`` returns the graph as JSON.
 """
 

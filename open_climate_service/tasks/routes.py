@@ -162,15 +162,30 @@ def _page(request: Request, *, error: str | None = None, draft: dict[str, Any] |
     return HTMLResponse(html, status_code=400 if error else 200)
 
 
-def _back(request: Request) -> RedirectResponse:
+def _detail(request: Request, task_id: str, *, error: str | None = None) -> HTMLResponse:
+    from open_climate_service.runs import service as runs
+    from open_climate_service.scheduler.service import get_scheduler_service
+    from open_climate_service.shared.urls import mount_prefix
+    from open_climate_service.system.templates import render_task_page
+
+    status = _status(_get_or_404(task_id))
+    history = [runs.view(run) for run in runs.list_runs(task_id=task_id, limit=20)]
+    html = render_task_page(status, history, get_scheduler_service().status(), mount_prefix(request), error=error)
+    return HTMLResponse(html, status_code=400 if error else 200)
+
+
+def _back(request: Request, task_id: str | None = None) -> RedirectResponse:
+    """Back to the task's page when the form was on it (``?next=task``), otherwise to the list."""
     from open_climate_service.shared.urls import mount_prefix
 
+    if task_id is not None and request.query_params.get("next") == "task":
+        return RedirectResponse(f"{mount_prefix(request)}/tasks/{task_id}", status_code=303)
     return RedirectResponse(f"{mount_prefix(request)}/tasks", status_code=303)
 
 
 @router.get("", response_model=TaskList)
 def list_tasks(request: Request) -> Any:
-    """Every task, with how it starts and its latest run, as JSON, or the Automation page."""
+    """Every task, with how it starts and its latest run, as JSON, or the Tasks page."""
     from open_climate_service.system.templates import wants_json
 
     if not wants_json(request):
@@ -180,7 +195,7 @@ def list_tasks(request: Request) -> Any:
 
 @router.post("/form", include_in_schema=False)
 async def create_task_form(request: Request) -> Response:
-    """The Automation page's Add a task form."""
+    """The Tasks page's Add a task form."""
     import json
 
     _require_writable()
@@ -210,15 +225,32 @@ async def create_task_form(request: Request) -> Response:
 
 @router.post("/{task_id}/delete", include_in_schema=False)
 def delete_task_form(request: Request, task_id: str) -> Response:
-    """The Automation page's Delete button."""
+    """The Delete button on a task's page."""
     _require_writable()
     _get_or_404(task_id)
     try:
         store.delete_task(task_id, check=_validate_structure)
     except ValueError as exc:
-        return _page(request, error=str(exc))
+        return _detail(request, task_id, error=str(exc))
     _apply()
     return _back(request)
+
+
+@router.post("/{task_id}/dry-run", include_in_schema=False)
+async def set_dry_run_form(request: Request, task_id: str) -> Response:
+    """The Go live and Back to dry run button on a deliver task's page."""
+    _require_writable()
+    existing = _get_or_404(task_id)
+    if existing.kind != "deliver":
+        raise HTTPException(status_code=409, detail="Only a deliver task has a dry run")
+    form = await request.form()
+    task = existing.model_copy(update={"dry_run": form.get("dry_run") == "true"})
+    try:
+        store.save_task(task, create=False, check=_validator(task))
+    except ValueError as exc:
+        return _detail(request, task_id, error=str(exc))
+    _apply()
+    return _back(request, task_id)
 
 
 @router.post("", response_model=TaskStatus, status_code=201)
@@ -235,8 +267,12 @@ def create_task(body: dict[str, Any]) -> TaskStatus:
 
 
 @router.get("/{task_id}", response_model=TaskStatus)
-def get_task(task_id: str) -> TaskStatus:
-    """One task, with how it starts and its latest run."""
+def get_task(task_id: str, request: Request) -> Any:
+    """One task, with how it starts and its latest run, as JSON, or the task's page."""
+    from open_climate_service.system.templates import wants_json
+
+    if not wants_json(request):
+        return _detail(request, task_id)
     return _status(_get_or_404(task_id))
 
 
@@ -262,7 +298,7 @@ def pause_task(task_id: str, request: Request) -> Any:
     _get_or_404(task_id)
     saved = _write(lambda: store.set_enabled(task_id, False))
     _apply()
-    return _back(request) if request.query_params.get("next") else _status(saved)
+    return _back(request, task_id) if request.query_params.get("next") else _status(saved)
 
 
 @router.post("/{task_id}/resume", response_model=TaskStatus)
@@ -272,7 +308,7 @@ def resume_task(task_id: str, request: Request) -> Any:
     _get_or_404(task_id)
     saved = _write(lambda: store.set_enabled(task_id, True))
     _apply()
-    return _back(request) if request.query_params.get("next") else _status(saved)
+    return _back(request, task_id) if request.query_params.get("next") else _status(saved)
 
 
 @router.post("/{task_id}/run", response_model=CheckResult, status_code=202)
@@ -288,10 +324,12 @@ def run_task(task_id: str, request: Request) -> Any:
         raise HTTPException(status_code=409, detail=f"Task '{task_id}' is paused")
     result = get_scheduler_service().run_task_now(task, cause=f"manual:{uuid4()}")
     if result.outcome == CheckOutcome.ERROR:
+        if request.query_params.get("next") == "task":
+            return _detail(request, task_id, error=result.message)
         if request.query_params.get("next"):
             return _page(request, error=result.message)
         raise HTTPException(status_code=409, detail=result.message)
-    return _back(request) if request.query_params.get("next") else result
+    return _back(request, task_id) if request.query_params.get("next") else result
 
 
 @router.delete("/{task_id}", status_code=204)

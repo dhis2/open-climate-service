@@ -296,13 +296,13 @@
               {% else %}
               {{ flow_chains(flow, mount, current='dataset:' ~ dataset.id) }}
               {% endif %}
-              <p class="note"><a href="{{ mount }}/tasks#flows">All flows on the Automation page</a></p>
+              <p class="note"><a href="{{ mount }}/tasks#flows">All flows on the Tasks page</a></p>
             </section>
 
             {% if not read_only %}
             <section class="panel" id="send-to" aria-labelledby="send-to-title">
               <h3 id="send-to-title">Send to DHIS2</h3>
-              <p class="note">After each update, aggregate this dataset to the org units and send the values to a DHIS2 data element. Starts as a dry run: DHIS2 checks the values and stores nothing until you switch the delivery to live on the Automation page.</p>
+              <p class="note">After each update, aggregate this dataset to the org units and send the values to a DHIS2 data element. Starts as a dry run: DHIS2 checks the values and stores nothing until you switch the delivery to live on its task page.</p>
               {% if send_error %}<div class="notice error" role="alert">{{ send_error }}</div>{% endif %}
               {% if not send_options.connections %}
               <p class="note">No DHIS2 connection is configured. Add one under <span class="mono">dhis2_connections</span> in <span class="mono">climate-service.yaml</span>.</p>

@@ -44,6 +44,7 @@ _MUTATING_ROUTES = [
     ("POST", "/tasks/form"),
     ("POST", "/datasets/{dataset_id}/send-to"),
     ("POST", "/tasks/{task_id}/delete"),
+    ("POST", "/tasks/{task_id}/dry-run"),
     ("PUT", "/tasks/{task_id}"),
     ("POST", "/tasks/{task_id}/pause"),
     ("POST", "/tasks/{task_id}/resume"),
