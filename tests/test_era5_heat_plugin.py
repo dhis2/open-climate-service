@@ -13,6 +13,7 @@ from open_climate_service.plugins.rasters.era5_heat import (
     ERA5HeatZarrDailyFromHourlyPlugin,
     ERA5HeatZarrHourlyPlugin,
 )
+from open_climate_service.shared.zarr import TimeChunkedZarr
 
 _TEST_BBOX = [28.0, -3.0, 29.0, -2.0]
 
@@ -43,7 +44,7 @@ def test_hourly_periods(monkeypatch: pytest.MonkeyPatch):
 def test_daily_periods(monkeypatch: pytest.MonkeyPatch):
     plugin = ERA5HeatDailyUTCIPlugin(temporal_aggregation="mean")
 
-    # monkeypatch the cutoff to avoid hitting CDS servers
+    # monkeypatch the cutoff to avoid hitting data servers
     fake_cutoff = datetime.today()
     monkeypatch.setattr(plugin, "_cached_cutoff", fake_cutoff)
 
@@ -68,37 +69,59 @@ def test_daily_periods(monkeypatch: pytest.MonkeyPatch):
     assert days[-1] < end
 
 
-def test_daily_fetch_reuses_loaded_time_chunk():
+def test_daily_fetch_reuses_loaded_time_chunk(monkeypatch: pytest.MonkeyPatch):
     plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
     times = np.arange("2020-01-01", "2020-01-03", dtype="datetime64[h]").astype("datetime64[ns]")
     values = np.arange(48, dtype=float).reshape(48, 1, 1)
-    plugin._cached_ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
-    plugin._time_chunk_size = 48
+    ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
+    ds["utci"].encoding["chunks"] = (48, 1, 1)
+    plugin._zarr = TimeChunkedZarr("unused", "utci", time_dim="t", opener=lambda _: ds)
+    monkeypatch.setattr(plugin, "_prepare_zarr_dataset", lambda ds, bbox: ds)
 
     first_day = plugin.fetch_period("2020-01-01", _TEST_BBOX)
-    cached_block = plugin._cached_block
+    cached_chunk = plugin._zarr._chunk
     second_day = plugin.fetch_period("2020-01-02", _TEST_BBOX)
 
-    assert plugin._cached_block is cached_block
+    assert plugin._zarr._chunk is cached_chunk
     assert first_day.utci.item() == pytest.approx(11.5)
     assert second_day.utci.item() == pytest.approx(35.5)
 
 
-def test_daily_fetch_loads_next_chunk_when_day_crosses_boundary():
+def test_daily_fetch_loads_next_chunk_when_day_crosses_boundary(monkeypatch: pytest.MonkeyPatch):
     plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
     times = np.arange("2020-01-01", "2020-01-04", dtype="datetime64[h]").astype("datetime64[ns]")
     values = np.arange(72, dtype=float).reshape(72, 1, 1)
-    plugin._cached_ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
-    plugin._time_chunk_size = 30
+    ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
+    ds["utci"].encoding["chunks"] = (30, 1, 1)
+    plugin._zarr = TimeChunkedZarr("unused", "utci", time_dim="t", opener=lambda _: ds)
+    monkeypatch.setattr(plugin, "_prepare_zarr_dataset", lambda ds, bbox: ds)
 
-    plugin.fetch_period("2020-01-01", _TEST_BBOX)
-    assert plugin._cached_block is not None
-    assert plugin._cached_block.sizes["t"] == 30
+    # the first day should load the first chunk (30 hours)
+    first_day = plugin.fetch_period("2020-01-01", _TEST_BBOX)
+    assert plugin._zarr._chunk is not None
+    assert plugin._zarr._chunk.sizes["t"] == 30
+    assert first_day.t.values[0] == np.datetime64("2020-01-01T00:00:00")
 
+    # the next day should load both the first and the second chunk, since the chunk boundary is 30 hours
     second_day = plugin.fetch_period("2020-01-02", _TEST_BBOX)
+    assert plugin._zarr._chunk.sizes["t"] == 60
+    assert second_day.t.values[0] == np.datetime64("2020-01-02T00:00:00")
 
-    assert plugin._cached_block.sizes["t"] == 60
-    assert second_day.utci.item() == pytest.approx(35.5)
+
+def test_time_zarr_uses_time_coordinate_and_chunk_axis():
+    times = np.arange("2020-01-01", "2020-01-05", dtype="datetime64[D]")
+    values = np.arange(8, dtype=float).reshape(2, 4, 1)
+    ds = xr.Dataset(
+        {"value": (("y", "valid_at", "x"), values)},
+        coords={"valid_at": times},
+    )
+    ds["value"].encoding["chunks"] = (1, 2, 1)
+    zarr = TimeChunkedZarr("unused", "value", time_dim="valid_at", opener=lambda _: ds)
+
+    result = zarr.slice_time(np.datetime64("2020-01-02"), np.datetime64("2020-01-04"))
+
+    assert result.sizes["valid_at"] == 2
+    assert result.value.values[:, :, 0].tolist() == [[1, 2], [5, 6]]
 
 
 # Functional integrations tests
@@ -120,18 +143,18 @@ def daily_utci_data_func():
 
 
 def test_daily_from_hourly_periods_efficiency():
-    """Background: Daily aggregation is done by reusing the hourly .periods() function to provide
-    the hours of each day, and then fetching and merging each hour. This will result in many periods() calls,
-    so we check that it finishes in reasonable time and uses the internal cutoff cache.
+    """Check that daily-from-hourly period generation stays fast across a multi-year daily range.
+
+    This generates the list of daily periods, checks that the hourly plugin reuses rather than
+    re-fetching the cutoff cache, and bounds the full loop's runtime.
     """
-    # this is a functional integration test that checks the cutoff cache retrieval from CDS
     if os.getenv("TEST_INTEGRATIONS") != "1":
         pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
 
     hourly_plugin = ERA5HeatZarrHourlyPlugin(variable="utci")
     daily_plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
 
-    # test that calling hourly periods for many days (5 years worth) finishes in reasonable time
+    # Generate daily IDs, then ensure each day's hourly IDs are produced quickly.
     start = "2020-01-01"
     end = "2025-12-31"
     days = asyncio.run(daily_plugin.periods(start, end))
@@ -143,7 +166,7 @@ def test_daily_from_hourly_periods_efficiency():
         assert hours[0][:10] == day
         assert hourly_plugin._cached_cutoff is not None
     duration = time.monotonic() - t
-    max_duration = 20  # seconds
+    max_duration = 10  # seconds for the full multi-year loop
     assert duration < max_duration
 
 

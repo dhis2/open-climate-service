@@ -16,6 +16,7 @@ from open_climate_service.shared.time import (
     datetime_to_period_string,
     parse_period_string_to_datetime,
 )
+from open_climate_service.shared.zarr import TimeChunkedZarr
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius
 
@@ -24,11 +25,13 @@ logger = logging.getLogger(__name__)
 # CDS dataset
 _CDS_ZARR_URL = "https://arco.datastores.ecmwf.int/cadl-arco-geo-004/arco/derived_utci_historical/all/geoChunked.zarr"
 _CDS_ZARR_VARIABLES = ["utci", "mrt"]
+_CDS_TIME_DIM = "time"
 
 
 class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
     """Streaming plugin for hourly ERA5-Heat zarr archive from Copernicus CDS."""
 
+    # NOTE: the current use of TimeChunkedZarr is not thread-safe, so we limit concurrency to 1 to avoid race conditions
     max_concurrency = 1
     commit_batch_size = 24
 
@@ -38,10 +41,8 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
                 f"ERA5HeatCDSHourlyPlugin: unsupported variable {variable!r}; "
                 f"expected one of {list(_CDS_ZARR_VARIABLES)}"
             )
-        self.variable = variable
-        self._cached_ds: xr.Dataset | None = None
+        self._zarr = TimeChunkedZarr(_CDS_ZARR_URL, variable, time_dim=_CDS_TIME_DIM, opener=_open_cds_zarr)
         self._cached_cutoff: datetime | None = None
-        self._time_chunk_size: int | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         # NOTE: Does not take into account local UTC offset hour which may include the previous or next day
@@ -66,40 +67,24 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
         """Fetches xarray dataset for a single hour snapshot."""
         # TODO: Later we should take into account UTC offset hour which may include the previous or next day
 
-        # Get ds
-        ds = self._fetch_ds(bbox)
-
-        # Subset to requested hour
         dt = parse_period_string_to_datetime(period_id)
-        timestamp = np.datetime64(dt.replace(tzinfo=None), "h").astype("datetime64[ns]")
-        ds = ds.sel(t=timestamp)
+        start = np.datetime64(dt.replace(tzinfo=None), "h").astype("datetime64[ns]")
+        return self._fetch_time_range(start, start + np.timedelta64(1, "h"), bbox)
 
-        # NOTE: Usually .fetch_period() should call .load() before returning.
-        # However, doing that for every hour results in a significant slowdown,
-        # and we don't except this Hourly class to be used directly
-        # so it's okay that we don't call .load().
-
+    def _fetch_time_range(self, start: np.datetime64, end: np.datetime64, bbox: list[float]) -> xr.Dataset:
+        ds = self._zarr.slice_time(
+            start,
+            end,
+            prepare=lambda ds: self._prepare_zarr_dataset(ds, bbox),
+        )
+        if _CDS_TIME_DIM in ds.dims:
+            ds = ds.rename({_CDS_TIME_DIM: "t"})
         return ds
 
-    def _fetch_ds(self, bbox: list[float]) -> xr.Dataset:
-        if self._cached_ds is None:
-            # Get data
-            ds = _open_cds_zarr(_CDS_ZARR_URL)
-            self._time_chunk_size = ds[self.variable].encoding["chunks"][0]
-
-            # Add crs needed later
-            ds = ds.rio.write_crs("EPSG:4326")
-
-            # Normalize xarray dims
-            ds = normalize_period(ds, variable=self.variable, bbox=list(bbox))
-
-            # Convert Kelvin to Celsius
-            ds = kelvin_to_celsius(ds, {"variable": self.variable})
-
-            # Save to cache
-            self._cached_ds = ds
-
-        return self._cached_ds
+    def _prepare_zarr_dataset(self, ds: xr.Dataset, bbox: list[float]) -> xr.Dataset:
+        ds = ds.rio.write_crs("EPSG:4326")
+        ds = normalize_period(ds, variable=self._zarr.variable, bbox=list(bbox), time_dim=_CDS_TIME_DIM)
+        return kelvin_to_celsius(ds, {"variable": self._zarr.variable})
 
     def _fetch_cutoff(self) -> datetime:
         if self._cached_cutoff is None:
@@ -116,8 +101,6 @@ class ERA5HeatZarrDailyFromHourlyPlugin(ERA5HeatZarrHourlyPlugin):
     def __init__(self, temporal_aggregation: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._temporal_aggregation = temporal_aggregation
-        self._cached_block_start: int | None = None
-        self._cached_block: xr.Dataset | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         cutoff = super()._fetch_cutoff()
@@ -126,24 +109,9 @@ class ERA5HeatZarrDailyFromHourlyPlugin(ERA5HeatZarrHourlyPlugin):
         return periods
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
-        """Fetch a day by reusing the loaded source time chunk."""
-        ds = self._fetch_ds(bbox)
-        day_start = np.datetime64(period_id, "D").astype("datetime64[ns]")
-        day_index = int(np.searchsorted(ds.t.values, day_start))
-        assert self._time_chunk_size is not None
-        chunk_size = self._time_chunk_size
-        block_start = day_index // chunk_size * chunk_size
-        day_end = day_index - block_start + 24
-
-        if self._cached_block_start != block_start or (
-            self._cached_block is not None and self._cached_block.sizes["t"] < day_end
-        ):
-            block_end = block_start + ((day_end + chunk_size - 1) // chunk_size) * chunk_size
-            self._cached_block = ds.isel(t=slice(block_start, block_end)).load()
-            self._cached_block_start = block_start
-
-        assert self._cached_block is not None
-        hourly_ds = self._cached_block.isel(t=slice(day_index - block_start, day_index - block_start + 24))
+        """Fetch and aggregate the values in a day."""
+        start = np.datetime64(period_id, "D").astype("datetime64[ns]")
+        hourly_ds = super()._fetch_time_range(start, start + np.timedelta64(1, "D"), bbox)
 
         # aggregate to daily
         daily_ds = daily_reduce(
