@@ -84,6 +84,7 @@ nav:
       - Dataset-update workflow automation: workflow_automation.md
       - Import to DHIS2 and Chap: importing_to_dhis2.md
       - GeoLibre plugin: geolibre_plugin.md
+      - AI assistants (MCP): mcp.md
       - Adding custom datasets: adding_custom_datasets.md
       - Extensibility: extensibility.md
       - Installable plugins: installable_plugins.md

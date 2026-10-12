@@ -43,7 +43,8 @@ _MUTATING_ROUTES = [
 ]
 
 # Mutating routes deliberately left open by read-only mode.
-_OPEN_WRITES = {("POST", "/result")}
+# /mcp: MCP sends every message as a POST; its tools reach the API through this policy (CLIM-851).
+_OPEN_WRITES = {("POST", "/result"), ("POST", "/mcp"), ("DELETE", "/mcp")}
 
 
 def _concrete(path: str) -> str:

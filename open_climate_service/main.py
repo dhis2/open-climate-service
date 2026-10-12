@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
+from starlette.routing import Route
 
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from open_climate_service import config as api_config
@@ -19,6 +20,7 @@ from open_climate_service.extents import routes as extent_routes
 from open_climate_service.features import routes as feature_routes
 from open_climate_service.ingestions import routes as ingestion_routes
 from open_climate_service.jobs.service import get_job_service
+from open_climate_service.mcp_server.endpoint import McpEndpoint
 from open_climate_service.openeo import routes as openeo_routes
 from open_climate_service.openeo.jobs import get_openeo_job_service
 from open_climate_service.read_only import read_only_middleware
@@ -273,6 +275,11 @@ def create_app() -> FastAPI:
     _app.include_router(scheduler_routes.router, prefix="/schedules", tags=["Schedules"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
     _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])
+    # MCP streamable HTTP (CLIM-851): POST carries requests, GET and DELETE are part of the
+    # transport. Answers 404 unless `mcp: true` in the instance config.
+    _app.router.routes.append(
+        Route("/mcp", endpoint=McpEndpoint(), methods=["GET", "POST", "DELETE"], include_in_schema=False)
+    )
 
     return _app
 
