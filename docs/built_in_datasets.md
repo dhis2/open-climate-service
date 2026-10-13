@@ -119,6 +119,24 @@ when the data measurements were made.
 
 ---
 
+## MODIS — NDVI and EVI (monthly)
+
+| Property               | Value                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Dataset IDs**        | `modis_ndvi_monthly`, `modis_evi_monthly`                                                                    |
+| **Variables**          | `ndvi`, `evi`                                                                                                |
+| **Units**              | 1                                                                                                            |
+| **Period**             | Monthly                                                                                                      |
+| **Spatial resolution** | ~250 m                                                                                                       |
+| **Record start**       | 2000-03                                                                                                      |
+| **Source**             | [MOD13Q1/MYD13Q1 v6.1 on Planetary Computer](https://planetarycomputer.microsoft.com/dataset/modis-13Q1-061) |
+
+Monthly mean of the Terra and Aqua 16-day composites whose window is centred in the month, with cloud, snow and fill pixels removed using `pixel_reliability`. Combining both satellites gives about four composites a month and covers gaps in the catalogue.
+
+**Access** — none required.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |

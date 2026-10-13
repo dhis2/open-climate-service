@@ -1,0 +1,80 @@
+- id: modis_ndvi_monthly
+  name: NDVI (MODIS MOD13Q1/MYD13Q1, monthly)
+  short_name: NDVI
+  description: >-
+    Normalized Difference Vegetation Index at 250 m, worldwide, from 2000 onwards. Monthly mean of
+    the Terra and Aqua 16-day composites centred in the month, with cloudy, snowy and fill pixels
+    removed. Values run from -0.2 to 1; dense green vegetation is above 0.6, bare soil and sand
+    near 0.1.
+  standard_name: normalized_difference_vegetation_index
+  variable: ndvi
+  period_type: monthly
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "2000-03"
+      resolution: P1M
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.modis_vi.MODISVegetationIndexMonthlyPlugin
+    params:
+      index: ndvi
+  units: "1"
+  cell_methods: "time: mean"
+  resolution: 250 m x 250 m
+  source: MODIS MOD13Q1/MYD13Q1 v6.1 (NASA LP DAAC)
+  source_url: https://planetarycomputer.microsoft.com/dataset/modis-13Q1-061
+  license:
+    name: NASA Earth Science Data
+    url: https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance
+  providers:
+    - name: NASA LP DAAC
+      url: https://lpdaac.usgs.gov/products/mod13q1v061/
+    - name: Microsoft Planetary Computer
+      url: https://planetarycomputer.microsoft.com/
+  display:
+    colormap: viridis
+    range: [0.0, 0.8]
+
+- id: modis_evi_monthly
+  name: EVI (MODIS MOD13Q1/MYD13Q1, monthly)
+  short_name: EVI
+  description: >-
+    Enhanced Vegetation Index at 250 m, worldwide, from 2000 onwards. Monthly mean of the Terra
+    and Aqua 16-day composites centred in the month, with cloudy, snowy and fill pixels removed.
+    Like NDVI but less saturated over dense vegetation and less sensitive to soil background.
+  standard_name: enhanced_vegetation_index
+  variable: evi
+  period_type: monthly
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "2000-03"
+      resolution: P1M
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.modis_vi.MODISVegetationIndexMonthlyPlugin
+    params:
+      index: evi
+  units: "1"
+  cell_methods: "time: mean"
+  resolution: 250 m x 250 m
+  source: MODIS MOD13Q1/MYD13Q1 v6.1 (NASA LP DAAC)
+  source_url: https://planetarycomputer.microsoft.com/dataset/modis-13Q1-061
+  license:
+    name: NASA Earth Science Data
+    url: https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance
+  providers:
+    - name: NASA LP DAAC
+      url: https://lpdaac.usgs.gov/products/mod13q1v061/
+    - name: Microsoft Planetary Computer
+      url: https://planetarycomputer.microsoft.com/
+  display:
+    colormap: viridis
+    range: [0.0, 0.6]
