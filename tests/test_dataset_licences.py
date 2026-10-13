@@ -147,6 +147,7 @@ _REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
     "copdem30.yaml": frozenset({ATTRIBUTION}),  # License to Use Copernicus DEM
     "era5_land_daily_stats.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "utci.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products (C3S)
+    "cams.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products (CAMS)
 }
 
 

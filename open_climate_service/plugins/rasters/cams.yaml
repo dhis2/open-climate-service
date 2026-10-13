@@ -1,0 +1,87 @@
+- id: cams_dust_aod_daily
+  name: Dust aerosol optical depth (CAMS)
+  short_name: Dust AOD
+  description: 'How much desert dust in the air column dims sunlight at 550 nm. Above 0.5 is a heavy dust
+    event. From 2003 to yesterday at 0.75 degrees (about 80 km): the EAC4 reanalysis while it lasts (it
+    runs about a year behind), then the CAMS daily forecast, so expect a step where they meet. Daily mean
+    over the instance''s own day.'
+  standard_name: atmosphere_optical_thickness_due_to_dust_ambient_aerosol_particles
+  variable: duaod550
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox:
+      - -180
+      - -90
+      - 180
+      - 90
+    temporal:
+      begin: '2003-01-01'
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.cams.CAMSDailyMeanPlugin
+    params:
+      variable: duaod550
+  units: '1'
+  cell_methods: 'time: mean'
+  resolution: 80 km x 80 km
+  source: CAMS EAC4 reanalysis and CAMS global forecasts (Copernicus ADS)
+  source_url: https://ads.atmosphere.copernicus.eu/datasets/cams-global-reanalysis-eac4
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+  - name: Copernicus Atmosphere Monitoring Service (CAMS)
+    url: https://atmosphere.copernicus.eu/
+  display:
+    colormap: reds
+    range:
+    - 0.0
+    - 2.0
+
+- id: cams_pm10_daily
+  name: PM10 at the surface (CAMS)
+  short_name: PM10
+  description: 'Mass concentration of particles smaller than 10 micrometres near the ground, in micrograms
+    per cubic metre. WHO''s 24-hour guideline is 45. From 2003 to yesterday at 0.75 degrees (about 80
+    km): the EAC4 reanalysis while it lasts (it runs about a year behind), then the CAMS daily forecast,
+    so expect a step where they meet. Daily mean over the instance''s own day.'
+  standard_name: mass_concentration_of_pm10_ambient_aerosol_particles_in_air
+  variable: pm10
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox:
+      - -180
+      - -90
+      - 180
+      - 90
+    temporal:
+      begin: '2003-01-01'
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.cams.CAMSDailyMeanPlugin
+    params:
+      variable: pm10
+  units: ug m-3
+  cell_methods: 'time: mean'
+  resolution: 80 km x 80 km
+  source: CAMS EAC4 reanalysis and CAMS global forecasts (Copernicus ADS)
+  source_url: https://ads.atmosphere.copernicus.eu/datasets/cams-global-reanalysis-eac4
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+  - name: Copernicus Atmosphere Monitoring Service (CAMS)
+    url: https://atmosphere.copernicus.eu/
+  display:
+    colormap: reds
+    range:
+    - 0.0
+    - 500.0

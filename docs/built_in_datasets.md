@@ -155,6 +155,24 @@ Daily maximum or mean of the hourly Universal Thermal Climate Index. Consolidate
 
 ---
 
+## CAMS — dust aerosol optical depth and PM10 (daily)
+
+| Property               | Value                                                                                                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dataset IDs**        | `cams_dust_aod_daily`, `cams_pm10_daily`                                                                                                                                                                              |
+| **Variables**          | `duaod550`, `pm10`                                                                                                                                                                                                    |
+| **Units**              | 1, ug m-3                                                                                                                                                                                                             |
+| **Period**             | Daily mean, in the instance's local day                                                                                                                                                                               |
+| **Spatial resolution** | ~80 km (0.75°)                                                                                                                                                                                                        |
+| **Record start**       | 2003-01-01                                                                                                                                                                                                            |
+| **Source**             | [CAMS EAC4](https://ads.atmosphere.copernicus.eu/datasets/cams-global-reanalysis-eac4) and [CAMS global forecasts](https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts) (ADS) |
+
+The EAC4 reanalysis while it lasts (about a year behind), then the 00 UTC CAMS forecast run interpolated onto the EAC4 grid. The two systems differ, so expect a step in the series where they meet.
+
+**Access** — the CDS key works on the ADS, but the ADS site terms and both dataset licences have to be accepted once in the browser.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |
