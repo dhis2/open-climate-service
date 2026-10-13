@@ -1,0 +1,38 @@
+- id: glofas_river_discharge_daily
+  name: River discharge (GloFAS v4)
+  short_name: River discharge
+  description: >-
+    Daily mean river discharge in cubic metres per second at 0.05 degrees (about 5 km), worldwide,
+    from 1979 to a few days ago, simulated by the GloFAS v4 LISFLOOD model driven by ERA5. Only
+    cells on the river network carry river flow, so a district average is not meaningful: read
+    the value at the river cell that represents each district instead.
+  standard_name: water_volume_transport_in_river_channel
+  variable: dis24
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -60, 180, 90]
+    temporal:
+      begin: "1979-01-01"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.glofas.GloFASDailyDischargePlugin
+    params:
+      version: "4"
+  units: m3 s-1
+  cell_methods: "time: mean"
+  resolution: 5 km x 5 km
+  source: GloFAS v4 reanalysis (Copernicus EWDS)
+  source_url: https://ewds.climate.copernicus.eu/datasets/cems-glofas-historical
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Emergency Management Service (CEMS)
+      url: https://emergency.copernicus.eu/
+  display:
+    colormap: blues
+    range: [0.0, 2000.0]

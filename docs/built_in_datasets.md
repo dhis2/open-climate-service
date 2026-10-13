@@ -173,6 +173,24 @@ The EAC4 reanalysis while it lasts (about a year behind), then the 00 UTC CAMS f
 
 ---
 
+## GloFAS — river discharge (daily)
+
+| Property               | Value                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `glofas_river_discharge_daily`                                                                 |
+| **Variable**           | `dis24`                                                                                        |
+| **Units**              | m3 s-1                                                                                         |
+| **Period**             | Daily                                                                                          |
+| **Spatial resolution** | ~5 km (0.05°)                                                                                  |
+| **Record start**       | 1979-01-01                                                                                     |
+| **Source**             | [GloFAS historical (EWDS)](https://ewds.climate.copernicus.eu/datasets/cems-glofas-historical) |
+
+Daily mean river discharge simulated by GloFAS v4 (set `version: "5"` in the template for v5). Only river cells carry river flow, so aggregate it by reading the river cell that represents each district rather than by a zonal mean.
+
+**Access** — the CDS key works on the EWDS, but the EWDS site terms and the dataset licence have to be accepted once in the browser.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |
