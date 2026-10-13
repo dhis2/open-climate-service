@@ -1,0 +1,85 @@
+- id: esacci_landcover_fraction_yearly
+  name: Land cover fractions (ESA CCI / C3S, yearly)
+  short_name: Land cover fractions
+  description: >-
+    Share of each 1 km cell covered by each of ten land cover groups (cropland, tree cover,
+    shrubland, grassland, sparse vegetation, wetland, urban, bare, water, snow and ice), from the
+    300 m ESA CCI / C3S land cover maps, yearly from 1992 to 2020. Averaging a group over a
+    district gives the share of the district it covers. The groups merge the 37 published classes
+    following the IPCC land categories, with shrubland, sparse vegetation and bare land kept apart.
+  variable: land_cover_fraction
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: v2.1.1
+      authority: esa-cci-lc
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1992"
+      end: "2020"
+      resolution: P1Y
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.esa_cci_lc.ESACCILandCoverFractionPlugin
+    params:
+      block: 3
+  units: "1"
+  cell_methods: "area: fraction"
+  resolution: 1 km x 1 km
+  source: ESA CCI / C3S land cover v2.1.1 (Microsoft Planetary Computer)
+  source_url: https://planetarycomputer.microsoft.com/dataset/esa-cci-lc
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/satellite-land-cover/
+  providers:
+    - name: ESA Climate Change Initiative and Copernicus Climate Change Service (C3S)
+      url: https://climate.esa.int/en/projects/land-cover/
+    - name: Microsoft Planetary Computer
+      url: https://planetarycomputer.microsoft.com/
+  display:
+    colormap: viridis
+    range: [0.0, 1.0]
+
+- id: esacci_landcover_class_yearly
+  name: Land cover class (ESA CCI / C3S, yearly)
+  short_name: Land cover class
+  description: >-
+    Land cover class of each 300 m cell, worldwide, yearly from 1992 to 2020, using the 37 LCCS
+    classes of the ESA CCI / C3S maps (10 rainfed cropland, 20 irrigated cropland, 50-100 tree
+    cover, 120 shrubland, 130 grassland, 150 sparse vegetation, 180 flooded vegetation, 190 urban,
+    200 bare, 210 water, 220 snow and ice). For display; use the land cover fractions to
+    aggregate to districts.
+  variable: lccs_class
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: v2.1.1
+      authority: esa-cci-lc
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1992"
+      end: "2020"
+      resolution: P1Y
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.esa_cci_lc.ESACCILandCoverClassPlugin
+    resampling: mode
+  units: "1"
+  resolution: 300 m x 300 m
+  source: ESA CCI / C3S land cover v2.1.1 (Microsoft Planetary Computer)
+  source_url: https://planetarycomputer.microsoft.com/dataset/esa-cci-lc
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/satellite-land-cover/
+  providers:
+    - name: ESA Climate Change Initiative and Copernicus Climate Change Service (C3S)
+      url: https://climate.esa.int/en/projects/land-cover/
+    - name: Microsoft Planetary Computer
+      url: https://planetarycomputer.microsoft.com/
+  display:
+    colormap: viridis
+    range: [10, 220]
