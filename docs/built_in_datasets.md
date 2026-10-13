@@ -119,6 +119,24 @@ when the data measurements were made.
 
 ---
 
+## GPM IMERG — daily precipitation
+
+| Property               | Value                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `imerg_precipitation_daily`                                                             |
+| **Variable**           | `precip`                                                                                |
+| **Units**              | mm/d                                                                                    |
+| **Period**             | Daily (UTC)                                                                             |
+| **Spatial resolution** | ~10 km (0.1°)                                                                           |
+| **Record start**       | 1998-01-01                                                                              |
+| **Source**             | [GPM IMERG v07 (GES DISC)](https://disc.gsfc.nasa.gov/datasets/GPM_3IMERGDF_07/summary) |
+
+The gauge-calibrated Final run where it exists (about three and a half months behind), then the satellite-only Late run.
+
+**Access** — Earthdata Login credentials in `~/.netrc` (`machine urs.earthdata.nasa.gov login ... password ...`) and the *NASA GESDISC DATA ARCHIVE* application approved in the Earthdata profile.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |

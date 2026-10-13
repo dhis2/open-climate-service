@@ -1,0 +1,38 @@
+- id: imerg_precipitation_daily
+  name: Precipitation rate (GPM IMERG v07)
+  short_name: Precipitation
+  description: >-
+    Daily rainfall at 0.1 degrees (about 10 km), worldwide from 1998 to about two days ago, from
+    NASA's merged satellite precipitation estimates. Uses the gauge-calibrated Final run where it
+    exists (about three and a half months behind) and the satellite-only Late run after that.
+    Days run in UTC.
+  standard_name: lwe_precipitation_rate
+  variable: precip
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1998-01-01"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.imerg.IMERGDailyPlugin
+    params: {}
+  units: mm/d
+  cell_methods: "time: mean"
+  resolution: 10 km x 10 km
+  source: NASA GPM IMERG v07 (GES DISC)
+  source_url: https://disc.gsfc.nasa.gov/datasets/GPM_3IMERGDF_07/summary
+  license:
+    name: NASA Earth Science Data
+    url: https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance
+  providers:
+    - name: NASA Goddard Earth Sciences Data and Information Services Center (GES DISC)
+      url: https://disc.gsfc.nasa.gov/
+  display:
+    colormap: blues
+    range: [0.0, 20.0]
+    nodata: 0.0
