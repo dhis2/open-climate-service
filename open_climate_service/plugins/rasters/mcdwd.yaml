@@ -1,0 +1,40 @@
+- id: modis_flood_daily
+  name: Flood extent (MODIS near-real-time, MCDWD)
+  short_name: Flooded area
+  description: >-
+    Daily map of unusual surface water at 250 m from NASA's MODIS near-real-time global flood
+    product (2-day composite of Terra and Aqua). 1 where flood water is seen, 0 where the ground
+    or normal water is seen, and empty where clouds hid the surface, so a district average is the
+    observed share of its area under flood. NASA keeps only about the last week of this product:
+    the record starts when ingestion first runs and grows only through a daily sync.
+  standard_name: flooded_area_fraction
+  variable: flooded
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "2021-03-15"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.mcdwd.MCDWDFloodDailyPlugin
+    params:
+      composite_days: 2
+      flood_classes: [3]
+  units: "1"
+  cell_methods: "time: point"
+  resolution: 250 m x 250 m
+  source: NASA LANCE MODIS MCDWD_L3_F2_NRT v6.1
+  source_url: https://www.earthdata.nasa.gov/data/instruments/modis/near-real-time-data/nrt-global-flood-products
+  license:
+    name: NASA Earth Science Data
+    url: https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance
+  providers:
+    - name: NASA LANCE
+      url: https://www.earthdata.nasa.gov/data/tools/lance
+  display:
+    colormap: blues
+    range: [0.0, 1.0]

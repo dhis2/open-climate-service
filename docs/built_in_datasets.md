@@ -137,6 +137,23 @@ The gauge-calibrated Final run where it exists (about three and a half months be
 
 ---
 
+## MODIS — flood extent, near real time (daily)
+
+| Property               | Value                                                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `modis_flood_daily`                                                                                                          |
+| **Variable**           | `flooded`                                                                                                                    |
+| **Units**              | 1 (flooded fraction)                                                                                                         |
+| **Period**             | Daily                                                                                                                        |
+| **Spatial resolution** | ~250 m                                                                                                                       |
+| **Source**             | [LANCE MCDWD_L3_F2_NRT](https://www.earthdata.nasa.gov/data/instruments/modis/near-real-time-data/nrt-global-flood-products) |
+
+1 where the 2-day MODIS composite sees unusual flood water, 0 where it sees ground or normal water, empty under cloud. LANCE keeps only about a week of this product, so there is no history to backfill: schedule a daily sync from the day the dataset is first ingested.
+
+**Access** — Earthdata Login credentials in `~/.netrc`, as for IMERG.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |

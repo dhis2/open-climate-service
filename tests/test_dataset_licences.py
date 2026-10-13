@@ -146,6 +146,7 @@ _REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
     "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
     "copdem30.yaml": frozenset({ATTRIBUTION}),  # License to Use Copernicus DEM
     "imerg.yaml": frozenset(),  # NASA Earth science data: no copyright, no use restrictions
+    "mcdwd.yaml": frozenset(),  # NASA Earth science data: no copyright, no use restrictions
 }
 
 
