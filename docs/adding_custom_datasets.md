@@ -372,7 +372,7 @@ Levels are aggregated from the full-resolution data, and `ingestion.resampling` 
 
 - **Continuous data** (temperature, precipitation, NDVI, …) — leave the default `mean`.
 - **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a mask into meaningless fractions.
-- **Multi-class categorical** (land-cover class codes, etc.) — use `mode` (majority class). `mean` would average class codes into a _different, non-existent_ class (e.g. `mean(10, 80) = 45`).
+- **Multi-class categorical** (land-cover class codes, etc.) — use `mode` (majority class). `mean` would average class codes into a _different, non-existent_ class (e.g. `mean(10, 80) = 45`). A dataset that declares [`classes`](#categorical-datasets) gets `mode` unless it sets `resampling` itself.
 
 `mean`/`max`/`min`/`sum`/`nearest` are computed by [topozarr](https://github.com/carbonplan/topozarr), which builds each level from the one above. That is valid for all five because they are _composable_ — for `nearest`, taking the corner of each corner gives the same cell as taking every nth cell of the original.
 
@@ -417,6 +417,31 @@ The following parameters control how the datasets are displayed visually and in 
 | `display.colormap` | No       | Colormap name for map rendering (e.g. `blues`, `rdbu_r`) |
 | `display.range`    | No       | `[min, max]` display range for the colormap              |
 | `display.nodata`   | No       | No-data / fill value                                     |
+
+### Categorical datasets
+
+A dataset whose values are codes rather than measurements (land cover, hazard or warning levels,
+binary masks) declares its classes. Each class has an integer `value` as stored, a `label`, and
+optionally a `color`. `display.nodata`, if set, is a code that is not a class, so `0` can be one:
+
+```yaml
+classes:
+  - { value: 0, label: No warning, color: "#ffffb2" }
+  - { value: 1, label: Caution (35-38 °C), color: "#fecc5c" }
+  - { value: 2, label: Warning (38-40 °C), color: "#fd8d3c" }
+  - { value: 3, label: Danger (40 °C and above), color: "#e31a1c" }
+display:
+  nodata: 255
+```
+
+The classes are written to the stored variable as CF `flag_values` and `flag_meanings`, and
+published in STAC as `classification:classes` on the data assets. The pyramid is resampled with
+`mode`. A categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
+`share` of each class, the `majority` class, or a `total` of a weight such as population per
+class (see [population per class](workflows.md#people-per-class-of-a-categorical-dataset)).
+`aggregate_spatial_weighted` refuses it, since a mean or sum of codes is not a class. A template
+with duplicate values, a non-integer value, an empty label, a malformed colour, or a nodata code
+that is also a class is refused when it is loaded.
 
 ## Step 3: Point the instance at your plugins directory
 

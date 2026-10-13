@@ -122,8 +122,17 @@ def aggregate_spatial_weighted(
             f"aggregate_spatial_weighted: reducer must be one of {', '.join(REDUCERS)}, by name; "
             "to aggregate with an openEO reducer process, use aggregate_spatial instead"
         )
-    record_features(geometries)
     raster = single_raster(data)
+    from open_climate_service.shared.classes import cube_classes, cube_name
+
+    if cube_classes(raster) is not None:
+        # Averaging codes gives a plausible but wrong class: land cover 10 and 50 average to 30.
+        raise ValueError(
+            f"aggregate_spatial_weighted: '{cube_name(raster)}' is a categorical dataset, so '{reducer}' would "
+            "aggregate class codes as numbers; use aggregate_spatial_classes for a share, majority or "
+            "total per class"
+        )
+    record_features(geometries)
     frame = features_in_crs(geometries, raster.rio.crs)
 
     # Run xvec zonal stats with exactextract backend.

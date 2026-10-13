@@ -134,6 +134,30 @@ To render a DHIS2 payload without a named export, write the graph yourself and p
 
 ---
 
+## People per class of a categorical dataset
+
+`population_per_class` counts the people living in each class of a [categorical
+dataset](adding_custom_datasets.md#categorical-datasets), such as heat stress levels, per
+feature and time step. It loads the class dataset and one step of a population dataset, resamples
+the classes onto the population grid by nearest neighbour (each person counts towards the class
+of the cell they live in), and sums the people per class within each feature, weighting cells by
+how much of them the feature covers.
+
+| Name | Description |
+|---|---|
+| `dataset_id` | The categorical dataset (its template declares `classes`) |
+| `temporal_extent` | `[start, end]` of the class dataset to load |
+| `population_dataset_id` | A population dataset, such as `worldpop_population_global2_100m` |
+| `population_year` | `[start, end]` covering exactly one population step |
+| `geometries` | GeoJSON `FeatureCollection`, or the output of `load_features` |
+
+The CSV has one row per time step, class and feature: `class` (the code), `class_label` and the
+count. Counts are of people **at** each class; for ordered levels, add the higher classes to get
+"at or above". The per-class counts of a feature add up to its total population.
+
+For the area share or the majority class instead, call `aggregate_spatial_classes` with
+`statistic: share` or `statistic: majority`.
+
 ## Mapping change between two periods
 
 `temporal_change` computes the per-pixel **net change** of a variable between the first and last time step in a range (`last − first`) and publishes it as a new single-band GeoZarr dataset — for example population change between two census years, or NDVI change between two dekads. Positive values are increases and negative values decreases, so the result suits a diverging colormap centred on zero.
