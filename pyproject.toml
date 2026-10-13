@@ -212,7 +212,7 @@ module = ["license_expression"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*"]
+module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*", "planetary_computer"]
 ignore_missing_imports = true
 
 [tool.pyright]
