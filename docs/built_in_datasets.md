@@ -119,6 +119,24 @@ when the data measurements were made.
 
 ---
 
+## ERA5-Land — minimum and maximum temperature, dewpoint, soil moisture, wind (daily)
+
+| Property               | Value                                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dataset IDs**        | `era5land_temperature_min_daily`, `era5land_temperature_max_daily`, `era5land_dewpoint_daily`, `era5land_soil_moisture_daily`, `era5land_wind_speed_daily` |
+| **Variables**          | `t2m`, `t2m`, `d2m`, `swvl1`, `wind_speed`                                                                                                                 |
+| **Units**              | degC, degC, degC, m3 m-3, m s-1                                                                                                                            |
+| **Period**             | Daily, in the instance's local day (`utc_offset_hours`)                                                                                                    |
+| **Spatial resolution** | ~9 km                                                                                                                                                      |
+| **Record start**       | 1950-01-01                                                                                                                                                 |
+| **Source**             | [ERA5-Land daily statistics (CDS)](https://cds.climate.copernicus.eu/datasets/derived-era5-land-daily-statistics)                                          |
+
+Daily statistics computed by the CDS from hourly ERA5-Land. Soil moisture is the top layer (0–7 cm). Wind speed is the daily mean of hourly speeds computed from the u and v components, not the speed of the mean wind vector.
+
+**Access** — a CDS key in `~/.cdsapirc`; no Earth Data Hub subscription.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |
