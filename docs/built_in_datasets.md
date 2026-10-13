@@ -137,6 +137,24 @@ Daily statistics computed by the CDS from hourly ERA5-Land. Soil moisture is the
 
 ---
 
+## ERA5-HEAT — heat stress, UTCI (daily)
+
+| Property               | Value                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------- |
+| **Dataset IDs**        | `era5heat_utci_max_daily`, `era5heat_utci_mean_daily`                                 |
+| **Variable**           | `utci`                                                                                |
+| **Units**              | degC                                                                                  |
+| **Period**             | Daily, in the instance's local day                                                    |
+| **Spatial resolution** | ~28 km (0.25°)                                                                        |
+| **Record start**       | 1940-01-01                                                                            |
+| **Source**             | [ERA5-HEAT (CDS)](https://cds.climate.copernicus.eu/datasets/derived-utci-historical) |
+
+Daily maximum or mean of the hourly Universal Thermal Climate Index. Consolidated data is used where published, the intermediate product for the most recent months.
+
+**Access** — a CDS key, and the dataset licence accepted on its CDS page.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |

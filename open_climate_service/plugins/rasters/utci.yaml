@@ -1,0 +1,78 @@
+- id: era5heat_utci_max_daily
+  name: Maximum heat stress, UTCI (ERA5-HEAT)
+  short_name: Maximum UTCI
+  description: >-
+    Daily maximum Universal Thermal Climate Index at 0.25 degrees (about 28 km), worldwide, from
+    1940 to a few days ago. UTCI is the air temperature that would feel the same to a person in
+    reference conditions, combining temperature, humidity, wind and radiation. Above 32 degC is
+    strong heat stress, above 38 degC very strong, above 46 degC extreme. Days run in the
+    instance's own time zone.
+  standard_name: universal_thermal_comfort_index
+  variable: utci
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -60, 180, 90]
+    temporal:
+      begin: "1940-01-01"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.utci.UTCIDailyPlugin
+    params:
+      statistic: max
+  units: degC
+  cell_methods: "time: maximum"
+  resolution: 28 km x 28 km
+  source: ERA5-HEAT (Copernicus CDS)
+  source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: reds
+    range: [10.0, 50.0]
+
+- id: era5heat_utci_mean_daily
+  name: Mean heat stress, UTCI (ERA5-HEAT)
+  short_name: Mean UTCI
+  description: >-
+    Daily mean Universal Thermal Climate Index at 0.25 degrees (about 28 km), worldwide, from 1940
+    to a few days ago. UTCI is the air temperature that would feel the same to a person in
+    reference conditions, combining temperature, humidity, wind and radiation. Days run in the
+    instance's own time zone.
+  standard_name: universal_thermal_comfort_index
+  variable: utci
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -60, 180, 90]
+    temporal:
+      begin: "1940-01-01"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.utci.UTCIDailyPlugin
+    params:
+      statistic: mean
+  units: degC
+  cell_methods: "time: mean"
+  resolution: 28 km x 28 km
+  source: ERA5-HEAT (Copernicus CDS)
+  source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: reds
+    range: [10.0, 45.0]
