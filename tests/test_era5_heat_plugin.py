@@ -13,7 +13,7 @@ from open_climate_service.plugins.rasters.era5_heat import (
     ERA5HeatZarrDailyFromHourlyPlugin,
     ERA5HeatZarrHourlyPlugin,
 )
-from open_climate_service.shared.zarr import TimeChunkedZarr
+from open_climate_service.shared.zarr import CachedTimeSeriesZarr
 
 _TEST_BBOX = [28.0, -3.0, 29.0, -2.0]
 
@@ -69,59 +69,72 @@ def test_daily_periods(monkeypatch: pytest.MonkeyPatch):
     assert days[-1] < end
 
 
-def test_daily_fetch_reuses_loaded_time_chunk(monkeypatch: pytest.MonkeyPatch):
+def test_daily_fetch_reuses_cached_time_window(monkeypatch: pytest.MonkeyPatch):
     plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
     times = np.arange("2020-01-01", "2020-01-03", dtype="datetime64[h]").astype("datetime64[ns]")
     values = np.arange(48, dtype=float).reshape(48, 1, 1)
     ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
-    ds["utci"].encoding["chunks"] = (48, 1, 1)
-    plugin._zarr = TimeChunkedZarr("unused", "utci", time_dim="t", opener=lambda _: ds)
+    plugin._zarr = CachedTimeSeriesZarr("unused", "utci", time_dim="t", opener=lambda _: ds)
     monkeypatch.setattr(plugin, "_prepare_zarr_dataset", lambda ds, bbox: ds)
 
     first_day = plugin.fetch_period("2020-01-01", _TEST_BBOX)
-    cached_chunk = plugin._zarr._chunk
+    cached_chunk = plugin._zarr._cache
     second_day = plugin.fetch_period("2020-01-02", _TEST_BBOX)
 
-    assert plugin._zarr._chunk is cached_chunk
+    assert plugin._zarr._cache is cached_chunk
     assert first_day.utci.item() == pytest.approx(11.5)
     assert second_day.utci.item() == pytest.approx(35.5)
 
 
-def test_daily_fetch_loads_next_chunk_when_day_crosses_boundary(monkeypatch: pytest.MonkeyPatch):
+def test_daily_fetch_slides_bounded_cache_to_cover_next_day(monkeypatch: pytest.MonkeyPatch):
     plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
     times = np.arange("2020-01-01", "2020-01-04", dtype="datetime64[h]").astype("datetime64[ns]")
     values = np.arange(72, dtype=float).reshape(72, 1, 1)
     ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
-    ds["utci"].encoding["chunks"] = (30, 1, 1)
-    plugin._zarr = TimeChunkedZarr("unused", "utci", time_dim="t", opener=lambda _: ds)
+    plugin._zarr = CachedTimeSeriesZarr("unused", "utci", time_dim="t", opener=lambda _: ds, max_cache_bytes=30 * 8)
     monkeypatch.setattr(plugin, "_prepare_zarr_dataset", lambda ds, bbox: ds)
 
-    # the first day should load the first chunk (30 hours)
+    # The cache holds 30 float64 timesteps, regardless of the source chunk size.
     first_day = plugin.fetch_period("2020-01-01", _TEST_BBOX)
-    assert plugin._zarr._chunk is not None
-    assert plugin._zarr._chunk.sizes["t"] == 30
+    assert plugin._zarr._cache is not None
+    assert plugin._zarr._cache.sizes["t"] == 30
     assert first_day.t.values[0] == np.datetime64("2020-01-01T00:00:00")
 
-    # the next day should load both the first and the second chunk, since the chunk boundary is 30 hours
     second_day = plugin.fetch_period("2020-01-02", _TEST_BBOX)
-    assert plugin._zarr._chunk.sizes["t"] == 60
+    assert plugin._zarr._cache.sizes["t"] == 30
+    assert plugin._zarr._cache_start == 18
     assert second_day.t.values[0] == np.datetime64("2020-01-02T00:00:00")
+    assert second_day.utci.item() == pytest.approx(35.5)
 
 
-def test_time_zarr_uses_time_coordinate_and_chunk_axis():
+def test_cached_time_series_zarr_uses_explicit_time_dimension():
     times = np.arange("2020-01-01", "2020-01-05", dtype="datetime64[D]")
     values = np.arange(8, dtype=float).reshape(2, 4, 1)
     ds = xr.Dataset(
         {"value": (("y", "valid_at", "x"), values)},
         coords={"valid_at": times},
     )
-    ds["value"].encoding["chunks"] = (1, 2, 1)
-    zarr = TimeChunkedZarr("unused", "value", time_dim="valid_at", opener=lambda _: ds)
+    zarr = CachedTimeSeriesZarr("unused", "value", time_dim="valid_at", opener=lambda _: ds, max_cache_bytes=32)
 
     result = zarr.slice_time(np.datetime64("2020-01-02"), np.datetime64("2020-01-04"))
 
     assert result.sizes["valid_at"] == 2
     assert result.value.values[:, :, 0].tolist() == [[1, 2], [5, 6]]
+
+
+def test_cached_time_series_zarr_rejects_ranges_over_cache_limit():
+    times = np.arange("2020-01-01", "2020-01-04", dtype="datetime64[D]")
+    ds = xr.Dataset({"value": (("time", "x"), np.ones((3, 2), dtype="float32"))}, coords={"time": times})
+    zarr = CachedTimeSeriesZarr(
+        "unused",
+        "value",
+        time_dim="time",
+        opener=lambda _: ds,
+        max_cache_bytes=8,
+    )
+
+    with pytest.raises(ValueError, match="use xarray directly for large ranges"):
+        zarr.slice_time(np.datetime64("2020-01-01"), np.datetime64("2020-01-03"))
 
 
 # Functional integrations tests

@@ -16,7 +16,7 @@ from open_climate_service.shared.time import (
     datetime_to_period_string,
     parse_period_string_to_datetime,
 )
-from open_climate_service.shared.zarr import TimeChunkedZarr
+from open_climate_service.shared.zarr import DEFAULT_MAX_CACHE_BYTES, CachedTimeSeriesZarr
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius
 
@@ -31,17 +31,28 @@ _CDS_TIME_DIM = "time"
 class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
     """Streaming plugin for hourly ERA5-Heat zarr archive from Copernicus CDS."""
 
-    # NOTE: the current use of TimeChunkedZarr is not thread-safe, so we limit concurrency to 1 to avoid race conditions
+    # The cache is mutable and not thread-safe, so keep per-plugin fetches sequential.
     max_concurrency = 1
     commit_batch_size = 24
 
-    def __init__(self, variable: str, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        variable: str,
+        max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES,
+        **kwargs: Any,
+    ) -> None:
         if variable not in _CDS_ZARR_VARIABLES:
             raise ValueError(
                 f"ERA5HeatCDSHourlyPlugin: unsupported variable {variable!r}; "
                 f"expected one of {list(_CDS_ZARR_VARIABLES)}"
             )
-        self._zarr = TimeChunkedZarr(_CDS_ZARR_URL, variable, time_dim=_CDS_TIME_DIM, opener=_open_cds_zarr)
+        self._zarr = CachedTimeSeriesZarr(
+            _CDS_ZARR_URL,
+            variable,
+            time_dim=_CDS_TIME_DIM,
+            opener=_open_cds_zarr,
+            max_cache_bytes=max_cache_bytes,
+        )
         self._cached_cutoff: datetime | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
