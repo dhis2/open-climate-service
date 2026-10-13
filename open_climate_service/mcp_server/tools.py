@@ -70,8 +70,10 @@ class DatasetSummary(BaseModel):
     time_end: str | None = None
     time_step: str | None = Field(default=None, description="ISO 8601 duration between time steps, e.g. P1M.")
     area_count: int | None = Field(default=None, description="Number of areas in an area collection.")
+    last_updated: str | None = Field(default=None, description="When the instance last updated this dataset.")
     dataset_url: str
     stac_url: str
+    map_url: str = Field(description="The dataset in the instance's map viewer, to show the user.")
 
 
 class Area(BaseModel):
@@ -117,6 +119,7 @@ class _Provenance(BaseModel):
     process_graph: dict[str, Any] = Field(description="The openEO process graph OCS executed, for reproduction.")
     dataset_url: str
     stac_url: str
+    map_url: str = Field(description="The dataset in the instance's map viewer, to show the user.")
 
 
 class TimeseriesResult(_Provenance):
@@ -167,7 +170,11 @@ async def _get_json(client: httpx.AsyncClient, path: str) -> Any:
 
 def _links(client: httpx.AsyncClient, dataset_id: str) -> dict[str, str]:
     base = str(client.base_url).rstrip("/")
-    return {"dataset_url": f"{base}/datasets/{dataset_id}", "stac_url": f"{base}/stac/collections/{dataset_id}"}
+    return {
+        "dataset_url": f"{base}/datasets/{dataset_id}",
+        "stac_url": f"{base}/stac/collections/{dataset_id}",
+        "map_url": f"{base}/map?dataset={dataset_id}",
+    }
 
 
 def _raster_variable(collection: dict[str, Any]) -> tuple[str, str | None]:
@@ -186,6 +193,7 @@ def _summarise(collection: dict[str, Any], links: dict[str, str]) -> DatasetSumm
         description=collection.get("description"),
         dataset_url=links["dataset_url"],
         stac_url=links["stac_url"],
+        map_url=links["map_url"],
     )
     if summary.kind == "areas":
         summary.area_count = collection.get("table:row_count")
@@ -211,10 +219,15 @@ async def _catalogue(client: httpx.AsyncClient) -> list[DatasetSummary]:
         for link in catalog.get("links", [])
         if link.get("rel") == "child"
     ]
+    # The records, not the STAC documents, know when each dataset was last updated.
+    records = await _get_json(client, "/datasets?f=json")
+    last_updated = {item["dataset_id"]: item.get("last_updated") for item in records.get("items", [])}
     summaries = []
     for dataset_id in ids:
         collection = await _get_json(client, f"/stac/collections/{dataset_id}")
-        summaries.append(_summarise(collection, _links(client, dataset_id)))
+        summary = _summarise(collection, _links(client, dataset_id))
+        summary.last_updated = last_updated.get(dataset_id)
+        summaries.append(summary)
     return summaries
 
 

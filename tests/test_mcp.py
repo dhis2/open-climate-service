@@ -159,8 +159,11 @@ def test_list_datasets_reports_rasters_and_area_collections(mcp: TestClient, rai
     assert datasets["rain"]["unit"] == "mm/d"
     assert datasets["rain"]["time_step"] == "P1M"
     assert datasets["rain"]["dataset_url"] == "http://testserver/datasets/rain"
+    assert datasets["rain"]["map_url"] == "http://testserver/map?dataset=rain"
     assert datasets["regions"]["kind"] == "areas"
     assert datasets["regions"]["area_count"] == 2
+    # From the dataset records, which the STAC documents do not carry.
+    assert datasets["regions"]["last_updated"]
 
 
 def test_zonal_statistics_are_computed_per_area_and_period(mcp: TestClient, rain: None) -> None:
@@ -238,4 +241,5 @@ def test_links_carry_the_mount_prefix(
     ).json()["result"]["structuredContent"]
 
     assert result["dataset_url"] == "http://testserver/ocs/datasets/rain"
+    assert result["map_url"] == "http://testserver/ocs/map?dataset=rain"
     assert [row["value"] for row in result["rows"]] == [1.0, 1.0]

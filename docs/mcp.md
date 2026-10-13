@@ -43,4 +43,4 @@ The catalogue is also available as the resource `ocs://catalogue`.
 
 To answer a question about a place, the assistant lists the areas of a collection, picks one by name and passes its id to `get_zonal_statistics`. An instance needs an area collection for that, such as [Overture Maps divisions](built_in_datasets.md#overture-maps-administrative-divisions-feature-collection) or [DHIS2 org units](built_in_datasets.md#dhis2-organisation-units-feature-collection).
 
-Results are tables (`period`, `area_id`, `area_name`, `value`) with the unit, the process graph and links to the dataset. A result is limited to 2,000 rows; a larger request is refused with a hint to narrow the period or the areas.
+Results are tables (`period`, `area_id`, `area_name`, `value`) with the unit, the process graph, and links to the dataset and to it in the instance's map viewer. `list_datasets` also says when each dataset was last updated. A result is limited to 2,000 rows; a larger request is refused with a hint to narrow the period or the areas.
