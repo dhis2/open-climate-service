@@ -1,62 +1,93 @@
 {
   "id": "population_per_class",
   "summary": "People living in each class of a categorical dataset, per org unit, as CSV",
-  "description": "For a categorical dataset, one whose template declares `classes`, such as heat stress or hazard levels or land cover. Loads the class dataset over a time range and a population dataset for one year, resamples the classes onto the population grid by nearest neighbour, and sums the people in each class within each GeoJSON feature (e.g. a DHIS2 organisation unit). The result has one row per feature, class and time step, with the class code and its label. Counts are of people at each class, not at or above it; for ordered levels, sum the higher classes to get 'at or above'.\n\nUsage — call this process as the result of a process graph:\n\n{\n  \"people\": {\n    \"process_id\": \"population_per_class\",\n    \"arguments\": {\n      \"dataset_id\": \"heat_stress_levels_daily\",\n      \"temporal_extent\": [\"2026-01-01\", \"2026-01-31\"],\n      \"population_dataset_id\": \"worldpop_population_yearly\",\n      \"population_year\": [\"2025-01-01\", \"2025-12-31\"],\n      \"geometries\": { \"from_features\": \"districts\" }\n    },\n    \"result\": true\n  }\n}",
+  "description": "For a categorical dataset, one whose template declares `classes`, such as heat stress or hazard levels or land cover. Loads the class dataset over a time range and a population dataset for one year, resamples the classes onto the population grid by nearest neighbour, and sums the people in each class within each GeoJSON feature (e.g. a DHIS2 organisation unit). The result has one row per feature, class and time step, with the class code and its label. Counts are of people at each class, not at or above it; for ordered levels, sum the higher classes to get 'at or above'.\n\nUsage — call this process as the result of a process graph:\n\n{\n  \"districts\": {\n    \"process_id\": \"load_features\",\n    \"arguments\": { \"id\": \"districts\" }\n  },\n  \"people\": {\n    \"process_id\": \"population_per_class\",\n    \"arguments\": {\n      \"dataset_id\": \"heat_stress_levels_daily\",\n      \"temporal_extent\": [\"2026-01-01\", \"2026-01-31\"],\n      \"population_dataset_id\": \"worldpop_population_global2_100m\",\n      \"population_year\": [\"2025-01-01\", \"2025-12-31\"],\n      \"geometries\": { \"from_node\": \"districts\" }\n    },\n    \"result\": true\n  }\n}",
   "parameters": [
     {
       "name": "dataset_id",
       "description": "ID of the published categorical dataset (its template declares `classes`).",
-      "schema": { "type": "string", "subtype": "collection-id" }
+      "schema": {
+        "type": "string",
+        "subtype": "collection-id"
+      }
     },
     {
       "name": "temporal_extent",
       "description": "Time range of the class dataset to load, as [start, end] ISO-8601 date strings.",
-      "schema": { "type": "array", "subtype": "temporal-interval" }
+      "schema": {
+        "type": "array",
+        "subtype": "temporal-interval"
+      }
     },
     {
       "name": "population_dataset_id",
-      "description": "ID of the published population dataset, such as worldpop_population_yearly.",
-      "schema": { "type": "string", "subtype": "collection-id" }
+      "description": "ID of the published population dataset, such as worldpop_population_global2_100m.",
+      "schema": {
+        "type": "string",
+        "subtype": "collection-id"
+      }
     },
     {
       "name": "population_year",
       "description": "Time range covering exactly one population step, such as one year, as [start, end].",
-      "schema": { "type": "array", "subtype": "temporal-interval" }
+      "schema": {
+        "type": "array",
+        "subtype": "temporal-interval"
+      }
     },
     {
       "name": "geometries",
       "description": "GeoJSON FeatureCollection of organisation units. Each feature's `id` is kept as `feature_id`.",
-      "schema": { "type": "object", "subtype": "geojson" }
+      "schema": {
+        "type": "object",
+        "subtype": "geojson"
+      }
     }
   ],
   "process_graph": {
     "classes": {
       "process_id": "load_collection",
       "arguments": {
-        "id": { "from_parameter": "dataset_id" },
-        "temporal_extent": { "from_parameter": "temporal_extent" }
+        "id": {
+          "from_parameter": "dataset_id"
+        },
+        "temporal_extent": {
+          "from_parameter": "temporal_extent"
+        }
       }
     },
     "population": {
       "process_id": "load_collection",
       "arguments": {
-        "id": { "from_parameter": "population_dataset_id" },
-        "temporal_extent": { "from_parameter": "population_year" }
+        "id": {
+          "from_parameter": "population_dataset_id"
+        },
+        "temporal_extent": {
+          "from_parameter": "population_year"
+        }
       }
     },
     "per_class": {
       "process_id": "aggregate_spatial_classes",
       "arguments": {
-        "data": { "from_node": "classes" },
-        "geometries": { "from_parameter": "geometries" },
+        "data": {
+          "from_node": "classes"
+        },
+        "geometries": {
+          "from_parameter": "geometries"
+        },
         "statistic": "total",
-        "weights": { "from_node": "population" }
+        "weights": {
+          "from_node": "population"
+        }
       }
     },
     "save": {
       "process_id": "save_result",
       "arguments": {
-        "data": { "from_node": "per_class" },
+        "data": {
+          "from_node": "per_class"
+        },
         "format": "CSV"
       },
       "result": true

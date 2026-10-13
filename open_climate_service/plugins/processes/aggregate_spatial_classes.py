@@ -30,10 +30,31 @@ def _xy(raster: xr.DataArray) -> xr.DataArray:
 
 
 def _zonal(raster: xr.DataArray, frame: Any, stat: str) -> xr.DataArray:
-    result: xr.DataArray = raster.load().xvec.zonal_stats(
+    result: xr.DataArray = raster.xvec.zonal_stats(
         frame.geometry, x_coords="x", y_coords="y", method="exactextract", stats=stat
     )
     return result
+
+
+def _reads(raster: xr.DataArray, grid_cells: int) -> tuple[str | None, list[slice]]:
+    """Slices of the longest non-spatial axis, each within `READ_CHUNK_BYTES` once in memory.
+
+    *grid_cells* is the size of the grid the statistic computes on: the class grid for `share`
+    and `majority`, the weight grid for `total`, which a step is resampled onto. A daily series
+    over a large country is then read a bounded slice at a time, as aggregate_spatial_weighted
+    does.
+    """
+    from open_climate_service.plugins.processes.aggregate_spatial_weighted import READ_CHUNK_BYTES
+
+    other = [dim for dim in raster.dims if dim not in ("x", "y")]
+    if not other:
+        return None, [slice(None)]
+    dim = str(max(other, key=lambda name: raster.sizes[name]))
+    # Float64 values on the grid, for every combination of the other non-spatial axes.
+    step_bytes = 8 * grid_cells * (raster.size // (raster.sizes[dim] * raster.sizes["x"] * raster.sizes["y"]))
+    per_read = max(1, READ_CHUNK_BYTES // max(1, step_bytes))
+    steps = raster.sizes[dim]
+    return dim, [slice(start, min(steps, start + per_read)) for start in range(0, steps, per_read)]
 
 
 def _codes_only(raster: xr.DataArray) -> xr.DataArray:
@@ -49,7 +70,7 @@ def _codes_only(raster: xr.DataArray) -> xr.DataArray:
 
 
 def _single_step(weights: xr.DataArray) -> xr.DataArray:
-    """A weight raster as one 2-D grid: a population for one year, say."""
+    """A weight raster, with its axes already named x and y, as one 2-D grid: a year of population."""
     other = [dim for dim in weights.dims if dim not in ("x", "y")]
     extra = {dim: weights.sizes[dim] for dim in other if weights.sizes[dim] != 1}
     if extra:
@@ -132,34 +153,41 @@ def aggregate_spatial_classes(
     codes, labels = declared
     record_features(geometries)
 
+    classes = _codes_only(_xy(raster))
+    weight: xr.DataArray | None = None
     if statistic == "total":
         if weights is None:
             raise ValueError("aggregate_spatial_classes: statistic 'total' needs `weights`, such as population")
-        weight = _xy(_single_step(single_raster(weights)))
-        classes = _codes_only(_xy(raster))
-        # Onto the weight grid: a weight, people in a 100 m cell say, belongs to the class of the
-        # cell it is in, and exactextract weights only by an aligned grid.
-        classes = classes.rio.reproject_match(weight, resampling=_nearest())
-        classes = classes.assign_coords(x=weight.x, y=weight.y)
+        # Axes renamed first, so a weight on lon/lat is one grid rather than a series of them.
+        weight = _single_step(_xy(single_raster(weights))).load()
         frame = features_in_crs(geometries, weight.rio.crs)
-        per_class = [_zonal(weight.where(classes == code), frame, "sum") for code in codes]
         # The shapes are in the weight grid's CRS; the cadence and the name are the class raster's.
         reference = raster.rio.write_crs(weight.rio.crs)
+        grid_cells = weight.size
     else:
-        classes = _codes_only(_xy(raster))
         frame = features_in_crs(geometries, classes.rio.crs)
         reference = raster
-        if statistic == "majority":
-            result = _zonal(classes, frame, "majority")
-            record_spatial_aggregation("majority")
-            return vector_result(result, raster, frame.index)
-        valid = classes.notnull()
-        per_class = [_zonal((classes == code).astype("float64").where(valid), frame, "mean") for code in codes]
+        grid_cells = classes.sizes["x"] * classes.sizes["y"]
 
-    stacked = xr.concat(per_class, dim=xr.Variable(CLASS_DIM, codes))
-    stacked = stacked.assign_coords(class_label=(CLASS_DIM, labels))
+    def per_class(part: xr.DataArray) -> xr.DataArray:
+        if statistic == "majority":
+            return _zonal(part, frame, "majority")
+        if weight is not None:
+            # Onto the weight grid: a weight, people in a 100 m cell say, belongs to the class of
+            # the cell it is in, and exactextract weights only by an aligned grid.
+            on_grid = part.rio.reproject_match(weight, resampling=_nearest()).assign_coords(x=weight.x, y=weight.y)
+            stats = [_zonal(weight.where(on_grid == code), frame, "sum") for code in codes]
+        else:
+            valid = part.notnull()
+            stats = [_zonal((part == code).astype("float64").where(valid), frame, "mean") for code in codes]
+        stacked = xr.concat(stats, dim=xr.Variable(CLASS_DIM, codes))
+        return stacked.assign_coords(class_label=(CLASS_DIM, labels))
+
+    dim, reads = _reads(classes, grid_cells)
+    parts = [per_class((classes if dim is None else classes.isel({dim: read})).load()) for read in reads]
+    result = parts[0] if len(parts) == 1 else xr.concat(parts, dim=str(dim))
     record_spatial_aggregation(statistic)
-    return vector_result(stacked, reference, frame.index)
+    return vector_result(result, reference, frame.index)
 
 
 def _nearest() -> Any:

@@ -75,6 +75,8 @@ def test_a_template_declares_classes_with_labels_colours_and_a_nodata_code() -> 
         ([{"value": 1, "label": "A", "color": "red"}], None, "hex colour"),
         ([{"value": 0, "label": "A"}], 0, "also declared as a class"),
         ([], None, "non-empty list"),
+        ([{"value": 0, "label": "A"}], {}, "integer code"),
+        ([{"value": 0, "label": "A"}], "255", "integer code"),
     ],
 )
 def test_a_malformed_declaration_is_refused(classes: list[Any], nodata: int | None, message: str) -> None:
@@ -82,6 +84,11 @@ def test_a_malformed_declaration_is_refused(classes: list[Any], nodata: int | No
 
     with pytest.raises(ValueError, match=message):
         classification_from_template(template)
+
+
+def test_a_display_that_is_not_a_mapping_is_refused() -> None:
+    with pytest.raises(ValueError, match="'display' must be a mapping"):
+        classification_from_template({"classes": [{"value": 0, "label": "A"}], "display": ["nodata", 255]})
 
 
 def test_the_classes_reach_the_store_as_cf_flags() -> None:
@@ -179,6 +186,38 @@ def test_total_keeps_the_time_axis_of_the_levels() -> None:
 
     assert out.sel({"class": 0}).isel(geometry=0).values.tolist() == pytest.approx([16, 0])
     assert out.sel({"class": 2}).isel(geometry=0).values.tolist() == pytest.approx([0, 16])
+
+
+def test_a_series_read_in_bounded_slices_gives_the_same_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A long daily series is read a slice at a time, as aggregate_spatial_weighted does."""
+    from open_climate_service.plugins.processes import aggregate_spatial_weighted as weighted
+
+    days = [[[d % 4, (d + 1) % 4], [(d + 2) % 4, (d + 3) % 4]] for d in range(6)]
+    heat = stamp_classes(
+        xr.concat([_grid(day, cell=2.0) for day in days], dim="t").assign_coords(
+            t=np.arange("2025-01-01", "2025-01-07", dtype="datetime64[D]").astype("datetime64[ns]")
+        ),
+        "heat_levels",
+        classification_from_template(HEAT_LEVELS),
+    )
+    people = _grid([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]], name="population")
+    whole = {
+        stat: aggregate_spatial_classes(heat, _box(0, 0, 4, 4), stat, weights=people) for stat in ("total", "share")
+    }
+
+    monkeypatch.setattr(weighted, "READ_CHUNK_BYTES", 8 * 16 * 2)  # two days of the people grid
+    for stat, expected in whole.items():
+        sliced = aggregate_spatial_classes(heat, _box(0, 0, 4, 4), stat, weights=people)
+        xr.testing.assert_allclose(sliced.transpose(*expected.dims), expected)
+
+
+def test_weights_on_longitude_and_latitude_are_one_grid() -> None:
+    heat = _heat([[0, 3], [1, 2]], cell=2.0)
+    people = _grid([[1] * 4] * 4, name="population").rename({"x": "lon", "y": "lat"})
+
+    out = aggregate_spatial_classes(heat, _box(0, 0, 4, 4), "total", weights=people)
+
+    assert out.isel(geometry=0).values.tolist() == pytest.approx([4, 4, 4, 4])
 
 
 def test_total_needs_weights_and_refuses_a_weight_series() -> None:

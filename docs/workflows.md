@@ -153,7 +153,8 @@ how much of them the feature covers.
 
 The CSV has one row per time step, class and feature: `class` (the code), `class_label` and the
 count. Counts are of people **at** each class; for ordered levels, add the higher classes to get
-"at or above". The per-class counts of a feature add up to its total population.
+"at or above". The per-class counts of a feature add up to its total population, except for
+people under cells of the class dataset's nodata code, who belong to no class.
 
 For the area share or the majority class instead, call `aggregate_spatial_classes` with
 `statistic: share` or `statistic: majority`.

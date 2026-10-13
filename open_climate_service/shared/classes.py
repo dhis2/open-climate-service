@@ -84,10 +84,14 @@ def classification_from_template(template: dict[str, Any] | None) -> Classificat
     if len(set(values)) != len(values):
         raise ValueError(f"'classes' declares a value more than once: {values}")
 
-    nodata_raw = ((template or {}).get("display") or {}).get("nodata")
+    display = (template or {}).get("display")
+    if display is not None and not isinstance(display, dict):
+        raise ValueError(f"'display' must be a mapping, got {type(display).__name__}")
+    nodata_raw = (display or {}).get("nodata")
     nodata: int | None = None
     if nodata_raw is not None:
-        if isinstance(nodata_raw, bool) or not float(nodata_raw).is_integer():
+        integral = isinstance(nodata_raw, int) or (isinstance(nodata_raw, float) and nodata_raw.is_integer())
+        if isinstance(nodata_raw, bool) or not integral:
             raise ValueError(f"display.nodata of a categorical dataset must be an integer code, got {nodata_raw!r}")
         nodata = int(nodata_raw)
         if nodata in values:
