@@ -119,6 +119,23 @@ when the data measurements were made.
 
 ---
 
+## Copernicus — elevation, 90 m (static)
+
+| Property               | Value                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `copdem90_elevation_static`                                                                                   |
+| **Variable**           | `elevation`                                                                                                   |
+| **Units**              | meters                                                                                                        |
+| **Period**             | Yearly (single period, 2021)                                                                                  |
+| **Spatial resolution** | ~90 m                                                                                                         |
+| **Source**             | [Copernicus DEM GLO-90 on Planetary Computer](https://planetarycomputer.microsoft.com/dataset/cop-dem-glo-90) |
+
+The 90 m Copernicus DEM, read from Microsoft Planetary Computer. Needs no account, and a whole country fits in memory, which the 30 m version does not for a large country.
+
+**Access** — none required.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |

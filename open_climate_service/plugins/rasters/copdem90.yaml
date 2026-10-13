@@ -1,0 +1,40 @@
+- id: copdem90_elevation_static
+  name: Elevation (Copernicus 90m DEM, static)
+  short_name: Elevation
+  variable: elevation
+  description: >-
+    Height above sea level at 90 m, worldwide. A surface model, so it records the top of tree
+    canopy and buildings rather than bare ground. Needs no account, and at 90 m a whole country
+    fits comfortably, unlike the 30 m version.
+  period_type: yearly
+  sync:
+    kind: release
+    execution: rematerialize
+    version:
+      value: "2021_1"
+      authority: copernicus
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "2021"
+      end: "2021"
+      resolution: P1Y
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.copdem90.CopDEM90Plugin
+  standard_name: surface_altitude
+  units: m
+  resolution: 90 m x 90 m
+  source: Copernicus DEM GLO-90 (Microsoft Planetary Computer)
+  source_url: https://planetarycomputer.microsoft.com/dataset/cop-dem-glo-90
+  license:
+    name: Licence to Use Copernicus DEM
+    url: https://spacedata.copernicus.eu/documents/20123/121286/CSCDA_ESA_Mission-specific+Annex_31_Oct_22.pdf
+  providers:
+    - name: Copernicus
+      url: https://www.copernicus.eu/
+    - name: Microsoft Planetary Computer
+      url: https://planetarycomputer.microsoft.com/
+  display:
+    colormap: viridis
+    range: [0, 2000]
