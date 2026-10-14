@@ -33,6 +33,8 @@ Operational note:
 - `GET /features`
 - `GET /features/{collection_id}`
 - `GET /features/{collection_id}/data.parquet`
+- `GET /features/{collection_id}/data.pmtiles`
+- `GET /features/{collection_id}/styles/default.json`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
@@ -540,6 +542,18 @@ thousands of features, and pulling all of it should be deliberate.
 collection, as `application/x-parquet`. It is the href the collection's STAC `data` asset
 advertises, and it resolves through the registered record — an unregistered file in the store
 directory is not reachable through it.
+
+`GET /features/{collection_id}/data.pmtiles` serves the collection's vector tiles, a PMTiles
+archive the map viewer draws from, with range requests. Every refresh builds it from the stored
+GeoParquet, simplified per zoom, so it is for display only: aggregation reads the GeoParquet. A
+failed build is logged and does not fail the refresh; the route then answers 404 and the STAC
+collection has no `tiles` asset.
+
+`GET /features/{collection_id}/styles/default.json` serves the MapLibre style the map viewer
+draws a collection with: its tiles as filled areas, lines and points, with the collection's
+attribution on the source. The STAC collection lists it as its `style` asset, and names the
+archive and its layer in a `pmtiles` link (web-map-links extension), whenever the collection has
+tiles.
 
 ## 12. `/sync`
 

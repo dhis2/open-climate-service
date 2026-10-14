@@ -72,7 +72,9 @@ server = [
     # this package is the one SPDX tooling in Python agrees on, and it is pure Python.
     "license-expression>=30.4",
     "jinja2>=3.1",
-    "starlette>=0.27.0",
+    # 0.39 added Range support to FileResponse, which the feature asset routes rely on; 0.49.1
+    # fixed a vulnerability in its Range parsing (GHSA-7f5h-v6xp-fcq8).
+    "starlette>=0.49.1",
     "uvicorn>=0.41.0",
     "python-dotenv>=1.0.1",
     "geojson-pydantic>=2.1.0",
@@ -156,6 +158,10 @@ server = [
     # The /mcp endpoint (CLIM-851). Pinned to 2.x: 2.0 renamed FastMCP to MCPServer, and the
     # endpoint builds on 2.x names.
     "mcp>=2.3,<3",
+    # Builds the PMTiles archive the map viewer draws a feature collection from (CLIM-1177),
+    # straight from the stored GeoParquet. Pinned: it is pre-1.0 and its overview format is
+    # expected to change, and the archive is derived output a refresh rebuilds anyway.
+    "tylertoo==0.8.0",
 ]
 
 [project.urls]
@@ -215,7 +221,7 @@ module = ["license_expression"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*"]
+module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*", "tylertoo", "tylertoo.*"]
 ignore_missing_imports = true
 
 [tool.pyright]

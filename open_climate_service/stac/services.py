@@ -21,6 +21,7 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim, get_x_y_dims
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.features import templates as feature_templates
+from open_climate_service.features import tiles
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord, FeatureDetail
 from open_climate_service.shared import geoparquet
@@ -46,6 +47,7 @@ DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.j
 PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
 RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
+WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
@@ -328,6 +330,38 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             roles=["data"],
         ),
     )
+    # Vector tiles for display, when the refresh built them, and the style the viewer draws them
+    # with. The `pmtiles` link is how web-map-links clients find the archive and its layer.
+    if artifact.path and tiles.archive_path(Path(str(artifact.path))).is_file():
+        tiles_href = absolute_url(request, f"/features/{path_segment(dataset_id)}/data.pmtiles")
+        collection.add_asset(
+            "tiles",
+            pystac.Asset(
+                href=tiles_href,
+                media_type=tiles.PMTILES_MEDIA_TYPE,
+                title="Vector tiles (PMTiles)",
+                roles=["visual"],
+            ),
+        )
+        collection.add_asset(
+            "style",
+            pystac.Asset(
+                href=absolute_url(request, f"/features/{path_segment(dataset_id)}/styles/default.json"),
+                media_type=tiles.STYLE_MEDIA_TYPE,
+                title="MapLibre style",
+                roles=["style"],
+            ),
+        )
+        collection.add_link(
+            pystac.Link(
+                rel="pmtiles",
+                target=tiles_href,
+                media_type=tiles.PMTILES_MEDIA_TYPE,
+                title="Vector tiles (PMTiles)",
+                extra_fields={"pmtiles:layers": [tiles.TILE_LAYER]},
+            )
+        )
+        collection.stac_extensions.append(WEB_MAP_LINKS_EXTENSION)
     # As for a raster collection: only when the file is there, so a client never follows a
     # thumbnail href to a 404.
     if thumbnail_path(dataset_id).is_file():

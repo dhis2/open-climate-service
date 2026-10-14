@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from open_climate_service import config as api_config
+from open_climate_service.features import tiles
 from open_climate_service.ingestions.schemas import ArtifactRecord
 from open_climate_service.shared import geoparquet
 from open_climate_service.shared.crs import canonical_crs_code, transform_bbox
@@ -45,6 +46,13 @@ never an accidental one. The guard catches the caller that forgot a bbox, not th
 means it, which is why `max_unqualified_read=None` is an ordinary argument rather than a
 setting an operator has to find. The number is a backstop rather than a measured capacity: it
 sits above a country's divisions at every level and below a national facility register.
+"""
+
+ROW_GROUP_SIZE = 100_000
+"""The most rows one Parquet row group holds.
+
+A bbox read skips whole row groups by their bbox statistics, so a collection in one row group is
+read whole whatever the window. Portolan caps row groups at 150,000 rows; this stays under it.
 """
 
 
@@ -203,6 +211,10 @@ def prune_superseded_files(dataset_id: str, *, keep: Path | None) -> None:
         if marker_age < SUPERSEDED_FILE_GRACE_SECONDS:
             continue
         try:
+            # Its vector tiles go with it: an archive is only ever for the file it was built from.
+            # The archive first, so that if it cannot be removed, the Parquet file is still here
+            # for the next prune to find, and both are tried again.
+            tiles.archive_path(stale).unlink(missing_ok=True)
             stale.unlink()
             marker.unlink(missing_ok=True)
         except OSError:
@@ -305,7 +317,9 @@ def write_feature_collection(
 
     `write_covering_bbox` is what makes `read_feature_collection`'s bbox argument a pushdown
     rather than a filter over everything: it writes the GeoParquet 1.1 bbox covering column, so
-    a windowed read skips whole row groups instead of decoding them.
+    a windowed read skips whole row groups instead of decoding them. For that, a row group must
+    cover a small area, so rows are sorted along a Hilbert curve and row groups are bounded at
+    `ROW_GROUP_SIZE`. Both are Portolan requirements as well.
 
     The input is GeoJSON, so its coordinates are WGS 84 by RFC 7946 whatever `store_crs` says.
     A different `store_crs` therefore *reprojects* rather than relabels: tagging WGS 84
@@ -316,6 +330,9 @@ def write_feature_collection(
     target = canonical_crs_code(store_crs)
     if target != WGS84:
         frame = frame.to_crs(target)
+    # Sorted in the stored CRS, so nearby rows are nearby in the coordinates a read windows on.
+    # The index is reset, or the permuted one would be written as an extra column.
+    frame = frame.iloc[frame.hilbert_distance().argsort(kind="stable")].reset_index(drop=True)
 
     path = new_collection_file(dataset_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,7 +341,7 @@ def write_feature_collection(
     # interrupted write leaves an unreferenced file, never a truncated collection.
     staging = path.with_name(f"{path.name}.{uuid4().hex}.writing")
     try:
-        frame.to_parquet(staging, write_covering_bbox=True, schema_version="1.1.0")
+        frame.to_parquet(staging, write_covering_bbox=True, schema_version="1.1.0", row_group_size=ROW_GROUP_SIZE)
         staging.replace(path)
     finally:
         staging.unlink(missing_ok=True)

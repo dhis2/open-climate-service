@@ -1,12 +1,14 @@
 """FastAPI routes for registered feature collections."""
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from open_climate_service.features import services
 from open_climate_service.features.schemas import FeatureCollectionListResponse, FeatureCollectionRecord
+from open_climate_service.features.tiles import PMTILES_MEDIA_TYPE, STYLE_MEDIA_TYPE
 from open_climate_service.ingestions.job_submission import INGESTION_JOB_HREF_BASE
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
+from open_climate_service.shared.urls import absolute_url, path_segment
 
 router = APIRouter()
 
@@ -81,3 +83,30 @@ def download_feature_collection(collection_id: str) -> FileResponse:
     """
     path = services.published_collection_file_or_404(collection_id)
     return FileResponse(path, media_type=PARQUET_MEDIA_TYPE, filename=f"{collection_id}.parquet")
+
+
+@router.get("/{collection_id}/data.pmtiles", response_class=FileResponse)
+# HEAD as well, for a client that sizes the archive before reading ranges of it. Kept out of the
+# OpenAPI schema so the operation is listed once.
+@router.head("/{collection_id}/data.pmtiles", response_class=FileResponse, include_in_schema=False)
+def download_feature_tiles(collection_id: str) -> FileResponse:
+    """Serve the PMTiles archive the map viewer draws a published collection from.
+
+    Range requests are answered by `FileResponse`, which is all a PMTiles reader needs: it
+    fetches the header and the tiles in view, never the whole archive. Advertised as the
+    collection's `tiles` STAC asset whenever it exists.
+    """
+    path = services.published_collection_tiles_or_404(collection_id)
+    return FileResponse(path, media_type=PMTILES_MEDIA_TYPE, filename=f"{collection_id}.pmtiles")
+
+
+@router.get("/{collection_id}/styles/default.json")
+def feature_style(collection_id: str, request: Request) -> JSONResponse:
+    """Serve the MapLibre style a published collection is drawn with, over its vector tiles.
+
+    Advertised as the collection's `style` STAC asset whenever it has tiles. The map viewer draws
+    from it, so any other MapLibre client draws the collection the same way.
+    """
+    tiles_url = absolute_url(request, f"/features/{path_segment(collection_id)}/data.pmtiles")
+    style = services.published_collection_style_or_404(collection_id, tiles_url)
+    return JSONResponse(style, media_type=STYLE_MEDIA_TYPE)
