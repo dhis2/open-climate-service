@@ -38,11 +38,22 @@ def load_netcdfs(paths: Sequence[str | Path], **kwargs: Any) -> xr.Dataset:
 def open_netcdfs(paths: Sequence[str | Path], **kwargs: Any) -> xr.Dataset:
     """Open several netCDF files as one lazy dataset whose reads take the process-wide lock.
 
-    For files too large to load at once. Each read xarray makes from them, whenever the dataset
-    is computed, takes ``NETCDF_LOCK`` instead of xarray's own lock, so it cannot run beside a
-    whole-file read or write.
+    For files too large to load at once. Opening reads every file's metadata, so it happens under
+    ``NETCDF_LOCK``; so does each read xarray makes from the files later, whenever the dataset is
+    computed, which takes this lock instead of xarray's own; and so does closing them, since
+    xarray's file manager closes under a private lock of its own.
     """
-    return xr.open_mfdataset(paths, lock=NETCDF_LOCK, **kwargs)
+    with NETCDF_LOCK:
+        ds = xr.open_mfdataset(paths, lock=NETCDF_LOCK, **kwargs)
+    close = ds._close
+
+    def locked_close() -> None:
+        with NETCDF_LOCK:
+            if close is not None:
+                close()
+
+    ds.set_close(locked_close)
+    return ds
 
 
 def write_netcdf(ds: xr.Dataset, path: str | Path) -> None:

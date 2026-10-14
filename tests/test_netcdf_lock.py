@@ -98,6 +98,37 @@ def test_writing_a_lazily_opened_netcdf_does_not_deadlock(tmp_path: Path) -> Non
     assert load_netcdf(tmp_path / "out.nc").sizes["t"] == 2
 
 
+def _waits_for_the_lock(action: Any) -> bool:
+    """Whether *action*, run in a thread, waits while another thread holds the lock."""
+    holding, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with NETCDF_LOCK:
+            holding.set()
+            release.wait(timeout=10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    holding.wait(timeout=10)
+    worker = threading.Thread(target=action)
+    worker.start()
+    worker.join(timeout=0.5)
+    waited = worker.is_alive()
+    release.set()
+    holder.join()
+    worker.join(timeout=10)
+    return waited
+
+
+def test_opening_and_closing_a_lazy_dataset_take_the_lock(tmp_path: Path) -> None:
+    """Opening reads every file's metadata and closing releases HDF5 handles: both under the lock."""
+    files = [_write(tmp_path / "a.nc", "2024-01-01")]
+    opened: list[xr.Dataset] = []
+
+    assert _waits_for_the_lock(lambda: opened.append(open_netcdfs(files, combine="by_coords")))
+    assert _waits_for_the_lock(opened[0].close)
+
+
 def test_lazy_reads_take_the_shared_lock(tmp_path: Path) -> None:
     """A lazily opened file's reads wait while another thread holds the lock for a whole read."""
     lazy = open_netcdfs([_write(tmp_path / "a.nc", "2024-01-01")], combine="by_coords")
