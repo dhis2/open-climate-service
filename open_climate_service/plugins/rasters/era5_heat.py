@@ -11,6 +11,7 @@ import numpy as np
 import xarray as xr
 from earthkit.transforms.temporal import daily_reduce
 
+from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import (
     daily_period_ids,
     datetime_to_period_string,
@@ -95,6 +96,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
     def _prepare_zarr_dataset(self, ds: xr.Dataset, bbox: list[float]) -> xr.Dataset:
         ds = ds.rio.write_crs("EPSG:4326")
         ds = normalize_period(ds, variable=self._zarr.variable, bbox=list(bbox), time_dim=_CDS_TIME_DIM)
+        ds = normalize_y_direction(ds)
         return kelvin_to_celsius(ds, {"variable": self._zarr.variable})
 
     def _fetch_cutoff(self) -> datetime:

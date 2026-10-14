@@ -86,6 +86,42 @@ def test_daily_fetch_reuses_cached_time_window(monkeypatch: pytest.MonkeyPatch):
     assert second_day.utci.item() == pytest.approx(35.5)
 
 
+def test_prepared_zarr_normalizes_y_once_for_reused_cached_source(monkeypatch: pytest.MonkeyPatch):
+    import rioxarray  # noqa: F401
+
+    plugin = ERA5HeatZarrHourlyPlugin(variable="utci")
+    times = np.arange("2020-01-01", "2020-01-03", dtype="datetime64[h]").astype("datetime64[ns]")
+    values = np.arange(48 * 2 * 2, dtype=float).reshape(48, 2, 2) + 273.15
+    ds = xr.Dataset(
+        {"utci": (("time", "y", "x"), values)},
+        coords={"time": times, "y": [-2.5, -2.0], "x": [28.5, 29.0]},
+    )
+    plugin._zarr = CachedTimeSeriesZarr("unused", "utci", time_dim="time", opener=lambda _: ds)
+
+    prepare_calls = 0
+    prepare_zarr_dataset = plugin._prepare_zarr_dataset
+
+    def counted_prepare(source: xr.Dataset, bbox: list[float]) -> xr.Dataset:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return prepare_zarr_dataset(source, bbox)
+
+    monkeypatch.setattr(plugin, "_prepare_zarr_dataset", counted_prepare)
+
+    first_day = plugin._fetch_time_range(times[0], times[24], [28.0, -3.0, 30.0, -1.0])
+    second_day = plugin._fetch_time_range(
+        times[24],
+        times[-1] + np.timedelta64(1, "h"),
+        [28.0, -3.0, 30.0, -1.0],
+    )
+
+    assert prepare_calls == 1
+    assert first_day.y.values.tolist() == [-2.0, -2.5]
+    assert second_day.y.values.tolist() == [-2.0, -2.5]
+    np.testing.assert_allclose(first_day.utci.values, values[:24, ::-1, :] - 273.15)
+    np.testing.assert_allclose(second_day.utci.values, values[24:, ::-1, :] - 273.15)
+
+
 def test_daily_fetch_reuses_bounded_cache_while_progressing_forward(monkeypatch: pytest.MonkeyPatch):
     plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
     times = np.arange("2020-01-01", "2020-01-09", dtype="datetime64[h]").astype("datetime64[ns]")
