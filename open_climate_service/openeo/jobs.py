@@ -338,7 +338,7 @@ class OpenEOJobService:
 
     def __init__(self, *, max_workers: int | None = None) -> None:
         self._pool = ThreadPoolExecutor(
-            max_workers=max_workers or max_concurrent_jobs(), thread_name_prefix="openeo-job"
+            max_workers=max_concurrent_jobs() if max_workers is None else max_workers, thread_name_prefix="openeo-job"
         )
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()

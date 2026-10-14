@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -202,15 +203,24 @@ def test_job_limit_defaults_and_reads_the_environment(monkeypatch: pytest.Monkey
     assert compute.max_concurrent_jobs() == 5
 
 
-def test_job_threads_cover_a_limit_above_four(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "make_pool",
+    [lambda: ThreadProcessExecutor()._pool, lambda: OpenEOJobService()._pool],
+    ids=["native", "openeo"],
+)
+def test_job_threads_cover_a_limit_above_four(
+    monkeypatch: pytest.MonkeyPatch, make_pool: Callable[[], ThreadPoolExecutor]
+) -> None:
     monkeypatch.setenv(compute.MAX_CONCURRENT_JOBS_ENV, "6")
     started = threading.Barrier(7)
-    executor = ThreadProcessExecutor()
-    futures = [executor.submit(started.wait, 10) for _ in range(6)]
-    started.wait(10)  # raises BrokenBarrierError unless all six run at once
-    for future in futures:
-        future.result(10)
-    executor.shutdown()
+    pool = make_pool()
+    try:
+        futures = [pool.submit(started.wait, 10) for _ in range(6)]
+        started.wait(10)  # raises BrokenBarrierError unless all six run at once
+        for future in futures:
+            future.result(10)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 @pytest.mark.parametrize("raw", ["0", "-1", "two"])

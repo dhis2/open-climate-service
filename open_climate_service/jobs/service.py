@@ -138,7 +138,8 @@ class ThreadProcessExecutor:
     def __init__(self, *, max_workers: int | None = None) -> None:
         # As many threads as job slots: fewer would cap concurrency below the configured limit.
         self._pool = ThreadPoolExecutor(
-            max_workers=max_workers or max_concurrent_jobs(), thread_name_prefix="climate-service-job"
+            max_workers=max_concurrent_jobs() if max_workers is None else max_workers,
+            thread_name_prefix="climate-service-job",
         )
 
     def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[None]:
