@@ -33,6 +33,7 @@ from open_climate_service.plugins.rasters.era5_land import (
     _drop_auxiliary_variables,
     _hourly_availability_cutoff,
 )
+from open_climate_service.shared.netcdf import load_netcdf
 from open_climate_service.streaming import BaseDatasetPlugin, daily_period_ids
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius
 
@@ -150,7 +151,7 @@ class ERA5LandCDSDailyStatisticPlugin(_MonthlyCachedCDSPlugin):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "era5land_daily_stat.nc"
             _CdsClient().retrieve("derived-era5-land-daily-statistics", self._request(year, month, bbox), str(target))
-            ds = xr.open_dataset(target, engine="netcdf4").load()
+            ds = load_netcdf(target)
         ds = _rename_to_canonical(_collapse_expver(ds[[self.variable]]))
         if self.variable in _KELVIN_VARIABLES:
             ds = kelvin_to_celsius(ds, {"variable": self.variable})
@@ -221,7 +222,7 @@ class ERA5LandCDSDailyWindSpeedPlugin(_MonthlyCachedCDSPlugin):
             with tempfile.TemporaryDirectory() as tmp:
                 target = Path(tmp) / "era5land_wind.nc"
                 _CdsClient().retrieve("reanalysis-era5-land", params, str(target))
-                raw = xr.open_dataset(target, engine="netcdf4")[["u10", "v10"]].load()
+                raw = load_netcdf(target)[["u10", "v10"]]
             cubes.append(_rename_to_canonical(_collapse_expver(raw)))
             month_start = (month_start + timedelta(days=32)).replace(day=1)
         ds = xr.concat(cubes, dim="t") if len(cubes) > 1 else cubes[0]
