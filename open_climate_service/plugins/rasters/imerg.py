@@ -21,6 +21,7 @@ import numpy as np
 import xarray as xr
 
 from open_climate_service.plugins.rasters.earthdata import cmr_granules, data_links, download
+from open_climate_service.shared.netcdf import NETCDF_LOCK
 from open_climate_service.streaming import BaseDatasetPlugin, daily_period_ids
 
 _FINAL = "GPM_3IMERGDF"
@@ -72,7 +73,7 @@ class IMERGDailyPlugin(BaseDatasetPlugin):
             raise RuntimeError(f"No IMERG v07 daily granule for {period_id}")
         with tempfile.TemporaryDirectory() as tmp:
             path = download(url, Path(tmp) / Path(url).name)
-            with xr.open_dataset(path, engine="netcdf4") as raw:
+            with NETCDF_LOCK, xr.open_dataset(path, engine="netcdf4") as raw:
                 xmin, ymin, xmax, ymax = map(float, bbox)
                 region = raw["precipitation"].sel(
                     lon=slice(xmin - _HALF_GRID_STEP, xmax + _HALF_GRID_STEP),
