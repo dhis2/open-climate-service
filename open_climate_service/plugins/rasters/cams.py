@@ -28,6 +28,7 @@ import xarray as xr
 from ecmwf.datastores import Client as _Client
 
 from open_climate_service.plugins.rasters.era5_land_daily_stats import _MonthlyCachedCDSPlugin
+from open_climate_service.shared.netcdf import load_netcdf
 from open_climate_service.streaming import daily_period_ids
 
 _ADS_URL = "https://ads.atmosphere.copernicus.eu/api"
@@ -77,8 +78,8 @@ def _open_download(path: Path, workdir: Path) -> xr.Dataset:
         with zipfile.ZipFile(path) as archive:
             archive.extractall(workdir)
         files = sorted(workdir.rglob("*.nc"))
-        return xr.merge([xr.open_dataset(f, engine="netcdf4").load() for f in files], compat="override")
-    return xr.open_dataset(path, engine="netcdf4").load()
+        return xr.merge([load_netcdf(f) for f in files], compat="override")
+    return load_netcdf(path)
 
 
 def _to_valid_time(ds: xr.Dataset) -> xr.Dataset:

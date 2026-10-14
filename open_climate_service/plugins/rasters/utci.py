@@ -25,6 +25,7 @@ import xarray as xr
 from ecmwf.datastores import Client as _CdsClient
 
 from open_climate_service.plugins.rasters.era5_land_daily_stats import _MonthlyCachedCDSPlugin
+from open_climate_service.shared.netcdf import load_netcdf, load_netcdfs
 from open_climate_service.streaming import daily_period_ids
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius
 
@@ -50,8 +51,8 @@ def _open_download(path: Path, workdir: Path) -> xr.Dataset:
         with zipfile.ZipFile(path) as archive:
             archive.extractall(workdir)
         files = sorted(p for p in workdir.rglob("*.nc"))
-        return xr.open_mfdataset(files, combine="by_coords", engine="netcdf4").load()
-    return xr.open_dataset(path, engine="netcdf4").load()
+        return load_netcdfs(files, combine="by_coords")
+    return load_netcdf(path)
 
 
 class UTCIDailyPlugin(_MonthlyCachedCDSPlugin):
