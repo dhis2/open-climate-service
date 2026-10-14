@@ -101,16 +101,85 @@ def test_daily_fetch_reuses_bounded_cache_while_progressing_forward(monkeypatch:
 
         assert daily_ds.utci.item() == pytest.approx(day * 24 + 11.5)
         assert plugin._zarr._cache is not None
-        assert plugin._zarr._cache.sizes["t"] == 72
 
         if day in (0, 3, 6):
             if previous_cache is not None:
                 assert plugin._zarr._cache is not previous_cache
             previous_cache = plugin._zarr._cache
-            expected_cache_start = {0: 0, 3: 72, 6: 120}[day]
+            expected_cache_start = {0: 0, 3: 72, 6: 144}[day]
+            expected_cache_steps = {0: 72, 3: 72, 6: 48}[day]
             assert plugin._zarr._cache_start == expected_cache_start
+            assert plugin._zarr._cache.sizes["t"] == expected_cache_steps
         else:
             assert plugin._zarr._cache is previous_cache
+
+
+def test_cached_time_series_zarr_starts_cache_at_request_when_capacity_exceeds_archive():
+    times = np.arange("2020-01-01", "2020-01-03", dtype="datetime64[h]")
+    values = np.arange(48, dtype=float).reshape(48, 1, 1)
+    ds = xr.Dataset({"value": (("time", "y", "x"), values)}, coords={"time": times})
+    zarr = CachedTimeSeriesZarr(
+        "unused",
+        "value",
+        time_dim="time",
+        opener=lambda _: ds,
+        max_cache_bytes=72 * 8,
+    )
+
+    result = zarr.slice_time(
+        np.datetime64("2020-01-02"),
+        np.datetime64("2020-01-03"),
+    )
+
+    assert zarr._cache_start == 24
+    assert zarr._cache is not None
+    assert zarr._cache.sizes["time"] == 24
+    assert result.value.values[:, 0, 0].tolist() == list(range(24, 48))
+
+
+def test_cached_time_series_zarr_stops_cache_at_next_source_chunk_boundary():
+    chunk_steps = 168
+    times = np.arange("2020-01-01", "2020-01-22", dtype="datetime64[h]")
+    values = np.arange(len(times), dtype=float).reshape(len(times), 1, 1)
+    ds = xr.Dataset({"value": (("time", "y", "x"), values)}, coords={"time": times})
+    ds["value"].encoding["chunks"] = (chunk_steps, 1, 1)
+    zarr = CachedTimeSeriesZarr(
+        "unused",
+        "value",
+        time_dim="time",
+        opener=lambda _: ds,
+        max_cache_bytes=300 * 8,
+    )
+
+    result = zarr.slice_time(
+        times[30],
+        times[54],
+    )
+
+    assert zarr._cache_start == 30
+    assert zarr._cache is not None
+    assert zarr._cache.sizes["time"] == chunk_steps - 30
+    assert result.value.values[:, 0, 0].tolist() == list(range(30, 54))
+
+
+def test_cached_time_series_zarr_warns_when_source_chunk_metadata_is_missing(caplog: pytest.LogCaptureFixture):
+    times = np.arange("2020-01-01", "2020-01-11", dtype="datetime64[h]")
+    values = np.arange(len(times), dtype=float).reshape(len(times), 1, 1)
+    ds = xr.Dataset({"value": (("time", "y", "x"), values)}, coords={"time": times})
+    zarr = CachedTimeSeriesZarr(
+        "unused",
+        "value",
+        time_dim="time",
+        opener=lambda _: ds,
+        max_cache_bytes=72 * 8,
+    )
+
+    zarr.slice_time(times[30], times[54])
+
+    assert "Time chunk metadata is unavailable" in caplog.text
+    assert zarr._cache_start == 30
+    assert zarr._cache is not None
+    assert zarr._cache.sizes["time"] == 72
 
 
 def test_cached_time_series_zarr_uses_explicit_time_dimension():
