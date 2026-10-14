@@ -43,10 +43,7 @@ class ERA5HeatZarrHourlyPlugin(BaseDatasetPlugin):
         **kwargs: Any,
     ) -> None:
         if variable not in _CDS_ZARR_VARIABLES:
-            raise ValueError(
-                f"Unsupported variable {variable!r}; "
-                f"expected one of {list(_CDS_ZARR_VARIABLES)}"
-            )
+            raise ValueError(f"Unsupported variable {variable!r}; expected one of {list(_CDS_ZARR_VARIABLES)}")
         self._zarr = CachedTimeSeriesZarr(
             _CDS_ZARR_URL,
             variable,

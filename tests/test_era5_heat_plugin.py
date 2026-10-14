@@ -87,7 +87,7 @@ def test_daily_fetch_reuses_cached_time_window(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_prepared_zarr_normalizes_y_once_for_reused_cached_source(monkeypatch: pytest.MonkeyPatch):
-    import rioxarray  # noqa: F401
+    import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
     plugin = ERA5HeatZarrHourlyPlugin(variable="utci")
     times = np.arange("2020-01-01", "2020-01-03", dtype="datetime64[h]").astype("datetime64[ns]")
