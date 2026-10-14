@@ -14,7 +14,7 @@ import dask.threaded
 import pytest
 
 from open_climate_service.jobs.models import JobRecord, JobStatus
-from open_climate_service.jobs.service import JobService
+from open_climate_service.jobs.service import JobService, ThreadProcessExecutor
 from open_climate_service.openeo.jobs import OpenEOJobService
 from open_climate_service.shared import compute
 from open_climate_service.shared.compute import JobSlots, SharedDaskPool
@@ -200,6 +200,17 @@ def test_job_limit_defaults_and_reads_the_environment(monkeypatch: pytest.Monkey
     assert compute.max_concurrent_jobs() == compute.DEFAULT_MAX_CONCURRENT_JOBS
     monkeypatch.setenv(compute.MAX_CONCURRENT_JOBS_ENV, "5")
     assert compute.max_concurrent_jobs() == 5
+
+
+def test_job_threads_cover_a_limit_above_four(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(compute.MAX_CONCURRENT_JOBS_ENV, "6")
+    started = threading.Barrier(7)
+    executor = ThreadProcessExecutor()
+    futures = [executor.submit(started.wait, 10) for _ in range(6)]
+    started.wait(10)  # raises BrokenBarrierError unless all six run at once
+    for future in futures:
+        future.result(10)
+    executor.shutdown()
 
 
 @pytest.mark.parametrize("raw", ["0", "-1", "two"])
