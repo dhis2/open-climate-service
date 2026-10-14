@@ -86,25 +86,31 @@ def test_daily_fetch_reuses_cached_time_window(monkeypatch: pytest.MonkeyPatch):
     assert second_day.utci.item() == pytest.approx(35.5)
 
 
-def test_daily_fetch_slides_bounded_cache_to_cover_next_day(monkeypatch: pytest.MonkeyPatch):
+def test_daily_fetch_reuses_bounded_cache_while_progressing_forward(monkeypatch: pytest.MonkeyPatch):
     plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
-    times = np.arange("2020-01-01", "2020-01-04", dtype="datetime64[h]").astype("datetime64[ns]")
-    values = np.arange(72, dtype=float).reshape(72, 1, 1)
+    times = np.arange("2020-01-01", "2020-01-09", dtype="datetime64[h]").astype("datetime64[ns]")
+    values = np.arange(8 * 24, dtype=float).reshape(8 * 24, 1, 1)
     ds = xr.Dataset({"utci": (("t", "y", "x"), values)}, coords={"t": times})
-    plugin._zarr = CachedTimeSeriesZarr("unused", "utci", time_dim="t", opener=lambda _: ds, max_cache_bytes=30 * 8)
+    plugin._zarr = CachedTimeSeriesZarr("unused", "utci", time_dim="t", opener=lambda _: ds, max_cache_bytes=72 * 8)
     monkeypatch.setattr(plugin, "_prepare_zarr_dataset", lambda ds, bbox: ds)
 
-    # The cache holds 30 float64 timesteps, regardless of the source chunk size.
-    first_day = plugin.fetch_period("2020-01-01", _TEST_BBOX)
-    assert plugin._zarr._cache is not None
-    assert plugin._zarr._cache.sizes["t"] == 30
-    assert first_day.t.values[0] == np.datetime64("2020-01-01T00:00:00")
+    previous_cache = None
+    for day in range(8):
+        period_id = (date(2020, 1, 1) + timedelta(days=day)).isoformat()
+        daily_ds = plugin.fetch_period(period_id, _TEST_BBOX)
 
-    second_day = plugin.fetch_period("2020-01-02", _TEST_BBOX)
-    assert plugin._zarr._cache.sizes["t"] == 30
-    assert plugin._zarr._cache_start == 18
-    assert second_day.t.values[0] == np.datetime64("2020-01-02T00:00:00")
-    assert second_day.utci.item() == pytest.approx(35.5)
+        assert daily_ds.utci.item() == pytest.approx(day * 24 + 11.5)
+        assert plugin._zarr._cache is not None
+        assert plugin._zarr._cache.sizes["t"] == 72
+
+        if day in (0, 3, 6):
+            if previous_cache is not None:
+                assert plugin._zarr._cache is not previous_cache
+            previous_cache = plugin._zarr._cache
+            expected_cache_start = {0: 0, 3: 72, 6: 120}[day]
+            assert plugin._zarr._cache_start == expected_cache_start
+        else:
+            assert plugin._zarr._cache is previous_cache
 
 
 def test_cached_time_series_zarr_uses_explicit_time_dimension():

@@ -91,7 +91,8 @@ class CachedTimeSeriesZarr:
         if requested_bytes > self._max_cache_bytes:
             raise ValueError(
                 f"Requested time range needs about {requested_bytes} bytes, exceeding "
-                f"max_cache_bytes={self._max_cache_bytes}; use xarray directly for large ranges"
+                f"max_cache_bytes={self._max_cache_bytes}; either increase the plugin's "
+                f"max_cache_bytes or use xarray directly for large ranges"
             )
 
         cache_end = (
@@ -100,7 +101,7 @@ class CachedTimeSeriesZarr:
             else -1
         )
         if self._cache is None or self._cache_start is None or first < self._cache_start or last > cache_end:
-            cache_start = min(first, max(0, last - self._cache_steps))
+            cache_start = max(0, min(first, self._dataset.sizes[self._time_dim] - self._cache_steps))
             cache_end = min(self._dataset.sizes[self._time_dim], cache_start + self._cache_steps)
             self._cache = self._dataset.isel({self._time_dim: slice(cache_start, cache_end)}).load()
             self._cache_start = cache_start
