@@ -262,6 +262,13 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
 
     monkeypatch.setattr(services, "create_artifact", fake_create_artifact)
     monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
+    # Avoid a real network call from CHIRPS3DailyPlugin._availability_cutoff() —
+    # this test is about the append plan, not plugin availability.
+    monkeypatch.setattr(
+        sync_engine,
+        "_query_available_periods",
+        lambda *args, **kwargs: [f"2026-02-{day:02d}" for day in range(1, 11)],
+    )
 
     result = services.sync_dataset(dataset_id=dataset_id, end="2026-02-10", publish=True)
 

@@ -257,6 +257,11 @@ def test_augment_with_workflows_registers_udp(monkeypatch: pytest.MonkeyPatch) -
 @pytest.fixture()
 def job_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OpenEOJobService:
     monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    # The managed writer reads the artifact index; keep it in this test's directory.
+    monkeypatch.setattr("open_climate_service.ingestions.services.ARTIFACTS_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(
+        "open_climate_service.ingestions.services.ARTIFACTS_INDEX_PATH", tmp_path / "artifacts" / "records.json"
+    )
     return OpenEOJobService(max_workers=1)
 
 

@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import portalocker
 
@@ -215,3 +215,103 @@ def _mutate_records(mutation: Callable[[list[dict[str, object]]], _T]) -> _T:
             return result
         finally:
             portalocker.unlock(handle)
+
+
+# --- freezing a graph against the registry ---------------------------------------------------
+
+_MAX_INLINE_DEPTH = 16
+
+
+def _rewrite_node_refs(value: Any, rename: Callable[[str], str]) -> Any:
+    """Rewrite ``from_node`` references of one graph level, leaving callback graphs alone.
+
+    A callback (a mapping holding ``process_graph``) has its own node namespace, so its
+    references are not this graph's nodes.
+    """
+    if isinstance(value, dict):
+        if set(value) == {"from_node"} and isinstance(value["from_node"], str):
+            return {"from_node": rename(value["from_node"])}
+        if "process_graph" in value:
+            return value
+        return {key: _rewrite_node_refs(child, rename) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_rewrite_node_refs(child, rename) for child in value]
+    return value
+
+
+def _freeze_callbacks(value: Any, resolve: Callable[[str], WorkflowRecord | None], stack: tuple[str, ...]) -> Any:
+    """Freeze the callback graphs nested in a node's arguments."""
+    if isinstance(value, dict):
+        frozen = {
+            key: _freeze_callbacks(child, resolve, stack) for key, child in value.items() if key != "process_graph"
+        }
+        graph = value.get("process_graph")
+        if isinstance(graph, dict):
+            frozen["process_graph"] = freeze_process_graph(graph, resolve=resolve, _stack=stack)
+        elif "process_graph" in value:
+            frozen["process_graph"] = graph
+        return frozen
+    if isinstance(value, list):
+        return [_freeze_callbacks(child, resolve, stack) for child in value]
+    return value
+
+
+def freeze_process_graph(
+    process_graph: dict[str, Any],
+    *,
+    resolve: Callable[[str], WorkflowRecord | None] | None = None,
+    _stack: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Inline every call to a registered workflow, recursively, as of now.
+
+    The result runs the definitions current at this moment even if a workflow is edited
+    later, which a graph that names workflows by id does not: those are resolved again at
+    execution. Arguments and declared defaults are substituted exactly as the executor does
+    (`execution._resolve_workflow_parameters`); each inlined node is named
+    ``<calling node>__<workflow node>``, and references to the calling node are redirected to
+    the workflow's result node.
+    """
+    from open_climate_service.openeo.execution import _resolve_workflow_parameters
+
+    lookup = resolve or get_workflow
+    if len(_stack) > _MAX_INLINE_DEPTH:
+        raise ValueError(f"workflow calls nest deeper than {_MAX_INLINE_DEPTH}: {' > '.join(_stack)}")
+    nodes: dict[str, Any] = {}
+    redirect: dict[str, str] = {}
+
+    def _insert(node_id: str, node: dict[str, Any]) -> None:
+        if node_id in nodes:
+            raise ValueError(f"workflow inlining would overwrite node '{node_id}'")
+        nodes[node_id] = node
+
+    for node_id, raw in process_graph.items():
+        node = {**raw, "arguments": _freeze_callbacks(raw.get("arguments", {}), lookup, _stack)}
+        process_id = node.get("process_id")
+        record = lookup(process_id) if isinstance(process_id, str) else None
+        if record is None or not record.process_graph:
+            _insert(node_id, node)
+            continue
+        if record.id in _stack:
+            raise ValueError(f"workflow '{record.id}' calls itself: {' > '.join((*_stack, record.id))}")
+        prefix = f"{node_id}__"
+
+        def _prefixed(name: str, prefix: str = prefix) -> str:
+            return f"{prefix}{name}"
+
+        body = {
+            _prefixed(inner_id): _rewrite_node_refs(inner, _prefixed)
+            for inner_id, inner in record.process_graph.items()
+        }
+        defaults = {p["name"]: p["default"] for p in record.parameters if "name" in p and "default" in p}
+        body = _resolve_workflow_parameters(body, {**defaults, **node["arguments"]})
+        body = freeze_process_graph(body, resolve=lookup, _stack=(*_stack, record.id))
+        results = [inner_id for inner_id, inner in body.items() if inner.get("result")]
+        if len(results) != 1:
+            raise ValueError(f"workflow '{record.id}' must have exactly one result node, found {len(results)}")
+        for inner_id, inner in body.items():
+            inner = {key: value for key, value in inner.items() if key != "result"}
+            if inner_id == results[0] and node.get("result"):
+                inner["result"] = True
+            _insert(inner_id, inner)
+        redirect[node_id] = results[0]
+    return {node_id: _rewrite_node_refs(node, lambda name: redirect.get(name, name)) for node_id, node in nodes.items()}

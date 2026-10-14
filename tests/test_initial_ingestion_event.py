@@ -128,10 +128,22 @@ def _await_terminal(instance: dict[str, Any], job_id: str, timeout: float = 20.0
     pytest.fail(f"Ingestion job {job_id} did not finish within {timeout}s")
 
 
-def _triggered_jobs() -> list[openeo_jobs.OpenEOJobRecord]:
+def _triggered_jobs(expected: int = 1, timeout: float = 10.0) -> list[openeo_jobs.OpenEOJobRecord]:
+    """The workflow jobs the trigger submitted, once there are `expected` of them.
+
+    The job service persists a job as successful first and hands its events to automation after,
+    so a test that saw the ingestion finish can look before the workflow job exists. Waiting for
+    the expected count, and returning whatever is there at the deadline, keeps the assertion on
+    the count rather than on timing.
+    """
     # A triggered job's description names its source event and its automation rule.
     rule = f"automation rule {_TRIGGER}"
-    return [record for record in openeo_jobs.store_list_jobs() if rule in (record.description or "")]
+    deadline = time.monotonic() + timeout
+    while True:
+        jobs = [record for record in openeo_jobs.store_list_jobs() if rule in (record.description or "")]
+        if len(jobs) >= expected or time.monotonic() > deadline:
+            return jobs
+        time.sleep(0.05)
 
 
 def _submitted_extent(record: openeo_jobs.OpenEOJobRecord) -> Any:
@@ -175,7 +187,7 @@ def test_extending_ingestion_reports_what_was_stored_before(instance: dict[str, 
 
     [event] = extended.events
     assert (event.data["previous_end"], event.data["current_end"]) == ("2026-01-02", "2026-01-03")
-    assert len(_triggered_jobs()) == 2
+    assert len(_triggered_jobs(expected=2)) == 2
 
 
 def test_failed_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
@@ -184,7 +196,7 @@ def test_failed_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
 
     assert record.status == JobStatus.FAILED
     assert record.events == []
-    assert _triggered_jobs() == []
+    assert _triggered_jobs(expected=0) == []
 
 
 def test_cancelled_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
@@ -208,7 +220,7 @@ def test_cancelled_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
 
     assert record.status == JobStatus.CANCELLED
     assert record.events == []
-    assert _triggered_jobs() == []
+    assert _triggered_jobs(expected=0) == []
 
 
 @pytest.mark.parametrize("marker", [True, False])
@@ -317,4 +329,4 @@ def test_inline_sync_is_recorded_as_a_completed_job_with_its_event(
     assert event.data["action"] in {"append", "rematerialize"}
     expected_previous_end = "2026-01-02" if event.data["action"] == "append" else None
     assert (event.data["previous_end"], event.data["current_end"]) == (expected_previous_end, "2026-01-03")
-    assert len(_triggered_jobs()) == 2
+    assert len(_triggered_jobs(expected=2)) == 2

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import portalocker
@@ -46,7 +46,9 @@ from open_climate_service.exports.tabular import (
 from open_climate_service.exports.tabular import (
     non_value_fields as _non_value_fields,
 )
+from open_climate_service.jobs.models import JobEvent
 from open_climate_service.openeo.schemas import (
+    ManagedPublication,
     OpenEOJobCreate,
     OpenEOJobListResponse,
     OpenEOJobRecord,
@@ -145,6 +147,13 @@ def store_list_jobs() -> list[OpenEOJobRecord]:
     return [OpenEOJobRecord.model_validate(r) for r in _load_raw_records()]
 
 
+def read_job_records() -> list[OpenEOJobRecord]:
+    """Every persisted job, for a reader that must not create the store: none when it is absent."""
+    if not _jobs_index().exists():
+        return []
+    return store_list_jobs()
+
+
 def store_get_job(job_id: str) -> OpenEOJobRecord | None:
     """Return one job record, or None if not found."""
     for raw in _load_raw_records():
@@ -208,6 +217,8 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data["max_attempts"] = record.max_attempts
     data["retry_at"] = record.retry_at.isoformat() if record.retry_at is not None else None
     data["publishing"] = record.publishing
+    data["publication"] = record.publication.model_dump(mode="json") if record.publication is not None else None
+    data["events"] = [event.model_dump(mode="json", by_alias=True) for event in record.events]
     return data
 
 
@@ -287,6 +298,19 @@ def _is_permanent_error(exc: BaseException, *, while_saving: bool = False) -> bo
     return while_saving and isinstance(root, _VALIDATION_ERROR_TYPES) and not isinstance(root, OSError)
 
 
+def _publication_events(record: OpenEOJobRecord) -> list[JobEvent]:
+    """The event of the publication a job completed, if it emitted one."""
+    publication = record.publication
+    if publication is None or publication.event_id is None:
+        return []
+    return [event for event in record.events if event.event_id == publication.event_id]
+
+
+def _commit_pending(record: OpenEOJobRecord) -> bool:
+    """Whether a publication may have committed and is not yet resolved."""
+    return record.publication is not None and record.publication.state == "committing"
+
+
 def _with_attempts(message: str, record: OpenEOJobRecord) -> str:
     """Name the attempts used, for a job that could retry; a single-attempt job is unchanged."""
     if record.max_attempts <= 1:
@@ -304,6 +328,11 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+def triggered_job_id(source_event_id: str, trigger_id: str) -> str:
+    """The deterministic id of the one job a durable event and trigger may create."""
+    return str(uuid5(NAMESPACE_URL, f"ocs:{source_event_id}:{trigger_id}"))
+
+
 class OpenEOJobService:
     """Manages openEO job lifecycle and asynchronous execution."""
 
@@ -312,6 +341,7 @@ class OpenEOJobService:
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
         self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
+        self._event_consumer: Callable[[list[JobEvent]], None] | None = None
         self._delivery_due: Callable[[OpenEOJobRecord], dict[str, str] | None] | None = None
         self._stopping = threading.Event()
         # Jobs waiting out a retry backoff: a timer requeues each, so no worker sleeps.
@@ -335,6 +365,16 @@ class OpenEOJobService:
         change the finished job's status.
         """
         self._finished_listener = listener
+
+    def set_event_consumer(self, consumer: Callable[[list[JobEvent]], None] | None) -> None:
+        """Register the consumer of the durable events a finished job produced.
+
+        The same consumer native jobs feed, so an update a job published reaches workflow
+        automation and pipelines the way an ingestion's does. Called after the job is
+        persisted as FINISHED; a restart replays the events from the job store instead, so
+        a consumer must tolerate seeing an event more than once.
+        """
+        self._event_consumer = consumer
 
     def shutdown(self) -> None:
         """Stop executing. A job waiting out a retry backoff stays QUEUED for the next start."""
@@ -366,17 +406,27 @@ class OpenEOJobService:
                         requeue = self._recover(record.id)
                 if not won:
                     logger.warning("openEO job %s is still executing in another process; watching it", record.id)
-                    self._watch_for_takeover(record.id)
+                    self._watch_for_recovery(record.id)
                 elif requeue:
                     self._enqueue(record.id)
             except Exception:
-                logger.exception("Could not recover openEO job %s; continuing with the others", record.id)
+                latest = store_get_job(record.id)
+                if latest is not None and _commit_pending(latest):
+                    logger.exception("Could not complete the publication of openEO job %s yet; watching it", record.id)
+                    self._watch_for_recovery(record.id)
+                else:
+                    logger.exception("Could not recover openEO job %s; continuing with the others", record.id)
 
     def _recover(self, job_id: str) -> bool:
         """Prepare one interrupted job while holding its lease; return whether to run it now."""
         record = store_get_job(job_id)
         if record is None or record.status not in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
             return False
+        if record.status == OpenEOJobStatus.RUNNING and record.publication is not None:
+            outcome = self._recover_publication(record)
+            if outcome != "cancel":
+                return outcome == "requeue"
+            record = store_get_job(job_id) or record
         if record.cancel_requested:
             store_update_job(
                 job_id, lambda r: r.model_copy(update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now()})
@@ -424,11 +474,63 @@ class OpenEOJobService:
         )
         return False
 
-    def _watch_for_takeover(self, job_id: str) -> None:
-        """Take over a job from another process once its execution lease is released.
+    def _recover_publication(self, record: OpenEOJobRecord) -> Literal["finished", "requeue", "cancel"]:
+        """Resolve a managed publication a process crash left RUNNING.
+
+        Whatever started the job, a user or a trigger, an interrupted publication is
+        recovered, never turned into an ERROR. A handled failure does not come here: it leaves
+        the job QUEUED for a retry or ERROR, not RUNNING.
+
+        - ``completed``: the outcome and its event are durable. The job is marked FINISHED and
+          its events dispatched; nothing is published again and the event keeps its id.
+        - ``committing``: the commit may have landed. The store history above this attempt's
+          base snapshot is searched for the commit message that names this job and attempt
+          (`committed_snapshot`). Found, the publication is completed with that snapshot as
+          the output snapshot: registration is an idempotent upsert. Not found, nothing was
+          published.
+        - ``planned``: nothing was committed.
+
+        When nothing was published the publication is cleared, and the job is requeued to run
+        again, unless it was cancelled, which is then recorded as such. No event is emitted.
+        """
+        publication = record.publication
+        assert publication is not None
+        if publication.state != "completed":
+            completed = self._reconcile_commit(record.id) if publication.state == "committing" else False
+            if not completed:
+                cancelled = record.cancel_requested
+                logger.warning(
+                    "openEO job %s was interrupted before its managed dataset '%s' was committed; "
+                    "nothing was published, %s",
+                    record.id,
+                    publication.dataset_id,
+                    "recording the cancellation" if cancelled else "running it again",
+                )
+
+                def _unpublished(r: OpenEOJobRecord) -> OpenEOJobRecord:
+                    update: dict[str, Any] = {"publication": None, "publishing": False, "updated": utc_now()}
+                    if not cancelled:
+                        update["status"] = OpenEOJobStatus.QUEUED
+                        update["logs"] = _append_log(
+                            r, f"attempt {r.attempt} interrupted by a restart before publishing; requeued"
+                        )
+                    return r.model_copy(update=update)
+
+                store_update_job(record.id, _unpublished)
+                return "cancel" if cancelled else "requeue"
+        finished = store_update_job(record.id, lambda r: self._finish(r, f"managed://{publication.dataset_id}"))
+        if finished.status == OpenEOJobStatus.FINISHED:
+            self._after_finished(finished)
+        return "finished"
+
+    def _watch_for_recovery(self, job_id: str) -> None:
+        """Recover a job once its leases and other transient dependencies are available.
 
         The record is re-read under the lease, so a job the other process finished is left
-        alone and one it abandoned is recovered as at startup. One watcher per job at most.
+        alone and one it abandoned is recovered as at startup. A publication that cannot yet
+        take its dataset lock or complete registration remains ``committing`` and is retried;
+        a commit cannot be abandoned merely because a transient dependency stays unavailable.
+        One watcher per job at most.
         """
         with self._lock:
             if self._stopping.is_set() or job_id in self._watched:
@@ -438,10 +540,26 @@ class OpenEOJobService:
         def watch() -> None:
             try:
                 while not self._stopping.wait(self.lease_poll_seconds):
-                    with execution_lease(_execution_lease_path(job_id)) as won:
-                        if not won:
+                    finished: OpenEOJobRecord | None = None
+                    try:
+                        with execution_lease(_execution_lease_path(job_id)) as won:
+                            if not won:
+                                continue
+                            current = store_get_job(job_id)
+                            if current is not None and current.status == OpenEOJobStatus.ERROR:
+                                finished = self._recover_failed_publication(job_id)
+                                requeue = False
+                            else:
+                                requeue = self._recover(job_id)
+                    except Exception as exc:
+                        current = store_get_job(job_id)
+                        if current is not None and _commit_pending(current):
+                            logger.warning("Publication recovery for openEO job %s is still deferred: %s", job_id, exc)
                             continue
-                        requeue = self._recover(job_id)
+                        logger.exception("Could not recover watched openEO job %s", job_id)
+                        return
+                    if finished is not None:
+                        self._after_finished(finished)
                     if requeue and not self._stopping.is_set():
                         logger.info("Took over openEO job %s after its previous process released it", job_id)
                         with self._lock:
@@ -512,7 +630,7 @@ class OpenEOJobService:
             )
         if not isinstance(body.process.get("process_graph"), dict):
             raise ValueError("process.process_graph must be an object")
-        job_id = str(uuid5(NAMESPACE_URL, f"ocs:{source_event_id}:{trigger_id}"))
+        job_id = triggered_job_id(source_event_id, trigger_id)
         now = utc_now()
         candidate = OpenEOJobRecord(
             id=job_id,
@@ -601,10 +719,14 @@ class OpenEOJobService:
     def delete_job(self, job_id: str) -> None:
         # 404 first so an arbitrary or malformed ID never creates a lease file.
         record = self.get_job_or_404(job_id)
+        if _commit_pending(record):
+            raise HTTPException(status_code=409, detail="Cannot delete a job with an unresolved publication commit")
         if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
             raise HTTPException(status_code=400, detail="Cannot delete a running job; cancel it first")
         with result_lease(job_id):
             record = self.get_job_or_404(job_id)
+            if _commit_pending(record):
+                raise HTTPException(status_code=409, detail="Cannot delete a job with an unresolved publication commit")
             if record.status in {OpenEOJobStatus.QUEUED, OpenEOJobStatus.RUNNING}:
                 raise HTTPException(status_code=400, detail="Cannot delete a running job; cancel it first")
             store_delete_job(job_id)
@@ -756,7 +878,7 @@ class OpenEOJobService:
         # Only once this worker is neither leased nor registered: otherwise a requeue from a
         # watcher or a retry timer could be refused as a duplicate and leave the job idle.
         if watch:
-            self._watch_for_takeover(job_id)
+            self._watch_for_recovery(job_id)
         elif retry_after is not None:
             self._schedule_retry(job_id, retry_after)
 
@@ -856,6 +978,15 @@ class OpenEOJobService:
             )
             return None
 
+        # A publication an earlier attempt left `committing` may have committed: it is resolved
+        # before anything else, and stays non-cancellable meanwhile.
+        pending = record.publication if record.publication and record.publication.state == "committing" else None
+        # A retry of that attempt is finished by completing it; a deliberate re-run (`start_job`
+        # resets the attempt count) completes it and then computes afresh.
+        rerun = record.attempt == 0
+        # Events already on the job were dispatched when they were produced.
+        known = {event.event_id for event in record.events}
+
         started = store_update_job(
             job_id,
             lambda r: r.model_copy(
@@ -864,48 +995,165 @@ class OpenEOJobService:
                     "updated": utc_now(),
                     "attempt": r.attempt + 1,
                     "retry_at": None,
-                    "publishing": False,
+                    "publishing": pending is not None,
+                    # Each attempt plans its own publication; one possibly committed is kept
+                    # until it is resolved below.
+                    "publication": pending,
                 }
             ),
         )
 
         saving = False
         try:
-            # Each attempt owns a fresh result directory. Without this, a successful rerun in
-            # another format made files left by an earlier or cancelled attempt downloadable.
-            import shutil
-
-            results_dir = _JOBS_DIR / job_id / "results"
-            shutil.rmtree(results_dir, ignore_errors=True)
-            results_dir.mkdir(parents=True, exist_ok=True)
-            # Cancellation is checked before every process and dask task, and once more,
-            # atomically, at the point of no return of any publication (CLIM-1221).
-            with cancellation_scope(
-                lambda: _cancel_requested(job_id),
-                enter_publication=lambda: self._enter_publication(job_id),
-            ):
-                result = run_process_graph(record.process)
-                raise_if_cancelled(force=True)
+            output_path: str | None = None
+            completed = False
+            if pending is not None:
                 saving = True
-                output_path = self._persist_result(job_id, result)
+                completed = self._reconcile_commit(job_id) is True
+                saving = False
+                if completed:
+                    output_path = f"managed://{pending.dataset_id}"
+            if not completed or rerun:
+                # Each attempt owns a fresh result directory. Without this, a successful rerun in
+                # another format made files left by an earlier or cancelled attempt downloadable.
+                import shutil
+
+                results_dir = _JOBS_DIR / job_id / "results"
+                shutil.rmtree(results_dir, ignore_errors=True)
+                results_dir.mkdir(parents=True, exist_ok=True)
+                store_update_job(job_id, lambda r: r.model_copy(update={"publishing": False, "publication": None}))
+                # Cancellation is checked before every process and dask task, and once more,
+                # atomically, at the point of no return of any publication (CLIM-1221).
+                with cancellation_scope(
+                    lambda: _cancel_requested(job_id),
+                    enter_publication=lambda: self._enter_publication(job_id),
+                ):
+                    result = run_process_graph(record.process)
+                    raise_if_cancelled(force=True)
+                    saving = True
+                    output_path = self._persist_result(job_id, result)
             finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
         except ExecutionCancelled:
             logger.info("openEO job %s was cancelled while running; nothing was published", job_id)
             store_update_job(
                 job_id,
                 lambda r: r.model_copy(
-                    update={"status": OpenEOJobStatus.CANCELED, "updated": utc_now(), "publishing": False}
+                    # A planned publication never crossed the gate: clear it, so nothing reads
+                    # it as pending.
+                    update={
+                        "status": OpenEOJobStatus.CANCELED,
+                        "updated": utc_now(),
+                        "publishing": False,
+                        "publication": None,
+                    }
                 ),
             )
             return None
         except Exception as job_exc:
             logger.exception("openEO job %s failed", job_id)
+            # An ordinary failure after the commit gate (registering, publishing, recording the
+            # outcome) must not lose a commit that landed: complete it now if it can be.
+            finished_now = self._complete_after_failure(job_id)
+            if finished_now is not None:
+                if finished_now.status == OpenEOJobStatus.FINISHED:
+                    self._after_finished(finished_now, [e for e in finished_now.events if e.event_id not in known])
+                return None
             return self._record_failure(job_id, started, job_exc, while_saving=saving)
         # Outside the try: a listener failure must not turn a finished job into an error.
         # Only a finished attempt reaches this, so only a successful attempt can deliver.
         if finished.status == OpenEOJobStatus.FINISHED:
-            self._notify_finished(finished)
+            self._after_finished(finished, [event for event in finished.events if event.event_id not in known])
         return None
+
+    def _reconcile_commit(self, job_id: str) -> bool | None:
+        """Resolve a publication left ``committing``: True completed, False nothing was committed.
+
+        None when there is no such publication. Completing raises if registration or the
+        outcome cannot be recorded; the publication then stays ``committing`` for later.
+        """
+        record = store_get_job(job_id)
+        publication = record.publication if record is not None else None
+        if publication is None or publication.state != "committing":
+            return None
+        from open_climate_service.ingestions import services as ingestion_services
+
+        store_lock = ingestion_services._acquire_store_lock(Path(publication.store_path))
+        if not store_lock.acquire(blocking=False):
+            raise RuntimeError(
+                f"Managed dataset '{publication.dataset_id}' is still being written; publication recovery deferred"
+            )
+        try:
+            snapshot_id = committed_snapshot(
+                Path(publication.store_path), publication.commit_message, publication.base_snapshot_id
+            )
+            if snapshot_id is None:
+                store_update_job(job_id, lambda r: r.model_copy(update={"publication": None, "publishing": False}))
+                return False
+            complete_managed_publication(job_id, snapshot_id)
+            return True
+        finally:
+            store_lock.release()
+
+    def _complete_after_failure(self, job_id: str) -> OpenEOJobRecord | None:
+        """After a failure past the commit gate, finish the job if its commit can be completed.
+
+        Returns the finished record, or None when there was nothing committed to complete or
+        completing failed too; the failure is then recorded as usual, with the publication
+        left ``committing`` for the next attempt or the next start.
+        """
+        record = store_get_job(job_id)
+        publication = record.publication if record is not None else None
+        if publication is None or publication.state not in ("committing", "completed"):
+            return None
+        try:
+            if publication.state == "committing" and self._reconcile_commit(job_id) is not True:
+                return None
+        except Exception:
+            logger.exception("openEO job %s could not complete its committed publication yet", job_id)
+            return None
+        logger.warning("openEO job %s failed after its commit; the publication was completed", job_id)
+        return store_update_job(job_id, lambda r: self._finish(r, f"managed://{publication.dataset_id}"))
+
+    def reconcile_publications(self) -> None:
+        """At startup, complete publications that ended jobs left ``committing``.
+
+        A job whose final attempt failed after its commit is ERROR, which ordinary recovery
+        does not look at. Its commit is completed here, with its one event, and the job is
+        marked FINISHED. Nothing committed: the publication is cleared. A transient failure
+        starts a process-local watcher which retries until completion or shutdown.
+        """
+        for record in store_list_jobs():
+            if record.status != OpenEOJobStatus.ERROR or record.publication is None:
+                continue
+            if record.publication.state != "committing":
+                continue
+            try:
+                with execution_lease(_execution_lease_path(record.id)) as won:
+                    finished = self._recover_failed_publication(record.id) if won else None
+                if not won:
+                    self._watch_for_recovery(record.id)
+                    continue
+                if finished is not None and finished.status == OpenEOJobStatus.FINISHED:
+                    self._after_finished(finished)
+            except Exception:
+                logger.exception("Could not complete the publication of openEO job %s yet; watching it", record.id)
+                self._watch_for_recovery(record.id)
+
+    def _recover_failed_publication(self, job_id: str) -> OpenEOJobRecord | None:
+        """Complete one ERROR job's pending commit while its execution lease is held."""
+        record = store_get_job(job_id)
+        if record is None or record.status != OpenEOJobStatus.ERROR or not _commit_pending(record):
+            return None
+        assert record.publication is not None
+        dataset_id = record.publication.dataset_id
+        if self._reconcile_commit(job_id) is not True:
+            return None
+        return store_update_job(
+            job_id,
+            lambda r: self._finish(r, f"managed://{dataset_id}").model_copy(
+                update={"error_message": None, "logs": _append_log(r, "publication completed during recovery")}
+            ),
+        )
 
     def _enter_publication(self, job_id: str) -> None:
         """Pass the point of no return, or raise if the job was cancelled first.
@@ -918,7 +1166,11 @@ class OpenEOJobService:
         def _gate(r: OpenEOJobRecord) -> OpenEOJobRecord:
             if r.cancel_requested:
                 raise ExecutionCancelled("The job was cancelled before it could publish")
-            return r.model_copy(update={"publishing": True, "updated": utc_now()})
+            update: dict[str, Any] = {"publishing": True, "updated": utc_now()}
+            if r.publication is not None and r.publication.state == "planned":
+                # In the same write: from here a restart must look for this job's commit.
+                update["publication"] = r.publication.model_copy(update={"state": "committing"})
+            return r.model_copy(update=update)
 
         store_update_job(job_id, _gate)
 
@@ -948,7 +1200,8 @@ class OpenEOJobService:
                         "status": OpenEOJobStatus.QUEUED,
                         "error_message": error,
                         "retry_at": retry_at,
-                        "publishing": False,
+                        # A commit still being resolved keeps the job non-cancellable.
+                        "publishing": _commit_pending(r),
                         "updated": utc_now(),
                         "logs": _append_log(
                             r,
@@ -968,7 +1221,7 @@ class OpenEOJobService:
                     "status": OpenEOJobStatus.ERROR,
                     "error_message": _with_attempts(error, r),
                     "updated": utc_now(),
-                    "publishing": False,
+                    "publishing": _commit_pending(r),
                     "logs": _append_log(r, f"attempt {r.attempt} of {r.max_attempts} {outcome}: {error}")
                     if r.max_attempts > 1
                     else r.logs,
@@ -1012,6 +1265,25 @@ class OpenEOJobService:
             except Exception:
                 logger.exception("Delivery lookup failed for openEO job %s; it will not be delivered", record.id)
         return finished.model_copy(update={"delivery_due": due})
+
+    def _after_finished(self, record: OpenEOJobRecord, events: list[JobEvent] | None = None) -> None:
+        """Run the finished listener, then hand the new durable events to the consumer.
+
+        ``events`` are those this attempt produced; by default, the event of the publication
+        the job completed. Earlier events were dispatched when they were produced.
+        """
+        self._notify_finished(record)
+        self._dispatch_events(record.id, _publication_events(record) if events is None else events)
+
+    def _dispatch_events(self, job_id: str, events: list[JobEvent]) -> None:
+        consumer = self._event_consumer
+        if consumer is None or not events:
+            return
+        try:
+            consumer(list(events))
+        except Exception:
+            # The events are durable on the job; startup replay delivers them again.
+            logger.exception("Event consumer failed for openEO job %s", job_id)
 
     def _notify_finished(self, record: OpenEOJobRecord) -> None:
         listener = self._finished_listener
@@ -1062,7 +1334,7 @@ class OpenEOJobService:
         if isinstance(result, xr.Dataset):
             # Zarr format with dataset_id → write directly to managed Icechunk/Zarr store
             if fmt == "ZARR" and options.get("dataset_id"):
-                _write_managed_zarr(result, options)
+                _write_managed_zarr(result, options, job_id=job_id, provenance=provenance)
                 # Managed datasets are not served as job-local files; advertise the
                 # managed dataset via a marker that _result_assets expands into
                 # /datasets, /zarr (and /stac when published) result links.
@@ -1166,8 +1438,204 @@ def _netcdf_safe_attrs(ds: Any) -> Any:
     return ds
 
 
-def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
-    """Write a computed xr.Dataset to the managed Icechunk/Zarr store and register it."""
+def store_head(store_path: Path) -> str | None:
+    """The snapshot ``main`` points at in an Icechunk store, or None when there is no store yet."""
+    import icechunk
+
+    if not store_path.exists():
+        return None
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
+    return str(repo.lookup_branch("main"))
+
+
+def committed_snapshot(store_path: Path, commit_message: str, base_snapshot_id: str | None) -> str | None:
+    """The snapshot an attempt committed, found by its own commit message above its base.
+
+    Walks ``main`` from its head back to ``base_snapshot_id`` (the head before the attempt
+    wrote; for a new store, all the way down) and returns the snapshot whose message is
+    ``commit_message``. A head that merely differs from the base proves nothing: another
+    writer may have committed since, so only this attempt's own message counts.
+    """
+    import icechunk
+
+    if not store_path.exists():
+        return None
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
+    for snapshot in repo.ancestry(branch="main"):
+        if base_snapshot_id is not None and snapshot.id == base_snapshot_id:
+            return None
+        if snapshot.message == commit_message:
+            return str(snapshot.id)
+    return None
+
+
+def publication_event_id(job_id: str, artifact_id: str, snapshot_id: str) -> str:
+    """The logical update one committed publication is: this job, this artifact, this snapshot.
+
+    Completing the same commit again, in a retry or at a restart, gives the same id, so it is
+    one update. A deliberate re-run commits a new snapshot, and is a new update.
+    """
+    return f"{job_id}:publication:{artifact_id}:{snapshot_id}"
+
+
+def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobRecord:
+    """Register a committed managed dataset and record its outcome and update event together.
+
+    Idempotent: a publication already completed is returned as it is, and registration is an
+    upsert that keeps the artifact id. The planned record gains the committed snapshot as its
+    output snapshot before it is registered. Whether an update is emitted follows the stored
+    record's effective publication, not the request: an artifact already published stays
+    published through the upsert. The event's time is taken inside the store write that
+    persists it, so it is later than any read of the job store that did not see it.
+    """
+    from open_climate_service.ingestions import services as ingestion_services
+    from open_climate_service.ingestions.processes import FULL_REWRITE_EVENT_ACTION, dataset_update_event
+    from open_climate_service.ingestions.schemas import ArtifactProvenance, ArtifactRecord, PublicationStatus
+
+    job = store_get_job(job_id)
+    if job is None or job.publication is None:
+        raise ValueError(f"openEO job '{job_id}' has no managed publication to complete")
+    publication = job.publication
+    if publication.state == "completed":
+        return job
+    planned = ArtifactRecord.model_validate(publication.record)
+    provenance = (planned.provenance or ArtifactProvenance(producer_job_id=job_id)).model_copy(
+        update={"output_snapshot_id": snapshot_id}
+    )
+    record = planned.model_copy(
+        update={"size_bytes": stored_bytes(Path(publication.store_path)), "provenance": provenance}
+    )
+    stored = ingestion_services.register_artifact_record(
+        record, publish=publication.publish_requested, replace_store=True
+    )
+    published = stored.publication.status == PublicationStatus.PUBLISHED
+    draft = (
+        dataset_update_event(
+            dataset_id=publication.dataset_id,
+            artifact_id=stored.artifact_id,
+            action=FULL_REWRITE_EVENT_ACTION,
+            # The store was replaced as a whole: nothing before current_end is known unchanged.
+            previous_end=None,
+            current_start=stored.coverage.temporal.start,
+            current_end=stored.coverage.temporal.end,
+            producer_type="openeo",
+            producer_job_id=job_id,
+            output_snapshot_id=snapshot_id,
+        )
+        if published
+        else None
+    )
+    event_id = publication_event_id(job_id, stored.artifact_id, snapshot_id) if draft is not None else None
+
+    def _complete(r: OpenEOJobRecord) -> OpenEOJobRecord:
+        current = r.publication
+        if current is None or current.state == "completed":
+            return r
+        now = utc_now()
+        events = list(r.events)
+        if draft is not None and event_id is not None and all(event.event_id != event_id for event in events):
+            events.append(JobEvent(event_id=event_id, time=now, **draft.model_dump()))
+        outcome = current.model_copy(
+            update={
+                "state": "completed",
+                "snapshot_id": snapshot_id,
+                "artifact_id": stored.artifact_id,
+                "published": published,
+                "event_id": event_id,
+                "completed_at": now,
+            }
+        )
+        return r.model_copy(update={"publication": outcome, "events": events, "updated": now})
+
+    return store_update_job(job_id, _complete)
+
+
+def _coverage_point(label: str | None) -> Any:
+    """A coverage boundary as a timestamp, or None when the label cannot be read as a date."""
+    import pandas as pd
+
+    if label is None:
+        return None
+    try:
+        return pd.Timestamp(label)
+    except (ValueError, TypeError):
+        return None
+
+
+def _refuse_coverage_shrink(record: Any) -> None:
+    """Refuse a full-store rewrite that would shorten a published managed dataset.
+
+    The writer replaces the whole store, so a job that computes only recent periods (a trigger
+    over ``[$event.previous_end, $event.current_end]``) would silently drop the history a
+    published dataset holds. Until derived datasets can be appended to, a rewrite must cover
+    at least the published coverage: it may start earlier and end later, never start later or
+    end earlier. The same rule a release sync follows. A boundary the published dataset has
+    but the result lacks (a result with no time axis, or with its temporal metadata lost)
+    cannot be shown not to shrink it, so it is refused too; a dataset published without that
+    boundary may still be rewritten. Raised as a ValueError, which is a permanent error while
+    saving: retrying the same graph would shrink it the same way.
+    """
+    from open_climate_service.ingestions import services as ingestion_services
+    from open_climate_service.ingestions.schemas import PublicationStatus
+
+    if record.path is None:
+        return
+    store_path = str(Path(record.path).resolve())
+    published = [
+        stored
+        for stored in ingestion_services._load_records()
+        if stored.dataset_id == record.dataset_id
+        and stored.format == record.format
+        and stored.path is not None
+        and str(Path(stored.path).resolve()) == store_path
+        and stored.publication.status == PublicationStatus.PUBLISHED
+    ]
+    if not published:
+        return
+    held = published[-1].coverage.temporal
+    new = record.coverage.temporal
+    pairs = (("starts", held.start, new.start, 1), ("ends", held.end, new.end, -1))
+    for side, held_label, new_label, direction in pairs:
+        if held_label is None:
+            continue  # nothing published at this boundary to protect
+        if new_label is None:
+            raise ValueError(
+                f"Refusing to rewrite published dataset '{record.dataset_id}': it holds {held.start} to "
+                f"{held.end}, but the result has no temporal coverage to compare (it {side} nowhere), and a "
+                "rewrite replaces the whole store. Publish a result over the full range, or to a new dataset_id"
+            )
+        held_at, new_at = _coverage_point(held_label), _coverage_point(new_label)
+        # Dates where both read as dates; otherwise periods compare lexically, as in sync.
+        later = (new_at > held_at) if held_at is not None and new_at is not None else (new_label > held_label)
+        earlier = (new_at < held_at) if held_at is not None and new_at is not None else (new_label < held_label)
+        if (direction == 1 and later) or (direction == -1 and earlier):
+            raise ValueError(
+                f"Refusing to rewrite published dataset '{record.dataset_id}': the result {side} at {new_label}, "
+                f"but the dataset holds {held.start} to {held.end}, and a rewrite replaces the whole store. "
+                "Compute the full range (not only the updated periods), or publish to a new dataset_id"
+            )
+
+
+def _plan_publication(job_id: str, publication: ManagedPublication) -> None:
+    """Persist a publication's intent, before anything reaches the store."""
+    store_update_job(job_id, lambda r: r.model_copy(update={"publication": publication, "updated": utc_now()}))
+
+
+def _write_managed_zarr(
+    ds: Any,
+    options: dict[str, Any],
+    *,
+    job_id: str | None = None,
+    provenance: dict[str, Any] | None = None,
+) -> None:
+    """Write a computed xr.Dataset to the managed Icechunk/Zarr store and register it.
+
+    With the ``job_id`` of a persisted job, that job owns the publication: its intent is
+    persisted before the store is written, it turns ``committing`` at the cancellation gate,
+    and it completes with its outcome and update event (`complete_managed_publication`).
+    Without a persisted owner there is nowhere durable to keep an event, so the dataset is
+    written and registered as before, with none.
+    """
     import uuid
     from datetime import UTC, datetime
 
@@ -1178,6 +1646,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
     from open_climate_service.ingestions import services as ingestion_services
     from open_climate_service.ingestions.schemas import (
         ArtifactFormat,
+        ArtifactProvenance,
         ArtifactPublication,
         ArtifactRecord,
         ArtifactRequestScope,
@@ -1284,6 +1753,9 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
         coverage=coverage,
         created_at=datetime.now(UTC),
         publication=ArtifactPublication(),
+        # The execution evidence as the graph produced it; the output snapshot is added once
+        # the commit has landed.
+        provenance=ArtifactProvenance(producer_job_id=job_id, execution=provenance) if job_id is not None else None,
     )
 
     # The same writer lock as ingestion and sync. Publishing into a store while one of those
@@ -1295,8 +1767,32 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             "run this job again once that finishes"
         )
     try:
+        # Refused before anything is planned or written: no commit, no event, the store unchanged.
+        _refuse_coverage_shrink(record)
+        commit_message = f"Published from openEO job: {dataset_id}"
+        # The producing job owns the publication only if it is persisted: its record is where
+        # the intent, the outcome and the event are kept durably.
+        owner = store_get_job(job_id) if job_id is not None else None
+        if owner is None:
+            job_id = None
+        else:
+            attempt = owner.attempt
+            # Names this job and attempt, so a restart can tell its commit from any other.
+            commit_message = f"Published from openEO job {owner.id} attempt {attempt}: {dataset_id}"
+            _plan_publication(
+                owner.id,
+                ManagedPublication(
+                    state="planned",
+                    dataset_id=dataset_id,
+                    store_path=str(store_path),
+                    commit_message=commit_message,
+                    base_snapshot_id=store_head(store_path),
+                    publish_requested=_publish_raw,
+                    record=record.model_dump(mode="json"),
+                ),
+            )
         try:
-            downloader.write_to_icechunk_store(
+            snapshot_id = downloader.write_to_icechunk_store(
                 _strip_non_serializable_attrs(ds),
                 store_path,
                 x_dim,
@@ -1304,7 +1800,7 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
                 t_dim,
                 crs=crs,
                 pyramid_method=downloader.resampling_method_from_template(template),
-                commit_message=f"Published from openEO job: {dataset_id}",
+                commit_message=commit_message,
                 # The point of no return: a cancelled job stops here, before the commit, so
                 # the store keeps its previous state and nothing is published.
                 before_commit=enter_publication,
@@ -1324,8 +1820,14 @@ def _write_managed_zarr(ds: Any, options: dict[str, Any]) -> None:
             {**template, "id": dataset_id, "variable": variable},
         )
 
-        record = record.model_copy(update={"size_bytes": stored_bytes(store_path)})
-        ingestion_services.register_artifact_record(record, publish=_publish_raw)
+        if job_id is not None:
+            complete_managed_publication(job_id, snapshot_id)
+        else:
+            update: dict[str, Any] = {"size_bytes": stored_bytes(store_path)}
+            if record.provenance is not None:
+                update["provenance"] = record.provenance.model_copy(update={"output_snapshot_id": snapshot_id})
+            record = record.model_copy(update=update)
+            ingestion_services.register_artifact_record(record, publish=_publish_raw)
     finally:
         store_lock.release()
 

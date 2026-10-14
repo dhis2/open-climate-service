@@ -37,8 +37,8 @@ The two halves of the term map directly onto the choices described in this docum
 
 **Analysis-ready** means a consumer can open the data and start computing without preprocessing:
 
-- Dimension names are normalised to `(time, x, y)` regardless of the source convention.
-- All datasets in an instance share a single coordinate reference system.
+- Dimensions are normalised regardless of the source convention: time is named `t`, and the spatial dimensions come last as `(y, x)`.
+- Every store records its coordinate reference system in GeoZarr metadata (see [CRS handling](#crs-handling)).
 - Units are standardised by the transform pipeline (e.g. Kelvin → Celsius).
 
 **Cloud-optimized** means the data can be accessed efficiently over HTTP without downloading the whole file. The Zarr and GeoZarr formats provide all the necessary properties — chunk-level access, HTTP-native serving, multiscale pyramids, and cloud compatibility.
@@ -53,7 +53,7 @@ Each managed dataset has exactly one store on disk, under `{data_dir}/rasters/{d
 
 Inside the store, the layout is either:
 
-- **Flat** — a single-resolution Zarr group with dimensions `(time, x, y)`
+- **Flat** — a single-resolution Zarr group
 - **Pyramid** — a multi-resolution Zarr group with levels `0/`, `1/`, `2/`, … where `0/` is full resolution
 
 The flat vs. pyramid decision is made at build time based on spatial size (see [Multiscale pyramids](#multiscale-pyramids) below).
@@ -62,27 +62,22 @@ The flat vs. pyramid decision is made at build time based on spatial size (see [
 
 ## Chunk sizing
 
-Chunks are sized to match expected access patterns. The goal is that reading one time step for the full spatial extent fits in one round-trip, and that full time series for a small area also fits in one round-trip.
+**Time:** a store written by an ingestion or sync holds one time step per chunk. Periods are fetched and appended one at a time, and nothing rechunks along time afterwards, so drawing one date on a map reads only that date's chunks, and a long time series for one place reads one chunk per step. A store published from an openEO job keeps the time chunks of the job's result, which can hold several steps each. The `t` coordinate array is chunked in blocks of up to 4096 values, so a client reads the whole axis in a few requests.
 
-Time chunk sizes are derived from the dataset's `extents.temporal.resolution` field, an ISO 8601 duration (e.g. `P1D`, `PT1H`, `P1M`). When present and valid, the duration is converted to approximate hours and mapped to a natural analysis window:
+**Space** depends on the layout:
 
-| Duration tier       | Approximate hours | Target window | Example                     |
-| ------------------- | ----------------- | ------------- | --------------------------- |
-| Sub-daily           | < 24 h            | ~1 week       | `PT1H` (hourly) → 168 steps |
-| Daily to sub-weekly | 24 h – 168 h      | ~1 month      | `P1D` (daily) → 30 steps    |
-| Weekly and coarser  | ≥ 168 h           | ~1 year       | `P1M` (monthly) → 12 steps  |
+| Layout  | Spatial chunk                                                                          | Example (from a real store)                  |
+| ------- | -------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Flat    | the chunks the data arrived in: the whole grid when the source is read in one piece    | 202 × 206 grid → chunk `(1, 202, 206)`       |
+| Pyramid | planned per level by topozarr for ~500 KB uncompressed, with chunks grouped into shards | 1550 × 1195 grid → chunk `(1, 388, 299)`     |
 
-This calculation is fully data-driven: any dataset — including custom or plugin datasets — only needs to declare `extents.temporal.resolution` and the correct chunk size is computed automatically. If the field is absent or not a valid ISO 8601 duration, a warning is logged and the time chunk falls back to the dataset's `period_type`.
-
-Spatial chunks are capped at 512 × 512 pixels — a pragmatic compromise between tile rendering (which benefits from smaller chunks) and analysis workloads (which benefit from larger ones). For small extents where the full spatial dimension is smaller than 512 pixels, the entire dimension fits in one chunk.
-
-Dimension names are normalised to `(time, x, y)` before writing, regardless of the source naming convention (`lat`/`lon`, `latitude`/`longitude`, etc.).
+Dimensions are normalised before writing, regardless of the source naming convention (`lat`/`lon`, `latitude`/`longitude`, `time`/`valid_time`, etc.): time is named `t`, and the spatial dimensions come last as `(y, x)`. Most rasters are `(t, y, x)`; some have extra dimensions in between, such as WorldPop's `(t, sex, age_group, y, x)`.
 
 ---
 
 ## Multiscale pyramids
 
-For large spatial extents, a flat zarr would require a map viewer to download the entire spatial extent at full resolution on every tile request. The platform builds a multiscale pyramid when the spatial dimensions exceed **2048 × 2048 pixels**.
+For large spatial extents, a flat zarr would require a map viewer to download the entire spatial extent at full resolution on every tile request. The platform builds a multiscale pyramid when the grid has more than **1024 × 1024 pixels** (`nx * ny > 1,048,576`). A pyramid adds about a third to the store's size.
 
 Pyramid levels are computed as:
 
@@ -90,9 +85,9 @@ Pyramid levels are computed as:
 levels = ceil(log2(max_dim / 512))   # clamped to [2, 8]
 ```
 
-Where 512 is the target tile size in pixels. Each level halves the resolution in both spatial dimensions using mean downsampling. Level `0/` is always the full resolution.
+Where 512 is the target tile size in pixels. Each level halves the resolution in both spatial dimensions. Level `0/` is always the full resolution. Levels are averaged by default. A dataset template can choose another method with `ingestion.resampling`: `max`, `min`, `sum` or `nearest`, or `mode` for categorical data such as land cover. `mode` levels are resampled from full resolution, not from the level above.
 
-Both flat and pyramid stores are written in **Zarr v3** format using regular chunks with zstd compression.
+Both flat and pyramid stores are written in **Zarr v3** format with zstd compression. Pyramid levels are also sharded.
 
 ---
 

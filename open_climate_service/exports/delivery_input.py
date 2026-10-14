@@ -85,8 +85,8 @@ def _verify(export_id: str, job_id: str) -> VerifiedExport:
             raise ValueError("Export renderer changed or is unversioned; create a new named export")
         if manifest.target is None:
             raise ValueError("Export was rendered without a delivery target; create a new bound export")
-        if target_binding(resolved.plugin.id, resolved.references) != manifest.target:
-            raise ValueError("DHIS2 target changed; create a new named export")
+        if target_binding(resolved.plugin, resolved.references) != manifest.target:
+            raise ValueError("Export target changed; create a new named export")
         graph_digest = manifest.provenance.get("process_sha256")
         if graph_digest is not None and json_digest(record.process) != graph_digest:
             raise ValueError("Source job process changed after rendering")

@@ -54,7 +54,7 @@ ingestion:
   params: {} # passed to the plugin
 ```
 
-`build_dataset_zarr` in `data_manager/downloader.py` builds a multiscale Zarr pyramid when the spatial dimensions exceed 2048×2048 pixels; otherwise it writes a flat chunked zarr with chunk sizes derived from the dataset's temporal resolution.
+`write_to_icechunk_store` in `data_manager/services/downloader.py` builds a multiscale Zarr pyramid when the grid has more than 1024×1024 pixels; otherwise it writes a flat store. Ingestion and sync write one time step per chunk; see `docs/zarr_and_geozarr.md`.
 
 ## Active design work
 

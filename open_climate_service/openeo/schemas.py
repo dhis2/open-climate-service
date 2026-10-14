@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from open_climate_service.jobs.models import JobEvent
 
 # ---------------------------------------------------------------------------
 # openEO capabilities
@@ -50,6 +52,34 @@ class OpenEOJobStatus(StrEnum):
     CANCELED = "canceled"
 
 
+ManagedPublicationState = Literal["planned", "committing", "completed"]
+
+
+class ManagedPublication(BaseModel):
+    """A managed-dataset publication owned by the openEO job that produces it.
+
+    ``planned`` is written before anything reaches the store, ``committing`` atomically with
+    the cancellation gate just before the Icechunk commit, and ``completed`` with the outcome
+    and its event once the commit landed and the artifact is registered. Recovery reads the
+    state to decide what an interrupted attempt left behind.
+    """
+
+    state: ManagedPublicationState
+    dataset_id: str
+    store_path: str
+    commit_message: str = Field(description="Names this job, so recovery can find its commit in the store history.")
+    base_snapshot_id: str | None = Field(
+        default=None, description="The store's head before this attempt wrote; None for a new store."
+    )
+    publish_requested: bool
+    record: dict[str, Any] = Field(description="The validated artifact record to register once committed.")
+    snapshot_id: str | None = None
+    artifact_id: str | None = None
+    published: bool | None = Field(default=None, description="The artifact's effective publication state.")
+    event_id: str | None = None
+    completed_at: datetime | None = None
+
+
 class OpenEOJobRecord(BaseModel):
     """Persisted openEO job record."""
 
@@ -91,6 +121,11 @@ class OpenEOJobRecord(BaseModel):
     # Set once the running attempt has passed its point of no return (a managed store commit):
     # from then on the job finishes rather than being cancelled half-published.
     publishing: bool = Field(default=False, exclude=True)
+    # The managed dataset this job publishes through save_result, from intent to outcome.
+    publication: ManagedPublication | None = Field(default=None, exclude=True)
+    # Durable domain events this job produced (a `dataset.updated` for a published managed
+    # dataset), written in the same store mutation as the outcome they describe.
+    events: list[JobEvent] = Field(default_factory=list, exclude=True)
 
 
 class OpenEOJobCreate(BaseModel):

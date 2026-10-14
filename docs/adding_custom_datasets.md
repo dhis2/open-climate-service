@@ -97,6 +97,12 @@ plugin import surface), alongside `BaseDatasetPlugin`.
   `time`/`valid_time` → `t`), clips to `bbox` (reprojecting the bbox from `bbox_crs` — WGS84
   by default — onto the source CRS, so a projected/UTM grid clips correctly), drops a
   singleton `band`, masks the nodata sentinel, and stamps the period onto the time axis.
+- **`bbox_slice(obj, bbox, *, x_dim, y_dim)`** — slices by coordinate value covering every cell the
+  bbox touches, for a plugin that selects from a remote store itself rather than reading it
+  whole: `ds.sel(bbox_slice(ds, bbox, x_dim="longitude", y_dim="latitude"))`. A plain
+  `slice(xmin, xmax)` selects on cell centres and drops the cells straddling each edge.
+  `cell_pad(coord)` returns the half cell it pads by, derived from the grid, for a selection
+  `bbox_slice` cannot express (such as one split at the 0/360 degree seam).
 - **`daily_period_ids(start, end)`** — enumerate the inclusive ISO day strings for a daily
   `periods()` implementation; apply your own availability clamp around it (accepts ISO
   strings or `date` objects, returns `[]` when `start > end`).
@@ -312,6 +318,8 @@ Most datasets are historical, and the default (`past`) suits them. Two other sha
 | `past` (default) | All historical                                                | Required                         |
 | `future`         | All ahead of now — a forecast                                 | **Optional**, meaning "from now" |
 | `spanning`       | Cross now — WorldPop Global2 (2015–2030), climate projections | Required                         |
+
+A climatology (`period_type: climatology`) is the exception to all three: its periods are day-of-year or month ordinals, and its reference period comes from the template (for example `period: [1991, 2020]` in the ingestion params). Leave `start` and `end` out and the whole reference period is ingested; the data source page shows no date fields for one.
 
 `spanning` requires a start _on purpose_. Defaulting it to "now" would ingest only the projected years and silently drop every historical one, which is usually the half you actually want. What declaring it does buy you: the ingest form prefills the end from the dataset's declared `extents.temporal.end`, so selecting WorldPop offers the full range through 2030 instead of truncating at today.
 

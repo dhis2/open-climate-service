@@ -17,6 +17,10 @@ from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEven
 logger = logging.getLogger(__name__)
 
 INGEST_EVENT_ACTION = "ingest"
+FULL_REWRITE_EVENT_ACTION = "full_rewrite"
+"""`action` of an update that replaced the whole stored dataset, such as an openEO publication.
+
+Paired with ``previous_end=None``: every period up to ``current_end`` may have changed."""
 """`action` of the update event an ingestion emits; syncs report their planner action instead."""
 
 _UPDATE_MARKER = "dataset_update_planned"
@@ -36,25 +40,36 @@ def dataset_update_event(
     previous_end: str | None,
     current_start: str | None,
     current_end: str | None,
+    producer_type: str | None = None,
+    producer_job_id: str | None = None,
+    output_snapshot_id: str | None = None,
 ) -> JobEventDraft:
     """Describe one change to a managed dataset for workflow automation.
 
     `previous_end` is the coverage end before the change; None means every period up to
     `current_end` is new or rewritten. `current_start` and `current_end` describe the
-    coverage after it.
+    coverage after it. `action` says how the store changed, not who changed it.
+
+    The producer fields are optional and only present when given, so an ingestion's or a
+    sync's event keeps its shape: `producer_type` (for example ``openeo``), the producing
+    job's id, and the Icechunk snapshot the change committed.
     """
-    return JobEventDraft(
-        type=DATASET_UPDATED_EVENT_TYPE,
-        source=f"/datasets/{dataset_id}",
-        data={
-            "dataset_id": dataset_id,
-            "artifact_id": artifact_id,
-            "action": action,
-            "previous_end": previous_end,
-            "current_start": current_start,
-            "current_end": current_end,
-        },
-    )
+    data: dict[str, Any] = {
+        "dataset_id": dataset_id,
+        "artifact_id": artifact_id,
+        "action": action,
+        "previous_end": previous_end,
+        "current_start": current_start,
+        "current_end": current_end,
+    }
+    for key, value in (
+        ("producer_type", producer_type),
+        ("producer_job_id", producer_job_id),
+        ("output_snapshot_id", output_snapshot_id),
+    ):
+        if value is not None:
+            data[key] = value
+    return JobEventDraft(type=DATASET_UPDATED_EVENT_TYPE, source=f"/datasets/{dataset_id}", data=data)
 
 
 def ingest_dataset(

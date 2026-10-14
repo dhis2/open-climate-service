@@ -1,0 +1,59 @@
+{
+  "id": "aggregate_by_features",
+  "summary": "Aggregate a GeoZarr dataset within each feature of a feature collection",
+  "description": "Destination-neutral zonal aggregation. Loads a published GeoZarr dataset over a time range and aggregates its variable within each GeoJSON feature, area-weighted, using the chosen method. The result is a vector cube with one value per feature and time step, at the dataset's native temporal resolution.\n\nThe workflow saves nothing itself: the caller decides where the result goes. A pipeline saves it through its destination's export plugin; a process graph can pass it to `save_result` in any tabular format. `aggregate_to_dhis2_json` and `aggregate_to_chap_csv` are the same computation with a fixed output format.\n\nUsage:\n\n{\n  \"agg\": {\n    \"process_id\": \"aggregate_by_features\",\n    \"arguments\": {\n      \"dataset_id\": \"era5land_precipitation_monthly\",\n      \"temporal_extent\": [\"2025-01-01\", \"2025-12-31\"],\n      \"geometries\": { \"type\": \"FeatureCollection\", \"features\": [ ... ] },\n      \"method\": \"mean\"\n    }\n  },\n  \"save\": {\n    \"process_id\": \"save_result\",\n    \"arguments\": { \"data\": { \"from_node\": \"agg\" }, \"format\": \"CSV\" },\n    \"result\": true\n  }\n}",
+  "parameters": [
+    {
+      "name": "dataset_id",
+      "description": "ID of the published GeoZarr collection to aggregate (as listed under /datasets).",
+      "schema": {
+        "type": "string",
+        "subtype": "collection-id"
+      }
+    },
+    {
+      "name": "temporal_extent",
+      "description": "Time range to load as [start, end] ISO-8601 date strings.",
+      "schema": {
+        "type": "array",
+        "subtype": "temporal-interval"
+      }
+    },
+    {
+      "name": "geometries",
+      "description": "GeoJSON FeatureCollection to aggregate within. Each feature's `id` identifies its row in the result.",
+      "schema": {
+        "type": "object",
+        "subtype": "geojson"
+      }
+    },
+    {
+      "name": "method",
+      "description": "Spatial aggregation method applied to the pixels within each feature: mean (default), min, max, sum, or median.",
+      "schema": {
+        "type": "string",
+        "enum": ["mean", "min", "max", "sum", "median"]
+      },
+      "default": "mean",
+      "optional": true
+    }
+  ],
+  "process_graph": {
+    "load": {
+      "process_id": "load_collection",
+      "arguments": {
+        "id": { "from_parameter": "dataset_id" },
+        "temporal_extent": { "from_parameter": "temporal_extent" }
+      }
+    },
+    "zonal": {
+      "process_id": "aggregate_spatial_weighted",
+      "arguments": {
+        "data": { "from_node": "load" },
+        "geometries": { "from_parameter": "geometries" },
+        "reducer": { "from_parameter": "method" }
+      },
+      "result": true
+    }
+  }
+}

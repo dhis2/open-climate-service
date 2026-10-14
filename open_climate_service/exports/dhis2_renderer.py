@@ -9,7 +9,13 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from open_climate_service.exports.base import BaseExportPlugin, DeliveryContext, RenderedExport
+from open_climate_service.exports.base import (
+    BaseExportPlugin,
+    DeliveryContext,
+    DestinationCheck,
+    DestinationContext,
+    RenderedExport,
+)
 from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
 from open_climate_service.exports.tabular import (
     _is_nullish,
@@ -46,12 +52,37 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     media_type = "application/json"
     version = "1"
     supports_delivery = True
+    supports_dry_run = True
+    # CREATE_AND_UPDATE imports overwrite the same data values; a repeat does not add any.
+    redelivery_safe = True
     # Upper bound for one dataValueSets POST; larger payloads are split into
     # deterministic chunks. Tune against the supported DHIS2 versions.
     max_chunk_size: int = 1000
     # Bounded backoff for reconciling an async import task after submission.
     max_poll_attempts: int = 10
     poll_backoff_base: float = 1.0
+
+    # Pipeline destination hooks; the DHIS2 specifics live in `dhis2_destination`.
+
+    def destination_settings_schema(self) -> dict[str, Any] | None:
+        from open_climate_service.exports import dhis2_destination
+
+        return dhis2_destination.settings_schema()
+
+    def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
+        from open_climate_service.exports import dhis2_destination
+
+        return dhis2_destination.export_definition(settings, context)
+
+    def check_destination(self, settings: dict[str, Any], context: DestinationContext) -> list[DestinationCheck]:
+        from open_climate_service.exports import dhis2_destination
+
+        return dhis2_destination.check_destination(settings, context)
+
+    def preview(self, content: bytes, limit: int = 5) -> list[dict[str, Any]]:
+        from open_climate_service.exports import dhis2_destination
+
+        return dhis2_destination.preview(content, limit)
 
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
         allowed = {

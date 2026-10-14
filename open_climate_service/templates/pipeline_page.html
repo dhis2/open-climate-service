@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ title }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <p class="breadcrumb"><a href="{{ mount }}/pipelines">Pipelines</a> / {{ spec.id }}</p>
+        <div class="page-title">
+          <h2 tabindex="-1">{{ title }}</h2>
+          <span class="chip">{{ spec.delivery.mode | replace('_', ' ') }}</span>
+          {% if validation %}<span class="chip {{ 'chip-published' if validation.valid else 'chip-unpublished' }}">{{ 'valid' if validation.valid else 'invalid' }}</span>{% endif %}
+          {% if dry_run %}<span class="chip {{ 'chip-published' if dry_run_passed else 'chip-unpublished' }}">dry run {{ 'passed' if dry_run_passed else 'failed' }}</span>{% endif %}
+          {% if not read_only %}<a class="button-link" href="{{ mount }}/pipelines/{{ spec.id }}/edit">Edit</a>{% endif %}
+        </div>
+
+        <ol class="pipeline-flow" aria-label="Pipeline flow">
+          <li><span class="flow-label">Workflow</span><strong>{{ spec.workflow.id }}</strong></li>
+          <li><span class="flow-label">Runs</span><strong>{{ 'after each update' if spec.delivery.policy == 'on_update' else 'by hand' }}</strong></li>
+          <li><span class="flow-label">Destination</span><strong>{{ spec.destination.plugin }}</strong></li>
+          <li><span class="flow-label">Delivery</span><strong>{{ spec.delivery.mode | replace('_', ' ') }}</strong></li>
+        </ol>
+
+        <div class="stack pipeline-detail">
+          <section class="panel" aria-labelledby="about-title">
+            <h3 id="about-title">Pipeline</h3>
+            <dl class="facts">
+              <dt>Workflow</dt><dd><a href="{{ mount }}/workflows/{{ spec.workflow.id }}">{{ spec.workflow.id }}</a></dd>
+              {% for a in arguments %}
+              <dt>{{ a.name }}</dt><dd class="mono">{{ a.value }}</dd>
+              {% endfor %}
+              <dt>Source kept current</dt><dd>{{ source_schedule }}</dd>
+              <dt>Runs</dt><dd>{{ 'after each update of a source dataset, over the updated interval' if spec.delivery.policy == 'on_update' else 'only when run by hand' }}{% if automation_since %}; updates since {{ automation_since }}{% endif %}</dd>
+              <dt>Destination</dt><dd class="mono">{{ spec.destination.plugin }}</dd>
+              <dt>Revision</dt><dd>{{ revision }}</dd>
+              <dt>Created</dt><dd>{{ created_at }}</dd>
+            </dl>
+            <h4>Destination settings</h4>
+            <pre class="config-code"><code>{{ settings }}</code></pre>
+            {% if export %}
+            <h4>Export definition</h4>
+            <p class="note">Compiled by the destination plugin at the last validation. Runs save, and deliveries send, through this export, named after the pipeline.</p>
+            <pre class="config-code"><code>{{ export }}</code></pre>
+            {% endif %}
+          </section>
+
+          <section class="panel" id="validation" aria-labelledby="validation-title">
+            <h3 id="validation-title">Validation</h3>
+            <p class="note">Checked when the pipeline was saved. The workflow, its inputs and the destination can all change afterwards, so re-check before relying on an old result. Going live always re-checks.</p>
+            {% if validation %}
+            <ul class="plain-list validation-list">
+              {% for c in validation.checks %}
+              <li class="validation-check validation-{{ c.status }}"><span class="chip {{ 'chip-published' if c.status == 'pass' else ('chip-unpublished' if c.status == 'fail' else '') }}">{{ c.status }}</span><span><strong class="mono">{{ c.id }}</strong><small>{{ c.message }}</small></span></li>
+              {% endfor %}
+            </ul>
+            <p class="note">Checked {{ validation.checked_at }}.</p>
+            {% endif %}
+            {% if not read_only %}
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/validate" class="form-actions">
+              <button type="submit">Re-check</button>
+            </form>
+            {% endif %}
+          </section>
+
+          <section class="panel" id="dry-run" aria-labelledby="dry-run-title">
+            <h3 id="dry-run-title">Dry run</h3>
+            <p class="note">Runs the workflow over the range below, renders the result through the destination and, where the destination supports it, submits it as a dry run: validated there, stored nowhere. A passed dry run approves these exact bindings for live delivery; changing the workflow, its arguments or the destination needs a new one.</p>
+            {% if dry_run %}
+            {% if dry_run.error %}
+            <div class="notice error" role="alert">{{ dry_run.error }}</div>
+            {% else %}
+            <div class="result-stats">
+              <div><strong>{{ dry_run.values }}</strong><span>values</span></div>
+              <div><strong>{{ dry_run.periods | length }}</strong><span>periods</span></div>
+              {% if dry_run.report %}<div><strong>{{ dry_run.report.conflicts | length }}</strong><span>conflicts</span></div>{% endif %}
+            </div>
+            <dl class="facts dry-run-facts">
+              <dt>Range</dt><dd>{{ dry_run.start }} to {{ dry_run.end }}</dd>
+              {% if dry_run.report %}
+              <dt>Destination outcome</dt><dd>{{ dry_run.report.outcome }}{% if dry_run.report.message %}: {{ dry_run.report.message }}{% endif %}</dd>
+              <dt>Counts</dt><dd>submitted {{ dry_run.report.submitted }}, would import {{ dry_run.report.imported }}, would update {{ dry_run.report.updated }}, ignored {{ dry_run.report.ignored }}</dd>
+              {% elif dry_run.rendered_only %}
+              <dt>Destination outcome</dt><dd>rendered only; this destination cannot validate a dry run</dd>
+              {% endif %}
+              <dt>Approval</dt><dd>{% if approved %}approves the current bindings{% elif dry_run_passed %}passed for earlier bindings; dry-run again{% else %}not passed{% endif %}</dd>
+            </dl>
+            {% if dry_run.report and dry_run.report.conflicts %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Object</th><th>Value</th></tr></thead>
+                <tbody>{% for c in dry_run.report.conflicts %}<tr><td class="mono">{{ c.object }}</td><td>{{ c.value }}</td></tr>{% endfor %}</tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% if dry_run.sample %}
+            {% set columns = dry_run.sample[0].keys() | list %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr>{% for k in columns %}<th>{{ k }}</th>{% endfor %}</tr></thead>
+                <tbody>{% for v in dry_run.sample %}<tr>{% for k in columns %}<td class="mono">{{ v[k] }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% endif %}
+            <p class="note">Ran {{ dry_run.ran_at }}.</p>
+            {% endif %}
+            {% if not read_only %}
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/dry-run" class="form-grid">
+              <div class="field">
+                <label for="dr-start">Start</label>
+                <input type="text" id="dr-start" name="start" required value="{{ range_start }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="field">
+                <label for="dr-end">End</label>
+                <input type="text" id="dr-end" name="end" required value="{{ range_end }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="primary">Run dry run</button>
+                <span class="note">Runs synchronously; a long range takes a while.</span>
+              </div>
+            </form>
+            {% endif %}
+          </section>
+
+          <section class="panel" id="delivery" aria-labelledby="delivery-title">
+            <h3 id="delivery-title">Delivery</h3>
+            <p class="note">
+              {% if spec.delivery.mode == 'live' %}Live: runs deliver to the destination and are stored there.
+              {% elif spec.delivery.mode == 'dry_run' %}Dry run: runs deliver as dry runs; the destination validates and stores nothing.
+              {% else %}Paused: no run starts by itself and no result is sent by itself. Running jobs finish and keep their results; their deliveries are held until delivered by hand.{% endif %}
+            </p>
+            {% if not read_only %}
+            <div class="form-actions">
+              {% if spec.delivery.mode == 'dry_run' %}
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/live"><button type="submit" {% if not approved %}disabled title="Needs a passed dry run of the current bindings"{% endif %}>Go live</button></form>
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/paused"><button type="submit">Pause</button></form>
+              {% elif spec.delivery.mode == 'live' %}
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/dry_run"><button type="submit">Back to dry run</button></form>
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/paused"><button type="submit">Pause</button></form>
+              {% else %}
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/dry_run"><button type="submit">Resume as dry run</button></form>
+              <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/mode/live"><button type="submit" {% if not approved %}disabled title="Needs a passed dry run of the current bindings"{% endif %}>Resume live</button></form>
+              {% endif %}
+              <span class="note">Each switch re-runs every check, the destination's included. Resuming does not replay updates that arrived while paused; run their interval by hand.</span>
+            </div>
+            {% endif %}
+          </section>
+
+          <section class="panel" id="runs" aria-labelledby="runs-title">
+            <h3 id="runs-title">Runs</h3>
+            <p class="note">Every run, by hand or after an update, invokes the workflow over an explicit interval as a batch job, saves through the pipeline's export, and delivers when the job finishes. A live run needs the pipeline to be live.</p>
+            {% if runs %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Submitted</th><th>Trigger</th><th>Interval</th><th>Mode</th><th>Job</th><th>Delivery</th></tr></thead>
+                <tbody>
+                  {% for r in runs %}
+                  <tr>
+                    <td>{{ r.submitted_at }}</td>
+                    <td>{{ r.trigger | replace('_', ' ') }}{% if r.source.dataset_id %} <span class="note">{{ r.source.dataset_id }}</span>{% endif %}</td>
+                    <td>{{ r.start }} to {{ r.end }}</td>
+                    <td><span class="chip">{{ r.mode | replace('_', ' ') }}</span></td>
+                    {% set stopped = r.submission == 'failed' or r.job_outcome or r.job_status in ['error', 'canceled'] %}
+                    <td>{% if r.submission == 'submitted' %}<a href="{{ mount }}/jobs/{{ r.job_id }}">{{ r.job_id[:8] }}</a> {% endif %}<span class="chip {{ 'chip-unpublished' if stopped else '' }}">{% if r.submission == 'failed' %}submission failed{% elif r.submission == 'pending' %}submitting{% if r.submission_attempts %}, attempt {{ r.submission_attempts + 1 }}{% endif %}{% elif r.job_outcome == 'missing' %}job deleted{% else %}{{ r.job_status }}{% endif %}</span>
+                      {% if r.submission != 'submitted' and r.error %}<small>{{ r.error }}</small>{% endif %}
+                      {% if stopped and not read_only %}<form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs/{{ r.run_id }}/retry" class="form-actions"><button type="submit">Run again</button></form>{% endif %}
+                    </td>
+                    <td>
+                      {% if r.delivery_job_id %}<a href="{{ mount }}{{ r.delivery_status_url }}">{{ r.delivery_status }}</a>{% if r.delivery_outcome %} <span class="chip {{ 'chip-published' if r.delivery_outcome in ['success', 'dry_run'] else 'chip-unpublished' }}">{{ r.delivery_outcome }}</span>{% if r.delivery_submitted is not none %} {{ r.delivery_submitted }} values, {{ r.delivery_conflicts }} conflicts{% endif %}{% endif %}
+                      {% if r.delivery_result %}<span class="chip {{ 'chip-published' if r.delivery_result in ['delivered', 'validated', 'acknowledged'] else 'chip-unpublished' }}">{{ r.delivery_result }}</span>{% endif %}
+                      {% if r.delivery_result in ['partial', 'rejected', 'unknown', 'failed', 'cancelled'] and not read_only %}
+                      {% if r.error %}<small>{{ r.error }}</small>{% endif %}
+                      <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs/{{ r.run_id }}/redeliver" class="form-actions"><button type="submit">Send again</button></form>
+                      <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs/{{ r.run_id }}/acknowledge" class="form-actions"><button type="submit">Checked at the destination</button></form>
+                      {% endif %}
+                      {% elif r.submission == 'submitted' and not r.job_outcome %}
+                      {% if r.delivery == 'held' %}<span class="chip">held</span> <span class="note">until the pipeline is resumed{% if r.mode == 'live' %} and live{% endif %}</span>
+                      {% elif r.delivery == 'failed' %}<span class="chip chip-unpublished">hand-off failed</span>
+                      {% elif r.error %}<span class="note">retrying (attempt {{ r.delivery_attempts }}): {{ r.error }}</span>{% endif %}
+                      {% if r.delivery == 'failed' and r.error %}<span class="notice error">{{ r.error }}</span>{% endif %}
+                      {% if r.job_status == 'finished' and not read_only %}<form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs/{{ r.run_id }}/deliver" class="form-actions"><button type="submit">Deliver</button></form>
+                      {% elif r.job_status != 'finished' %}<span class="note">after the job finishes</span>{% endif %}
+                      {% else %}<span class="note">nothing to deliver</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% if skipped %}
+            <h4>Updates not run</h4>
+            <p class="note">Dataset updates this pipeline did not run, and why. None is run later by itself; to cover one, run its interval once. This is a bounded list of the most recent {{ skipped_kept }}, not an audit trail.</p>
+            {% if skipped_discarded %}<div class="notice" role="status">{{ skipped_discarded }} older entr{{ 'y was' if skipped_discarded == 1 else 'ies were' }} discarded from this list, the newest for an update at {{ skipped_discarded_through }}. The updates themselves remain in the job history.</div>{% endif %}
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Update</th><th>Dataset</th><th>Interval</th><th>Reason</th></tr></thead>
+                <tbody>{% for u in skipped %}<tr><td>{{ u.time }}</td><td>{{ u.dataset_id or '' }}</td><td>{% if u.start %}{{ u.start }} to {{ u.end }}{% endif %}</td><td>{{ u.reason }}</td></tr>{% endfor %}</tbody>
+              </table>
+            </div>
+            {% endif %}
+            {% if not read_only %}
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs" class="form-grid">
+              <div class="field">
+                <label for="run-start">Start</label>
+                <input type="text" id="run-start" name="start" required value="{{ range_start }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="field">
+                <label for="run-end">End</label>
+                <input type="text" id="run-end" name="end" required value="{{ range_end }}" placeholder="YYYY-MM-DD" />
+              </div>
+              <div class="field">
+                <label for="run-mode">Delivery</label>
+                <select id="run-mode" name="mode">
+                  <option value="dry_run">Dry run</option>
+                  <option value="live" {% if spec.delivery.mode != 'live' or not approved %}disabled{% endif %}>Live{% if spec.delivery.mode != 'live' %} (pipeline is not live){% endif %}</option>
+                </select>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="primary">Run once</button>
+                <span class="note">For a catch-up or a backfill, choose the interval. Runs in the background; this page shows the job and its delivery.</span>
+              </div>
+            </form>
+            {% endif %}
+          </section>
+
+          {% if not read_only %}
+          <section class="panel" id="delete" aria-labelledby="delete-title">
+            <h3 id="delete-title">Delete</h3>
+            <p class="note">Removes this pipeline and its run history from OCS. Jobs, results and deliveries already made are kept.</p>
+            <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/delete" class="form-actions">
+              <label><input type="checkbox" name="confirm" value="yes" required /> I understand</label>
+              <button type="submit">Delete pipeline</button>
+            </form>
+          </section>
+          {% endif %}
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

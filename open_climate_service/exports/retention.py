@@ -8,6 +8,13 @@ import portalocker
 from fastapi import HTTPException
 
 
+class ResourceBusy(HTTPException):
+    """A 409 that only says something is in use right now: the same request may succeed later."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=409, detail=detail)
+
+
 @contextmanager
 def result_lease(job_id: str) -> Generator[None]:
     """Exclude deletion, updates, reruns, and other consumers until release.
@@ -25,7 +32,7 @@ def result_lease(job_id: str) -> Generator[None]:
     try:
         lock.acquire()
     except portalocker.exceptions.LockException:
-        raise HTTPException(status_code=409, detail="Source job results are currently in use") from None
+        raise ResourceBusy("Source job results are currently in use") from None
     try:
         yield
     finally:

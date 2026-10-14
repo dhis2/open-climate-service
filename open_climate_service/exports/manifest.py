@@ -31,13 +31,6 @@ class PluginIdentity(_Model):
     extension: str
 
 
-class TargetBinding(_Model):
-    """Target identity without its URL, token, or environment-variable value."""
-
-    connection_id: str
-    url_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
 class ExportManifest(_Model):
     """A saved payload bound to its source job, mapping, and optional target."""
 
@@ -55,7 +48,8 @@ class ExportManifest(_Model):
     mapping: dict[str, Any]
     mapping_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     references: dict[str, str]
-    target: TargetBinding | None
+    # The plugin's credential-free target identity (`BaseExportPlugin.target_binding`).
+    target: dict[str, str] | None
     provenance: dict[str, Any]
 
 
@@ -101,8 +95,12 @@ def plugin_identity(plugin: BaseExportPlugin) -> PluginIdentity:
     )
 
 
-def target_binding(plugin_id: str, references: dict[str, str]) -> TargetBinding | None:
-    """Bind a named DHIS2 target for built-in or installed export implementations."""
+def named_connection_binding(references: dict[str, str]) -> dict[str, str] | None:
+    """Bind a ``connection`` reference to a named instance connection: its id and a URL digest.
+
+    The default target of `BaseExportPlugin.target_binding`. Named connections are configured
+    under ``dhis2_connections``, the only kind of named connection the instance declares.
+    """
     connection_id = references.get("connection")
     if connection_id is None:
         return None
@@ -116,7 +114,25 @@ def target_binding(plugin_id: str, references: dict[str, str]) -> TargetBinding 
     if port is not None and (parts.scheme, port) not in {("https", 443), ("http", 80)}:
         hostname += f":{port}"
     canonical = urlunsplit((parts.scheme, hostname, parts.path.rstrip("/"), "", ""))
-    return TargetBinding(connection_id=connection_id, url_sha256=hashlib.sha256(canonical.encode()).hexdigest())
+    return {"connection_id": connection_id, "url_sha256": hashlib.sha256(canonical.encode()).hexdigest()}
+
+
+def target_binding(plugin: BaseExportPlugin, references: dict[str, str]) -> dict[str, str] | None:
+    """The plugin's credential-free identity of the target an export's references name, or None.
+
+    Stored in the manifest and compared again before delivery, so a target that moved is
+    refused. What a target is belongs to the plugin; the framework only stores and compares it.
+    """
+    binding = plugin.target_binding(references)
+    # External Python plugins are not necessarily type-checked.
+    if binding is not None and (
+        not isinstance(binding, dict)  # pyright: ignore[reportUnnecessaryIsInstance]
+        or not all(isinstance(k, str) and isinstance(v, str) for k, v in binding.items())  # pyright: ignore[reportUnnecessaryIsInstance]
+    ):
+        raise TypeError("Export plugin target_binding() must return a mapping of strings or None")
+    if binding is not None:
+        validate_public_mapping(binding)
+    return binding
 
 
 def atomic_write(path: Path, content: bytes) -> None:
