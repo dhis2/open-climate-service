@@ -171,10 +171,10 @@ to maintain data served by a structurally read-only public instance.
 
 Scheduled sync supports previously ingested historical or otherwise append/rematerialize
 datasets, and forecasts stored one run per issue time (such as GEFS), where each new run is an
-append. A static entry, or a forecast stored by the date it predicts, is refused when it is saved,
-and one already stored is skipped and remains visible in `GET /schedules` with an error, without
-preventing unrelated API routes from starting. A sync of a forecast stored by date keeps the
-values already stored for those dates, so it is refreshed by ingesting again with overwrite.
+append. A static entry, or a forecast stored by the date it predicts, is skipped and remains
+visible in `GET /schedules` with an error, without preventing unrelated API routes from starting.
+Refreshing a forecast stored by date requires replacing an overlapping forward window, not merely
+appending periods after the latest stored timestamp.
 
 Successful update events can drive openEO workflows through instance-owned bindings; see
 [Dataset-update workflow automation](workflow_automation.md). Cross-service orchestration,
