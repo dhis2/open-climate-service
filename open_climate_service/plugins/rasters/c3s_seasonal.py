@@ -171,24 +171,8 @@ class C3SSeasonalAnomalyPlugin(BaseDatasetPlugin):
         renamed = renamed.drop_vars(["time", "surface", "step", "valid_time", "number"], errors="ignore")
 
         leads = forecast.lead_values(renamed) - _UPSTREAM_FIRST_LEAD
-        renamed = renamed.assign_coords({forecast.LEAD_DIM: leads.astype("int32")})
-        renamed[forecast.LEAD_DIM].attrs["units"] = "months"
-        reference = np.asarray([issued], dtype="datetime64[ns]")
-        renamed = renamed.expand_dims({forecast.REFERENCE_DIM: reference})
-        renamed = renamed.assign_coords(
-            {
-                forecast.VALID_COORD: (
-                    (forecast.REFERENCE_DIM, forecast.LEAD_DIM),
-                    forecast.valid_times_for(reference, leads, "month"),
-                )
-            }
-        )
-        for name, standard in forecast.CF_STANDARD_NAMES.items():
-            if name in renamed.coords:
-                renamed[name].attrs["standard_name"] = standard
-        renamed = self._apply_unit_transform(renamed)
-        ordered = renamed.transpose(forecast.REFERENCE_DIM, forecast.LEAD_DIM, ..., "y", "x", missing_dims="ignore")
-        return self._store_ready(ordered)
+        renamed = renamed.assign_coords({forecast.LEAD_DIM: leads})
+        return self._store_ready(self._apply_unit_transform(forecast.as_run(renamed, issued, "month")))
 
     def _apply_unit_transform(self, ds: xr.Dataset) -> xr.Dataset:
         """Convert the stored values to the template's units, as the ERA5-Land plugins do.

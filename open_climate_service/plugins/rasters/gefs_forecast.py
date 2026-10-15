@@ -264,23 +264,7 @@ class GefsForecastPlugin(BaseDatasetPlugin):
         """Rename to the published axes and add the issue time and valid-time coordinate."""
         renamed = daily.rename({"latitude": "y", "longitude": "x"})
         renamed = renamed.drop_vars(["valid_day", "valid_time"], errors="ignore")
-        renamed = renamed.expand_dims({forecast.REFERENCE_DIM: [init]})
-        leads = np.asarray(renamed[forecast.LEAD_DIM].values, dtype="int32")
-        offsets = leads.astype("timedelta64[D]").astype("timedelta64[ns]")
-        renamed = renamed.assign_coords(
-            {
-                forecast.VALID_COORD: (
-                    (forecast.REFERENCE_DIM, forecast.LEAD_DIM),
-                    (init + offsets)[None, :],
-                )
-            }
-        )
-        for name, standard in forecast.CF_STANDARD_NAMES.items():
-            if name in renamed.coords:
-                renamed[name].attrs["standard_name"] = standard
-        renamed[forecast.LEAD_DIM].attrs["units"] = "days"
-        ordered = renamed.transpose(forecast.REFERENCE_DIM, forecast.LEAD_DIM, ..., "y", "x", missing_dims="ignore")
-        return self._store_ready_chunks(ordered)
+        return self._store_ready_chunks(forecast.as_run(renamed, init, "day"))
 
     @staticmethod
     def _store_ready_chunks(ds: xr.Dataset) -> xr.Dataset:

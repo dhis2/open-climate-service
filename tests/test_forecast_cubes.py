@@ -313,3 +313,19 @@ def test_stac_declares_the_lead_unit_it_finds() -> None:
     assert seasonal["unit"] == "month"
     assert seasonal["values"] == [0, 1, 2, 3, 4, 5]
     assert "Months ahead" in seasonal["description"]
+
+
+def test_as_run_turns_lead_days_into_one_run_with_its_valid_dates() -> None:
+    leads = xr.Dataset(
+        {"tmax": (("lead_time", "y", "x"), np.ones((3, 2, 2), dtype="float32"))},
+        coords={"lead_time": [1, 2, 3], "y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+
+    run = forecast.as_run(leads, np.datetime64("2026-10-15"))
+
+    assert run["tmax"].dims == ("reference_time", "lead_time", "y", "x")
+    assert forecast.is_forecast_cube(run)
+    assert run["lead_time"].attrs["units"] == "days"
+    assert run["reference_time"].attrs["standard_name"] == "forecast_reference_time"
+    valid = run[forecast.VALID_COORD].values[0].astype("datetime64[D]").astype(str).tolist()
+    assert valid == ["2026-10-16", "2026-10-17", "2026-10-18"]

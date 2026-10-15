@@ -154,6 +154,27 @@ def valid_times_for(reference: np.ndarray, leads: np.ndarray, unit: str) -> np.n
     return stamps
 
 
+def as_run(ds: xr.Dataset, issued: Any, unit: str = DEFAULT_LEAD_UNIT) -> xr.Dataset:
+    """One forecast run as a cube: *ds* with a ``lead_time`` axis of whole *unit* steps, issued at *issued*.
+
+    Adds the ``reference_time`` axis (length 1), the ``forecast_valid_time`` coordinate, the CF
+    standard names and the lead unit, and orders the axes ``(reference_time, lead_time, ..., y, x)``.
+    What a plugin appends per period, so every forecast source publishes the same shape.
+    """
+    if unit not in LEAD_UNITS:
+        raise ValueError(f"Unsupported {LEAD_DIM} unit {unit!r}; expected one of {sorted(LEAD_UNITS)}")
+    leads = np.asarray(ds[LEAD_DIM].values, dtype="int64")
+    reference = np.asarray([issued], dtype="datetime64[ns]")
+    run = ds.assign_coords({LEAD_DIM: leads.astype("int32")})
+    run = run.expand_dims({REFERENCE_DIM: reference})
+    run = run.assign_coords({VALID_COORD: ((REFERENCE_DIM, LEAD_DIM), valid_times_for(reference, leads, unit))})
+    for name, standard in CF_STANDARD_NAMES.items():
+        run[name].attrs["standard_name"] = standard
+    run[LEAD_DIM].attrs["units"] = f"{unit}s"
+    ordered: xr.Dataset = run.transpose(REFERENCE_DIM, LEAD_DIM, ..., "y", "x", missing_dims="ignore")
+    return ordered
+
+
 def valid_time(ds: xr.Dataset | xr.DataArray) -> xr.DataArray:
     """Return the valid-time coordinate, computing it if the store did not publish one.
 
