@@ -8,7 +8,7 @@ The current public story is:
 - discover the configured extent with `/extent`
 - discover managed datasets with `/datasets`
 - discover vector feature collections with `/features`
-- discover published GeoZarr datasets with `/stac/catalog.json`
+- discover published datasets, rasters and vector datasets, with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
 - preview a dataset with `/datasets/{dataset_id}/thumbnail.png` (also a STAC collection asset)
@@ -33,9 +33,15 @@ Operational note:
 - `GET /features`
 - `GET /features/{collection_id}`
 - `GET /features/{collection_id}/data.parquet`
+- `GET /features/{collection_id}/data.pmtiles`
+- `GET /features/{collection_id}/styles/default.json`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
+- `GET /stac/README.md`
+- `GET /stac/AGENTS.md`
+- `GET /stac/collections/{dataset_id}/README.md`
+- `GET /stac/collections/{dataset_id}/AGENTS.md`
 - `GET /zarr/{dataset_id}`
 - `GET /zarr/{dataset_id}/{relative_path}`
 - `GET /icechunk/{dataset_id}/{path}`
@@ -452,7 +458,7 @@ declare:
 | --- | --- | --- |
 | Extensions | `datacube`, `zarr`, `projection` | `table`, `projection` |
 | Describes the data with | `cube:dimensions`, `cube:variables` | `table:row_count`, `table:primary_geometry`, `table:columns` |
-| Data asset | `zarr` (plus `icechunk`) | `data`, `application/x-parquet` |
+| Data asset | `zarr` (plus `icechunk`) | `data`, `application/vnd.apache.parquet` |
 
 A feature collection emits no `cube:` fields and no Zarr asset, and a raster emits no `table:`
 fields. Both carry the same envelope: licence, `rel: license` link when the licence is a URL
@@ -466,6 +472,14 @@ Two things worth knowing about a feature collection's document:
 - **It declares no temporal extent** (`[[null, null]]`). Static geometry has no time axis, and a
   release identifier such as `2026-08-19.0` is not an instant — turning one into a temporal
   extent would publish a range no feature was observed in.
+- **Its last provider is this instance**, with the `host` role and the instance URL. The
+  template's providers come first; a `producer` role there says who made the data.
+- **A mirrored source is linked.** A template's `source_url` becomes a `via` link and its
+  `source_stac` a `canonical` link to the source's own STAC collection, with `{version}` filled by
+  the release the collection was read from. `updated` is when the collection was last refreshed.
+- **It links a README and an AGENTS guide** (`describedby` and `agents`, `text/markdown`): its
+  title, description, licence and provenance, and how to read the GeoParquet. The catalog links
+  its own pair, listing every collection.
 
 ## 11. Discover feature collections
 
@@ -537,9 +551,21 @@ collection is refused rather than served by accident — a national hierarchy ru
 thousands of features, and pulling all of it should be deliberate.
 
 `GET /features/{collection_id}/data.parquet` serves the stored GeoParquet for a **published**
-collection, as `application/x-parquet`. It is the href the collection's STAC `data` asset
+collection, as `application/vnd.apache.parquet`. It is the href the collection's STAC `data` asset
 advertises, and it resolves through the registered record — an unregistered file in the store
 directory is not reachable through it.
+
+`GET /features/{collection_id}/data.pmtiles` serves the collection's vector tiles, a PMTiles
+archive the map viewer draws from, with range requests. Every refresh builds it from the stored
+GeoParquet, simplified per zoom, so it is for display only: aggregation reads the GeoParquet. A
+failed build is logged and does not fail the refresh; the route then answers 404 and the STAC
+collection has no `tiles` asset.
+
+`GET /features/{collection_id}/styles/default.json` serves the MapLibre style the map viewer
+draws a collection with: its tiles as filled areas, lines and points, with the collection's
+attribution on the source. The STAC collection lists it as its `style` asset, and names the
+archive and its layer in a `pmtiles` link (web-map-links extension), whenever the collection has
+tiles.
 
 ## 12. `/sync`
 

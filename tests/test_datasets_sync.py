@@ -98,6 +98,12 @@ def _dataset_detail(dataset_id: str) -> DatasetDetailRecord:
     )
 
 
+def _daily_periods(start: str, end: str) -> list[str]:
+    first = date.fromisoformat(start)
+    last = date.fromisoformat(end)
+    return [(first + timedelta(days=offset)).isoformat() for offset in range((last - first).days + 1)]
+
+
 def test_sync_dataset_returns_up_to_date_when_no_new_period_is_due(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset_id = "chirps3_precipitation_daily_sle"
     monkeypatch.setattr(
@@ -253,6 +259,8 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
             "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
     )
+    # Keep sync-policy coverage independent of CHIRPS3's live HEAD-based cutoff lookup.
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda _, start, end: _daily_periods(start, end))
 
     captured: dict[str, object] = {}
 
@@ -262,6 +270,13 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
 
     monkeypatch.setattr(services, "create_artifact", fake_create_artifact)
     monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
+    # Avoid a real network call from CHIRPS3DailyPlugin._availability_cutoff() —
+    # this test is about the append plan, not plugin availability.
+    monkeypatch.setattr(
+        sync_engine,
+        "_query_available_periods",
+        lambda *args, **kwargs: [f"2026-02-{day:02d}" for day in range(1, 11)],
+    )
 
     result = services.sync_dataset(dataset_id=dataset_id, end="2026-02-10", publish=True)
 
@@ -406,6 +421,9 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_without
     latest.format = ArtifactFormat.ICECHUNK
     latest.path = None
     latest.asset_paths = []
+
+    # This test covers the artifact-end fallback, not the source's live availability.
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda _, start, end: _daily_periods(start, end))
 
     read_calls: list[tuple[object, ...]] = []
 

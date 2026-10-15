@@ -290,8 +290,11 @@
             <section class="panel" aria-labelledby="access-title">
               <h3 id="access-title">Access</h3>
               <div class="actions">
-                {% if published and not vector %}
+                {% if published %}
                 <a class="button-link primary" href="{{ mount }}/map?dataset={{ dataset.id | urlencode }}">Open in map viewer</a>
+                {% if not read_only %}
+                <a class="button-link" href="{{ mount }}/pipelines/new?dataset={{ dataset.id | urlencode }}">Create pipeline</a>
+                {% endif %}
                 {% endif %}
                 {% for link in links %}
                 <a class="button-link" href="{{ mount }}{{ link.href }}">{{ link.title }}</a>
@@ -300,7 +303,7 @@
               </div>
               {% if not published %}
               <p class="note" style="margin-top: var(--spacers-dp8)">
-                This dataset is not published, so it is not in {% if not vector %}the map viewer or {% endif %}the STAC catalog.
+                This dataset is not published, so it is not in the map viewer or the STAC catalog.
               </p>
               {% endif %}
             </section>

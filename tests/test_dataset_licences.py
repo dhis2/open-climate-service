@@ -144,6 +144,7 @@ _REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
     "c3s_seasonal.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "chirps3.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
     "era5_land.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "era5_heat.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "gefs_forecast.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0, per dynamical.org's catalogue page
     "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
     "copdem30.yaml": frozenset({ATTRIBUTION}),  # License to Use Copernicus DEM

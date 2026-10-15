@@ -21,6 +21,7 @@ from open_climate_service.data_accessor.services.accessor import open_icechunk_d
 from open_climate_service.data_manager.services.utils import get_time_dim, get_x_y_dims
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.features import templates as feature_templates
+from open_climate_service.features import tiles
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord, FeatureDetail
 from open_climate_service.shared import forecast, geoparquet
@@ -38,14 +39,15 @@ from open_climate_service.shared.time import (
 from open_climate_service.shared.urls import absolute_url, path_segment, self_url
 from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
-CATALOG_TITLE = "Open Climate Service"
-CATALOG_DESCRIPTION = "Published Open Climate Service GeoZarr datasets"
+CATALOG_DESCRIPTION = "Published datasets: rasters as GeoZarr stores and vector datasets as GeoParquet"
 STAC_VERSION = "1.1.0"
+MARKDOWN_MEDIA_TYPE = "text/markdown"
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
 PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
 RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
+WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
@@ -91,6 +93,12 @@ _zarr_media_type_cache: dict[str, str] = {}
 _V = TypeVar("_V")
 
 
+def _get_catalog_title() -> str:
+    from open_climate_service import config as api_config
+
+    return api_config.get_name()
+
+
 def _get_catalog_id() -> str:
     from open_climate_service import config as api_config
 
@@ -104,6 +112,8 @@ def build_catalog(request: Request) -> dict[str, object]:
     links = [
         {"rel": "self", "href": self_href, "type": "application/json"},
         {"rel": "root", "href": catalog_href, "type": "application/json"},
+        {"rel": "describedby", "href": absolute_url(request, "/stac/README.md"), "type": MARKDOWN_MEDIA_TYPE},
+        {"rel": "agents", "href": absolute_url(request, "/stac/AGENTS.md"), "type": MARKDOWN_MEDIA_TYPE},
     ]
     for dataset_id, artifact in _eligible_artifacts_by_dataset().items():
         links.append(
@@ -118,7 +128,8 @@ def build_catalog(request: Request) -> dict[str, object]:
         "stac_version": STAC_VERSION,
         "type": "Catalog",
         "id": _get_catalog_id(),
-        "title": CATALOG_TITLE,
+        # The instance's own name, as in the web interface; "Open Climate Service" when unset.
+        "title": _get_catalog_title(),
         "description": CATALOG_DESCRIPTION,
         "links": links,
     }
@@ -317,8 +328,19 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     collection.extra_fields["proj:code"] = detail.crs
     collection.stac_extensions.append(PROJECTION_EXTENSION)
 
+    # When the collection was last refreshed, which for a mirror of an upstream source is when
+    # it was last synced from it.
+    collection.extra_fields["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
+
     _apply_table_extension(collection, artifact, detail)
-    _add_feature_collection_links(collection, dataset_id=dataset_id, request=request, licence=licence)
+    _add_feature_collection_links(
+        collection,
+        dataset_id=dataset_id,
+        request=request,
+        licence=licence,
+        source_dataset=source_dataset,
+        version=artifact.version.value if artifact.version is not None else None,
+    )
     collection.add_asset(
         "data",
         pystac.Asset(
@@ -328,6 +350,38 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             roles=["data"],
         ),
     )
+    # Vector tiles for display, when the refresh built them, and the style the viewer draws them
+    # with. The `pmtiles` link is how web-map-links clients find the archive and its layer.
+    if artifact.path and tiles.archive_path(Path(str(artifact.path))).is_file():
+        tiles_href = absolute_url(request, f"/features/{path_segment(dataset_id)}/data.pmtiles")
+        collection.add_asset(
+            "tiles",
+            pystac.Asset(
+                href=tiles_href,
+                media_type=tiles.PMTILES_MEDIA_TYPE,
+                title="Vector tiles (PMTiles)",
+                roles=["visual"],
+            ),
+        )
+        collection.add_asset(
+            "style",
+            pystac.Asset(
+                href=absolute_url(request, f"/features/{path_segment(dataset_id)}/styles/default.json"),
+                media_type=tiles.STYLE_MEDIA_TYPE,
+                title="MapLibre style",
+                roles=["style"],
+            ),
+        )
+        collection.add_link(
+            pystac.Link(
+                rel="pmtiles",
+                target=tiles_href,
+                media_type=tiles.PMTILES_MEDIA_TYPE,
+                title="Vector tiles (PMTiles)",
+                extra_fields={"pmtiles:layers": [tiles.TILE_LAYER]},
+            )
+        )
+        collection.stac_extensions.append(WEB_MAP_LINKS_EXTENSION)
     # As for a raster collection: only when the file is there, so a client never follows a
     # thumbnail href to a 404.
     if thumbnail_path(dataset_id).is_file():
@@ -346,10 +400,30 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     # over HTTP while serving a request for one of its children.
     payload = collection.to_dict(include_self_link=True, transform_hrefs=False)
     payload["stac_version"] = STAC_VERSION
-    providers = _build_providers(source_dataset)
-    if providers:
-        payload["providers"] = providers
+    payload["providers"] = _feature_providers(source_dataset, request)
     return payload
+
+
+def _feature_providers(source_dataset: dict[str, Any], request: Request) -> list[dict[str, Any]]:
+    """The template's providers, then this instance as the one `host`, last.
+
+    The template names who made the data, and its `producer` role says so. Only this instance
+    hosts the copy being served, so a `host` role declared in a template is dropped rather than
+    published as a second host. The host's `url` is the instance itself, where its operator is
+    reached.
+    """
+    from open_climate_service import config as api_config
+
+    providers = []
+    for provider in _build_providers(source_dataset):
+        entry = {key: value for key, value in provider.items() if key != "roles"}
+        roles = [role for role in provider.get("roles", []) if role != "host"]
+        if roles:
+            entry["roles"] = roles
+        providers.append(entry)
+
+    providers.append({"name": api_config.get_name(), "roles": ["host"], "url": absolute_url(request, "/")})
+    return providers
 
 
 def _apply_table_extension(collection: pystac.Collection, artifact: ArtifactRecord, detail: "FeatureDetail") -> None:
@@ -387,9 +461,22 @@ def _stored_table_columns(artifact: ArtifactRecord, detail: "FeatureDetail") -> 
 
 
 def _add_feature_collection_links(
-    collection: pystac.Collection, *, dataset_id: str, request: Request, licence: DatasetLicence
+    collection: pystac.Collection,
+    *,
+    dataset_id: str,
+    request: Request,
+    licence: DatasetLicence,
+    source_dataset: dict[str, Any],
+    version: str | None,
 ) -> None:
-    """Attach the same link set a raster collection carries, plus the licence link."""
+    """Attach the same link set a raster collection carries, plus the licence, source and docs.
+
+    A collection mirrored from an upstream source links back to it: `via` to the source's page
+    (the template's `source_url`) and `canonical` to the source's own STAC collection
+    (`source_stac`), so a client can follow the chain to the authoritative metadata. `canonical`
+    names that one collection, so a `{version}` in `source_stac` is filled with the release this
+    collection was read from, and the link is left out when there is no version to fill it.
+    """
     catalog_href = absolute_url(request, "/stac/catalog.json")
     collection.clear_links()
     # Through `set_self_href`, not `add_link`: pystac emits the self link from that attribute,
@@ -414,6 +501,27 @@ def _add_feature_collection_links(
                 target=licence.url,
                 media_type="text/html",
                 title=licence.name or licence.identifier or "Licence",
+            )
+        )
+    source_url = source_dataset.get("source_url")
+    if isinstance(source_url, str) and source_url.strip():
+        collection.add_link(pystac.Link(rel="via", target=source_url.strip(), media_type="text/html", title="Source"))
+    source_stac = source_dataset.get("source_stac")
+    if isinstance(source_stac, str) and source_stac.strip():
+        href = source_stac.strip()
+        if "{version}" in href:
+            href = href.replace("{version}", version) if version else ""
+        if href:
+            collection.add_link(
+                pystac.Link(rel="canonical", target=href, media_type="application/json", title="Source STAC collection")
+            )
+    for rel, name, title in (("describedby", "README.md", "README"), ("agents", "AGENTS.md", "Guide for agents")):
+        collection.add_link(
+            pystac.Link(
+                rel=rel,
+                target=absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}/{name}"),
+                media_type=MARKDOWN_MEDIA_TYPE,
+                title=title,
             )
         )
 

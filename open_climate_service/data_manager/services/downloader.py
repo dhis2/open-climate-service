@@ -551,11 +551,14 @@ def write_to_icechunk_store(
     pyramid_method: str = "mean",
     commit_message: str = "Materialized dataset",
     before_commit: Callable[[], None] | None = None,
-) -> None:
+) -> str:
     """Write *ds* to an Icechunk store, building a multiscale pyramid when needed.
 
     ``before_commit`` runs after every write and immediately before the single commit. If it
     raises, nothing is committed and the store keeps its previous state.
+
+    Returns the id of the committed Icechunk snapshot: the physical identity of what was
+    written, which callers may record as provenance. It is not a logical release version.
 
     Applies GeoZarr conventions throughout. Creates the store if it does not exist;
     overwrites any existing content in the new commit.
@@ -751,4 +754,4 @@ def write_to_icechunk_store(
 
     if before_commit is not None:
         before_commit()
-    session.commit(commit_message)
+    return str(session.commit(commit_message))

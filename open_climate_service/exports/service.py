@@ -29,7 +29,16 @@ class ResolvedExport:
 
 
 def _configured_export_definitions() -> dict[str, dict[str, Any]]:
-    """Validate configured export definitions and index them by ID."""
+    """Validate configured and pipeline-owned export definitions and index them by ID.
+
+    An ID claimed by both the configuration and a pipeline is left out and listed by
+    :func:`_contested_export_ids`, so resolving it fails instead of picking one.
+    """
+    by_id, _ = _export_definitions()
+    return by_id
+
+
+def _export_definitions() -> tuple[dict[str, dict[str, Any]], set[str]]:
     definitions = config.get_config().get("exports", [])
     if not isinstance(definitions, list):
         raise ValueError("exports must be a list of named mappings")
@@ -43,7 +52,24 @@ def _configured_export_definitions() -> dict[str, dict[str, Any]]:
         if identifier in by_id:
             raise ValueError(f"Duplicate export ID '{identifier}'")
         by_id[identifier] = definition
-    return by_id
+    # A validated pipeline owns the named export under its id. Neither side wins a clash.
+    from open_climate_service.pipelines.exports import pipeline_export_definitions
+
+    contested: set[str] = set()
+    for definition in pipeline_export_definitions():
+        identifier = str(definition["id"])
+        if identifier in by_id:
+            contested.add(identifier)
+            logger.error(
+                "Export '%s' is declared in the configuration and owned by the pipeline of the same id; "
+                "neither is used until one is renamed or removed",
+                identifier,
+            )
+            continue
+        by_id[identifier] = definition
+    for identifier in contested:
+        by_id.pop(identifier, None)
+    return by_id, contested
 
 
 def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
@@ -51,19 +77,37 @@ def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
     export_id = options.get("export")
     if not isinstance(export_id, str) or not export_id.strip() or set(options) != {"export"}:
         raise ValueError("Named exports require options containing only a non-empty 'export' ID")
-    by_id = _configured_export_definitions()
+    by_id, contested = _export_definitions()
+    if export_id in contested:
+        raise ValueError(
+            f"Export '{export_id}' is declared in the configuration and owned by the pipeline of the same id; "
+            "rename the pipeline or remove the configured export"
+        )
     if export_id not in by_id:
         raise ValueError(f"Unknown export '{export_id}'")
-    definition = deepcopy(by_id[export_id])
-    definition.pop("id")
+    resolved = resolve_export_definition(by_id[export_id])
+    if resolved.plugin.format != fmt:
+        raise ValueError(f"Export '{export_id}' requires format '{resolved.plugin.format}', received '{fmt}'")
+    return resolved
+
+
+def resolve_export_definition(definition: dict[str, Any]) -> ResolvedExport:
+    """Resolve one explicit definition through the same path as an instance named export.
+
+    Pipelines use this to validate and dry-run the definition their destination compiles,
+    before it is resolvable by name. It deliberately accepts a complete definition rather than
+    adding a process-wide temporary export that concurrent jobs could observe.
+    """
+    definition = deepcopy(definition)
+    export_id = definition.pop("id", None)
+    if not isinstance(export_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", export_id):
+        raise ValueError("Each export requires an ID containing letters, digits, underscores, or hyphens")
     plugin_id = definition.pop("plugin", None)
     if not isinstance(plugin_id, str):
         raise ValueError("Export definition requires a plugin ID")
     plugin = load_export_plugins().get(plugin_id)
     if plugin is None:
         raise ValueError(f"Unknown export plugin '{plugin_id}'")
-    if plugin.format != fmt:
-        raise ValueError(f"Export '{export_id}' requires format '{plugin.format}', received '{fmt}'")
     references: dict[str, str] = {}
     for field in ("dataset", "org_units", "connection"):
         value = definition.pop(field, None)
@@ -87,7 +131,13 @@ def validate_configured_exports() -> None:
     Automation already resolves the exports its triggers deliver through; this covers the
     rest, so an export nobody has run yet is refused with the same message at the same time.
     """
+    # A pipeline's export is checked when the pipeline validates; a stale one must not stop startup.
+    from open_climate_service.pipelines.exports import pipeline_export_definitions
+
+    owned = {str(definition["id"]) for definition in pipeline_export_definitions()}
     for export_id, definition in _configured_export_definitions().items():
+        if export_id in owned:
+            continue
         plugin_id = definition.get("plugin")
         plugin = load_export_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
         if plugin is None:
@@ -160,9 +210,24 @@ def render_named_export(
     against it exactly as for a saved batch export.
     """
     resolved = resolve_named_export(fmt, options)
+    return resolved.plugin, render_resolved_export(data, resolved, provenance=provenance)
+
+
+def render_resolved_export(
+    data: Any,
+    resolved: ResolvedExport,
+    *,
+    provenance: dict[str, Any] | None = None,
+) -> RenderedExport:
+    """Render an already resolved export through every provenance and data-side gate.
+
+    This is the invocation-local counterpart to :func:`render_named_export`. Draft pipelines
+    resolve their generated definition directly, but must still receive the exact cadence and
+    incomplete-period checks applied to configured named exports.
+    """
     if provenance is not None:
         check_execution_declarations(resolved, provenance)
-    return resolved.plugin, _render(data, resolved, provenance)
+    return _render(data, resolved, provenance)
 
 
 def check_execution_declarations(resolved: ResolvedExport, provenance: dict[str, Any]) -> None:
@@ -454,7 +519,7 @@ def write_named_export(
 
     resolved = resolve_named_export(fmt, options)
     identity = plugin_identity(resolved.plugin)
-    target = target_binding(resolved.plugin.id, resolved.references)
+    target = target_binding(resolved.plugin, resolved.references)
     evidence = (
         deepcopy(provenance)
         if provenance is not None

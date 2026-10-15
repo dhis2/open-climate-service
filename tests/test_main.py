@@ -24,11 +24,18 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         def recover_pending_jobs(self) -> None:
             calls.append("openeo-recover")
 
+        def reconcile_publications(self) -> None:
+            calls.append("openeo-reconcile-publications")
+
         def set_finished_listener(self, listener: object) -> None:
             calls.append("finished-listener-set" if listener is not None else "finished-listener-cleared")
 
         def set_delivery_due_provider(self, provider: object) -> None:
             calls.append("delivery-due-set" if provider is not None else "delivery-due-cleared")
+
+        def set_event_consumer(self, consumer: object | None) -> None:
+            # The same consumer as native jobs: a published managed dataset's update.
+            calls.append("openeo-consumer-set" if consumer is not None else "openeo-consumer-unset")
 
         def shutdown(self) -> None:
             calls.append("openeo-shutdown")
@@ -69,9 +76,11 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
             "recover",
             "automation-start",
             "consumer-set",
+            "openeo-consumer-set",
             "delivery-due-set",
             "finished-listener-set",
             "openeo-recover",
+            "openeo-reconcile-publications",
             "automation-reconcile",
             "automation-replay",
             "scheduler-start",
@@ -81,13 +90,16 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         "recover",
         "automation-start",
         "consumer-set",
+        "openeo-consumer-set",
         "delivery-due-set",
         "finished-listener-set",
         "openeo-recover",
+        "openeo-reconcile-publications",
         "automation-reconcile",
         "automation-replay",
         "scheduler-start",
         "consumer-unset",
+        "openeo-consumer-unset",
         "finished-listener-cleared",
         "scheduler-shutdown",
         "shutdown",

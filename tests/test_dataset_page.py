@@ -201,6 +201,15 @@ def test_the_dataset_list_filters_by_type_when_it_holds_both(
     assert body.count('data-kind="vector"') == item_types.count("feature")
 
 
+def test_an_empty_dataset_list_points_to_the_data_sources(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(landing, "_load_datasets", lambda: [])
+
+    body = client.get("/datasets", headers={"Accept": BROWSER_ACCEPT}).text
+
+    assert '<a href="/data-sources">data sources</a>' in body
+    assert "POST /ingestions" not in body
+
+
 def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
     from open_climate_service.ingestions import services
@@ -397,15 +406,15 @@ def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
 
 
 @pytest.mark.parametrize(("item_type", "raster"), [("coverage", True), ("feature", False)])
-def test_the_dataset_page_offers_the_map_viewer_and_colour_scale_only_for_a_raster(
+def test_the_dataset_page_offers_the_map_viewer_for_both_and_a_colour_scale_only_for_a_raster(
     monkeypatch: pytest.MonkeyPatch, item_type: str, raster: bool
 ) -> None:
-    """The map viewer draws only rasters, and a feature collection has no colour scale."""
+    """The map viewer draws rasters and vectors, but a feature collection has no colour scale."""
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
 
     html = landing.render_dataset_page(_record(itemType=item_type), "/ocs")
 
-    assert ("Open in map viewer" in html) is raster
+    assert "Open in map viewer" in html
     assert ('class="ramp-bar"' in html) is raster
     assert ("--ramp: linear-gradient" in html) is raster
 
