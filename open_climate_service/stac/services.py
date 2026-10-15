@@ -278,7 +278,10 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     # not the artifact coverage — see _wgs84_extent_from_store. Temporal still tracks the
     # artifact's materialized coverage.
     _override_temporal_extent_from_artifact(
-        collection_payload, artifact, snapshot=registry_datasets.is_timeless(source_dataset)
+        collection_payload,
+        artifact,
+        # A workflow result with a recorded cadence has a time axis, whatever its template says.
+        snapshot=registry_datasets.is_timeless(source_dataset) and artifact.period_type is None,
     )
     _sanitize_variable_attrs(collection_payload)
     # Last, because the cf: fields are only known after the variables are built and sanitized.

@@ -61,6 +61,7 @@ from open_climate_service.ingestions.sync_engine import SyncConfigurationError, 
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
+from open_climate_service.shared.raster_contract import TIME_ALIASES
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -476,6 +477,7 @@ def create_artifact(
             publish=publish,
             request_scope=ArtifactRequestScope(bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None),
             on_progress=on_progress,
+            is_cancel_requested=is_cancel_requested,
             on_update_planned=on_update_planned,
         )
 
@@ -1221,7 +1223,11 @@ def _plan_static_materialization(*, store_path: Path, overwrite: bool) -> _Strea
         action = SyncAction.REMATERIALIZE
     else:
         action = SyncAction.APPEND
-    return _StreamingMaterializationPlan(action=action, start=None, end=None, periods=None, has_committed_periods=False)
+    # A stored dataset counts as committed data, so a failed rebuild of its replacement raises
+    # instead of swapping in a store that was never normalized.
+    return _StreamingMaterializationPlan(
+        action=action, start=None, end=None, periods=None, has_committed_periods=has_store
+    )
 
 
 def _previous_coverage_end(dataset: dict[str, object], plan: _StreamingMaterializationPlan) -> str | None:
@@ -1374,7 +1380,14 @@ def _create_streaming_artifact(
 
         if plan.action != SyncAction.NO_OP and timeless:
             plugin_handed_to_orchestrator = True
-            run_static_ingest_sync(plugin=plugin, params=params, dataset=dataset, bbox=bbox, store_path=ingest_path)
+            run_static_ingest_sync(
+                plugin=plugin,
+                params=params,
+                dataset=dataset,
+                bbox=bbox,
+                store_path=ingest_path,
+                is_cancel_requested=is_cancel_requested,
+            )
             ingest_completed = True
         elif plan.action != SyncAction.NO_OP:
             assert plan.start is not None and plan.end is not None
@@ -1890,7 +1903,7 @@ def _maybe_build_pyramid(
 
     try:
         # None for a static dataset without a time axis (CLIM-1448).
-        t_dim = next((d for d in ("t", "time", "valid_time") if d in ds.sizes), None)
+        t_dim = next((d for d in ("t", *TIME_ALIASES) if d in ds.sizes), None)
         already_normalized = "spatial_ref" in ds.coords or "spatial_ref" in ds.variables
         if already_normalized and "x" in ds.sizes and "y" in ds.sizes and not downloader.needs_pyramid(ds):
             # A flat, already-normalized store needs no read-rewrite — but streaming ingests
@@ -2901,10 +2914,11 @@ def _dataset_period_type(latest: ArtifactRecord, source_dataset: dict[str, Any])
     """
     if latest.format == ArtifactFormat.GEOPARQUET:
         return None
-    if registry_datasets.is_timeless(source_dataset):
-        # A static raster without a time axis (CLIM-1448): no period axis, like a feature collection.
-        return None
     declared = _as_optional_str(source_dataset.get("period_type")) or latest.period_type
+    if declared is None and registry_datasets.is_timeless(source_dataset):
+        # A static raster without a time axis (CLIM-1448): no period axis, like a feature collection.
+        # A cadence recorded for a workflow result that has one still wins, above.
+        return None
     return declared if declared is not None else "unknown"
 
 
