@@ -17,6 +17,7 @@ from open_climate_service.plugins.processes.aggregate_spatial_classes import agg
 from open_climate_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
 from open_climate_service.shared.cf import cf_attrs_from_template
 from open_climate_service.shared.classes import (
+    Classification,
     classification_from_template,
     cube_classes,
     stac_classes,
@@ -35,6 +36,12 @@ HEAT_LEVELS: dict[str, Any] = {
 }
 
 
+def _heat_classes() -> Classification:
+    classification = classification_from_template(HEAT_LEVELS)
+    assert classification is not None
+    return classification
+
+
 def _box(xmin: float, ymin: float, xmax: float, ymax: float) -> dict[str, Any]:
     ring = [[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]
     return {"type": "Polygon", "coordinates": [ring]}
@@ -50,7 +57,7 @@ def _grid(values: list[list[int]], *, cell: float = 1.0, name: str = "level") ->
 
 
 def _heat(values: list[list[int]], **kwargs: Any) -> xr.DataArray:
-    return stamp_classes(_grid(values, **kwargs), "heat_levels", classification_from_template(HEAT_LEVELS))
+    return stamp_classes(_grid(values, **kwargs), _heat_classes())
 
 
 # --- declaring classes -------------------------------------------------------------------------
@@ -177,8 +184,7 @@ def test_total_keeps_the_time_axis_of_the_levels() -> None:
         xr.concat([_grid([[0, 0], [0, 0]], cell=2.0), _grid([[2, 2], [2, 2]], cell=2.0)], dim="t").assign_coords(
             t=np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]")
         ),
-        "heat_levels",
-        classification_from_template(HEAT_LEVELS),
+        _heat_classes(),
     )
     people = _grid([[1, 1, 1, 1]] * 4, name="population")
 
@@ -197,8 +203,7 @@ def test_a_series_read_in_bounded_slices_gives_the_same_answer(monkeypatch: pyte
         xr.concat([_grid(day, cell=2.0) for day in days], dim="t").assign_coords(
             t=np.arange("2025-01-01", "2025-01-07", dtype="datetime64[D]").astype("datetime64[ns]")
         ),
-        "heat_levels",
-        classification_from_template(HEAT_LEVELS),
+        _heat_classes(),
     )
     people = _grid([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]], name="population")
     whole = {
@@ -239,7 +244,7 @@ def test_a_categorical_dataset_is_never_averaged() -> None:
     """Land cover 10 and 50 average to a third class; the weighted aggregation refuses instead."""
     heat = _heat([[0, 3], [0, 3]])
 
-    with pytest.raises(ValueError, match="'heat_levels' is a categorical dataset, so 'mean'"):
+    with pytest.raises(ValueError, match="'level' is a categorical dataset, so 'mean'"):
         aggregate_spatial_weighted(heat, _box(0, 0, 2, 2), "mean")
 
 
@@ -284,3 +289,22 @@ def test_a_published_collection_carries_its_classes_in_stac(
     else:
         assert "classification:classes" not in doc["assets"]["zarr"]
         assert STAC_CLASSIFICATION_EXTENSION not in doc["stac_extensions"]
+
+
+def test_loading_a_continuous_collection_leaves_it_without_classes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_climate_service.data_registry.services import datasets as registry
+    from open_climate_service.data_registry.services.datasets import _validate_dataset_template
+    from open_climate_service.openeo.execution import stamp_declared_cadence
+
+    template = {
+        "id": "t2m_daily",
+        "period_type": "daily",
+        "sync": {"kind": "temporal"},
+        "ingestion": {"plugin": "pkg.Cls"},
+    }
+    _validate_dataset_template(template, source="t.yaml")
+    monkeypatch.setattr(registry, "get_dataset", lambda _id: template)
+    cube = stamp_declared_cadence(_grid([[1, 2], [3, 4]], name="t2m"), "t2m_daily")
+
+    assert cube_classes(cube) is None
+    assert "ocs_nodata" not in cube.attrs

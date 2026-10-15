@@ -25,8 +25,7 @@ from typing import Any
 
 STAC_CLASSIFICATION_EXTENSION = "https://stac-extensions.github.io/classification/v2.0.0/schema.json"
 
-# Stamped on a loaded cube beside the CF flags, so a refusal can name the dataset.
-DATASET_ATTR = "ocs_dataset"
+# Stamped on a loaded cube beside the CF flags, so the aggregation can leave the nodata code out.
 NODATA_ATTR = "ocs_nodata"
 
 _COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
@@ -122,12 +121,11 @@ def stac_classes(classification: Classification) -> list[dict[str, Any]]:
     return entries
 
 
-def stamp_classes(data: Any, collection_id: str, classification: Classification | None) -> Any:
+def stamp_classes(data: Any, classification: Classification) -> Any:
     """Mark a loaded cube with its dataset's classes, in place, and return it."""
     attrs = getattr(data, "attrs", None)
-    if isinstance(attrs, dict) and classification is not None:
+    if isinstance(attrs, dict):
         attrs.update(cf_flag_attrs(classification))
-        attrs[DATASET_ATTR] = collection_id
         if classification.nodata is not None:
             attrs[NODATA_ATTR] = classification.nodata
     return data
@@ -143,9 +141,3 @@ def cube_classes(data: Any) -> tuple[list[int], list[str]] | None:
     meanings = str(attrs.get("flag_meanings", "")).split()
     labels = meanings if len(meanings) == len(codes) else [str(code) for code in codes]
     return codes, labels
-
-
-def cube_name(data: Any) -> str:
-    """The dataset a cube was loaded from, for messages, or its variable name."""
-    attrs = getattr(data, "attrs", None) or {}
-    return str(attrs.get(DATASET_ATTR) or getattr(data, "name", None) or "the input")

@@ -15,7 +15,7 @@ import xvec  # type: ignore[import-untyped]  # noqa: F401  # pyright: ignore[rep
 
 from open_climate_service.process import process
 
-STATISTICS = ("total", "share", "majority")
+REDUCERS = ("total", "share", "majority")
 CLASS_DIM = "class"
 
 
@@ -107,9 +107,9 @@ def _single_step(weights: xr.DataArray) -> xr.DataArray:
                 {"type": "object", "subtype": "geojson"},
             ],
         },
-        "statistic": {
+        "reducer": {
             "description": "`total` (needs `weights`), `share` or `majority`.",
-            "schema": {"type": "string", "enum": list(STATISTICS)},
+            "schema": {"type": "string", "enum": list(REDUCERS)},
         },
         "weights": {
             "description": "For `total`: a raster to sum per class, such as population, on its own grid.",
@@ -125,7 +125,7 @@ def _single_step(weights: xr.DataArray) -> xr.DataArray:
 def aggregate_spatial_classes(
     data: xr.Dataset | xr.DataArray,
     geometries: Any,
-    statistic: str,
+    reducer: str,
     weights: xr.Dataset | xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Per-class zonal statistics of a categorical raster.
@@ -137,17 +137,17 @@ def aggregate_spatial_classes(
         (their codes) and `class_label`; for `majority`, the majority class code per geometry.
         The non-spatial dimensions of the input are preserved, as for aggregate_spatial_weighted.
     """
-    from open_climate_service.shared.classes import cube_classes, cube_name
+    from open_climate_service.shared.classes import cube_classes
     from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
     from open_climate_service.shared.vectors import features_in_crs, single_raster, vector_result
 
-    if statistic not in STATISTICS:
-        raise ValueError(f"aggregate_spatial_classes: statistic must be one of {', '.join(STATISTICS)}")
+    if reducer not in REDUCERS:
+        raise ValueError(f"aggregate_spatial_classes: reducer must be one of {', '.join(REDUCERS)}")
     raster = single_raster(data)
     declared = cube_classes(raster)
     if declared is None:
         raise ValueError(
-            f"aggregate_spatial_classes: '{cube_name(raster)}' declares no classes; it is not a categorical "
+            f"aggregate_spatial_classes: '{raster.name or 'the input'}' declares no classes; it is not a categorical "
             "dataset. Declare `classes` in its template, or use aggregate_spatial_weighted for continuous data"
         )
     codes, labels = declared
@@ -155,9 +155,9 @@ def aggregate_spatial_classes(
 
     classes = _codes_only(_xy(raster))
     weight: xr.DataArray | None = None
-    if statistic == "total":
+    if reducer == "total":
         if weights is None:
-            raise ValueError("aggregate_spatial_classes: statistic 'total' needs `weights`, such as population")
+            raise ValueError("aggregate_spatial_classes: reducer 'total' needs `weights`, such as population")
         # Axes renamed first, so a weight on lon/lat is one grid rather than a series of them.
         weight = _single_step(_xy(single_raster(weights))).load()
         frame = features_in_crs(geometries, weight.rio.crs)
@@ -170,7 +170,7 @@ def aggregate_spatial_classes(
         grid_cells = classes.sizes["x"] * classes.sizes["y"]
 
     def per_class(part: xr.DataArray) -> xr.DataArray:
-        if statistic == "majority":
+        if reducer == "majority":
             return _zonal(part, frame, "majority")
         if weight is not None:
             # Onto the weight grid: a weight, people in a 100 m cell say, belongs to the class of
@@ -186,7 +186,7 @@ def aggregate_spatial_classes(
     dim, reads = _reads(classes, grid_cells)
     parts = [per_class((classes if dim is None else classes.isel({dim: read})).load()) for read in reads]
     result = parts[0] if len(parts) == 1 else xr.concat(parts, dim=str(dim))
-    record_spatial_aggregation(statistic)
+    record_spatial_aggregation(reducer)
     return vector_result(result, reference, frame.index)
 
 

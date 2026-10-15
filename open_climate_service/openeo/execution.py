@@ -771,10 +771,13 @@ def stamp_declared_cadence(data: _Cube, collection_id: str) -> _Cube:
         stamp_cadence(data, cadence)
     # A categorical dataset's classes travel on the cube, so a process can aggregate per class
     # and refuse to average codes (CLIM-895). From the template, so an older store counts too.
-    if isinstance(template, dict):
+    # A continuous dataset declares no classes and is left as it is.
+    if isinstance(template, dict) and template.get("classes") is not None:
         from open_climate_service.shared.classes import classification_from_template, stamp_classes
 
-        stamp_classes(data, collection_id, classification_from_template(template))
+        classification = classification_from_template(template)
+        if classification is not None:
+            stamp_classes(data, classification)
     return data
 
 

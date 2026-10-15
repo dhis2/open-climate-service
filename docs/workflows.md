@@ -146,9 +146,9 @@ how much of them the feature covers.
 | Name | Description |
 |---|---|
 | `dataset_id` | The categorical dataset (its template declares `classes`) |
-| `temporal_extent` | `[start, end]` of the class dataset to load |
+| `dataset_time` | `[start, end]` of the class dataset to load |
 | `population_dataset_id` | A population dataset, such as `worldpop_population_global2_100m` |
-| `population_year` | `[start, end]` covering exactly one population step |
+| `population_time` | `[start, end]` covering exactly one population step |
 | `geometries` | GeoJSON `FeatureCollection`, or the output of `load_features` |
 
 The CSV has one row per time step, class and feature: `class` (the code), `class_label` and the
@@ -157,7 +157,7 @@ count. Counts are of people **at** each class; for ordered levels, add the highe
 people under cells of the class dataset's nodata code, who belong to no class.
 
 For the area share or the majority class instead, call `aggregate_spatial_classes` with
-`statistic: share` or `statistic: majority`.
+`reducer: share` or `reducer: majority`.
 
 ## Mapping change between two periods
 

@@ -123,14 +123,14 @@ def aggregate_spatial_weighted(
             "to aggregate with an openEO reducer process, use aggregate_spatial instead"
         )
     raster = single_raster(data)
-    from open_climate_service.shared.classes import cube_classes, cube_name
+    from open_climate_service.shared.classes import cube_classes
 
     if cube_classes(raster) is not None:
         # Averaging codes gives a plausible but wrong class: land cover 10 and 50 average to 30.
         raise ValueError(
-            f"aggregate_spatial_weighted: '{cube_name(raster)}' is a categorical dataset, so '{reducer}' would "
-            "aggregate class codes as numbers; use aggregate_spatial_classes for a share, majority or "
-            "total per class"
+            f"aggregate_spatial_weighted: '{raster.name or 'the input'}' is a categorical dataset, so "
+            f"'{reducer}' would aggregate class codes as numbers; use aggregate_spatial_classes for a "
+            "share, majority or total per class"
         )
     record_features(geometries)
     frame = features_in_crs(geometries, raster.rio.crs)
