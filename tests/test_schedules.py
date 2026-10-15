@@ -37,6 +37,19 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     "chirps": {"id": "chirps", "sync": {"kind": "temporal", "execution": "append"}},
     "era5": {"id": "era5", "sync": {"kind": "temporal", "execution": "append"}},
     "worldpop": {"id": "worldpop", "sync": {"kind": "static"}},
+    # A forecast stored per run, and one stored by the date it predicts.
+    "gefs": {
+        "id": "gefs",
+        "temporal_direction": "future",
+        "sync": {"kind": "temporal", "execution": "append"},
+        "ingestion": {"plugin": "open_climate_service.plugins.rasters.gefs_forecast.GefsForecastPlugin"},
+    },
+    "heat": {
+        "id": "heat",
+        "temporal_direction": "future",
+        "sync": {"kind": "temporal", "execution": "append"},
+        "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+    },
 }
 
 
@@ -429,6 +442,17 @@ def test_api_refuses_what_the_clock_could_not_run(client: TestClient, monkeypatc
     assert client.delete("/schedules/sync/chirps").status_code == 404
 
 
+def test_a_forecast_stored_per_run_can_be_scheduled_and_one_stored_by_date_cannot(client: TestClient) -> None:
+    per_run = client.post("/schedules/sync", json={"dataset_id": "gefs", "cron": "0 6 * * *"})
+    assert per_run.status_code == 201, per_run.text
+    assert store.get_schedule("gefs") is not None
+
+    by_date = client.post("/schedules/sync", json={"dataset_id": "heat", "cron": "0 6 * * *"})
+    assert by_date.status_code == 422
+    assert "cannot be synced on a schedule yet" in by_date.text and "Overwrite" in by_date.text
+    assert store.get_schedule("heat") is None
+
+
 def test_managed_schedule_uses_its_source_template(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     import open_climate_service.ingestions.services as ingestion_services
 
@@ -492,7 +516,7 @@ def dataset_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestCl
     from tests.test_dataset_page import _record
 
     def record(dataset_id: str) -> Any:
-        if dataset_id not in {"era5", "chirps"}:
+        if dataset_id not in {"era5", "chirps", "gefs", "heat"}:
             raise HTTPException(status_code=404, detail=dataset_id)
         return _record(dataset_id)
 
@@ -549,6 +573,18 @@ def test_the_dataset_page_creates_edits_pauses_and_deletes_its_schedule(dataset_
     )
     assert deleted.status_code == 303 and deleted.headers["location"].endswith("/datasets/era5#schedule")
     assert store.get_schedule("era5") is None
+
+
+def test_the_dataset_page_explains_a_forecast_it_cannot_schedule_instead_of_offering_a_form(
+    dataset_pages: TestClient,
+) -> None:
+    by_date = dataset_pages.get("/datasets/heat", headers={"Accept": BROWSER})
+    assert by_date.status_code == 200
+    assert "cannot be synced on a schedule yet" in by_date.text
+    assert "Schedule automatic sync" not in by_date.text and 'action="/schedules/sync"' not in by_date.text
+
+    per_run = dataset_pages.get("/datasets/gefs", headers={"Accept": BROWSER})
+    assert "Schedule automatic sync" in per_run.text and "cannot be synced on a schedule yet" not in per_run.text
 
 
 def test_a_refused_save_shows_the_dataset_page_with_the_reason_and_the_draft(dataset_pages: TestClient) -> None:

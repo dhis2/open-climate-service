@@ -79,6 +79,25 @@ def is_forecast_cube(ds: Any) -> bool:
     return REFERENCE_DIM in sizes and LEAD_DIM in sizes
 
 
+def stores_runs(template: dict[str, Any] | None) -> bool:
+    """True when a template's plugin writes one forecast run per ``reference_time`` step.
+
+    Such a store gains a new run by appending it and never rewrites an earlier one, so a
+    scheduled sync keeps it current. The plugin class says so through its ``time_dim``.
+    """
+    from open_climate_service.shared.dynamic_import import get_dynamic_function
+
+    ingestion = (template or {}).get("ingestion")
+    plugin_path = ingestion.get("plugin") if isinstance(ingestion, dict) else None
+    if not isinstance(plugin_path, str) or not plugin_path:
+        return False
+    try:
+        plugin_class = get_dynamic_function(plugin_path)
+    except Exception:
+        return False
+    return getattr(plugin_class, "time_dim", None) == REFERENCE_DIM
+
+
 def lead_unit(ds: xr.Dataset | xr.DataArray) -> str:
     """The unit ``lead_time`` counts in — a key of :data:`LEAD_UNITS`.
 
