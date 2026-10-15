@@ -134,8 +134,9 @@ Sync schedules sit under `/schedules/sync` because they are keyed by the dataset
 one per dataset. Another kind of schedule would get its own path under `/schedules` and appear
 in the same listing.
 
-A dataset that is static, forecast-facing or has no registered data source is refused with the
-reason. The target must have been ingested for a check to submit a sync; a stored schedule for
+A dataset that is static, a forecast stored by the date it predicts, or without a registered data
+source is refused with the reason, and the dataset page shows that reason instead of the schedule
+form. The target must have been ingested for a check to submit a sync; a stored schedule for
 a dataset not yet ingested is saved and its checks finish as `not_materialized` until it is.
 
 Changing schedules changes when data moves into the instance, and a sync can trigger
