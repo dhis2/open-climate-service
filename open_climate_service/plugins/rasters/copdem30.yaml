@@ -3,7 +3,7 @@
   short_name: Elevation
   variable: elevation
   description: Digital Elevation Model (DEM) representing height in meters above sea level. Note that height is recorded as the highest point at each location, so e.g. will capture the height of tree canopy rather than ground level. 
-  # No period_type: elevation has no time axis, so the store is (y, x) (CLIM-1448).
+  # No period_type: elevation has no time axis, so the store is (y, x).
   sync:
     kind: static
   extents:
