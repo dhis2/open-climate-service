@@ -139,7 +139,8 @@ def test_a_dated_snapshot_keeps_its_date_as_metadata(client: TestClient, static_
     assert "t" not in _store(dataset_id).dims
     assert client.get(f"/datasets/{dataset_id}").json()["extent"]["temporal"] == {"start": "2021", "end": "2021"}
     collection = client.get(f"/stac/collections/{dataset_id}").json()
-    assert collection["extent"]["temporal"]["interval"][0][0].startswith("2021")
+    # The year as a whole, not its first instant.
+    assert collection["extent"]["temporal"]["interval"] == [["2021-01-01T00:00:00Z", "2021-12-31T23:59:59Z"]]
     # No temporal dimension, so the map viewer offers no time slider.
     assert all(dim["type"] == "spatial" for dim in collection["cube:dimensions"].values())
 
@@ -174,3 +175,19 @@ def test_the_ingest_form_asks_for_no_dates(client: TestClient, static_sources: s
     assert "this dataset has no time axis" in page and 'id="start"' not in page
     started = client.post("/manage/ingest", data={"dataset_id": dataset_id}, headers={"Accept": "text/event-stream"})
     assert "Start period is required" not in started.text
+
+
+@pytest.mark.parametrize(
+    ("value", "end"),
+    [
+        ("2021", "2021-12-31T23:59:59"),
+        ("2021-06", "2021-06-30T23:59:59"),
+        ("2021-12", "2021-12-31T23:59:59"),
+        ("2024-02", "2024-02-29T23:59:59"),
+        ("2021-06-15", "2021-06-15T23:59:59"),
+    ],
+)
+def test_a_snapshot_date_lasts_as_long_as_it_is_precise(value: str, end: str) -> None:
+    from open_climate_service.shared.time import period_string_end_datetime
+
+    assert period_string_end_datetime(value).isoformat() == f"{end}+00:00"
