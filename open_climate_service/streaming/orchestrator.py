@@ -19,7 +19,7 @@ import asyncio
 import inspect
 import logging
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -54,7 +54,7 @@ class StreamingIngestResult:
     """
 
     store_path: Path
-    period_type: str
+    period_type: str | None
     periods_written: int
 
 
@@ -409,3 +409,51 @@ def run_streaming_ingest_sync(
             committed_periods=committed_periods,
         )
     )
+
+
+def run_static_ingest_sync(
+    *,
+    plugin: IngestionPlugin,
+    params: dict[str, Any],
+    dataset: dict[str, Any] | None = None,
+    bbox: list[float],
+    store_path: Path,
+) -> StreamingIngestResult:
+    """Fetch a static dataset without a time axis once and write it as a ``(y, x)`` store (CLIM-1448).
+
+    The counterpart of a streaming ingest's first write, for a plugin implementing ``fetch``:
+    there are no periods to plan, append or resume, so the whole dataset is one commit. The
+    caller hands it an empty path (a new store, or a replacement beside the published one).
+    """
+    x_dim: str = getattr(plugin, "x_dim", "x")
+    y_dim: str = getattr(plugin, "y_dim", "y")
+    fallback_crs: int | str = getattr(plugin, "crs", 4326)
+    try:
+        fetch = getattr(plugin, "fetch")
+        ds: xr.Dataset
+        if inspect.iscoroutinefunction(fetch):
+            ds = asyncio.run(cast("Coroutine[Any, Any, xr.Dataset]", fetch(bbox, **params)))
+        else:
+            ds = cast("xr.Dataset", fetch(bbox, **params))
+        try:
+            # A leftover length-one time axis would make readers treat the store as a series.
+            temporal = [str(d) for d in ds.dims if d not in (x_dim, y_dim)]
+            if temporal:
+                raise RuntimeError(
+                    f"A static dataset without a time axis must be fetched as ({y_dim}, {x_dim}); got dims "
+                    f"{tuple(str(d) for d in ds.dims)}. Drop the extra dimensions {temporal} in the plugin."
+                )
+            prepared = prepare_for_publication(ds, fallback_crs=fallback_crs, time_dim=None, x_dim=x_dim, y_dim=y_dim)
+            ds = prepared.dataset
+            spec = _grid_spec_from_dataset(ds, time_dim="t", x_dim=x_dim, y_dim=y_dim, crs=prepared.crs)
+            _strip_cf_encoding(ds, "", time_dim="t")
+            apply_cf_metadata(ds, cf_attrs_from_template(dataset), overwrite=True)
+            session = open_or_create_repo(store_path).writable_session("main")
+            ds.to_zarr(session.store, mode="w", zarr_format=3)
+            write_geozarr_attrs(session.store, spec=spec, bbox=bbox)
+            session.commit("ingest: static")
+        finally:
+            ds.close()
+    finally:
+        close_ingestion_plugin(plugin)
+    return StreamingIngestResult(store_path=store_path, period_type=None, periods_written=1)

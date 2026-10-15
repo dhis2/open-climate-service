@@ -73,9 +73,10 @@ from open_climate_service.shared.time import (
     utc_today,
 )
 from open_climate_service.shared.urls import path_segment as _segment
-from open_climate_service.streaming.orchestrator import run_streaming_ingest_sync
+from open_climate_service.streaming.orchestrator import run_static_ingest_sync, run_streaming_ingest_sync
 from open_climate_service.streaming.protocol import IngestionPlugin, close_ingestion_plugin
 from open_climate_service.streaming.store import (
+    is_store_empty,
     open_or_create_repo,
     read_committed_period_ids_ordered,
 )
@@ -156,8 +157,8 @@ class _StreamingMaterializationPlan:
     """Cumulative bounds and periods to fetch, selected before store mutation."""
 
     action: SyncAction
-    start: str
-    end: str
+    start: str | None
+    end: str | None
     periods: list[str] | None
     has_committed_periods: bool
     committed_periods: list[str] = field(default_factory=list)
@@ -458,6 +459,25 @@ def create_artifact(
     # output was first told to supply a start period — advice for a request that could never
     # have succeeded.
     ensure_ingestable(dataset)
+
+    if registry_datasets.is_timeless(dataset):
+        # No time axis, so no periods to resolve, plan or append: the plugin's `fetch` is called
+        # once (CLIM-1448). A start or end in the request has nothing to select and is ignored.
+        ingestion = dataset.get("ingestion")
+        plugin_path = str((ingestion or {}).get("plugin", "")).strip() if isinstance(ingestion, dict) else ""
+        return _create_streaming_artifact(
+            dataset=dataset,
+            plugin_path=plugin_path,
+            start=None,
+            end=None,
+            bbox=bbox,
+            country_code=country_code,
+            overwrite=overwrite,
+            publish=publish,
+            request_scope=ArtifactRequestScope(bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None),
+            on_progress=on_progress,
+            on_update_planned=on_update_planned,
+        )
 
     period_type = str(dataset["period_type"])
     start = _resolve_request_start(start, dataset=dataset, period_type=period_type)
@@ -1187,6 +1207,23 @@ def _plan_streaming_materialization(
     )
 
 
+def _plan_static_materialization(*, store_path: Path, overwrite: bool) -> _StreamingMaterializationPlan:
+    """Plan an ingest of a static dataset without a time axis (CLIM-1448).
+
+    There are no periods to compare, so a stored dataset is current: an ingest without
+    ``overwrite`` keeps it, and one with ``overwrite`` fetches it again into a replacement that
+    is swapped in once it is complete.
+    """
+    has_store = store_path.exists() and not is_store_empty(store_path)
+    if has_store and not overwrite:
+        action = SyncAction.NO_OP
+    elif has_store:
+        action = SyncAction.REMATERIALIZE
+    else:
+        action = SyncAction.APPEND
+    return _StreamingMaterializationPlan(action=action, start=None, end=None, periods=None, has_committed_periods=False)
+
+
 def _previous_coverage_end(dataset: dict[str, object], plan: _StreamingMaterializationPlan) -> str | None:
     """The coverage end stored data had before an update, or None when all of it is new.
 
@@ -1209,8 +1246,8 @@ def _create_streaming_artifact(
     *,
     dataset: dict[str, object],
     plugin_path: str,
-    start: str,
-    end: str,
+    start: str | None,
+    end: str | None,
     bbox: list[float] | None,
     country_code: str | None,
     overwrite: bool,
@@ -1269,15 +1306,20 @@ def _create_streaming_artifact(
         # `.retired`. Healing before any inspection makes the next sync an ordinary append.
         recover_interrupted_swap(store_path)
 
-        plan = _plan_streaming_materialization(
-            plugin=plugin,
-            store_path=store_path,
-            start=start,
-            end=end,
-            period_type=str(dataset["period_type"]),
-            overwrite=overwrite,
-            periods=periods,
-        )
+        timeless = registry_datasets.is_timeless(dataset)
+        if timeless:
+            plan = _plan_static_materialization(store_path=store_path, overwrite=overwrite)
+        else:
+            assert start is not None and end is not None
+            plan = _plan_streaming_materialization(
+                plugin=plugin,
+                store_path=store_path,
+                start=start,
+                end=end,
+                period_type=str(dataset["period_type"]),
+                overwrite=overwrite,
+                periods=periods,
+            )
         if plan.action == SyncAction.NO_OP:
             try:
                 existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
@@ -1289,8 +1331,11 @@ def _create_streaming_artifact(
                 logger.warning("Re-registering committed store '%s' without an artifact record", store_path)
             else:
                 temporal = existing.coverage.temporal
-                coverage_is_current = str(dataset["period_type"]) == "climatology" or (
-                    temporal.start == plan.start and temporal.end == plan.end
+                # A timeless store has no periods to fall behind: what is stored is the dataset.
+                coverage_is_current = (
+                    timeless
+                    or str(dataset["period_type"]) == "climatology"
+                    or (temporal.start == plan.start and temporal.end == plan.end)
                 )
                 if coverage_is_current:
                     if publish and existing.publication.status != PublicationStatus.PUBLISHED:
@@ -1327,7 +1372,12 @@ def _create_streaming_artifact(
             rollback_snapshot = snapshot
             rollback_branch = branch
 
-        if plan.action != SyncAction.NO_OP:
+        if plan.action != SyncAction.NO_OP and timeless:
+            plugin_handed_to_orchestrator = True
+            run_static_ingest_sync(plugin=plugin, params=params, dataset=dataset, bbox=bbox, store_path=ingest_path)
+            ingest_completed = True
+        elif plan.action != SyncAction.NO_OP:
+            assert plan.start is not None and plan.end is not None
             plugin_handed_to_orchestrator = True
             result = run_streaming_ingest_sync(
                 plugin=plugin,
@@ -1356,8 +1406,13 @@ def _create_streaming_artifact(
             )
 
         _spatial_wgs84_data = coverage_data["coverage"].get("spatial_wgs84")
+        temporal_coverage = CoverageTemporal(**coverage_data["coverage"]["temporal"])
+        if timeless:
+            # The store has no time axis; a dated snapshot carries its date as metadata.
+            snapshot_start, snapshot_end = registry_datasets.snapshot_date(dataset)
+            temporal_coverage = CoverageTemporal(start=snapshot_start, end=snapshot_end)
         coverage = ArtifactCoverage(
-            temporal=CoverageTemporal(**coverage_data["coverage"]["temporal"]),
+            temporal=temporal_coverage,
             spatial=CoverageSpatial(**coverage_data["coverage"]["spatial"]),
             spatial_wgs84=CoverageSpatial(**_spatial_wgs84_data) if _spatial_wgs84_data else None,
         )
@@ -1365,7 +1420,7 @@ def _create_streaming_artifact(
         # the raw user request. The latter remains on the record as operation provenance.
         # A brand-new store may legitimately clamp its end to source availability; an
         # update was already planned from the source's exact available period sequence.
-        if coverage.temporal.start is not None:
+        if coverage.temporal.start is not None and not timeless:
             coverage_matches_plan = (
                 _temporal_coverage_matches_request_scope(coverage.temporal, materialization_scope)
                 if plan.has_committed_periods
@@ -1834,6 +1889,8 @@ def _maybe_build_pyramid(
         return _StoreNormalizationResult(completed=False)
 
     try:
+        # None for a static dataset without a time axis (CLIM-1448).
+        t_dim = next((d for d in ("t", "time", "valid_time") if d in ds.sizes), None)
         already_normalized = "spatial_ref" in ds.coords or "spatial_ref" in ds.variables
         if already_normalized and "x" in ds.sizes and "y" in ds.sizes and not downloader.needs_pyramid(ds):
             # A flat, already-normalized store needs no read-rewrite — but streaming ingests
@@ -1841,7 +1898,6 @@ def _maybe_build_pyramid(
             # That makes a map client fetch one tiny chunk per timestep to read the axis
             # (thousands of requests for a multi-year daily store), so re-chunk just the
             # coordinate here (cheap; data variables untouched).
-            t_dim = next((d for d in ("t", "time", "valid_time") if d in ds.sizes), None)
             if t_dim is not None:
                 try:
                     downloader.ensure_time_coordinate_chunking(store_path, t_dim)
@@ -1863,6 +1919,7 @@ def _maybe_build_pyramid(
             downloader.write_to_icechunk_store(
                 ds,
                 staging,
+                t_dim=t_dim,
                 pyramid_method=downloader.resampling_method_from_template(dataset),
                 commit_message="Applied GeoZarr conventions",
             )
@@ -2843,6 +2900,9 @@ def _dataset_period_type(latest: ArtifactRecord, source_dataset: dict[str, Any])
     source of what to call one.
     """
     if latest.format == ArtifactFormat.GEOPARQUET:
+        return None
+    if registry_datasets.is_timeless(source_dataset):
+        # A static raster without a time axis (CLIM-1448): no period axis, like a feature collection.
         return None
     declared = _as_optional_str(source_dataset.get("period_type")) or latest.period_type
     return declared if declared is not None else "unknown"

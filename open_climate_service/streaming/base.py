@@ -13,6 +13,10 @@ implements just two methods:
 
 The store grid (shape, dtype, nodata, CRS) is inferred from the first fetched
 period; a projected-grid source declares its CRS via the `crs` class attribute.
+
+A static dataset without a time axis (a template with `sync: {kind: static}` and no
+`period_type`, such as elevation) implements `fetch(bbox, **params)` instead, returning
+``(y, x)``; it is fetched once per ingest (CLIM-1448).
 """
 
 from __future__ import annotations
@@ -72,3 +76,13 @@ class BaseDatasetPlugin:
         self-contained.)
         """
         raise NotImplementedError("Dataset plugins must implement fetch_period()")
+
+    def fetch(self, bbox: list[float], **params: Any) -> "xr.Dataset | Awaitable[xr.Dataset]":
+        """Fetch a static dataset without a time axis as ``(y, x)`` (CLIM-1448).
+
+        Implemented instead of `periods` and `fetch_period` by a plugin whose template is
+        ``sync: {kind: static}`` without a ``period_type``. Called once per ingest; as with
+        `fetch_period`, a regular method runs in a worker thread, ``async def`` is awaited, and
+        the framework closes the returned dataset after writing it.
+        """
+        raise NotImplementedError("A static dataset plugin without a time axis must implement fetch()")
