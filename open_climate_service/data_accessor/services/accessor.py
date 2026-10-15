@@ -13,7 +13,7 @@ from pyproj import Transformer
 from ...data_manager.services.downloader import get_cache_files, get_icechunk_path, get_zarr_path
 from ...data_manager.services.utils import get_time_dim, get_x_y_dims
 from ...shared.crs import dataset_crs
-from ...shared.netcdf import open_netcdfs, write_netcdf
+from ...shared.netcdf import write_netcdf
 from ...shared.time import numpy_datetime_to_period_string
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ def get_data(
             logger.warning(
                 f"Could not find optimized zarr file for dataset {dataset['id']}, using slower netcdf files instead."
             )
-            ds = open_netcdfs(
+            ds = xr.open_mfdataset(
                 files,
                 data_vars="minimal",
                 coords="minimal",  # pyright: ignore[reportArgumentType]
@@ -125,7 +125,7 @@ def get_data_coverage_for_paths(
         ds = open_zarr_dataset(zarr_path)
     else:
         assert netcdf_paths is not None
-        ds = open_netcdfs(
+        ds = xr.open_mfdataset(
             netcdf_paths,
             data_vars="minimal",
             coords="minimal",  # pyright: ignore[reportArgumentType]
