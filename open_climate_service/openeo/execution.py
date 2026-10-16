@@ -769,7 +769,7 @@ def stamp_declared_cadence(data: _Cube, collection_id: str) -> _Cube:
     cadence = template.get("period_type") if isinstance(template, dict) else None
     if isinstance(cadence, str):
         stamp_cadence(data, cadence)
-        
+
     # A categorical dataset's classes travel on the cube, so a process can aggregate per class
     # and refuse to average codes (CLIM-895). From the template, so an older store counts too.
     # A continuous dataset declares no classes and is left as it is.

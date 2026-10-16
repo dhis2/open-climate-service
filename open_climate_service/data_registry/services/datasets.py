@@ -422,7 +422,7 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
             classification_from_template(dataset)
         except ValueError as exc:
             raise ValueError(f"Dataset template '{dataset_id}' in {source}: {exc}") from exc
-    
+
     sync_block = dataset.get("sync", {})
     sync_kind = sync_block.get("kind") if isinstance(sync_block, dict) else None
     if not isinstance(sync_kind, str) or not sync_kind:

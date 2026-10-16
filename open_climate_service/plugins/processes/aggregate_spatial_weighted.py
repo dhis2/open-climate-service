@@ -114,10 +114,10 @@ def aggregate_spatial_weighted(
         and the non-spatial dimensions of the input cube preserved.
     """
     # NOTE: adapted from openeo_processes_dask.processes.aggregate_spatial to support exactextract
+    from open_climate_service.data_manager.services.utils import get_x_y_dims
+    from open_climate_service.shared.classes import cube_classes
     from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
     from open_climate_service.shared.vectors import features_in_crs, single_raster, vector_result
-    from open_climate_service.shared.classes import cube_classes
-    from open_climate_service.data_manager.services.utils import get_x_y_dims
 
     # Validate the reducer argument
     if not isinstance(reducer, str) or reducer not in REDUCERS:
@@ -157,7 +157,7 @@ def aggregate_spatial_weighted(
         for read in reads
     ]
     vec_cube: xr.DataArray = parts[0] if len(parts) == 1 else cast(xr.DataArray, xr.concat(parts, dim=str(dim)))
-    
+
     # The named method, so a DHIS2 export can check the aggregation it declares against this one.
     record_spatial_aggregation(reducer)
     return vector_result(vec_cube, raster, frame.index)
