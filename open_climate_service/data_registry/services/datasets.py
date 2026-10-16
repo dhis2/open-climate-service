@@ -82,6 +82,35 @@ def declared_temporal_end(dataset: dict[str, Any]) -> str | None:
     return str(end) if end is not None else None
 
 
+def is_timeless(dataset: dict[str, Any]) -> bool:
+    """True for a static template without a ``period_type``: its data has no time axis (CLIM-1448).
+
+    Elevation, slope or distance to a road: the value does not refer to a period. Its plugin
+    implements ``fetch(bbox)`` instead of ``periods`` and ``fetch_period``, and the store is
+    ``(y, x)``. A static template that declares a ``period_type`` (a workflow output, a
+    climatology) keeps its axis.
+    """
+    sync = dataset.get("sync")
+    kind = sync.get("kind") if isinstance(sync, dict) else None
+    return kind == "static" and dataset.get("period_type") is None
+
+
+def snapshot_date(dataset: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The date a timeless dataset describes, from its ``extents.temporal``; (None, None) if it has none.
+
+    A land cover map for 2021 refers to 2021 but is not a series: the date is metadata on the
+    dataset, shown in STAC and on its page, not a one-step axis in the store. ``end`` defaults
+    to ``begin``.
+    """
+    extents = dataset.get("extents")
+    temporal = extents.get("temporal") if isinstance(extents, dict) else None
+    if not isinstance(temporal, dict) or temporal.get("begin") is None:
+        return None, None
+    begin = str(temporal["begin"])
+    end = temporal.get("end")
+    return begin, str(end) if end is not None else begin
+
+
 def list_datasets() -> list[dict[str, Any]]:
     """Load all dataset templates and return a flat list.
 
