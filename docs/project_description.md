@@ -182,7 +182,7 @@ All datasets are stored as GeoZarr. Key properties:
 - Chunk shape tuned per dataset to balance three access patterns: time series queries, polygon aggregation, and browser tile rendering.
 - Blosc/Zstd compression.
 
-Managed datasets are written through Icechunk, which opens every store on the local filesystem — the only backend implemented today. Icechunk uses Apache Arrow's `object_store` rather than fsspec, so an alternative backend is a constructor change (`s3_storage`, `gcs_storage`) rather than a path rewrite. Making the backend a per-deployment configuration choice is tracked in CLIM-555, targeting:
+Managed datasets are written through Icechunk, which opens every store on the local filesystem — the only backend implemented today. Icechunk uses Apache Arrow's `object_store` rather than fsspec, so an alternative backend is a constructor change (`s3_storage`, `gcs_storage`) rather than a path rewrite. Making the backend a per-deployment configuration choice is planned, targeting:
 
 | Backend                  | Notes                                                                                                                                                                      |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
