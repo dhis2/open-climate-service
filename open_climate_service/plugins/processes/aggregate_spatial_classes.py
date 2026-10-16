@@ -29,7 +29,7 @@ CLASS_DIM = "class"
 """The result dimension holding the class codes, with their labels as the `class_label` coordinate."""
 
 
-def _xy(raster: xr.DataArray) -> xr.DataArray:
+def _ensure_xy(raster: xr.DataArray) -> xr.DataArray:
     """The raster with its spatial axes named x and y, which exactextract needs.
 
     As in aggregate_spatial_weighted: a cube's axes may be x/y, lon/lat or longitude/latitude.
@@ -42,7 +42,7 @@ def _xy(raster: xr.DataArray) -> xr.DataArray:
     return raster
 
 
-def _codes_only(raster: xr.DataArray) -> xr.DataArray:
+def _apply_missing(raster: xr.DataArray) -> xr.DataArray:
     """The class raster as floats, with the nodata code and missing cells as NaN.
 
     exactextract skips NaN cells, so a cell that is no class counts towards no class, and the
@@ -55,13 +55,14 @@ def _codes_only(raster: xr.DataArray) -> xr.DataArray:
     if nodata is not None:
         values = values.where(raster != nodata)
     masked: xr.DataArray = values.rio.write_nodata(np.nan)
+
     return masked
 
 
-def _single_grid(weights: xr.DataArray) -> xr.DataArray:
-    """The weight raster, axes already named x and y, as one 2-D grid: one year of population.
+def _ensure_single_grid(weights: xr.DataArray) -> xr.DataArray:
+    """Ensure a raster - with axes already named x and y - is as a single 2-D grid for a single time period.
 
-    A class series is summed against a single weight grid; a weight series would leave it unclear
+    E.g. a class series is summed against a single weight grid; a weight series would leave it unclear
     which year of people belongs to which day of classes, so it is refused.
     """
     other = [dim for dim in weights.dims if dim not in ("x", "y")]
@@ -87,12 +88,15 @@ def _read_chunks(classes: xr.DataArray, grid_cells: int) -> tuple[str | None, li
     other = [dim for dim in classes.dims if dim not in ("x", "y")]
     if not other:
         return None, [slice(None)]
+
     dim = str(max(other, key=lambda name: classes.sizes[name]))
     grids_per_step = classes.size // (classes.sizes[dim] * classes.sizes["x"] * classes.sizes["y"])
     step_bytes = 8 * grid_cells * grids_per_step
     per_read = max(1, READ_CHUNK_BYTES // max(1, step_bytes))
     steps = classes.sizes[dim]
-    return dim, [slice(start, min(steps, start + per_read)) for start in range(0, steps, per_read)]
+    slices = [slice(start, min(steps, start + per_read)) for start in range(0, steps, per_read)]
+
+    return dim, slices
 
 
 def _zonal(raster: xr.DataArray, frame: Any, stat: str) -> xr.DataArray:
@@ -216,22 +220,31 @@ def aggregate_spatial_classes(
 
     if reducer not in REDUCERS:
         raise ValueError(f"aggregate_spatial_classes: reducer must be one of {', '.join(REDUCERS)}")
+
+    # Preprocess the geometries
+    record_features(geometries)
+
+    # Preprocess the categorical raster
     raster = single_raster(data)
-    declared = cube_classes(raster)
-    if declared is None:
+    raster = _apply_missing(_ensure_xy(raster))
+
+    # Extract the categorical classification
+    classification = cube_classes(raster)
+    if classification is None:
         raise ValueError(
             f"aggregate_spatial_classes: '{raster.name or 'the input'}' declares no classes; it is not a categorical "
             "dataset. Declare `classes` in its template, or use aggregate_spatial_weighted for continuous data"
         )
-    codes, labels = declared
-    record_features(geometries)
-    classes = _codes_only(_xy(raster))
+    codes, labels = classification
 
+    # Prepare data for the requested reducer
     if reducer == "total":
         if weights is None:
             raise ValueError("aggregate_spatial_classes: reducer 'total' needs `weights`, such as population")
+
         # Axes renamed before the one-grid check, so a weight on lon/lat is one grid, not a series.
-        weight = _single_grid(_xy(single_raster(weights))).load()
+        weight = _ensure_single_grid(_ensure_xy(single_raster(weights))).load()
+
         # The sums are on the weight grid, so the geometries are put in its CRS.
         frame = features_in_crs(geometries, weight.rio.crs)
         reference = raster.rio.write_crs(weight.rio.crs)
@@ -241,17 +254,25 @@ def aggregate_spatial_classes(
             return _total(part, weight, frame, codes, labels)
 
     else:
-        frame = features_in_crs(geometries, classes.rio.crs)
+        frame = features_in_crs(geometries, raster.rio.crs)
         reference = raster
-        grid_cells = classes.sizes["x"] * classes.sizes["y"]
+        grid_cells = raster.sizes["x"] * raster.sizes["y"]
 
-        def compute(part: xr.DataArray) -> xr.DataArray:
-            return _share(part, frame, codes, labels) if reducer == "share" else _majority(part, frame)
+        if reducer == "share":
 
-    # Read and aggregate a bounded slice of the series at a time, as aggregate_spatial_weighted.
-    dim, reads = _read_chunks(classes, grid_cells)
-    parts = [compute((classes if dim is None else classes.isel({dim: read})).load()) for read in reads]
+            def compute(part: xr.DataArray) -> xr.DataArray:
+                return _share(part, frame, codes, labels)
+
+        elif reducer == "majority":
+
+            def compute(part: xr.DataArray) -> xr.DataArray:
+                return _majority(part, frame)
+
+    # Read and aggregate a bounded slice of the series at a time and concatenate the results
+    dim, reads = _read_chunks(raster, grid_cells)
+    parts = [compute((raster if dim is None else raster.isel({dim: read})).load()) for read in reads]
     result: xr.DataArray = parts[0] if len(parts) == 1 else xr.concat(parts, dim=str(dim))
+
+    # Record aggregation method and return the results
     record_spatial_aggregation(reducer)
-    # The result takes its name and the cadence of its time axis from the class raster.
     return vector_result(result, reference, frame.index)
