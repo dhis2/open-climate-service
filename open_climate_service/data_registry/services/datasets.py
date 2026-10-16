@@ -417,10 +417,12 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
     if dataset.get("classes") is not None:
         from open_climate_service.shared.classes import classification_from_template
 
+        # Verify that categorical datasets have a valid classification
         try:
             classification_from_template(dataset)
         except ValueError as exc:
             raise ValueError(f"Dataset template '{dataset_id}' in {source}: {exc}") from exc
+    
     sync_block = dataset.get("sync", {})
     sync_kind = sync_block.get("kind") if isinstance(sync_block, dict) else None
     if not isinstance(sync_kind, str) or not sync_kind:
