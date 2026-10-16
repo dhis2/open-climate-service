@@ -134,8 +134,9 @@ Sync schedules sit under `/schedules/sync` because they are keyed by the dataset
 one per dataset. Another kind of schedule would get its own path under `/schedules` and appear
 in the same listing.
 
-A dataset that is static, forecast-facing or has no registered data source is refused with the
-reason. The target must have been ingested for a check to submit a sync; a stored schedule for
+A dataset that is static, a forecast stored by the date it predicts, or without a registered data
+source is refused with the reason, and the dataset page shows that reason instead of the schedule
+form. The target must have been ingested for a check to submit a sync; a stored schedule for
 a dataset not yet ingested is saved and its checks finish as `not_materialized` until it is.
 
 Changing schedules changes when data moves into the instance, and a sync can trigger
@@ -170,10 +171,11 @@ to maintain data served by a structurally read-only public instance.
 ## Current scope
 
 Scheduled sync supports previously ingested historical or otherwise append/rematerialize
-datasets. A static or future-facing entry is skipped and remains visible in `GET /schedules`
-with an error, without preventing unrelated API routes from starting. Refreshing a forecast
-requires replacing an overlapping forward window, not merely appending periods after the
-latest stored timestamp.
+datasets, and forecasts stored one run per issue time (such as GEFS), where each new run is an
+append. A static entry, or a forecast stored by the date it predicts, is skipped and remains
+visible in `GET /schedules` with an error, without preventing unrelated API routes from starting.
+Refreshing a forecast stored by date requires replacing an overlapping forward window, not merely
+appending periods after the latest stored timestamp.
 
 Successful update events can drive openEO workflows through instance-owned bindings; see
 [Dataset-update workflow automation](workflow_automation.md). Cross-service orchestration,
