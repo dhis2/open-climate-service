@@ -24,6 +24,7 @@ import xarray as xr
 from earthkit.transforms import climatology as ek_climatology
 from ecmwf.datastores import Client as _CdsClient
 
+from open_climate_service.shared.netcdf import load_netcdf
 from open_climate_service.shared.time import (
     daily_period_ids,
     datetime_to_period_string,
@@ -137,7 +138,7 @@ class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):
             target = Path(tmp) / "era5land_hourly.nc"
             remote = _CdsClient().submit("reanalysis-era5-land", params)
             remote.download(str(target))
-            ds = xr.open_dataset(target, engine="netcdf4").load()
+            ds = load_netcdf(target)
         ds = _collapse_expver(ds[[self.variable]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
         ds = ds.rename({"longitude": "x", "latitude": "y", time_dim: "t"})
@@ -219,7 +220,7 @@ class ERA5LandDailyTemperaturePlugin(BaseDatasetPlugin):
             target = Path(tmp) / "era5land_daily.nc"
             remote = _CdsClient().submit("derived-era5-land-daily-statistics", params)
             remote.download(str(target))
-            ds = xr.open_dataset(target, engine="netcdf4").load()
+            ds = load_netcdf(target)
 
         ds = _collapse_expver(ds[["t2m"]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
@@ -336,7 +337,7 @@ class ERA5LandMonthlyPlugin(BaseDatasetPlugin):
             remote.download(str(target))
             # Loaded, not lazy: the framework closes what `fetch_period` returns, and every
             # month of the year is served from this one object.
-            ds = xr.open_dataset(target, engine="netcdf4").load()
+            ds = load_netcdf(target)
 
         ds = _collapse_expver(ds[[self.variable]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
