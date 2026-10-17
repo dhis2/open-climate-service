@@ -146,6 +146,9 @@ def resampling_method_from_template(template: dict[str, Any] | None) -> str:
     """
     ingestion = (template or {}).get("ingestion")
     raw = ingestion.get("resampling") if isinstance(ingestion, dict) else None
+    if raw is None and (template or {}).get("classes"):
+        # A dataset that declares classes holds codes: the most common code, never an average.
+        return "mode"
     return _normalize_resampling_method(raw)
 
 
