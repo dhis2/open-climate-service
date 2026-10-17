@@ -155,6 +155,9 @@ server = [
     # Overture's own country column. The register, and nothing else, at about 40 KB — pycountry
     # answers the same question but carries ~21 MB of translations this has no use for.
     "iso3166>=2.1",
+    # The /mcp endpoint (CLIM-851). Pinned to 2.x: 2.0 renamed FastMCP to MCPServer, and the
+    # endpoint builds on 2.x names.
+    "mcp>=2.3,<3",
     # Builds the PMTiles archive the map viewer draws a feature collection from (CLIM-1177),
     # straight from the stored GeoParquet. Pinned: it is pre-1.0 and its overview format is
     # expected to change, and the archive is derived output a refresh rebuilds anyway.
