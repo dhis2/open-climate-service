@@ -422,7 +422,8 @@ The following parameters control how the datasets are displayed visually and in 
 
 A dataset whose values are codes rather than measurements (land cover, hazard or warning levels,
 binary masks) declares its classes. Each class has an integer `value` as stored, a `label`, and
-optionally a `color`. `display.nodata`, if set, is a code that is not a class, so `0` can be one:
+optionally a `color`. A cell that is no class is stored as missing (NaN): `normalize_period(..., nodata=...)`
+masks a source's no-data code.
 
 ```yaml
 classes:
@@ -430,18 +431,16 @@ classes:
   - { value: 1, label: Caution (35-38 °C), color: "#fecc5c" }
   - { value: 2, label: Warning (38-40 °C), color: "#fd8d3c" }
   - { value: 3, label: Danger (40 °C and above), color: "#e31a1c" }
-display:
-  nodata: 255
 ```
 
 The classes are written to the stored variable as CF `flag_values` and `flag_meanings`, and
 published in STAC as `classification:classes` on the data assets. The pyramid is resampled with
 `mode`. A categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
 `share` of each class, the `majority` class, or a `total` of a weight such as population per
-class (see [population per class](workflows.md#people-per-class-of-a-categorical-dataset)).
+class.
 `aggregate_spatial_weighted` refuses it, since a mean or sum of codes is not a class. A template
-with duplicate values, a non-integer value, an empty label, a malformed colour, or a nodata code
-that is also a class is refused when it is loaded.
+with duplicate values, a non-integer value, an empty label or a malformed colour is refused when
+it is loaded.
 
 ## Step 3: Point the instance at your plugins directory
 

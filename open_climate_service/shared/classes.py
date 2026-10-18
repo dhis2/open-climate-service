@@ -8,13 +8,11 @@ plausible but wrong class, so a categorical dataset is aggregated per class inst
 classes:
   - { value: 0, label: No warning, color: "#ffffb2" }
   - { value: 1, label: Caution (35-38 °C), color: "#fecc5c" }
-display:
-  nodata: 255   # optional: a code that is not data, so 0 can be a class
 ```
 
-The classes reach the store as CF ``flag_values``/``flag_meanings`` on the variable, STAC as
-``classification:classes``, and a loaded cube as the same CF attributes, stamped from the
-template at load so a store written before its classes were declared is still categorical.
+The classes reach the store as CF ``flag_values``/``flag_meanings`` on the variable, which a
+loaded cube carries, and STAC as ``classification:classes``. A cell that is no class is stored
+as missing (NaN) by its plugin.
 """
 
 from __future__ import annotations
@@ -24,9 +22,6 @@ from dataclasses import dataclass
 from typing import Any
 
 STAC_CLASSIFICATION_EXTENSION = "https://stac-extensions.github.io/classification/v2.0.0/schema.json"
-
-# Stamped on a loaded cube beside the CF flags, so the aggregation can leave the nodata code out.
-NODATA_ATTR = "ocs_nodata"
 
 _COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
 
@@ -42,10 +37,9 @@ class DataClass:
 
 @dataclass(frozen=True)
 class Classification:
-    """The classes a categorical dataset declares, and the code that is not data, if any."""
+    """The classes a categorical dataset declares."""
 
     classes: tuple[DataClass, ...]
-    nodata: int | None = None
 
     @property
     def values(self) -> list[int]:
@@ -82,20 +76,7 @@ def classification_from_template(template: dict[str, Any] | None) -> Classificat
     values = [c.value for c in classes]
     if len(set(values)) != len(values):
         raise ValueError(f"'classes' declares a value more than once: {values}")
-
-    display = (template or {}).get("display")
-    if display is not None and not isinstance(display, dict):
-        raise ValueError(f"'display' must be a mapping, got {type(display).__name__}")
-    nodata_raw = (display or {}).get("nodata")
-    nodata: int | None = None
-    if nodata_raw is not None:
-        integral = isinstance(nodata_raw, int) or (isinstance(nodata_raw, float) and nodata_raw.is_integer())
-        if isinstance(nodata_raw, bool) or not integral:
-            raise ValueError(f"display.nodata of a categorical dataset must be an integer code, got {nodata_raw!r}")
-        nodata = int(nodata_raw)
-        if nodata in values:
-            raise ValueError(f"display.nodata {nodata} is also declared as a class")
-    return Classification(classes=tuple(classes), nodata=nodata)
+    return Classification(classes=tuple(classes))
 
 
 def cf_flag_attrs(classification: Classification) -> dict[str, Any]:
@@ -105,7 +86,7 @@ def cf_flag_attrs(classification: Classification) -> dict[str, Any]:
 
 
 def stac_classes(classification: Classification) -> list[dict[str, Any]]:
-    """STAC ``classification:classes``: one entry per class, and the nodata code marked as such."""
+    """STAC ``classification:classes``: one entry per class."""
     entries: list[dict[str, Any]] = []
     for item in classification.classes:
         entry: dict[str, Any] = {
@@ -116,19 +97,7 @@ def stac_classes(classification: Classification) -> list[dict[str, Any]]:
         if item.color:
             entry["color_hint"] = item.color.lstrip("#").upper()
         entries.append(entry)
-    if classification.nodata is not None:
-        entries.append({"value": classification.nodata, "name": "nodata", "nodata": True})
     return entries
-
-
-def stamp_classes(data: Any, classification: Classification) -> Any:
-    """Mark a loaded cube with its dataset's classes, in place, and return it."""
-    attrs = getattr(data, "attrs", None)
-    if isinstance(attrs, dict):
-        attrs.update(cf_flag_attrs(classification))
-        if classification.nodata is not None:
-            attrs[NODATA_ATTR] = classification.nodata
-    return data
 
 
 def cube_classes(data: Any) -> tuple[list[int], list[str]] | None:

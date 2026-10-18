@@ -9,8 +9,8 @@ weights each cell by the share of it the geometry covers:
 - `total`: the sum of a weight raster, usually population, in each class.
 
 `share` and `total` return one value per class and geometry, on a `class` dimension labelled by
-`class_label`; `majority` returns one class code per geometry. The nodata code a template declares
-is not a class and counts towards none.
+`class_label`; `majority` returns one class code per geometry. A missing (NaN) cell is not a class
+and counts towards none.
 """
 
 from typing import Any
@@ -43,19 +43,12 @@ def _ensure_xy(raster: xr.DataArray) -> xr.DataArray:
 
 
 def _apply_missing(raster: xr.DataArray) -> xr.DataArray:
-    """The class raster as floats, with the nodata code and missing cells as NaN.
+    """The class raster as floats, with missing cells as NaN.
 
     exactextract skips NaN cells, so a cell that is no class counts towards no class, and the
     share of a class is of the geometry's area that has a class.
     """
-    from open_climate_service.shared.classes import NODATA_ATTR
-
-    nodata = raster.attrs.get(NODATA_ATTR)
-    values = raster.astype("float64")
-    if nodata is not None:
-        values = values.where(raster != nodata)
-    masked: xr.DataArray = values.rio.write_nodata(np.nan)
-
+    masked: xr.DataArray = raster.astype("float64").rio.write_nodata(np.nan)
     return masked
 
 
@@ -153,8 +146,8 @@ def _total(
         "population, per class in each geometry: the class raster is first resampled onto the weight "
         "grid by nearest neighbour, since a weight is only meaningful on its own grid. `share` gives "
         "the fraction of each geometry's area in each class, and `majority` the class covering most "
-        "of it. Pixels are weighted by their overlap with the geometry. The nodata code, if declared, "
-        "is not a class and counts towards none."
+        "of it. Pixels are weighted by their overlap with the geometry. A missing cell is not a class "
+        "and counts towards none."
     ),
     parameters={
         "data": {
