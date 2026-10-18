@@ -58,8 +58,6 @@ logger = logging.getLogger(__name__)
 # Source spellings for the temporal dimension, mapped onto the canonical ``t``. The map
 # viewer looks for `t`; a store that ships `time` renders without a time control.
 _TIME_ALIASES = ("time", "valid_time", "date", "time_counter")
-TIME_ALIASES = _TIME_ALIASES
-"""Names a source may give its time axis; publication renames each to ``t``."""
 
 # Beyond this longitude a geographic x axis is on the 0…360 frame rather than −180…180.
 _LON_ROLL_THRESHOLD = 180.0

@@ -33,7 +33,6 @@ from open_climate_service.shared.time import (
     Cadence,
     parse_period_string_to_datetime,
     period_cadence,
-    period_string_end_datetime,
     period_type_to_iso_step,
     resolve_iso_period_step,
 )
@@ -277,12 +276,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     # Spatial extent comes from the live store (set in _build_collection_with_xstac),
     # not the artifact coverage — see _wgs84_extent_from_store. Temporal still tracks the
     # artifact's materialized coverage.
-    _override_temporal_extent_from_artifact(
-        collection_payload,
-        artifact,
-        # A workflow result with a recorded cadence has a time axis, whatever its template says.
-        snapshot=registry_datasets.is_timeless(source_dataset) and artifact.period_type is None,
-    )
+    _override_temporal_extent_from_artifact(collection_payload, artifact)
     _sanitize_variable_attrs(collection_payload)
     # Last, because the cf: fields are only known after the variables are built and sanitized.
     _declare_cf_extension_if_used(collection_payload)
@@ -1159,23 +1153,14 @@ def _round_spatial_steps(collection: dict[str, Any]) -> None:
             dimensions[key] = value
 
 
-def _override_temporal_extent_from_artifact(
-    collection: dict[str, Any], artifact: ArtifactRecord, *, snapshot: bool = False
-) -> None:
-    """Set the collection's temporal extent from the artifact's coverage.
-
-    A series is stamped at the start of each period, so its end is the start of the last one.
-    A dated snapshot without a time axis (CLIM-1448) has no steps: its date stands for the whole
-    period it names, so ``"2021"`` ends on 31 December 2021, not at its first instant.
-    """
+def _override_temporal_extent_from_artifact(collection: dict[str, Any], artifact: ArtifactRecord) -> None:
     temporal = artifact.coverage.temporal
 
-    def _fmt(value: datetime) -> str:
-        return value.isoformat().replace("+00:00", "Z")
+    def _fmt(v: str | None) -> str | None:
+        return parse_period_string_to_datetime(v).isoformat().replace("+00:00", "Z") if v else None
 
-    start = _fmt(parse_period_string_to_datetime(temporal.start)) if temporal.start else None
-    end_of = period_string_end_datetime if snapshot else parse_period_string_to_datetime
-    end = _fmt(end_of(temporal.end)) if temporal.end else None
+    start = _fmt(temporal.start)
+    end = _fmt(temporal.end)
     collection["extent"]["temporal"]["interval"] = [[start, end]]
     dimensions = collection.setdefault("cube:dimensions", {})
     for key, value in dimensions.items():

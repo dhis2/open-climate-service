@@ -446,28 +446,6 @@ def parse_period_string_to_datetime(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def period_string_end_datetime(value: str) -> datetime:
-    """The last second of the period a date string names, at its own precision, as a UTC datetime.
-
-    ``"2021"`` is the whole of 2021, ``"2021-06"`` all of June and ``"2021-06-15"`` that day; a
-    string with a time is that instant. For a dated snapshot without a period type (CLIM-1448),
-    whose only clue to how long its date lasts is how precisely it is written.
-    """
-    normalized = value.strip()
-    start = parse_period_string_to_datetime(normalized)
-    if "T" in normalized or _WEEKLY_PERIOD_PATTERN.fullmatch(normalized) is not None:
-        return start
-    if len(normalized) == 4:
-        following = start.replace(year=start.year + 1)
-    elif len(normalized) == 7:
-        following = (
-            start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
-        )
-    else:
-        following = start + timedelta(days=1)
-    return following - timedelta(seconds=1)
-
-
 def numpy_datetime_to_period_string(datetimes: np.ndarray[Any, Any], period_type: str) -> np.ndarray[Any, Any]:
     """Convert an array of numpy datetimes to truncated period strings."""
     if period_type == "weekly":

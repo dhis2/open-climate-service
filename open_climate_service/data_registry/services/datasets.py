@@ -95,22 +95,6 @@ def is_timeless(dataset: dict[str, Any]) -> bool:
     return kind == "static" and dataset.get("period_type") is None
 
 
-def snapshot_date(dataset: dict[str, Any]) -> tuple[str | None, str | None]:
-    """The date a timeless dataset describes, from its ``extents.temporal``; (None, None) if it has none.
-
-    A land cover map for 2021 refers to 2021 but is not a series: the date is metadata on the
-    dataset, shown in STAC and on its page, not a one-step axis in the store. ``end`` defaults
-    to ``begin``.
-    """
-    extents = dataset.get("extents")
-    temporal = extents.get("temporal") if isinstance(extents, dict) else None
-    if not isinstance(temporal, dict) or temporal.get("begin") is None:
-        return None, None
-    begin = str(temporal["begin"])
-    end = temporal.get("end")
-    return begin, str(end) if end is not None else begin
-
-
 def list_datasets() -> list[dict[str, Any]]:
     """Load all dataset templates and return a flat list.
 

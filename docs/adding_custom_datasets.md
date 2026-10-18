@@ -235,10 +235,6 @@ class ElevationPlugin(BaseDatasetPlugin):
         return normalize_period(ds, source_variable="dsm", variable="elevation", bbox=bbox).load()
 ```
 
-A single dated snapshot, such as a land cover map for 2021, is the same with `extents.temporal`
-giving its date (`begin`, and `end` if it spans a range): the date is shown in STAC and on the
-dataset page, while the store still has no time axis.
-
 ### Derived datasets
 
 In contrast to ingestable datasets, **derived** datasets are those that cannot be ingested but rather have to be produced by running a workflow, and therefore should not have the `ingestion.plugin` parameter. Roughly half the shipped catalogue is derived and lacks this parameter. Anomalies, normals and change rasters are *produced* by a workflow through `save_result` and registered as static templates, so there is nothing upstream to fetch. 

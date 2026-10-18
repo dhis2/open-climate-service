@@ -61,7 +61,6 @@ from open_climate_service.ingestions.sync_engine import SyncConfigurationError, 
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
-from open_climate_service.shared.raster_contract import TIME_ALIASES
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -477,7 +476,6 @@ def create_artifact(
             publish=publish,
             request_scope=ArtifactRequestScope(bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None),
             on_progress=on_progress,
-            is_cancel_requested=is_cancel_requested,
             on_update_planned=on_update_planned,
         )
 
@@ -1380,14 +1378,7 @@ def _create_streaming_artifact(
 
         if plan.action != SyncAction.NO_OP and timeless:
             plugin_handed_to_orchestrator = True
-            run_static_ingest_sync(
-                plugin=plugin,
-                params=params,
-                dataset=dataset,
-                bbox=bbox,
-                store_path=ingest_path,
-                is_cancel_requested=is_cancel_requested,
-            )
+            run_static_ingest_sync(plugin=plugin, params=params, dataset=dataset, bbox=bbox, store_path=ingest_path)
             ingest_completed = True
         elif plan.action != SyncAction.NO_OP:
             assert plan.start is not None and plan.end is not None
@@ -1419,13 +1410,8 @@ def _create_streaming_artifact(
             )
 
         _spatial_wgs84_data = coverage_data["coverage"].get("spatial_wgs84")
-        temporal_coverage = CoverageTemporal(**coverage_data["coverage"]["temporal"])
-        if timeless:
-            # The store has no time axis; a dated snapshot carries its date as metadata.
-            snapshot_start, snapshot_end = registry_datasets.snapshot_date(dataset)
-            temporal_coverage = CoverageTemporal(start=snapshot_start, end=snapshot_end)
         coverage = ArtifactCoverage(
-            temporal=temporal_coverage,
+            temporal=CoverageTemporal(**coverage_data["coverage"]["temporal"]),
             spatial=CoverageSpatial(**coverage_data["coverage"]["spatial"]),
             spatial_wgs84=CoverageSpatial(**_spatial_wgs84_data) if _spatial_wgs84_data else None,
         )
@@ -1433,7 +1419,7 @@ def _create_streaming_artifact(
         # the raw user request. The latter remains on the record as operation provenance.
         # A brand-new store may legitimately clamp its end to source availability; an
         # update was already planned from the source's exact available period sequence.
-        if coverage.temporal.start is not None and not timeless:
+        if coverage.temporal.start is not None:
             coverage_matches_plan = (
                 _temporal_coverage_matches_request_scope(coverage.temporal, materialization_scope)
                 if plan.has_committed_periods
@@ -1903,7 +1889,7 @@ def _maybe_build_pyramid(
 
     try:
         # None for a static dataset without a time axis (CLIM-1448).
-        t_dim = next((d for d in ("t", *TIME_ALIASES) if d in ds.sizes), None)
+        t_dim = next((d for d in ("t", "time", "valid_time") if d in ds.sizes), None)
         already_normalized = "spatial_ref" in ds.coords or "spatial_ref" in ds.variables
         if already_normalized and "x" in ds.sizes and "y" in ds.sizes and not downloader.needs_pyramid(ds):
             # A flat, already-normalized store needs no read-rewrite — but streaming ingests

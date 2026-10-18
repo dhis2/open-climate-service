@@ -1,7 +1,7 @@
 """Static datasets without a time axis (CLIM-1448): ingested whole, stored as (y, x).
 
 A template with `sync: {kind: static}` and no `period_type` has no periods. Its plugin implements
-`fetch(bbox)`, the store has no time dimension, and a dated snapshot carries its date as metadata.
+`fetch(bbox)`, and the store has no time dimension.
 Driven through the routes: ingest, the dataset listing, STAC, the ingest form and load_collection.
 """
 
@@ -45,25 +45,6 @@ class SeriesInDisguisePlugin(BaseDatasetPlugin):
         return ds.expand_dims({"t": [np.datetime64("2010-01-01")]})
 
 
-class LandCoverPlugin(BaseDatasetPlugin):
-    """Integer classes with 255 as the no-data code, as categorical sources publish them."""
-
-    def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
-        ds = ElevationPlugin().fetch(bbox)
-        classes = np.full(ds["elevation"].shape, 3, dtype="uint8")
-        classes[0, 0] = 255
-        landcover = xr.DataArray(classes, dims=("y", "x"), coords=ds.coords)
-        landcover.encoding["_FillValue"] = np.uint8(255)
-        return landcover.to_dataset(name="elevation")
-
-
-class LeftoverTimePlugin(BaseDatasetPlugin):
-    """A static plugin that selects one step but keeps its scalar time coordinate."""
-
-    def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
-        return SeriesInDisguisePlugin().fetch(bbox).isel(t=0)
-
-
 _TEMPLATES = """
 - id: {prefix}_elevation
   name: Elevation
@@ -79,21 +60,6 @@ _TEMPLATES = """
   display:
     colormap: viridis
     range: [0, 1000]
-- id: {prefix}_landcover_2021
-  name: Land cover 2021
-  variable: elevation
-  sync:
-    kind: static
-  extents:
-    spatial:
-      bbox: [-180, -90, 180, 90]
-    temporal:
-      begin: "2021"
-  ingestion:
-    plugin: tests.test_static_datasets.ElevationPlugin
-  display:
-    colormap: viridis
-    range: [0, 1000]
 - id: {prefix}_disguised
   name: Disguised series
   variable: elevation
@@ -101,20 +67,6 @@ _TEMPLATES = """
     kind: static
   ingestion:
     plugin: tests.test_static_datasets.SeriesInDisguisePlugin
-- id: {prefix}_leftover_time
-  name: Leftover time
-  variable: elevation
-  sync:
-    kind: static
-  ingestion:
-    plugin: tests.test_static_datasets.LeftoverTimePlugin
-- id: {prefix}_classes
-  name: Classes
-  variable: elevation
-  sync:
-    kind: static
-  ingestion:
-    plugin: tests.test_static_datasets.LandCoverPlugin
 """
 
 
@@ -164,20 +116,6 @@ def test_ingesting_again_keeps_the_data_unless_overwrite_is_set(client: TestClie
     assert float(_store(dataset_id)["elevation"].max()) == 200.0
 
 
-def test_a_dated_snapshot_keeps_its_date_as_metadata(client: TestClient, static_sources: str) -> None:
-    dataset_id = f"{static_sources}_landcover_2021"
-
-    assert _ingest(client, dataset_id).status_code in (200, 201)
-
-    assert "t" not in _store(dataset_id).dims
-    assert client.get(f"/datasets/{dataset_id}").json()["extent"]["temporal"] == {"start": "2021", "end": "2021"}
-    collection = client.get(f"/stac/collections/{dataset_id}").json()
-    # The year as a whole, not its first instant.
-    assert collection["extent"]["temporal"]["interval"] == [["2021-01-01T00:00:00Z", "2021-12-31T23:59:59Z"]]
-    # No temporal dimension, so the map viewer offers no time slider.
-    assert all(dim["type"] == "spatial" for dim in collection["cube:dimensions"].values())
-
-
 def test_load_collection_returns_a_spatial_cube(client: TestClient, static_sources: str) -> None:
     dataset_id = f"{static_sources}_elevation"
     assert _ingest(client, dataset_id).status_code in (200, 201)
@@ -210,40 +148,6 @@ def test_the_ingest_form_asks_for_no_dates(client: TestClient, static_sources: s
     assert "Start period is required" not in started.text
 
 
-@pytest.mark.parametrize(
-    ("value", "end"),
-    [
-        ("2021", "2021-12-31T23:59:59"),
-        ("2021-06", "2021-06-30T23:59:59"),
-        ("2021-12", "2021-12-31T23:59:59"),
-        ("2024-02", "2024-02-29T23:59:59"),
-        ("2021-06-15", "2021-06-15T23:59:59"),
-    ],
-)
-def test_a_snapshot_date_lasts_as_long_as_it_is_precise(value: str, end: str) -> None:
-    from open_climate_service.shared.time import period_string_end_datetime
-
-    assert period_string_end_datetime(value).isoformat() == f"{end}+00:00"
-
-
-def test_a_leftover_time_coordinate_is_refused(client: TestClient, static_sources: str) -> None:
-    dataset_id = f"{static_sources}_leftover_time"
-
-    with pytest.raises(RuntimeError, match="must not carry a time coordinate"):
-        _ingest(client, dataset_id)
-
-    assert not downloader.get_icechunk_path({"id": dataset_id}).exists()
-
-
-def test_an_integer_no_data_code_is_kept(client: TestClient, static_sources: str) -> None:
-    dataset_id = f"{static_sources}_classes"
-
-    assert _ingest(client, dataset_id).status_code in (200, 201)
-
-    stored = _store(dataset_id)["elevation"].load()
-    assert bool(stored.isnull()[0, 0]) and int(stored[1, 1]) == 3
-
-
 def test_an_overwrite_whose_rebuild_fails_keeps_the_stored_data(
     client: TestClient, static_sources: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -261,26 +165,6 @@ def test_an_overwrite_whose_rebuild_fails_keeps_the_stored_data(
     assert float(_store(dataset_id)["elevation"].max()) == 100.0
 
 
-def test_a_cancelled_ingest_writes_nothing(static_sources: str) -> None:
-    from open_climate_service.ingestions import services
-    from open_climate_service.jobs.models import JobCancelledError
-
-    dataset_id = f"{static_sources}_elevation"
-    with pytest.raises(JobCancelledError):
-        services.create_artifact(
-            dataset=registry.get_dataset(dataset_id) or {},
-            start=None,
-            end=None,
-            bbox=_BBOX,
-            country_code=None,
-            overwrite=False,
-            publish=False,
-            is_cancel_requested=lambda: True,
-        )
-
-    assert _FETCHES == [] and not downloader.get_icechunk_path({"id": dataset_id}).exists()
-
-
 def test_a_workflow_result_keeps_its_recorded_cadence() -> None:
     """A static template without a period_type, whose result has a time axis and a recorded cadence."""
     from types import SimpleNamespace
@@ -292,24 +176,3 @@ def test_a_workflow_result_keeps_its_recorded_cadence() -> None:
     template = {"id": "derived", "sync": {"kind": "static"}}
 
     assert services._dataset_period_type(latest, template) == "daily"  # type: ignore[arg-type]
-
-
-def test_a_rebuilt_store_renames_any_time_axis_alias(tmp_path: Path) -> None:
-    """The rewrite after ingest finds the axis under every name publication accepts, not only t/time."""
-    from open_climate_service.ingestions import services
-    from open_climate_service.streaming.store import open_or_create_repo
-
-    store_path = tmp_path / "aliased.icechunk"
-    ds = ElevationPlugin().fetch(_BBOX).expand_dims({"date": [np.datetime64("2024-01-01")]})
-    session = open_or_create_repo(store_path).writable_session("main")
-    ds.to_zarr(session.store, mode="w", zarr_format=3)
-    session.commit("aliased")
-
-    result = services._maybe_build_pyramid(store_path, {"id": "aliased"}, retain_previous=False)
-
-    assert result.completed
-    assert "t" in _store_at(store_path).dims and "date" not in _store_at(store_path).dims
-
-
-def _store_at(path: Path) -> xr.Dataset:
-    return open_icechunk_dataset(path)
