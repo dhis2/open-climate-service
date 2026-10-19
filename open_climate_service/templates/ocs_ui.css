@@ -735,7 +735,7 @@ button:disabled {
   flex: none;
   width: var(--spacers-dp12);
   height: var(--spacers-dp12);
-  margin-top: 0.2em;
+  margin-top: calc(0.2em + 2px);
   border-radius: 2px;
   border: 1px solid var(--colors-grey300);
 }
