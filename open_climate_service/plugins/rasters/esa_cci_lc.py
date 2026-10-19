@@ -23,6 +23,7 @@ on the CDS, so one year can take several minutes.
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import zipfile
 from pathlib import Path
@@ -31,10 +32,10 @@ from typing import Any
 import numpy as np
 import xarray as xr
 from ecmwf.datastores import Client as _CdsClient
+
 from open_climate_service.streaming import BaseDatasetPlugin
 
 _DATASET = "satellite-land-cover"
-_FIRST_YEAR, _LAST_YEAR = 1992, 2022
 _NO_DATA = 0
 
 # Class group -> LCCS codes. Every code except 0 (no data) belongs to exactly one group.
@@ -52,10 +53,18 @@ CLASS_GROUPS: dict[str, tuple[int, ...]] = {
 }
 
 
-def _years(start: str, end: str) -> list[str]:
-    first = max(int(str(start)[:4]), _FIRST_YEAR)
-    last = min(int(str(end)[:4]), _LAST_YEAR)
-    return [str(year) for year in range(first, last + 1)]
+def _available_years() -> list[str]:
+    constraints = _CdsClient().apply_constraints(_DATASET, {})
+    years = constraints.get("year")
+    if not isinstance(years, list) or not all(isinstance(year, str) for year in years):
+        raise RuntimeError(f"CDS returned no valid year options for collection {_DATASET!r}: {years!r}")
+    return sorted(set(years), key=int)
+
+
+def _years(start: str, end: str, available_years: list[str]) -> list[str]:
+    first = int(str(start)[:4])
+    last = int(str(end)[:4])
+    return [year for year in available_years if first <= int(year) <= last]
 
 
 def _cds_version(year: int) -> str:
@@ -89,9 +98,11 @@ def _load_year(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArray:
             path = target
         ds = xr.open_dataset(path)
     classes = ds["lccs_class"]
+
     # Drop only the yearly time axis: an extent one pixel wide must keep both spatial axes.
     if "time" in classes.dims:
         classes = classes.isel(time=0, drop=True)
+        
     # A declared fill value is decoded to NaN; make it the class code for no data, so the fractions
     # leave it out of the denominator instead of counting it as observed and unclassified.
     classes = classes.fillna(_NO_DATA).astype("uint8")
@@ -111,8 +122,11 @@ def _with_time(ds: xr.Dataset, year: str) -> xr.Dataset:
 class ESACCILandCoverClassPlugin(BaseDatasetPlugin):
     """Yearly LCCS land cover class codes (uint8; 0 is no data)."""
 
+    max_concurrency = 5
+
     async def periods(self, start: str, end: str) -> list[str]:
-        return _years(start, end)
+        available_years = await asyncio.to_thread(_available_years)
+        return _years(start, end, available_years)
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
         classes = _load_year(period_id, bbox)
