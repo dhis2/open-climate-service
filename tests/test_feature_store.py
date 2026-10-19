@@ -567,6 +567,65 @@ def test_the_written_file_carries_the_covering_bbox_a_pushdown_needs() -> None:
     assert "bbox" in column["covering"]
 
 
+def _grid(size: int) -> dict[str, Any]:
+    """A size x size grid of unit boxes, listed column by column from opposite corners.
+
+    The listed order jumps across the grid on every step, so a file kept in this order puts
+    distant boxes side by side and every row group spans most of the extent.
+    """
+    cells = [(col, row) for col in range(size) for row in range(size)]
+    order = [cells[i // 2] if i % 2 == 0 else cells[-1 - i // 2] for i in range(len(cells))]
+    return _collection(*(_box(f"C{col}{row}", col, row, col + 1, row + 1) for col, row in order))
+
+
+def _row_group_bounds(path: Path) -> list[tuple[float, float, float, float]]:
+    """Each row group's extent, from the bbox covering column's statistics alone."""
+    import pyarrow.parquet as pq
+
+    metadata = pq.ParquetFile(str(path)).metadata
+    names = [metadata.schema.column(i).path for i in range(metadata.num_columns)]
+    bounds = []
+    for group in range(metadata.num_row_groups):
+        stats = {name: metadata.row_group(group).column(names.index(name)).statistics for name in names}
+        assert all(stats[f"bbox.{axis}"].has_min_max for axis in ("xmin", "ymin", "xmax", "ymax"))
+        bounds.append((stats["bbox.xmin"].min, stats["bbox.ymin"].min, stats["bbox.xmax"].max, stats["bbox.ymax"].max))
+    return bounds
+
+
+def test_rows_are_stored_in_spatial_order_so_each_row_group_covers_a_small_area(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Portolan's row ordering rule, and what lets a bbox read skip row groups at all."""
+    monkeypatch.setattr(store, "ROW_GROUP_SIZE", 4)
+
+    record = _register(features=_grid(4))
+
+    bounds = _row_group_bounds(Path(str(record.path)))
+    assert len(bounds) == 4
+    # Each group of four consecutive rows is one quadrant of the 4 x 4 grid, a quarter of the
+    # extent, and no two groups overlap.
+    assert all((xmax - xmin) * (ymax - ymin) == 4 for xmin, ymin, xmax, ymax in bounds)
+    assert len(set(bounds)) == 4
+
+
+def test_row_groups_are_bounded_and_no_index_column_is_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pyarrow.parquet as pq
+
+    monkeypatch.setattr(store, "ROW_GROUP_SIZE", 5)
+
+    record = _register(features=_grid(4))
+
+    metadata = pq.ParquetFile(str(record.path)).metadata
+    assert [metadata.row_group(i).num_rows for i in range(metadata.num_row_groups)] == [5, 5, 5, 1]
+    # Sorting permutes the index; it must not travel into the file as a column of its own.
+    assert not [name for name in pq.read_schema(str(record.path)).names if name.startswith("__index")]
+    assert store.read_feature_collection(record)["orgUnitCode"].is_unique
+
+
+def test_the_row_group_size_stays_under_portolans_limit() -> None:
+    assert store.ROW_GROUP_SIZE <= 150_000
+
+
 def test_a_projected_collection_is_windowed_against_a_wgs84_bbox() -> None:
     """The bbox crosses CRSs, not the rows; the rows stay in the CRS they were written in."""
     record = _register(crs="EPSG:3857")

@@ -18,7 +18,7 @@ from open_climate_service.automation.config import (
     WorkflowTrigger,
     get_automation_config,
 )
-from open_climate_service.jobs import store as job_store
+from open_climate_service.jobs.events import persisted_events
 from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
 from open_climate_service.openeo import workflows
 from open_climate_service.openeo.jobs import (
@@ -309,23 +309,28 @@ def _resolved_output_dataset(trigger: WorkflowTrigger, workflow: Any) -> str | N
     """Return a trigger's statically resolvable managed output, or None.
 
     Only workflows that declare an ``output_dataset_id`` parameter produce a
-    managed dataset. File-producing workflows and ``$event`` references cannot
-    be resolved statically and are left to the per-store lock at run time.
+    managed dataset. ``$event.dataset_id`` resolves to the trigger source; other
+    event references cannot be resolved statically and are left to run time.
     """
     parameters = getattr(workflow, "parameters", None)
     if not isinstance(parameters, list):
         return None
-    names = {param.get("name") for param in parameters if isinstance(param, dict)}
-    if _MANAGED_OUTPUT_PARAMETER not in names:
+    output_parameter = next(
+        (param for param in parameters if isinstance(param, dict) and param.get("name") == _MANAGED_OUTPUT_PARAMETER),
+        None,
+    )
+    if output_parameter is None:
         return None
-    value = trigger.arguments.get(_MANAGED_OUTPUT_PARAMETER)
+    value = trigger.arguments.get(_MANAGED_OUTPUT_PARAMETER, output_parameter.get("default"))
+    if value == "$event.dataset_id":
+        return trigger.on_update_of
     if isinstance(value, str) and value and not value.startswith("$event"):
         return value
     return None
 
 
 def _validate_output_ownership(config: AutomationConfig) -> None:
-    """Refuse triggers on one source that would concurrently write one output."""
+    """Refuse concurrent output ownership and managed-dataset trigger cycles."""
     bindings: dict[tuple[str, str], list[str]] = {}
     for trigger in config.workflow_triggers:
         workflow = workflows.get_workflow(trigger.workflow_id)
@@ -342,6 +347,39 @@ def _validate_output_ownership(config: AutomationConfig) -> None:
             f"workflow triggers would concurrently write the same managed output: {details}. "
             "Give each trigger a distinct output_dataset_id."
         )
+
+    graph: dict[str, set[str]] = {}
+    for source, output in bindings:
+        graph.setdefault(source, set()).add(output)
+
+    visited: set[str] = set()
+    active: list[str] = []
+    active_set: set[str] = set()
+
+    def visit(dataset_id: str) -> list[str] | None:
+        if dataset_id in active_set:
+            start = active.index(dataset_id)
+            return [*active[start:], dataset_id]
+        if dataset_id in visited:
+            return None
+        active.append(dataset_id)
+        active_set.add(dataset_id)
+        for output in sorted(graph.get(dataset_id, ())):
+            cycle = visit(output)
+            if cycle is not None:
+                return cycle
+        active.pop()
+        active_set.remove(dataset_id)
+        visited.add(dataset_id)
+        return None
+
+    for source in sorted(graph):
+        cycle = visit(source)
+        if cycle is not None:
+            raise ValueError(
+                "workflow triggers form a managed dataset update cycle: "
+                f"{' -> '.join(cycle)}. Give each trigger an output outside its input chain."
+            )
 
 
 def _iter_strings(value: Any) -> Any:
@@ -538,22 +576,25 @@ class WorkflowAutomationService:
             _save_activations(activations)
 
     def replay(self) -> None:
-        """Consume persisted events, honouring each trigger's activation boundary."""
+        """Consume persisted events, honouring each trigger's activation boundary.
+
+        Reads the shared event log, so an update owned by an openEO job (a managed dataset it
+        published) is replayed exactly like one owned by an ingestion or a sync.
+        """
         config = self._config or self._config_loader()
         if api_config.is_read_only() or not config.workflow_triggers:
             return
         service = self._openeo_service or get_openeo_job_service()
         activations = _load_activations()
-        for record in job_store.list_job_records():
-            for event in record.events:
-                if event.type != DATASET_UPDATED_EVENT_TYPE:
+        for event in persisted_events():
+            if event.type != DATASET_UPDATED_EVENT_TYPE:
+                continue
+            for trigger in config.workflow_triggers:
+                if trigger.on_update_of != event.data.get("dataset_id"):
                     continue
-                for trigger in config.workflow_triggers:
-                    if trigger.on_update_of != event.data.get("dataset_id"):
-                        continue
-                    if not trigger.replay_existing and _is_before_activation(event, activations.get(trigger.id)):
-                        continue
-                    self._submit_safely(trigger, event, service)
+                if not trigger.replay_existing and _is_before_activation(event, activations.get(trigger.id)):
+                    continue
+                self._submit_safely(trigger, event, service)
 
     def consume(self, events: list[JobEvent]) -> None:
         """Submit workflows for newly persisted successful-job events."""

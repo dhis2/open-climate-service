@@ -3,6 +3,7 @@
 import re
 from datetime import datetime
 from enum import StrEnum
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -118,7 +119,10 @@ class ArtifactRequestScope(BaseModel):
 
     start: str | None = Field(
         default=None,
-        description="Requested start period (None for a non-temporal dataset, e.g. a climatology).",
+        description=(
+            "Requested start period. For a climatology, a day-of-year or month ordinal; '1' when "
+            "the request named none, meaning the whole reference period."
+        ),
     )
     end: str | None = Field(default=None, description="Requested end period for the ingestion or sync operation.")
     bbox: tuple[float, float, float, float] | None = Field(
@@ -436,6 +440,30 @@ class FeatureDetail(BaseModel):
         return canonical
 
 
+class ArtifactProvenance(BaseModel):
+    """How an artifact was produced, for one produced by an openEO job.
+
+    Three identities stay distinct: ``producer_job_id`` names the job that produced the data,
+    the record's ``artifact_id`` names the logical artifact, and ``output_snapshot_id`` names
+    the physical Icechunk snapshot the job committed. The snapshot is not a release: a derived
+    artifact's ``version`` stays None unless OCS deliberately releases it.
+    """
+
+    producer_kind: Literal["openeo_job"] = "openeo_job"
+    producer_job_id: str = Field(description="Id of the openEO job whose save_result produced the artifact.")
+    output_snapshot_id: str | None = Field(
+        default=None, description="Id of the Icechunk snapshot the producing job committed."
+    )
+    execution: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The execution evidence the graph produced (`shared.provenance.ExecutionEvidence`), "
+            "verbatim: the process graph digest (`process_sha256`) and the observed inputs "
+            "(`sources`: collection, artifact, source dataset and input snapshot ids)."
+        ),
+    )
+
+
 class ArtifactRecord(BaseModel):
     """Stored artifact metadata."""
 
@@ -479,6 +507,9 @@ class ArtifactRecord(BaseModel):
     coverage: ArtifactCoverage
     created_at: datetime
     publication: ArtifactPublication = Field(default_factory=ArtifactPublication)
+    provenance: ArtifactProvenance | None = Field(
+        default=None, description="How a derived artifact was produced; None for an ingested one."
+    )
     features: FeatureDetail | None = Field(
         default=None,
         description=(
@@ -536,10 +567,17 @@ class CreateIngestionRequest(BaseModel):
         description=(
             "Start period to ingest. Required for historical datasets. May be omitted for a "
             "dataset declaring 'temporal_direction: future' (e.g. a forecast), where it means "
-            "'from now' — a fixed date would be stale by the next day."
+            "'from now' — a fixed date would be stale by the next day — and for a climatology, "
+            "where it means the whole reference period the template declares."
         ),
     )
-    end: str | None = Field(default=None, description="Optional end period to ingest.")
+    end: str | None = Field(
+        default=None,
+        description=(
+            "Optional end period to ingest. Omitted, it means the latest period the source has, or "
+            "for a climatology the end of its reference period."
+        ),
+    )
     overwrite: bool = Field(
         default=False,
         description="Whether to force regeneration of an existing matching artifact.",

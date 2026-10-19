@@ -107,7 +107,9 @@ def deliver_named_export(
                 raise ValueError("Source export changed or submission lacks a frozen manifest; submit a new delivery")
             report = _deliver(verified, export_id, dry_run, context)
     except AlreadyLocked:
-        raise HTTPException(status_code=409, detail="A delivery for this export is already in progress") from None
+        from open_climate_service.exports.retention import ResourceBusy
+
+        raise ResourceBusy("A delivery for this export is already in progress") from None
     if on_progress is not None:
         on_progress(1, 1, "Delivery complete")
     if report.outcome == ExportOutcome.CANCELLED:
@@ -123,9 +125,9 @@ def _deliver(verified: VerifiedExport, export_id: str, dry_run: bool, context: D
     resolved = resolve_named_export(verified.manifest.plugin.format, {"export": export_id})
     if not resolved.plugin.supports_delivery:
         raise ValueError(f"Export plugin '{resolved.plugin.id}' does not support delivery")
-    target = verified.manifest.target.connection_id if verified.manifest.target else None
-    if target is None:
+    if verified.manifest.target is None:
         raise ValueError("Export was rendered without a delivery target")
+    target = resolved.plugin.delivery_target(verified.manifest.target)
     report = resolved.plugin.send(verified.content, target, dry_run=dry_run, context=context)
     # External Python plugins are not necessarily type-checked.
     if not isinstance(report, ExportReport):  # pyright: ignore[reportUnnecessaryIsInstance]

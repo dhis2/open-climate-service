@@ -66,6 +66,7 @@ from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
     datetime_to_period_string,
     dekad_start,
+    has_calendar_periods,
     next_period_string,
     normalize_period_string,
     utc_now,
@@ -473,7 +474,10 @@ def create_artifact(
     )
     resolved_download_end = download_end if download_end is not None else end
     if resolved_download_end is None:
-        if registry_datasets.is_future_facing(dataset):
+        if not has_calendar_periods(period_type):
+            # No "now" to end at either; the plugin enumerates the reference period's ordinals.
+            resolved_download_end = _LAST_ORDINAL
+        elif registry_datasets.is_future_facing(dataset):
             # "Now" is this dataset's *start*, so using it as the end would collapse a
             # seven-day forecast to a single day. Offer a generous horizon instead and let
             # the plugin clip to whatever it actually publishes. `request_scope.end` stays
@@ -1905,15 +1909,15 @@ def _load_streaming_plugin(plugin_path: str, *, params: dict[str, object]) -> In
     return plugin
 
 
-def register_artifact_record(record: ArtifactRecord, *, publish: bool) -> ArtifactRecord:
+def register_artifact_record(record: ArtifactRecord, *, publish: bool, replace_store: bool = False) -> ArtifactRecord:
     """Store a pre-built artifact record and optionally publish it to STAC.
 
-    Uses overwrite semantics: re-publishing a managed dataset (e.g. re-running an
-    openEO ``save_result`` for the same ``dataset_id``) replaces the existing
-    record's metadata — name, coverage, paths — rather than silently keeping the
-    stale record, while preserving its artifact id and publication state.
+    ``replace_store`` is for a writer that replaces one managed store as a whole, such
+    as openEO ``save_result``. It keeps that store's logical artifact id and publication
+    state even when the rewrite changes request scope, and coalesces stale duplicate
+    records for the same store. Other callers retain request-scope overwrite semantics.
     """
-    stored = _upsert_artifact_record(record, overwrite=True)
+    stored = _upsert_artifact_record(record, overwrite=True, replace_store=replace_store)
     if publish and stored.publication.status != PublicationStatus.PUBLISHED:
         return publish_artifact_record(stored.artifact_id)
     return stored
@@ -2409,12 +2413,44 @@ def _upsert_artifact_record(
     record: ArtifactRecord,
     *,
     overwrite: bool,
+    replace_store: bool = False,
 ) -> ArtifactRecord:
     """Persist a new or replacement artifact record for the same logical request scope."""
     if not overwrite:
         return _store_artifact_record(record)
 
     def mutate(records: list[ArtifactRecord]) -> ArtifactRecord:
+        if replace_store:
+            if record.path is None:
+                raise ValueError("Replacing a managed store requires its path")
+            store_path = str(Path(record.path).resolve())
+            matching = [
+                stored
+                for stored in records
+                if stored.dataset_id == record.dataset_id
+                and stored.format == record.format
+                and stored.path is not None
+                and str(Path(stored.path).resolve()) == store_path
+            ]
+            if matching:
+                store_existing = next(
+                    (
+                        stored
+                        for stored in reversed(matching)
+                        if stored.publication.status == PublicationStatus.PUBLISHED
+                    ),
+                    matching[-1],
+                )
+                replacement = record.model_copy(
+                    update={
+                        "artifact_id": store_existing.artifact_id,
+                        "publication": store_existing.publication,
+                    }
+                )
+                matching_ids = {stored.artifact_id for stored in matching}
+                records[:] = [stored for stored in records if stored.artifact_id not in matching_ids]
+                records.append(replacement)
+                return replacement
         existing = _find_replaceable_artifact(records=records, record=record)
         if existing is None:
             records.append(record)
@@ -2493,6 +2529,15 @@ def _normalize_optional_request_period(value: str | None, *, period_type: str, f
     return _normalize_request_period(value, period_type=period_type, field_name=field_name)
 
 
+_FIRST_ORDINAL = "1"
+_LAST_ORDINAL = "366"
+"""The widest scope of a climatology, whose ids are day-of-year (or month) ordinals.
+
+Used only when a request leaves the bounds out. The plugin enumerates the ordinals its reference
+period has, so the bounds name "all of it" rather than select a part.
+"""
+
+
 def _resolve_request_start(value: str | None, *, dataset: dict[str, object], period_type: str) -> str:
     """Return the normalized start period, substituting "now" for a forecast dataset.
 
@@ -2513,6 +2558,11 @@ def _resolve_request_start(value: str | None, *, dataset: dict[str, object], per
     """
     if value is not None:
         return _normalize_request_period(value, period_type=period_type, field_name="start")
+
+    if not has_calendar_periods(period_type):
+        # A climatology's ids are ordinals and its reference period is fixed by the template,
+        # so there is no start to ask for: the scope is all of it, from the first ordinal.
+        return _FIRST_ORDINAL
 
     if not registry_datasets.is_future_facing(dataset):
         raise HTTPException(

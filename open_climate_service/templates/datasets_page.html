@@ -94,11 +94,8 @@
         </div>
         {% else %}
         <p class="note">
-          No datasets ingested yet. Use
-          <a href="{{ mount }}/docs#/Ingestions/create_ingestion_ingestions_post">POST /ingestions</a>
-          to ingest data, or
-          <a href="{{ mount }}/docs#/Sync/trigger_sync_sync_post">POST /sync</a>
-          to run an automated sync.
+          No datasets yet. Start by ingesting data from one of the
+          <a href="{{ mount }}/data-sources">data sources</a>.
         </p>
         {% endif %}
 

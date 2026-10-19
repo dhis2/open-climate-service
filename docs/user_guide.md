@@ -6,7 +6,7 @@ For configuring a new instance for your country, see the [instance guide](instan
 
 ## Discovering datasets
 
-The STAC catalog is the starting point for data discovery. It lists all published GeoZarr datasets as STAC Collections.
+The STAC catalog is the starting point for data discovery. It is titled with the instance's name and lists every published dataset as a STAC Collection: rasters as GeoZarr stores, vector datasets as GeoParquet.
 
 ```bash
 curl -s http://127.0.0.1:9000/stac/catalog.json | jq

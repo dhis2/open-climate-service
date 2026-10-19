@@ -1,14 +1,9 @@
+import atexit
 import os
+import shutil
+import tempfile
 from collections.abc import Callable, Generator
-
-import pytest
-from fastapi.testclient import TestClient
-from starlette.types import ASGIApp, Receive, Scope, Send
-
-from open_climate_service import config as api_config
-from open_climate_service.main import app
-from open_climate_service.openeo import earthkit_processes, xclim_processes
-from open_climate_service.shared import compute, urls
+from pathlib import Path
 
 _TEST_CONFIG = """\
 extent:
@@ -18,18 +13,49 @@ extent:
 data_dir: ./data
 """
 
+# The suite's own instance, set before anything from open_climate_service is imported. Store
+# paths such as ARTIFACTS_DIR are resolved from the config when their module is imported, so
+# a config set later, by a fixture, comes too late: they would already name the developer's
+# `data_dir` from `.env`, or the XDG fallback without one. `load_dotenv` does not overwrite a
+# variable that is already set, so `.env` cannot take this back.
+_TEST_INSTANCE = Path(tempfile.mkdtemp(prefix="ocs-test-instance-"))
+atexit.register(shutil.rmtree, _TEST_INSTANCE, ignore_errors=True)
+TEST_CONFIG_FILE = _TEST_INSTANCE / "climate-service.yaml"
+TEST_DATA_ROOT = _TEST_INSTANCE / "data"
+# The caller's own value, restored when a session ends, so a process that runs pytest and then
+# carries on (an IDE calling pytest.main(), a notebook) is not left pointing at the test instance.
+_CALLERS_CONFIG = os.environ.get("CLIMATE_SERVICE_CONFIG")
 
-@pytest.fixture(autouse=True, scope="session")
-def _test_open_climate_service_config(tmp_path_factory: pytest.TempPathFactory) -> Generator[None, None, None]:
-    config_file = tmp_path_factory.mktemp("config") / "climate-service.yaml"
-    config_file.write_text(_TEST_CONFIG, encoding="utf-8")
-    old = os.environ.get("CLIMATE_SERVICE_CONFIG")
-    os.environ["CLIMATE_SERVICE_CONFIG"] = str(config_file)
-    yield
-    if old is None:
+
+def _use_test_instance() -> None:
+    TEST_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TEST_CONFIG_FILE.write_text(_TEST_CONFIG, encoding="utf-8")
+    os.environ["CLIMATE_SERVICE_CONFIG"] = str(TEST_CONFIG_FILE)
+
+
+_use_test_instance()
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from starlette.types import ASGIApp, Receive, Scope, Send  # noqa: E402
+
+from open_climate_service import config as api_config  # noqa: E402
+from open_climate_service.main import app  # noqa: E402
+from open_climate_service.openeo import earthkit_processes, xclim_processes  # noqa: E402
+from open_climate_service.shared import compute, urls  # noqa: E402
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    # A repeated pytest.main() in one process can reuse this module without running its top
+    # level again, so the test instance is set again here, after the previous session's restore.
+    _use_test_instance()
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    if _CALLERS_CONFIG is None:
         os.environ.pop("CLIMATE_SERVICE_CONFIG", None)
     else:
-        os.environ["CLIMATE_SERVICE_CONFIG"] = old
+        os.environ["CLIMATE_SERVICE_CONFIG"] = _CALLERS_CONFIG
 
 
 @pytest.fixture(autouse=True)

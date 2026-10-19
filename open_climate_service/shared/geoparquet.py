@@ -22,14 +22,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_GEOMETRY_COLUMN = "geometry"
 
-PARQUET_MEDIA_TYPE = "application/x-parquet"
+PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
 """The one media type OCS advertises for Parquet, wherever it advertises one.
 
-Two spellings were in use — `application/vnd.apache.parquet` on the openEO job-result path and
-pystac's own `application/x-parquet` — and neither is registered with IANA, so this is a choice
-rather than a correction. `x-parquet` wins because it is what the STAC ecosystem reads: pystac
-ships it as a constant, and a feature collection's data asset is the thing a STAC client has to
-recognise. Kept here, beside the reader, so the catalogue and the job-result path cannot drift.
+The type IANA registered for Parquet in 2024, and the one Portolan requires. pystac still ships
+`application/x-parquet` as its constant, an older unregistered spelling. Kept here, beside the
+reader, so the catalogue and the job-result path cannot drift.
 """
 
 

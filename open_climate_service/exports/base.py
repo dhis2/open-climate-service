@@ -2,9 +2,42 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from open_climate_service.exports.report import ExportReport
+
+
+@dataclass(frozen=True)
+class PipelineDataset:
+    """A managed dataset a pipeline's workflow reads, as a destination sees it."""
+
+    id: str
+    variable: str | None
+    cadence: str | None
+
+
+@dataclass(frozen=True)
+class DestinationContext:
+    """What a pipeline binds, handed to its destination plugin.
+
+    The pipeline core derives this from the workflow arguments without knowing the
+    destination: the datasets bound to ``collection-id`` parameters and the feature
+    collections bound with ``from_features``. ``export_id`` is the named export the
+    pipeline's results are saved and delivered through.
+    """
+
+    export_id: str
+    datasets: tuple[PipelineDataset, ...]
+    feature_collections: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DestinationCheck:
+    """One destination-side validation step and its verdict."""
+
+    id: str
+    status: Literal["pass", "fail", "skip"]
+    message: str
 
 
 @dataclass(frozen=True)
@@ -67,6 +100,66 @@ class BaseExportPlugin(ABC):
     version: str | None = None
     # Render-only plugins leave this False; the delivery endpoint refuses them.
     supports_delivery: bool = False
+    # True when ``send(dry_run=True)`` has the far end validate without storing anything.
+    # A pipeline whose destination lacks it dry-runs by rendering only.
+    supports_dry_run: bool = False
+    # True when sending the same payload twice leaves the destination as sending it once
+    # (an upsert). Only then may an operator send a delivery again after an unconfirmed outcome.
+    redelivery_safe: bool = False
+
+    # --- delivery target hooks (delivery plugins) -----------------------------------------
+
+    def target_binding(self, references: dict[str, str]) -> dict[str, str] | None:
+        """Credential-free identity of the target an export's references name, or None.
+
+        Recorded in the saved export's manifest and compared again before delivery, so a
+        target that changed in between is refused. Must not contain secrets or URLs with
+        credentials; a digest of an address is the usual identity.
+
+        The default keeps the contract delivery plugins have always had: a ``connection``
+        reference names one of the instance's named connections, bound by id and URL digest.
+        Override both target hooks for any other kind of target.
+        """
+        from open_climate_service.exports.manifest import named_connection_binding
+
+        return named_connection_binding(references)
+
+    def delivery_target(self, binding: dict[str, str]) -> Any:
+        """What ``send`` receives for a bound target. Default: the named connection's id."""
+        return binding["connection_id"]
+
+    # --- pipeline destination hooks (optional) ------------------------------------------
+    # A plugin becomes a pipeline destination by returning a settings schema. The core
+    # never interprets settings; it hands them back to these hooks.
+
+    def destination_settings_schema(self) -> dict[str, Any] | None:
+        """JSON Schema of the pipeline destination settings, or None when not a destination.
+
+        Read when rendering the pipeline form, so it may list instance choices such as
+        configured connections. It must be pure.
+        """
+        return None
+
+    def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
+        """Compile destination settings into this plugin's export definition, without ``id`` or ``plugin``.
+
+        The result is resolved like a configured named export, so it holds the mapping plus
+        any ``dataset``/``connection`` references. Raise ValueError naming what is wrong.
+        Must be pure: no network calls.
+        """
+        raise NotImplementedError(f"Export plugin '{self.id}' is not a pipeline destination")
+
+    def check_destination(self, settings: dict[str, Any], context: DestinationContext) -> list[DestinationCheck]:
+        """Destination-side checks run on save, on re-check and before going live.
+
+        Unlike the other hooks this may contact the destination, and must turn its
+        failures into ``fail`` checks rather than raise.
+        """
+        return []
+
+    def preview(self, content: bytes, limit: int = 5) -> list[dict[str, Any]]:
+        """A few rendered records for a dry-run summary; empty when the payload has no row shape."""
+        return []
 
     @abstractmethod
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:

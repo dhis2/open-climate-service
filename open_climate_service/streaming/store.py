@@ -291,6 +291,12 @@ def write_geozarr_attrs(store: Any, *, spec: GridSpec, bbox: list[float]) -> Non
             declared = attrs.get("zarr_conventions")
             attrs["zarr_conventions"] = ([*declared] if isinstance(declared, list) else []) + preserved
 
+    # Keep `spatial_ref` a coordinate: an append replaces the root attrs, dropping `coordinates`.
+    if "spatial_ref" in root.array_keys():
+        coordinates = str(attrs.get("coordinates") or "").split()
+        if "spatial_ref" not in coordinates:
+            attrs["coordinates"] = " ".join([*coordinates, "spatial_ref"])
+
     root.attrs.update(attrs)
     if geometry is not None:
         write_gdal_geotransform(root, geometry["transform"])

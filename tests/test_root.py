@@ -78,6 +78,22 @@ def test_health_returns_healthy_status(client: TestClient) -> None:
     assert result.status == "healthy"
 
 
+def test_zarr_route_exposes_the_range_headers_to_any_origin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Set app-wide, so a Zarr chunk read from another origin sees them as an asset read does."""
+    monkeypatch.setattr(
+        ingestion_services,
+        "get_dataset_zarr_store_file_or_404",
+        lambda _id, _path, range_header=None: {"zarr_format": 3, "node_type": "group", "attributes": {}},
+    )
+
+    response = client.get("/zarr/dataset-1/zarr.json", headers={"Origin": "https://example.org"})
+
+    exposed = {name.strip().lower() for name in response.headers["access-control-expose-headers"].split(",")}
+    assert {"content-range", "content-length", "accept-ranges", "etag"} <= exposed
+
+
 def test_zarr_route_echoes_origin_for_browser_access(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         ingestion_services,

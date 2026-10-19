@@ -163,7 +163,7 @@ def test_no_datacube_or_zarr_fields_are_emitted_for_a_feature_collection(
     assert ZARR_EXTENSION not in doc["stac_extensions"]
     for field in DATACUBE_FIELDS:
         assert field not in doc
-    assert set(doc["assets"]) <= {"data", "thumbnail"}
+    assert set(doc["assets"]) <= {"data", "thumbnail", "tiles", "style"}
     assert "zarr" not in doc["assets"] and "icechunk" not in doc["assets"]
     assert "renders" not in doc
 
@@ -270,7 +270,8 @@ def test_a_declared_licence_and_attribution_reach_the_collection(
     assert doc["license"] == "CC-BY-4.0"
     assert doc["description"] == "District boundaries from the national hierarchy."
     assert doc["providers"] == [
-        {"name": "Ministry of Health", "url": "https://moh.example", "roles": ["producer", "licensor"]}
+        {"name": "Ministry of Health", "url": "https://moh.example", "roles": ["producer", "licensor"]},
+        HOST,
     ]
 
 
@@ -299,14 +300,164 @@ def test_a_licence_with_only_a_url_travels_as_a_link(
 def test_an_undeclared_licence_is_not_invented(
     client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`other` rather than something that reads as permissive, and no providers out of nowhere."""
+    """`other` rather than something that reads as permissive, and no producer out of nowhere."""
     _declare_template(monkeypatch, None)
 
     doc = client.get("/stac/collections/districts").json()
 
     assert doc["license"] == "other"
-    assert "providers" not in doc
+    assert doc["providers"] == [HOST]
     assert not [link for link in doc["links"] if link["rel"] == "license"]
+
+
+HOST = {"name": "Open Climate Service", "roles": ["host"], "url": "http://testserver/"}
+
+
+def test_this_instance_is_the_one_host_listed_last(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A template's own `host` role is dropped: only this instance hosts the copy it serves."""
+    _declare_template(monkeypatch, {"providers": [{"name": "Upstream", "roles": ["producer", "host"]}]})
+
+    doc = client.get("/stac/collections/districts").json()
+
+    assert doc["providers"] == [{"name": "Upstream", "roles": ["producer"]}, HOST]
+
+
+def test_a_mirrored_collection_links_its_source_and_when_it_was_refreshed(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare_template(
+        monkeypatch,
+        {"source_url": "https://source.example/divisions", "source_stac": "https://stac.source.example/catalog.json"},
+    )
+
+    doc = client.get("/stac/collections/districts").json()
+
+    links = {link["rel"]: link for link in doc["links"]}
+    assert links["via"]["href"] == "https://source.example/divisions" and links["via"]["type"] == "text/html"
+    assert links["canonical"]["href"] == "https://stac.source.example/catalog.json"
+    assert links["canonical"]["type"] == "application/json"
+    assert doc["updated"] == districts.created_at.isoformat().replace("+00:00", "Z")
+
+
+@pytest.mark.parametrize(("version", "expected"), [("2026-09-23.0", True), (None, False)])
+def test_canonical_names_the_upstream_collection_for_the_release_read(
+    client: TestClient,
+    districts: ArtifactRecord,
+    monkeypatch: pytest.MonkeyPatch,
+    version: str | None,
+    expected: bool,
+) -> None:
+    """`canonical` is the same collection upstream, so it needs the release, or it is left out."""
+    if version is not None:
+        stored = ingestion_services._load_records()[0]
+        stored.version = ArtifactVersion(value=version, authority="overture")
+        ingestion_services._save_records([stored])
+    _declare_template(monkeypatch, {"source_stac": "https://stac.source.example/{version}/area/collection.json"})
+
+    links = [link for link in client.get("/stac/collections/districts").json()["links"] if link["rel"] == "canonical"]
+
+    if expected:
+        assert [link["href"] for link in links] == ["https://stac.source.example/2026-09-23.0/area/collection.json"]
+    else:
+        assert links == []
+
+
+def test_a_collection_without_a_declared_source_has_no_source_links(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare_template(monkeypatch, None)
+
+    rels = {link["rel"] for link in client.get("/stac/collections/districts").json()["links"]}
+
+    assert not rels & {"via", "canonical"}
+
+
+def test_the_catalog_and_a_feature_collection_link_a_readme_and_agents_guide(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare_template(
+        monkeypatch,
+        {
+            "license": "CC-BY-4.0",
+            "description": "District boundaries from the national hierarchy.",
+            "providers": [{"name": "Ministry of Health", "roles": ["producer"]}],
+            "source_url": "https://moh.example/hierarchy",
+        },
+    )
+
+    for document_url in ("/stac/catalog.json", "/stac/collections/districts"):
+        links = {link["rel"]: link for link in client.get(document_url).json()["links"]}
+        for rel in ("describedby", "agents"):
+            assert links[rel]["type"] == "text/markdown"
+            response = client.get(links[rel]["href"].removeprefix("http://testserver"))
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/markdown")
+
+    readme = client.get("/stac/collections/districts/README.md").text
+    # Portolan's minimum: title, description, licence and provenance.
+    assert readme.startswith("# District boundaries\n")
+    assert "District boundaries from the national hierarchy." in readme
+    assert "## Licence" in readme and "CC-BY-4.0" in readme
+    assert "- Ministry of Health (producer)" in readme and "https://moh.example/hierarchy" in readme
+    agents = client.get("/stac/collections/districts/AGENTS.md").text
+    assert "http://testserver/features/districts/data.parquet" in agents and "`orgUnitCode`" in agents
+    catalog = client.get("/stac/README.md").text
+    assert "[District boundaries](http://testserver/stac/collections/districts) (vector)" in catalog
+    # Headed by the instance's own name, not the product's.
+    monkeypatch.setattr("open_climate_service.config.get_name", lambda: "Malawi Climate Service")
+    assert client.get("/stac/README.md").text.startswith("# Malawi Climate Service\n")
+    assert client.get("/stac/AGENTS.md").text.startswith("# Reading the Malawi Climate Service catalog\n")
+    assert client.get("/stac/catalog.json").json()["title"] == "Malawi Climate Service"
+
+
+def test_the_readme_lists_the_same_providers_as_the_stac_with_one_host(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare_template(monkeypatch, {"providers": [{"name": "Upstream", "roles": ["producer", "host"]}]})
+
+    readme = client.get("/stac/collections/districts/README.md").text
+
+    assert "- Upstream (producer)\n" in readme
+    assert readme.count("(host)") == 1
+    assert "- [Open Climate Service](http://testserver/) (host)" in readme
+
+
+def test_the_agents_query_quotes_column_names_and_names_the_stored_crs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A column name with a space stays one name, and a projected collection's bounds are projected."""
+    from open_climate_service.features import services as feature_services
+
+    payload = _collection_payload()
+    for feature in payload["features"]:
+        feature["properties"]['org "unit" code'] = feature["properties"].pop("orgUnitCode")
+    feature_services.refresh_feature_collection(
+        template={"id": "districts", "name": "District boundaries", "id_property": 'org "unit" code'},
+        features=payload,
+        store_crs="EPSG:3857",
+    )
+    monkeypatch.setattr(ingestion_services, "_artifact_storage_exists", lambda _: True)
+
+    agents = client.get("/stac/collections/districts/AGENTS.md").text
+
+    assert 'SELECT "org ""unit"" code", ST_AsText("geometry") FROM' in agents
+    assert "in EPSG:3857 coordinates" in agents and "longitude and latitude" not in agents
+
+
+def test_a_raster_or_unknown_collection_has_no_readme(client: TestClient) -> None:
+    for name in ("README.md", "AGENTS.md"):
+        response = client.get(f"/stac/collections/nothing_here/{name}")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "No published feature collection 'nothing_here'"
+
+
+def test_the_catalog_guide_opens_a_raster_with_its_assets_open_kwargs(client: TestClient) -> None:
+    """A multiscale store's root has no data variables; the asset's kwargs name the level to open."""
+    agents = client.get("/stac/AGENTS.md").text
+
+    assert 'xr.open_zarr(asset["href"], **asset["xarray:open_kwargs"])' in agents
 
 
 # --- the GeoParquet asset --------------------------------------------------------------------
@@ -315,7 +466,7 @@ def test_an_undeclared_licence_is_not_invented(
 def test_the_data_asset_advertises_the_settled_media_type(client: TestClient, districts: ArtifactRecord) -> None:
     doc = client.get("/stac/collections/districts").json()
 
-    assert doc["assets"]["data"]["type"] == PARQUET_MEDIA_TYPE == "application/x-parquet"
+    assert doc["assets"]["data"]["type"] == PARQUET_MEDIA_TYPE == "application/vnd.apache.parquet"
     assert doc["assets"]["data"]["roles"] == ["data"]
 
 
@@ -330,6 +481,50 @@ def test_the_advertised_asset_url_serves_the_stored_file(client: TestClient, dis
     assert response.headers["content-type"] == PARQUET_MEDIA_TYPE
     assert response.content[:4] == b"PAR1"
     assert response.content == Path(str(districts.path)).read_bytes()
+
+
+RANGE_EXPOSED = {"content-type", "content-length", "content-range", "accept-ranges", "etag"}
+
+
+def test_the_asset_route_answers_head_with_the_files_size(client: TestClient, districts: ArtifactRecord) -> None:
+    """A client sizes the file with HEAD before reading ranges of it."""
+    response = client.head("/features/districts/data.parquet")
+
+    assert response.status_code == 200
+    assert int(response.headers["content-length"]) == Path(str(districts.path)).stat().st_size
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.content == b""
+
+
+def test_a_cross_origin_range_read_can_see_the_range_headers(client: TestClient, districts: ArtifactRecord) -> None:
+    """Without the exposed headers a browser script on another origin cannot place the bytes."""
+    response = client.get(
+        "/features/districts/data.parquet", headers={"Origin": "https://viewer.example", "Range": "bytes=0-3"}
+    )
+
+    assert response.status_code == 206
+    assert response.content == b"PAR1"
+    assert response.headers["access-control-allow-origin"] == "*"
+    exposed = {name.strip().lower() for name in response.headers["access-control-expose-headers"].split(",")}
+    assert exposed >= RANGE_EXPOSED
+
+
+def test_a_preflight_allows_range_and_conditional_request_headers(client: TestClient) -> None:
+    requested = "range, if-match, if-modified-since, if-none-match, if-unmodified-since"
+
+    response = client.options(
+        "/features/districts/data.parquet",
+        headers={
+            "Origin": "https://viewer.example",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": requested,
+        },
+    )
+
+    assert response.status_code == 200
+    allowed = {name.strip().lower() for name in response.headers["access-control-allow-headers"].split(",")}
+    assert allowed >= {name.strip() for name in requested.split(",")}
+    assert {"GET", "HEAD"} <= {m.strip() for m in response.headers["access-control-allow-methods"].split(",")}
 
 
 def test_the_asset_route_resolves_through_the_record_not_the_directory(

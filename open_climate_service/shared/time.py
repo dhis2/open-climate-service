@@ -82,6 +82,16 @@ def period_cadence(period_type: Any) -> Cadence:
     return Cadence.UNKNOWN
 
 
+def has_calendar_periods(period_type: Any) -> bool:
+    """Whether a period type's ids are calendar instants a date can be converted into.
+
+    False for a climatology, whose ids are day-of-year or month ordinals. Asking such a type
+    to format a date is a category error, not a failure — the caller has to offer something
+    other than a date rather than log the refusal and carry on with a wrong value.
+    """
+    return period_cadence(period_type) is not Cadence.NON_TEMPORAL
+
+
 def period_type_to_iso_step(period_type: Any) -> str | None:
     """Map a dataset ``period_type`` to its ISO 8601 step, or None if it has none.
 

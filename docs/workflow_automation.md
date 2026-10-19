@@ -4,6 +4,11 @@ An OCS instance can run an existing openEO workflow when a successful ingestion 
 changes stored data. This is event-driven: it does not guess that an operation has finished by
 scheduling a second cron expression.
 
+> For a new setup, use a [pipeline](web_interface.md#the-pipeline-pages-pipelines) instead: it
+> runs one workflow on the same dataset updates and adds validation, a dry-run gate, delivery
+> modes and run history. Workflow triggers and the named `exports` they deliver through remain
+> supported for existing configurations, but are due to be retired in favour of pipelines.
+
 ## Configure a trigger
 
 Triggers are instance-owned bindings in `climate-service.yaml`:
@@ -30,7 +35,8 @@ exact event references can be used at any nesting level:
 
 - `$event.dataset_id`
 - `$event.artifact_id`
-- `$event.action`: `ingest` for an ingestion, or the sync planner's `append` or `rematerialize`
+- `$event.action`: `ingest` for an ingestion, the sync planner's `append` or `rematerialize`, or
+  `full_rewrite` for a managed dataset an openEO job published
 - `$event.previous_end`: the coverage end before the update, or `null` when the whole store is new
   or rewritten
 - `$event.current_start`: the coverage start after the update
@@ -45,6 +51,33 @@ period was rewritten. After an append, `previous_end` is the old coverage bounda
 interval includes the boundary and the newly appended periods. A workflow that always needs an
 explicit, non-null start can use `$event.current_start`, the start of the complete coverage after
 the update.
+
+**A trigger that publishes a managed dataset must compute its full range.** A workflow that ends in
+`save_result` with an `output_dataset_id` replaces that whole store on every run. Over
+`[$event.previous_end, $event.current_end]` it would compute only the newly appended periods and
+drop the rest of the published history, so OCS refuses a rewrite that would start later or end
+earlier than the published dataset (the job fails without committing, and nothing downstream
+runs). Bind such a trigger to the complete coverage instead:
+
+```yaml
+    - id: chirps-anomaly
+      on_update_of: chirps3_precipitation_monthly
+      workflow_id: climate_anomaly
+      arguments:
+        observed_dataset_id: $event.dataset_id
+        normal_dataset_id: chirps3_precipitation_monthly_normal_1991_2020
+        output_dataset_id: chirps3_precipitation_monthly_anomaly
+        variable: precip
+        temporal_extent: [$event.current_start, $event.current_end]
+```
+
+Appending to a derived dataset, which would let it compute only the new periods, is not
+supported yet.
+
+Managed-output triggers must also form an acyclic dataset graph. OCS rejects a trigger that
+writes its own source, including `output_dataset_id: $event.dataset_id`, and rejects chains such
+as A -> B -> A at startup. Every successful managed rewrite emits another durable update, so
+allowing such a cycle would create jobs indefinitely.
 
 The workflow definition remains reusable and deployment-independent. Operational bindings such
 as output dataset IDs, geometries, and DHIS2 identifiers remain in instance configuration.
@@ -88,8 +121,8 @@ A malformed reference or an id that no template declares fails at startup, like 
 
 ## Delivery behavior
 
-A workflow is considered only after a successful ingestion or sync has persisted a
-`dataset.updated` event. Failed, cancelled and no-op runs do not trigger workflows, and neither
+A workflow is considered only after a successful ingestion, sync or openEO publication has
+persisted a `dataset.updated` event. Failed, cancelled and no-op runs do not trigger workflows, and neither
 does re-ingesting a dataset that is already current. Ingestion and sync, whether queued,
 scheduled, run inline, or started from the admin pages, all use the same path. Work run inline
 is recorded as a completed job under `/ingestions/jobs`, because that record is what makes
@@ -100,6 +133,50 @@ the completed job, that update event cannot be recovered automatically.
 An ingestion job notes in its checkpoint that it is about to change stored data, before
 fetching anything. If OCS stops after the data is committed but before the job completes,
 the recovered job finds the data current and still emits the event it owed, exactly once.
+
+### Updates from derived datasets
+
+An openEO job whose graph ends in `save_result` as Zarr with a `dataset_id` publishes a managed
+dataset, and owns that publication and its `dataset.updated` event. Startup replay and the live
+consumers read events from the native and the openEO job stores alike, so a trigger or a
+pipeline on a derived dataset needs nothing special.
+
+- **Only a published output is announced.** The event is recorded once the Icechunk commit has
+  landed, the artifact is registered and its publication is settled, and it follows the stored
+  record: an artifact that was already published stays published, and is announced, even when
+  the job did not ask to publish. An unpublished output is stored and registered without one.
+- **It describes a full rewrite.** The managed writer replaces the whole store, so the event's
+  `action` is `full_rewrite`, `previous_end` is empty and `current_start`/`current_end` are the
+  committed dataset's coverage. It does not claim which periods changed, so a pipeline on the
+  dataset re-runs its whole coverage on every publication.
+- **A rewrite never shortens a published dataset.** One that would start later or end earlier
+  than the published coverage is refused before anything is committed. It may cover more.
+- **The producing job owns it, one event per commit.** The event carries `producer_type: openeo`,
+  `producer_job_id` and `output_snapshot_id`, and its id is derived from the job, the artifact
+  and the committed snapshot. Completing the same commit again, in a retry or at a restart, is
+  the same logical update; a deliberate re-run of the job commits a new snapshot and is a new
+  update, which triggers and pipelines act on again.
+- **The snapshot is provenance, not a version.** `output_snapshot_id` is the physical Icechunk
+  snapshot the job committed. The artifact records it under `provenance`, with the producing
+  job and the execution evidence (process digest and input artifacts, source datasets and input
+  snapshots); its logical `version` stays empty unless OCS releases the dataset.
+
+The job records its intent before writing, marks the publication `committing` at the
+cancellation gate just before the commit, and writes the outcome and event together after
+registration. A restart that finds it `committing` searches the store history above the
+attempt's starting snapshot for the commit message naming the job and attempt: found, it
+completes the publication with that snapshot; not found, nothing was published and the job runs
+again, whether a user or a trigger submitted it. A job that recorded its event but stopped
+before finishing is finished at restart and its event dispatched; one that finished but stopped
+before dispatching is found by startup replay. Cancellation before the gate publishes nothing;
+after it, and while a commit is unresolved, cancellation is refused.
+
+An ordinary error after the gate (registering the artifact, publishing it, recording the
+outcome) never loses a commit that landed. The failing attempt completes the publication if it
+can, and the job finishes. If it cannot, the publication stays `committing`: a retry completes
+it from the existing commit rather than computing and committing again. Startup recovery keeps
+watching a pending final attempt while its dataset lock or another transient dependency is
+unavailable; once completion succeeds, the job is marked finished and its one event is emitted.
 
 Each event and trigger pair produces a deterministic openEO job ID. OCS replays persisted events
 at startup, but an already created, queued, running, or completed job is not duplicated. If OCS

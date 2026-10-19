@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from open_climate_service import config as api_config
 from open_climate_service.features import providers as feature_providers
-from open_climate_service.features import store
+from open_climate_service.features import store, tiles
 from open_climate_service.features import templates as feature_templates
 from open_climate_service.features.schemas import FeatureCollectionListResponse, FeatureCollectionRecord
 from open_climate_service.ingestions import services as ingestion_services
@@ -164,6 +164,7 @@ def _refresh_feature_collection_locked(
     # superseded go. A failure here leaves an orphan, not a wrong answer.
     store.prune_superseded_files(dataset_id, keep=written)
     # Last, and never raising: a collection that cannot be drawn is still registered.
+    tiles.build_archive(written, dataset_id, store_crs)
     write_feature_thumbnail(written, dataset_id)
     return record
 
@@ -533,6 +534,30 @@ def published_collection_file_or_404(collection_id: str) -> Path:
             status_code=404, detail=f"Feature collection '{collection_id}' is registered but its file is missing"
         )
     return path
+
+
+def published_collection_tiles_or_404(collection_id: str) -> Path:
+    """Return the PMTiles archive of a published collection's current file, or raise 404.
+
+    Resolved through the same record as its GeoParquet, so the tiles always draw the version
+    the catalogue advertises. A collection with no archive (a failed build, or one stored
+    before tiles existed) is a 404 until a refresh builds it.
+    """
+    path = tiles.archive_path(published_collection_file_or_404(collection_id))
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Feature collection '{collection_id}' has no vector tiles")
+    return path
+
+
+def published_collection_style_or_404(collection_id: str, tiles_url: str) -> dict[str, Any]:
+    """Return the MapLibre style of a published collection, or raise 404 when it has no tiles.
+
+    `tiles_url` is the absolute URL of its archive, which the caller knows from the request.
+    """
+    published_collection_tiles_or_404(collection_id)
+    record = ingestion_services.stac_eligible_artifacts_by_dataset()[collection_id]
+    template = feature_templates.get_feature_template(record.dataset_id) or {}
+    return tiles.style(record.dataset_name, tiles_url, _feature_attribution(template))
 
 
 def _build_record(collection_id: str, record: ArtifactRecord, template: dict[str, Any]) -> FeatureCollectionRecord:

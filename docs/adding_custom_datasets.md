@@ -97,6 +97,12 @@ plugin import surface), alongside `BaseDatasetPlugin`.
   `time`/`valid_time` → `t`), clips to `bbox` (reprojecting the bbox from `bbox_crs` — WGS84
   by default — onto the source CRS, so a projected/UTM grid clips correctly), drops a
   singleton `band`, masks the nodata sentinel, and stamps the period onto the time axis.
+- **`bbox_slice(obj, bbox, *, x_dim, y_dim)`** — slices by coordinate value covering every cell the
+  bbox touches, for a plugin that selects from a remote store itself rather than reading it
+  whole: `ds.sel(bbox_slice(ds, bbox, x_dim="longitude", y_dim="latitude"))`. A plain
+  `slice(xmin, xmax)` selects on cell centres and drops the cells straddling each edge.
+  `cell_pad(coord)` returns the half cell it pads by, derived from the grid, for a selection
+  `bbox_slice` cannot express (such as one split at the 0/360 degree seam).
 - **`daily_period_ids(start, end)`** — enumerate the inclusive ISO day strings for a daily
   `periods()` implementation; apply your own availability clamp around it (accepts ISO
   strings or `date` objects, returns `[]` when `start > end`).
@@ -156,6 +162,7 @@ from the dimension's metadata, so there's nothing extra to configure.
   resolution: 4 km x 4 km
   source: ENACTS
   source_url: https://enacts.example.org
+  license: CC-BY-4.0
 ```
 
 ### Template field reference
@@ -170,6 +177,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `variable`   | Yes      | Name of the data variable in the Zarr store (e.g. `precip`, `t2m`, `rainfall`) |
 | `source`     | No       | Name of the upstream data source                                               |
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
+| `license`    | No       | The data's licence: an SPDX identifier (`CC-BY-4.0`), or `name` and `url` where none exists (`Licence to Use Copernicus Products`). Published on the STAC collection; without it the collection is published as `other`. Take it from the licence the source names, not from how its page describes the data |
 | `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /data-sources`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
 | `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Derived datasets](#derived-datasets) |
 
@@ -313,6 +321,8 @@ Most datasets are historical, and the default (`past`) suits them. Two other sha
 | `future`         | All ahead of now — a forecast                                 | **Optional**, meaning "from now" |
 | `spanning`       | Cross now — WorldPop Global2 (2015–2030), climate projections | Required                         |
 
+A climatology (`period_type: climatology`) is the exception to all three: its periods are day-of-year or month ordinals, and its reference period comes from the template (for example `period: [1991, 2020]` in the ingestion params). Leave `start` and `end` out and the whole reference period is ingested; the data source page shows no date fields for one.
+
 `spanning` requires a start _on purpose_. Defaulting it to "now" would ingest only the projected years and silently drop every historical one, which is usually the half you actually want. What declaring it does buy you: the ingest form prefills the end from the dataset's declared `extents.temporal.end`, so selecting WorldPop offers the full range through 2030 instead of truncating at today.
 
 #### Forecast datasets (`temporal_direction: future`)
@@ -436,7 +446,8 @@ classes:
 The classes are written to the stored variable as CF `flag_values` and `flag_meanings`, and
 published in STAC as `classification:classes` on the data assets. The pyramid is resampled with
 `mode`. The map viewer draws each class in its colour, with a legend of the labels; a class
-without a `color` takes one from a categorical palette, and `display` is not used. A categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
+without a `color` takes one from a categorical palette, and `display` is not used. A
+categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
 `share` of each class, the `majority` class, or a `total` of a weight such as population per
 class.
 `aggregate_spatial_weighted` refuses it, since a mean or sum of codes is not a class. A template
@@ -480,6 +491,22 @@ Verify it appears in the STAC catalog:
 ```bash
 curl -s http://127.0.0.1:9000/stac/catalog.json | jq '.links[] | select(.rel == "child")'
 ```
+
+## Contributing a data source
+
+A data source added to OCS core is maintained by the team rather than by one instance, so it needs a little more than a working plugin. Check before you start:
+
+- **Open access.** The source can be fetched with a free account at most, from the provider itself.
+- **Maintained.** The provider still updates and supports the dataset.
+- **A declared licence.** `license` is set from the licence the source names; a non-commercial licence is allowed, but must be declared.
+- **Useful beyond one instance.** Core holds sources that most instances can use. A more specialised source works as well from a `plugins_dir` or an [installable package](installable_plugins.md).
+
+And before opening the PR:
+
+- **One data source per PR.** A plugin shared by several templates of one source (daily and monthly ERA5-Land, say) counts as one.
+- **Ingest a real period.** Run Step 4 on a small extent and open the dataset in the map viewer. Check that units and values are plausible and that the store has the expected time steps.
+- **Tests.** Test `periods()` and `fetch_period()` with the network faked, and run `make lint` and `make test`.
+- **Describe access.** The `description` names the account or key the source needs, and any limit (a short rolling window, a data lag).
 
 ## Distributing a plugin as an installable package
 

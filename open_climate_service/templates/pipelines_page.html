@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pipelines · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        <div class="page-title">
+          <h2 id="pipelines-title" tabindex="-1">Pipelines</h2>
+          <span class="chip">{{ pipelines | length }} configured</span>
+        </div>
+        <p class="lead">A pipeline runs one reusable workflow over its bound inputs and delivers the result to a destination: validated first, dry-run, then live.</p>
+
+        <nav class="page-tabs" aria-label="Pipeline views">
+          <a href="{{ mount }}/pipelines" {% if tab == 'list' %}aria-current="page"{% endif %}>Configured pipelines</a>
+          {% if not read_only %}<a href="{{ mount }}/pipelines/new" {% if tab == 'create' and not editing %}aria-current="page"{% endif %}>Create pipeline</a>{% endif %}
+          {% if editing and not read_only %}<a href="{{ mount }}/pipelines/{{ editing }}/edit" aria-current="page">Edit {{ editing }}</a>{% endif %}
+        </nav>
+
+        {% if tab == 'list' %}
+        {% if pipelines %}
+        <div class="panel table-wrap pipeline-table">
+          <table>
+            <thead>
+              <tr><th>Pipeline</th><th>Workflow</th><th>Destination</th><th>Delivery</th><th>Validation</th><th>Dry run</th><th>Last run</th></tr>
+            </thead>
+            <tbody>
+              {% for p in pipelines %}
+              <tr>
+                <td><a href="{{ mount }}/pipelines/{{ p.id }}">{{ p.title }}</a></td>
+                <td class="mono">{{ p.workflow }}</td>
+                <td class="mono">{{ p.destination }}</td>
+                <td><span class="chip">{{ p.mode | replace('_', ' ') }}</span> <span class="note">{{ 'on update' if p.policy == 'on_update' else 'manual' }}</span></td>
+                <td>{% if p.validation %}<span class="chip {{ 'chip-published' if p.validation == 'valid' else 'chip-unpublished' }}">{{ p.validation }}</span>{% else %}<span class="note">not yet</span>{% endif %}</td>
+                <td>{% if p.dry_run %}<span class="chip {{ 'chip-published' if p.dry_run == 'approved' else 'chip-unpublished' }}">{{ p.dry_run }}</span>{% else %}<span class="note">not yet</span>{% endif %}</td>
+                <td>{% if p.last_run %}{{ p.last_run.start }} to {{ p.last_run.end }} <span class="note">{{ p.last_run.trigger | replace('_', ' ') }}</span>{% else %}<span class="note">none</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="panel empty-state">
+          <h3>No pipelines yet</h3>
+          <p class="note">Create one from a dataset's page, or here, when its inputs and destination are ready.</p>
+          {% if not read_only %}<a class="button-link primary empty-state-action" href="{{ mount }}/pipelines/new">Create pipeline</a>{% endif %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {% if tab == 'create' and read_only %}
+        <div class="notice">This instance is read-only; pipelines cannot be created or edited.</div>
+        {% elif tab == 'create' %}
+        <section class="panel pipeline-create" aria-labelledby="create-title">
+          <h3 id="create-title">{% if editing %}Edit pipeline{% else %}New pipeline{% endif %}</h3>
+          <p class="note">Saving validates the workflow binding, the inputs and the destination, and refuses the pipeline when a check fails. A new pipeline starts in dry-run mode and sends nothing that a destination stores.</p>
+          {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+          {% if checks %}
+          <ul class="plain-list validation-list">
+            {% for c in checks.checks if c.status != 'pass' %}
+            <li class="validation-check validation-{{ c.status }}"><span class="chip {{ 'chip-unpublished' if c.status == 'fail' else '' }}">{{ c.status }}</span><span><strong class="mono">{{ c.id }}</strong><small>{{ c.message }}</small></span></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if not workflows %}
+          <p class="note">No registered workflow can run in a pipeline: it needs a temporal-interval parameter and must return data rather than save it.</p>
+          {% elif not destinations %}
+          <p class="note">No export plugin is a pipeline destination.</p>
+          {% else %}
+          <form method="get" action="{{ mount }}/pipelines/{% if editing %}{{ editing }}/edit{% else %}new{% endif %}" class="form-grid pipeline-select">
+            <div class="field field-wide">
+              <label for="p-workflow">Workflow</label>
+              <select id="p-workflow" name="workflow">
+                {% for w in workflows %}<option value="{{ w.id }}" {% if workflow and workflow.id == w.id %}selected{% endif %}>{{ w.id }}: {{ w.summary }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="p-destination-plugin">Destination</label>
+              <select id="p-destination-plugin" name="destination">
+                {% for d in destinations %}<option value="{{ d.id }}" {% if destination and destination.id == d.id %}selected{% endif %}>{{ d.id }} ({{ d.format }})</option>{% endfor %}
+              </select>
+            </div>
+            <div class="form-actions"><button type="submit">Use these</button><span class="note">Changing the workflow or destination reloads their fields.</span></div>
+          </form>
+
+          <form method="post" action="{{ mount }}/pipelines{% if editing %}/{{ editing }}{% endif %}" class="pipeline-form">
+            <input type="hidden" name="workflow" value="{{ workflow.id }}" />
+            <input type="hidden" name="destination" value="{{ destination.id }}" />
+            {% if editing %}<input type="hidden" name="revision" value="{{ revision or '' }}" />{% endif %}
+            <fieldset class="form-section">
+              <legend><span>1</span> Identify the pipeline</legend>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="p-id">Id</label>
+                  <input type="text" id="p-id" name="id" required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="{{ draft.id or editing or '' }}" {% if editing %}readonly{% endif %} />
+                  <span class="hint">Letters, digits, underscores or hyphens. Also the id of the export its results are saved through.</span>
+                </div>
+                <div class="field">
+                  <label for="p-name">Name</label>
+                  <input type="text" id="p-name" name="name" value="{{ draft.name or '' }}" />
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend><span>2</span> Bind the workflow's inputs</legend>
+              <p class="hint">{{ workflow.summary }}</p>
+              <div class="form-grid">
+                {% for f in parameter_fields %}
+                <div class="field {% if f.kind in ['dataset', 'features', 'json'] %}field-wide{% endif %}">
+                  <label for="arg-{{ f.name }}">{{ f.name }}{% if not f.required and f.kind != 'interval' %} <span class="note">optional</span>{% endif %}</label>
+                  {% if f.kind == 'interval' %}
+                  <input type="text" id="arg-{{ f.name }}" name="arg.{{ f.name }}" value="{{ f.value }}" placeholder="Supplied by each run" />
+                  <span class="hint">Leave empty: each run gives its own interval. Bind it as JSON only when the workflow has another interval for runs.</span>
+                  {% elif f.kind == 'dataset' %}
+                  <select id="arg-{{ f.name }}" name="arg.{{ f.name }}" {% if f.required %}required{% endif %}>
+                    {% if not f.required %}<option value="">(not bound)</option>{% endif %}
+                    {% for d in datasets %}<option value="{{ d.id }}" {% if f.value == d.id %}selected{% endif %}>{{ d.name }} ({{ d.cadence }}, {{ d.coverage.start }} to {{ d.coverage.end }})</option>{% endfor %}
+                  </select>
+                  {% elif f.kind == 'features' %}
+                  <select id="arg-{{ f.name }}" name="arg.{{ f.name }}" {% if f.required %}required{% endif %}>
+                    {% if not f.required %}<option value="">(not bound)</option>{% endif %}
+                    {% for c in collections %}<option value="{{ c.id }}" {% if f.value == c.id %}selected{% endif %}>{{ c.name }} ({{ c.feature_count }} features, {{ c.geometry_types | join(', ') }})</option>{% endfor %}
+                  </select>
+                  {% elif f.kind == 'enum' %}
+                  <select id="arg-{{ f.name }}" name="arg.{{ f.name }}">
+                    {% if not f.required %}<option value="">default{% if f.default is not none %} ({{ f.default }}){% endif %}</option>{% endif %}
+                    {% for option in f.enum %}<option value="{{ option }}" {% if f.value == option | string %}selected{% endif %}>{{ option }}</option>{% endfor %}
+                  </select>
+                  {% elif f.kind == 'json' %}
+                  <textarea id="arg-{{ f.name }}" name="arg.{{ f.name }}" rows="3" class="mono" placeholder="JSON">{{ f.value }}</textarea>
+                  {% else %}
+                  <input type="text" id="arg-{{ f.name }}" name="arg.{{ f.name }}" value="{{ f.value }}" {% if f.required %}required{% endif %} {% if f.default is not none %}placeholder="{{ f.default }}"{% endif %} />
+                  {% endif %}
+                  {% if f.description and f.kind != 'interval' %}<span class="hint">{{ f.description }}</span>{% endif %}
+                </div>
+                {% endfor %}
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend><span>3</span> Configure the {{ destination.id }} destination</legend>
+              <div class="form-grid">
+                {% for f in settings_fields %}
+                {% if f.kind == 'rows' %}
+                <div class="field field-wide">
+                  <strong>{{ f.title }}</strong>
+                  {% for row in f.rows %}
+                  {% set i = loop.index0 %}
+                  <div class="form-grid">
+                    {% for c in f.columns %}
+                    <div class="field">
+                      <label for="dest-{{ f.name }}-{{ i }}-{{ c.name }}">{{ c.title }}{% if not c.required %} <span class="note">optional</span>{% endif %}</label>
+                      <input type="text" id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="{{ row.get(c.name) or '' }}" />
+                    </div>
+                    {% endfor %}
+                  </div>
+                  {% endfor %}
+                  <span class="hint">{{ f.description }} Fill the empty row to add one; save to get another.</span>
+                </div>
+                {% else %}
+                <div class="field {% if f.kind == 'json' %}field-wide{% endif %}">
+                  <label for="dest-{{ f.name }}">{{ f.title }}{% if not f.required %} <span class="note">optional</span>{% endif %}</label>
+                  {% if f.enum %}
+                  <select id="dest-{{ f.name }}" name="dest.{{ f.name }}" {% if f.required %}required{% endif %}>
+                    {% for option in f.enum %}<option value="{{ option }}" {% if f.value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}
+                  </select>
+                  {% elif f.kind == 'json' %}
+                  <textarea id="dest-{{ f.name }}" name="dest.{{ f.name }}" rows="3" class="mono" placeholder="JSON">{{ f.value }}</textarea>
+                  {% else %}
+                  <input type="text" id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="{{ f.value }}" {% if f.required %}required{% endif %} />
+                  {% endif %}
+                  {% if f.description %}<span class="hint">{{ f.description }}</span>{% endif %}
+                </div>
+                {% endif %}
+                {% endfor %}
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend><span>4</span> Decide when it runs</legend>
+              <p class="hint">The pipeline never fetches data. Keeping a source dataset current is its sync schedule; the pipeline reacts to its updates.</p>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="p-policy">Run</label>
+                  <select id="p-policy" name="policy">
+                    <option value="on_update" {% if not draft.delivery or draft.delivery.policy in [none, 'on_update'] %}selected{% endif %}>After each source dataset update</option>
+                    <option value="manual" {% if draft.delivery and draft.delivery.policy == 'manual' %}selected{% endif %}>Only when run by hand</option>
+                  </select>
+                  <span class="hint">A run after an update covers the updated interval. A scheduled release is not available yet.</span>
+                </div>
+              </div>
+            </fieldset>
+            {% if editing %}<input type="hidden" name="mode" value="{{ draft.delivery.mode if draft.delivery else 'dry_run' }}" />{% endif %}
+            <div class="form-actions">
+              <button type="submit" class="primary">Save</button>
+              <span class="note">{% if editing %}A change to the workflow, its arguments or the destination needs a new dry run before live delivery.{% else %}The new pipeline starts in dry-run mode.{% endif %}</span>
+              {% if editing %}<a class="button-link" href="{{ mount }}/pipelines/{{ editing }}">Cancel</a>{% endif %}
+            </div>
+          </form>
+          {% endif %}
+        </section>
+        {% endif %}
+      </main>
+    </div>
+  </body>
+</html>
