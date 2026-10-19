@@ -62,7 +62,7 @@ def _cds_version(year: int) -> str:
     return "v2_0_7cds" if year <= 2015 else "v2_1_1"
 
 
-def _load_classes(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArray:
+def _load_year(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArray:
     """The ``lccs_class`` raster for ``year`` on the native grid over ``bbox`` (+ ``pad`` degrees)."""
     xmin, ymin, xmax, ymax = (bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad)
     request = {
@@ -115,45 +115,7 @@ class ESACCILandCoverClassPlugin(BaseDatasetPlugin):
         return _years(start, end)
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
-        classes = _load_classes(period_id, bbox)
+        classes = _load_year(period_id, bbox)
         classes = classes.where(classes != _NO_DATA).astype("float32")
         classes.attrs = {"units": "1", "flag_meanings": "LCCS class codes, see the template description"}
         return _with_time(classes.to_dataset(name="lccs_class"), period_id)
-
-
-class ESACCILandCoverFractionPlugin(BaseDatasetPlugin):
-    """Yearly fraction of each cell covered by each land cover class group.
-
-    Template params:
-        block: native pixels per output cell along each axis (default 3, about 1 km).
-    """
-
-    def __init__(self, block: int = 3, **_: Any) -> None:
-        if int(block) < 1:
-            raise ValueError(f"{type(self).__name__}: block must be a positive integer, got {block!r}")
-        self.block = int(block)
-
-    async def periods(self, start: str, end: str) -> list[str]:
-        return _years(start, end)
-
-    def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
-        classes = _load_classes(period_id, bbox)
-        fractions = class_fractions(classes, self.block)
-        return _with_time(fractions.to_dataset(name="land_cover_fraction"), period_id)
-
-
-def class_fractions(classes: xr.DataArray, block: int) -> xr.DataArray:
-    """Fraction of each ``block`` x ``block`` cell covered by each class group.
-
-    No-data pixels are left out of the denominator, so a cell that is half no data and half
-    cropland is 1.0 cropland; a cell that is all no data is NaN in every group.
-    """
-    valid = classes != _NO_DATA
-    layers = [classes.isin(codes) for codes in CLASS_GROUPS.values()]
-    stacked = xr.concat(layers, dim="land_cover_class").assign_coords(land_cover_class=list(CLASS_GROUPS))
-    coarsen = {"y": block, "x": block}
-    counts = stacked.astype("float32").coarsen(coarsen, boundary="trim").reduce(np.sum)
-    observed = valid.astype("float32").coarsen(coarsen, boundary="trim").reduce(np.sum)
-    fractions = (counts / observed.where(observed > 0)).astype("float32")
-    fractions.attrs = {"units": "1", "long_name": "fraction of cell covered by the land cover class group"}
-    return fractions.transpose("land_cover_class", "y", "x")
