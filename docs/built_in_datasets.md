@@ -54,6 +54,13 @@ It is a separate dataset from `chirps3_precipitation_daily` on purpose. A store 
 
 **Sync behaviour** — the newest published day is found by probing the CHIRPS server day by day from today, up to 21 days back. The lag is typically 4–5 days.
 
+**Preliminary first, final later, in DHIS2** — push both datasets to the same data element. The DHIS2 export imports with `CREATE_AND_UPDATE`, so a value for an org unit and period that already exists is overwritten:
+
+1. Daily, push `chirps3_precipitation_daily_prelim` for the days after the final dataset's last date, so a late run never puts provisional values back over final ones.
+2. When the final product publishes a month, push `chirps3_precipitation_daily` for that month; its values replace the preliminary ones.
+
+DHIS2 then holds the best value available for each day. It does not show which values are still provisional; to mark them, push the preliminary dataset with its own attribute option combo or data element instead, which gives up the overwrite.
+
 ---
 
 ## CHIRPS v3 — monthly precipitation
