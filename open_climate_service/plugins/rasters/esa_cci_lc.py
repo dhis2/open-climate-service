@@ -85,24 +85,24 @@ def _load_year(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArray:
         client = _CdsClient()
         client.check_authentication()
         client.submit(_DATASET, request).download(str(target))
-        # The CDS delivers a zip holding one netCDF file, or the netCDF file itself.
-        if zipfile.is_zipfile(target):
-            with zipfile.ZipFile(target) as archive:
-                names = [name for name in archive.namelist() if name.endswith(".nc")]
-                if not names:
-                    raise RuntimeError(
-                        f"No netCDF file in the CDS land cover download for {year}: {archive.namelist()}"
-                    )
-                path = Path(archive.extract(names[0], tmp))
-        else:
-            path = target
-        ds = xr.open_dataset(path)
-    classes = ds["lccs_class"]
+
+        # The CDS delivers a zip holding one netCDF file
+        with zipfile.ZipFile(target) as archive:
+            names = [name for name in archive.namelist() if name.endswith(".nc")]
+            if not names:
+                raise RuntimeError(
+                    f"No netCDF file in the CDS land cover download for {year}: {archive.namelist()}"
+                )
+            path = Path(archive.extract(names[0], tmp))
+
+        # Open, load, and close the ds before the temporary directory is removed
+        with xr.open_dataset(path) as ds:
+            classes = ds.load()["lccs_class"]
 
     # Drop only the yearly time axis: an extent one pixel wide must keep both spatial axes.
     if "time" in classes.dims:
         classes = classes.isel(time=0, drop=True)
-        
+
     # A declared fill value is decoded to NaN; make it the class code for no data, so the fractions
     # leave it out of the denominator instead of counting it as observed and unclassified.
     classes = classes.fillna(_NO_DATA).astype("uint8")
