@@ -206,20 +206,25 @@ def test_aggregate_spatial_fully_outside():
     # uniform flat grid with only 1s
     da = _flat_grid(y_ascending=True)
 
-    # exactly 1x1 pixels aligned with pixels
-    geom = _box(-2, -2, -1, -1)
+    # one geometry over a cell, one outside the grid, both exactly 1x1 pixels aligned with pixels
+    geoms = [_box(0, 0, 1, 1), _box(-2, -2, -1, -1)]
 
-    # returns geometry even if outside
-    out = aggregate_spatial_weighted(da, geom, "sum")
-    assert out.sizes["geometry"] == 1
+    # returns the outside geometry too
+    out = aggregate_spatial_weighted(da, geoms, "sum")
+    assert out.sizes["geometry"] == 2
 
     # weighted sum for nomatch = 0
-    out = aggregate_spatial_weighted(da, geom, "sum")
-    assert float(out.isel(geometry=0).item()) == pytest.approx(0)
+    assert float(out.isel(geometry=1).item()) == pytest.approx(0)
 
     # weighted mean for nomatch = nan
-    out = aggregate_spatial_weighted(da, geom, "mean")
-    assert np.isnan(out.isel(geometry=0))
+    out = aggregate_spatial_weighted(da, geoms, "mean")
+    assert np.isnan(out.isel(geometry=1))
+
+
+def test_aggregate_spatial_nothing_inside_is_refused():
+    # A CRS mismatch, or features from another country, would otherwise return NaN throughout.
+    with pytest.raises(ValueError, match="None of the 1 geometries overlaps the raster"):
+        aggregate_spatial_weighted(_flat_grid(y_ascending=True), _box(-2, -2, -1, -1), "sum")
 
 
 def test_aggregate_spatial_mixed_geometry_types():

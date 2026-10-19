@@ -209,7 +209,7 @@ def aggregate_spatial_classes(
     """
     from open_climate_service.shared.classes import cube_classes
     from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
-    from open_climate_service.shared.vectors import features_in_crs, single_raster, vector_result
+    from open_climate_service.shared.vectors import features_on_raster, single_raster, vector_result
 
     if reducer not in REDUCERS:
         raise ValueError(f"aggregate_spatial_classes: reducer must be one of {', '.join(REDUCERS)}")
@@ -239,7 +239,7 @@ def aggregate_spatial_classes(
         weight = _ensure_single_grid(_ensure_xy(single_raster(weights))).load()
 
         # The sums are on the weight grid, so the geometries are put in its CRS.
-        frame = features_in_crs(geometries, weight.rio.crs)
+        frame = features_on_raster(geometries, weight)
         reference = raster.rio.write_crs(weight.rio.crs)
         grid_cells = weight.size
 
@@ -247,7 +247,7 @@ def aggregate_spatial_classes(
             return _total(part, weight, frame, codes, labels)
 
     else:
-        frame = features_in_crs(geometries, raster.rio.crs)
+        frame = features_on_raster(geometries, raster)
         reference = raster
         grid_cells = raster.sizes["x"] * raster.sizes["y"]
 

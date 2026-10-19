@@ -167,15 +167,29 @@ def single_raster(data: Any) -> xr.DataArray:
     return raster
 
 
-def features_in_crs(geometries: Any, crs: Any) -> gpd.GeoDataFrame:
-    """The features of a `geometries` argument, indexed by feature id, reprojected to *crs*.
+def features_on_raster(geometries: Any, raster: xr.DataArray) -> gpd.GeoDataFrame:
+    """The features of a `geometries` argument, indexed by feature id, in *raster*'s CRS.
 
-    See :func:`geometries_to_frame` for what is accepted. Features without a CRS are WGS 84.
+    See :func:`geometries_to_frame` for what is accepted. The geometries are reprojected, never
+    the raster, which would resample it. Features without a CRS are WGS 84. When none of them
+    overlaps the raster this raises, naming both CRSes and bounds, rather than returning NaN for
+    every feature: that is what a wrong CRS, or features from another country, looks like.
     """
+    from shapely.geometry import box
+
     frame = geometries_to_frame(geometries)
     if frame.crs is None:
         frame = frame.set_crs("EPSG:4326")
-    return frame.to_crs(crs)
+    projected = frame.to_crs(raster.rio.crs)
+    bounds = raster.rio.bounds()
+    if len(projected) and not projected.intersects(box(*bounds)).any():
+        given = ", ".join(f"{value:g}" for value in frame.total_bounds)
+        covered = ", ".join(f"{value:g}" for value in bounds)
+        raise ValueError(
+            f"None of the {len(frame)} geometries overlaps the raster: the geometries span ({given}) "
+            f"in {frame.crs}, the raster ({covered}) in {raster.rio.crs}"
+        )
+    return projected
 
 
 def vector_result(

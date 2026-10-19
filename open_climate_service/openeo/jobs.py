@@ -1728,7 +1728,7 @@ def _write_managed_zarr(
     _reject_incompatible_template_units(ds, variable, cf_attrs)
     apply_cf_metadata(ds, cf_attrs, overwrite=True)
 
-    coverage = _derive_coverage(ds, x_dim, y_dim, t_dim)
+    coverage = _derive_coverage(ds, x_dim, y_dim, t_dim, crs)
     period_type: str | None = _derive_period_type(ds, options, source_template, t_dim)
     store_path = downloader.DOWNLOAD_DIR / f"{dataset_id}.icechunk"
     store_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2175,8 +2175,8 @@ def _humanize_identifier(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[_-]+", " ", value)).strip().title()
 
 
-def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None) -> Any:
-    """Derive ArtifactCoverage from an xr.Dataset's coordinates."""
+def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None, native_crs: str) -> Any:
+    """Derive ArtifactCoverage from an xr.Dataset's coordinates, which are in *native_crs*."""
     import numpy as np
     import pyproj
 
@@ -2192,7 +2192,6 @@ def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None) -> Any:
     ymax = float(ds[y_dim].max())
     spatial = CoverageSpatial(xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
-    native_crs: str = ds.attrs.get("proj:code", "EPSG:4326")
     spatial_wgs84: Any = None
     if native_crs not in ("EPSG:4326", "CRS84", "OGC:CRS84"):
         try:

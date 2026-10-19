@@ -2059,7 +2059,7 @@ def test_derive_coverage_falls_back_to_reduced_dimensions_attrs() -> None:
     ds["temperature"].attrs["reduced_dimensions_min_values"] = {"t": np.datetime64("2018-01-01")}
     ds["temperature"].attrs["reduced_dimensions_max_values"] = {"t": np.datetime64("2018-03-01")}
 
-    coverage = _derive_coverage(ds, "x", "y", None)
+    coverage = _derive_coverage(ds, "x", "y", None, "EPSG:4326")
     assert coverage.temporal.start == "2018-01-01"
     assert coverage.temporal.end == "2018-03-01"
 
@@ -2089,7 +2089,7 @@ def test_derive_coverage_returns_spatial_and_temporal_from_dataset() -> None:
         {"v": (("t", "y", "x"), np.ones((2, 3, 4)))},
         coords={"t": t, "y": [10.0, 20.0, 30.0], "x": [1.0, 2.0, 3.0, 4.0]},
     )
-    coverage = _derive_coverage(ds, "x", "y", "t")
+    coverage = _derive_coverage(ds, "x", "y", "t", "EPSG:4326")
 
     assert coverage.spatial.xmin == pytest.approx(1.0)
     assert coverage.spatial.xmax == pytest.approx(4.0)
