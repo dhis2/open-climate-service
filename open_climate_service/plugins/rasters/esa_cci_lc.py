@@ -90,9 +90,7 @@ def _load_year(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArray:
         with zipfile.ZipFile(target) as archive:
             names = [name for name in archive.namelist() if name.endswith(".nc")]
             if not names:
-                raise RuntimeError(
-                    f"No netCDF file in the CDS land cover download for {year}: {archive.namelist()}"
-                )
+                raise RuntimeError(f"No netCDF file in the CDS land cover download for {year}: {archive.namelist()}")
             path = Path(archive.extract(names[0], tmp))
 
         # Open, load, and close the ds before the temporary directory is removed
