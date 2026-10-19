@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import FastAPI
 
@@ -71,7 +73,22 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(main, "get_workflow_automation_service", lambda: FakeAutomationService())
     monkeypatch.setattr(main, "get_scheduler_service", lambda: FakeSchedulerService())
 
+    warm_started = asyncio.Event()
+    warm_cancelled = asyncio.Event()
+
+    async def fake_warm() -> None:
+        warm_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            warm_cancelled.set()
+            raise
+
+    monkeypatch.setattr(main, "_warm_process_registry", fake_warm)
+
     async with main._lifespan(FastAPI()):
+        # The process registry loads in the background, without holding up startup.
+        await asyncio.wait_for(warm_started.wait(), timeout=1)
         assert calls == [
             "recover",
             "automation-start",
@@ -105,6 +122,40 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         "shutdown",
         "openeo-shutdown",
     ]
+    await asyncio.wait_for(warm_cancelled.wait(), timeout=1)
+
+
+@pytest.mark.anyio
+async def test_the_process_registry_is_loaded_in_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from open_climate_service.openeo import processes
+
+    loaded_on: list[str] = []
+    monkeypatch.setattr(
+        processes, "list_openeo_processes", lambda: loaded_on.append(threading.current_thread().name) or []
+    )
+
+    await main._warm_process_registry()
+
+    assert len(loaded_on) == 1
+    assert loaded_on[0] != threading.main_thread().name
+
+
+@pytest.mark.anyio
+async def test_a_failed_warm_up_is_logged_and_left_to_first_use(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from open_climate_service.openeo import processes
+
+    def broken() -> list[dict[str, object]]:
+        raise RuntimeError("plugin import failed")
+
+    monkeypatch.setattr(processes, "list_openeo_processes", broken)
+
+    await main._warm_process_registry()
+
+    assert "Could not load the openEO processes at startup" in caplog.text
 
 
 @pytest.mark.anyio
