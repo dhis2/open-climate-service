@@ -98,6 +98,36 @@ Population disaggregated by sex and 5-year age band. Population is the quantity;
 
 ---
 
+## ESA CCI / C3S — land cover class (yearly)
+
+| Property               | Value                                                                 |
+| ---------------------- | --------------------------------------------------------------------- |
+| **Dataset ID**         | `esacci_landcover_class_yearly`                                       |
+| **Variable**           | `lccs_class`                                                          |
+| **Units**              | dimensionless class codes                                             |
+| **Period**             | Yearly                                                                |
+| **Spatial coverage**   | Global                                                                |
+| **Spatial resolution** | 300 m                                                                 |
+| **Record start**       | 1992                                                                  |
+| **Record end**         | Currently 2022; available years are discovered from the CDS catalogue |
+| **Source**             | [ESA CCI / C3S land cover](https://cds.climate.copernicus.eu/datasets/satellite-land-cover) |
+
+Each yearly raster contains the ESA CCI / C3S land-cover map in its 37 Land Cover Classification
+System (LCCS) classes. This is a categorical dataset for display; use categorical **mode**
+resampling when building overviews rather than averaging the class codes. The no-data code (0) is
+stored as missing data.
+
+**Setup** — register for a Copernicus Climate Data Store account, configure the CDS credentials,
+and accept the dataset licence in the browser before ingesting. See the
+[CDS setup instructions](era5_land_datasets.md#copernicus-climate-data-store-monthly-datasets).
+
+**Availability and sync** — the plugin discovers the allowed years from the CDS catalogue when
+listing available periods, so newly published years do not require a hardcoded plugin year limit.
+The CDS publishes version 2.0.7cds for 1992–2015 and version 2.1.1 from 2016 onward. Sync tracks
+the declared release; new catalogue years can be ingested when requested.
+
+---
+
 ## Copernicus — elevation (static)
 
 | Property               | Value                                                                                                |
