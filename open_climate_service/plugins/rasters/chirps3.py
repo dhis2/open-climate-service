@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, TypeVar
 
 import xarray as xr
@@ -90,7 +90,7 @@ class CHIRPS3DailyPlugin(BaseDatasetPlugin):
         self.flavor = flavor
 
     async def periods(self, start: str, end: str) -> list[str]:
-        """Return ordered daily periods, clamped to the latest complete month."""
+        """Return ordered daily periods, clamped to the newest published day."""
         cutoff = await asyncio.to_thread(self._availability_cutoff)
         return daily_period_ids(start, end, cutoff=cutoff)
 
@@ -108,10 +108,19 @@ class CHIRPS3DailyPlugin(BaseDatasetPlugin):
         return normalize_period(da, variable="precip", period=period_id, nodata=_CHIRPS3_NODATA, bbox=bbox)
 
     def _availability_cutoff(self) -> date:
-        """Return the last day of the most recently published complete month."""
+        """Return the newest day this stage has published.
+
+        The final product is published a month at a time in arrears, so its cutoff is the last
+        day of the newest complete month. The preliminary product appears a day at a time, a few
+        days behind, so it is probed day by day from today and reaches into the current month.
+        """
+        today = datetime.now(UTC).date()
+        if self.stage == "prelim":
+            return _latest_published(
+                lambda step: today - timedelta(days=step), self._url_for_day, lookback=21, description="preliminary day"
+            )
 
         def candidate(step: int) -> date:
-            today = datetime.now(UTC).date()
             months_back = step + 1  # the current month is never complete
             year, month = divmod(today.year * 12 + today.month - 1 - months_back, 12)
             month += 1
