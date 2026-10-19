@@ -177,11 +177,15 @@ def features_on_raster(geometries: Any, raster: xr.DataArray) -> gpd.GeoDataFram
     """
     from shapely.geometry import box
 
+    from open_climate_service.data_manager.services.utils import get_x_y_dims
+
     frame = geometries_to_frame(geometries)
     if frame.crs is None:
         frame = frame.set_crs("EPSG:4326")
     projected = frame.to_crs(raster.rio.crs)
-    bounds = raster.rio.bounds()
+    # rioxarray finds x/y and longitude/latitude axes, but not lon/lat.
+    x_dim, y_dim = get_x_y_dims(raster)
+    bounds = raster.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim).rio.bounds()
     if len(projected) and not projected.intersects(box(*bounds)).any():
         given = ", ".join(f"{value:g}" for value in frame.total_bounds)
         covered = ", ".join(f"{value:g}" for value in bounds)

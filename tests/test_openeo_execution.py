@@ -1650,6 +1650,31 @@ def test_persist_result_writes_icechunk_when_dataset_id_in_options(
     assert publish_flag is True  # publish defaults to True when key is absent
 
 
+def test_persist_result_covers_a_projected_result_in_its_own_crs(
+    job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A result that keeps `spatial_ref` but lost `proj:code` was stored in its CRS and covered as
+    if it were WGS 84, so its WGS 84 coverage was never derived."""
+    import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
+
+    ds = _small_dataset().assign_coords(x=500000 + _small_dataset().x * 1000, y=6000000 + _small_dataset().y * 1000)
+    envelope = SaveResultEnvelope(ds.rio.write_crs("EPSG:32633"), "Zarr", {"dataset_id": "utm_aggregate"})
+    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    registered: list[Any] = []
+    monkeypatch.setattr(
+        "open_climate_service.ingestions.services.register_artifact_record",
+        lambda record, publish: registered.append(record) or record,
+    )
+
+    job_service._persist_result("job-utm", envelope)
+
+    record = registered[0]
+    assert record.coverage.spatial.xmin == pytest.approx(501000)
+    assert record.coverage.spatial_wgs84 is not None
+    assert record.coverage.spatial_wgs84.xmin == pytest.approx(15.0, abs=0.1)  # UTM 33's central meridian
+
+
 def test_persist_result_stamps_cf_attrs_from_template(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
