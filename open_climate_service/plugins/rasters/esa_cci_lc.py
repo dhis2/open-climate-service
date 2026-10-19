@@ -33,8 +33,6 @@ import xarray as xr
 from ecmwf.datastores import Client as _CdsClient
 from open_climate_service.streaming import BaseDatasetPlugin
 
-from ocs_plugins._netcdf import load_netcdf
-
 _DATASET = "satellite-land-cover"
 _FIRST_YEAR, _LAST_YEAR = 1992, 2022
 _NO_DATA = 0
@@ -75,7 +73,9 @@ def _load_classes(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArra
     }
     with tempfile.TemporaryDirectory() as tmp:
         target = Path(tmp) / "land_cover"
-        _CdsClient().submit(_DATASET, request).download(str(target))
+        client = _CdsClient()
+        client.check_authentication()
+        client.submit(_DATASET, request).download(str(target))
         # The CDS delivers a zip holding one netCDF file, or the netCDF file itself.
         if zipfile.is_zipfile(target):
             with zipfile.ZipFile(target) as archive:
@@ -87,7 +87,7 @@ def _load_classes(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArra
                 path = Path(archive.extract(names[0], tmp))
         else:
             path = target
-        ds = load_netcdf(path)
+        ds = xr.open_dataset(path)
     classes = ds["lccs_class"]
     # Drop only the yearly time axis: an extent one pixel wide must keep both spatial axes.
     if "time" in classes.dims:

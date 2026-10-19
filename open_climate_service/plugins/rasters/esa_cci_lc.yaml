@@ -23,7 +23,7 @@
       end: "2022"
       resolution: P1Y
   ingestion:
-    plugin: ocs_plugins.rasters.esa_cci_lc.ESACCILandCoverFractionPlugin
+    plugin: open_climate_service.plugins.rasters.esa_cci_lc.ESACCILandCoverFractionPlugin
     params:
       block: 3
   units: "1"
@@ -66,7 +66,7 @@
       end: "2022"
       resolution: P1Y
   ingestion:
-    plugin: ocs_plugins.rasters.esa_cci_lc.ESACCILandCoverClassPlugin
+    plugin: open_climate_service.plugins.rasters.esa_cci_lc.ESACCILandCoverClassPlugin
     resampling: mode
   classes:
     - { value: 10, label: "Cropland, rainfed", color: "#ffff64" }
