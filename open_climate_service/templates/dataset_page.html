@@ -316,7 +316,9 @@
                 <dd>{{ value }}</dd>
                 {% endfor %}
               </dl>
-              {% if not vector %}
+              {% if classes %}
+              {% include "_class_legend.html" %}
+              {% elif not vector %}
               <span class="ramp-bar" style="--ramp: {{ dataset.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
               {% endif %}
             </section>

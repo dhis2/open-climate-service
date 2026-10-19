@@ -445,9 +445,9 @@ classes:
 
 The classes are written to the stored variable as CF `flag_values` and `flag_meanings`, and
 published in STAC as `classification:classes` on the data assets. The pyramid is resampled with
-`mode`. The map viewer draws each class in its colour, with a legend of the labels; a class
-without a `color` takes one from a categorical palette, and `display` is not used. A
-categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
+`mode`. The map viewer and the dataset's thumbnail draw each class in its colour, and the map
+viewer and the dataset page list the classes as a legend; a class without a `color` takes one
+from a categorical palette, and `display` is not used. A categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
 `share` of each class, the `majority` class, or a `total` of a weight such as population per
 class.
 `aggregate_spatial_weighted` refuses it, since a mean or sum of codes is not a class. A template
