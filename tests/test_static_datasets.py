@@ -45,6 +45,32 @@ class SeriesInDisguisePlugin(BaseDatasetPlugin):
         return ds.expand_dims({"t": [np.datetime64("2010-01-01")]})
 
 
+class LandCoverPlugin(BaseDatasetPlugin):
+    """Integer classes with 255 as the no-data code, as categorical sources publish them."""
+
+    def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
+        ds = ElevationPlugin().fetch(bbox)
+        classes = np.full(ds["elevation"].shape, 3, dtype="uint8")
+        classes[0, 0] = 255
+        landcover = xr.DataArray(classes, dims=("y", "x"), coords=ds.coords)
+        landcover.encoding["_FillValue"] = np.uint8(255)
+        return landcover.to_dataset(name="elevation")
+
+
+class StandaloneElevationPlugin:
+    """Exactly the documented static contract: `fetch` alone, no base class supplying the rest."""
+
+    def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
+        return ElevationPlugin().fetch(bbox)
+
+
+class LeftoverTimePlugin(BaseDatasetPlugin):
+    """A static plugin that selects one step but keeps its scalar time coordinate."""
+
+    def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
+        return SeriesInDisguisePlugin().fetch(bbox).isel(t=0)
+
+
 _TEMPLATES = """
 - id: {prefix}_elevation
   name: Elevation
@@ -67,6 +93,27 @@ _TEMPLATES = """
     kind: static
   ingestion:
     plugin: tests.test_static_datasets.SeriesInDisguisePlugin
+- id: {prefix}_leftover_time
+  name: Leftover time
+  variable: elevation
+  sync:
+    kind: static
+  ingestion:
+    plugin: tests.test_static_datasets.LeftoverTimePlugin
+- id: {prefix}_standalone
+  name: Standalone
+  variable: elevation
+  sync:
+    kind: static
+  ingestion:
+    plugin: tests.test_static_datasets.StandaloneElevationPlugin
+- id: {prefix}_classes
+  name: Classes
+  variable: elevation
+  sync:
+    kind: static
+  ingestion:
+    plugin: tests.test_static_datasets.LandCoverPlugin
 """
 
 
@@ -165,6 +212,53 @@ def test_an_overwrite_whose_rebuild_fails_keeps_the_stored_data(
     assert float(_store(dataset_id)["elevation"].max()) == 100.0
 
 
+def test_a_plugin_implementing_only_fetch_is_accepted(client: TestClient, static_sources: str) -> None:
+    dataset_id = f"{static_sources}_standalone"
+
+    response = _ingest(client, dataset_id)
+
+    assert response.status_code in (200, 201), response.text
+    assert set(_store(dataset_id)["elevation"].dims) == {"y", "x"}
+
+
+def test_a_leftover_time_coordinate_is_refused(client: TestClient, static_sources: str) -> None:
+    dataset_id = f"{static_sources}_leftover_time"
+
+    with pytest.raises(RuntimeError, match="must not carry a time coordinate"):
+        _ingest(client, dataset_id)
+
+    assert not downloader.get_icechunk_path({"id": dataset_id}).exists()
+
+
+def test_an_integer_no_data_code_is_kept(client: TestClient, static_sources: str) -> None:
+    dataset_id = f"{static_sources}_classes"
+
+    assert _ingest(client, dataset_id).status_code in (200, 201)
+
+    stored = _store(dataset_id)["elevation"].load()
+    assert bool(stored.isnull()[0, 0]) and int(stored[1, 1]) == 3
+
+
+def test_a_cancelled_ingest_writes_nothing(static_sources: str) -> None:
+    from open_climate_service.ingestions import services
+    from open_climate_service.jobs.models import JobCancelledError
+
+    dataset_id = f"{static_sources}_elevation"
+    with pytest.raises(JobCancelledError):
+        services.create_artifact(
+            dataset=registry.get_dataset(dataset_id) or {},
+            start=None,
+            end=None,
+            bbox=_BBOX,
+            country_code=None,
+            overwrite=False,
+            publish=False,
+            is_cancel_requested=lambda: True,
+        )
+
+    assert _FETCHES == [] and not downloader.get_icechunk_path({"id": dataset_id}).exists()
+
+
 def test_a_workflow_result_keeps_its_recorded_cadence() -> None:
     """A static template without a period_type, whose result has a time axis and a recorded cadence."""
     from types import SimpleNamespace
@@ -176,3 +270,24 @@ def test_a_workflow_result_keeps_its_recorded_cadence() -> None:
     template = {"id": "derived", "sync": {"kind": "static"}}
 
     assert services._dataset_period_type(latest, template) == "daily"  # type: ignore[arg-type]
+
+
+def test_a_rebuilt_store_renames_any_time_axis_alias(tmp_path: Path) -> None:
+    """The rewrite after ingest finds the axis under every name publication accepts, not only t/time."""
+    from open_climate_service.ingestions import services
+    from open_climate_service.streaming.store import open_or_create_repo
+
+    store_path = tmp_path / "aliased.icechunk"
+    ds = ElevationPlugin().fetch(_BBOX).expand_dims({"date": [np.datetime64("2024-01-01")]})
+    session = open_or_create_repo(store_path).writable_session("main")
+    ds.to_zarr(session.store, mode="w", zarr_format=3)
+    session.commit("aliased")
+
+    result = services._maybe_build_pyramid(store_path, {"id": "aliased"}, retain_previous=False)
+
+    assert result.completed
+    assert "t" in _store_at(store_path).dims and "date" not in _store_at(store_path).dims
+
+
+def _store_at(path: Path) -> xr.Dataset:
+    return open_icechunk_dataset(path)

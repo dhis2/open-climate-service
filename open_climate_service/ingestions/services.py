@@ -61,6 +61,7 @@ from open_climate_service.ingestions.sync_engine import SyncConfigurationError, 
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
+from open_climate_service.shared.raster_contract import TIME_ALIASES
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -74,7 +75,7 @@ from open_climate_service.shared.time import (
 )
 from open_climate_service.shared.urls import path_segment as _segment
 from open_climate_service.streaming.orchestrator import run_static_ingest_sync, run_streaming_ingest_sync
-from open_climate_service.streaming.protocol import IngestionPlugin, close_ingestion_plugin
+from open_climate_service.streaming.protocol import IngestionPlugin, StaticIngestionPlugin, close_ingestion_plugin
 from open_climate_service.streaming.store import (
     is_store_empty,
     open_or_create_repo,
@@ -476,6 +477,7 @@ def create_artifact(
             publish=publish,
             request_scope=ArtifactRequestScope(bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None),
             on_progress=on_progress,
+            is_cancel_requested=is_cancel_requested,
             on_update_planned=on_update_planned,
         )
 
@@ -1292,7 +1294,7 @@ def _create_streaming_artifact(
             status_code=409,
             detail=f"An ingest or sync is already running for dataset '{dataset['id']}'. Wait for it to finish.",
         )
-    plugin: IngestionPlugin | None = None
+    plugin: IngestionPlugin | StaticIngestionPlugin | None = None
     replacement_path: Path | None = None
     rollback_repo: Any | None = None
     rollback_branch: str | None = None
@@ -1302,7 +1304,8 @@ def _create_streaming_artifact(
     plugin_handed_to_orchestrator = False
     ingest_completed = False
     try:
-        plugin = _load_streaming_plugin(plugin_path, params=params)
+        timeless = registry_datasets.is_timeless(dataset)
+        plugin = _load_streaming_plugin(plugin_path, params=params, static=timeless)
         # First thing under the lock, before anything looks at the store. A swap killed between
         # its two renames leaves the published path missing and the data at `.retired`; ingest
         # would read that as a brand-new store and write only the requested delta into a fresh
@@ -1310,13 +1313,12 @@ def _create_streaming_artifact(
         # `.retired`. Healing before any inspection makes the next sync an ordinary append.
         recover_interrupted_swap(store_path)
 
-        timeless = registry_datasets.is_timeless(dataset)
         if timeless:
             plan = _plan_static_materialization(store_path=store_path, overwrite=overwrite)
         else:
             assert start is not None and end is not None
             plan = _plan_streaming_materialization(
-                plugin=plugin,
+                plugin=cast(IngestionPlugin, plugin),  # loaded against this contract above
                 store_path=store_path,
                 start=start,
                 end=end,
@@ -1378,13 +1380,20 @@ def _create_streaming_artifact(
 
         if plan.action != SyncAction.NO_OP and timeless:
             plugin_handed_to_orchestrator = True
-            run_static_ingest_sync(plugin=plugin, params=params, dataset=dataset, bbox=bbox, store_path=ingest_path)
+            run_static_ingest_sync(
+                plugin=cast(StaticIngestionPlugin, plugin),
+                params=params,
+                dataset=dataset,
+                bbox=bbox,
+                store_path=ingest_path,
+                is_cancel_requested=is_cancel_requested,
+            )
             ingest_completed = True
         elif plan.action != SyncAction.NO_OP:
             assert plan.start is not None and plan.end is not None
             plugin_handed_to_orchestrator = True
             result = run_streaming_ingest_sync(
-                plugin=plugin,
+                plugin=cast(IngestionPlugin, plugin),
                 params=params,
                 dataset=dataset,
                 bbox=bbox,
@@ -1889,7 +1898,7 @@ def _maybe_build_pyramid(
 
     try:
         # None for a static dataset without a time axis (CLIM-1448).
-        t_dim = next((d for d in ("t", "time", "valid_time") if d in ds.sizes), None)
+        t_dim = next((d for d in ("t", *TIME_ALIASES) if d in ds.sizes), None)
         already_normalized = "spatial_ref" in ds.coords or "spatial_ref" in ds.variables
         if already_normalized and "x" in ds.sizes and "y" in ds.sizes and not downloader.needs_pyramid(ds):
             # A flat, already-normalized store needs no read-rewrite — but streaming ingests
@@ -1942,21 +1951,30 @@ def _maybe_build_pyramid(
     return _StoreNormalizationResult(completed=True, swapped=True)
 
 
-def _load_streaming_plugin(plugin_path: str, *, params: dict[str, object]) -> IngestionPlugin:
+def _load_streaming_plugin(
+    plugin_path: str, *, params: dict[str, object], static: bool = False
+) -> IngestionPlugin | StaticIngestionPlugin:
     """Load and instantiate one streaming plugin class from a dotted import path.
+
+    A static dataset's plugin is checked against the static contract (``fetch``), every other
+    against the temporal one (``periods`` and ``fetch_period``).
 
     Template-defined `ingestion.params` are treated as plugin
     configuration and passed to the constructor here. The same params are also
     forwarded later to `fetch_period(...)` so plugins may keep configuration in
     constructor state, per-call kwargs, or both.
     """
-    from open_climate_service.shared.plugin_loader import instantiate_plugin
+    from open_climate_service.shared.plugin_loader import instantiate_plugin, instantiate_static_plugin
 
     module_path, _, attr_name = plugin_path.rpartition(".")
     if not module_path or not attr_name:
         raise HTTPException(status_code=500, detail=f"Invalid ingestion.plugin path '{plugin_path}'")
     try:
-        plugin = instantiate_plugin(plugin_path, dict(params))
+        plugin: IngestionPlugin | StaticIngestionPlugin = (
+            instantiate_static_plugin(plugin_path, dict(params))
+            if static
+            else instantiate_plugin(plugin_path, dict(params))
+        )
     except HTTPException:
         raise
     except Exception as exc:
