@@ -57,9 +57,20 @@ DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
 # CF attributes surfaced from the store onto cube:variables, as `cf:`-prefixed STAC fields.
-# `cell_methods` is passed through as the CF string ("time: mean"); the CF extension also
-# defines a per-dimension array form, but permits the plain string for methods that span axes.
+# The CF extension's schema defines `cf:cell_methods` as an array of strings, so the CF string
+# ("time: mean") is emitted as its one entry: ["time: mean"]. The extension's README also shows
+# a plain string for methods that span axes, but its schema refuses one, and the schema is what
+# a validating client applies (CLIM-1484). Nor is the string split into the README's per-
+# dimension array: that needs CF axis names mapped onto cube dimension names, and cannot express
+# a method spanning several axes, so one entry holding the whole CF string loses nothing.
 _CF_VARIABLE_ATTRS = ("standard_name", "cell_methods")
+
+
+def _cf_field(key: str, value: str) -> str | list[str]:
+    """A CF attribute as the CF extension's schema types its field."""
+    return [value] if key == "cell_methods" else value
+
+
 # CF section 2.6.2 "Description of file contents". Of the six attributes there, these four are
 # the ones CF permits on a variable: "We wish to allow the newly defined attributes, i.e.,
 # institution, source, references, and comment, to be either global or assigned to individual
@@ -1151,7 +1162,7 @@ def _build_cube_variables(ds: xr.Dataset) -> dict[str, Any]:
         for cf_key in _CF_VARIABLE_ATTRS:
             value = var.attrs.get(cf_key)
             if isinstance(value, str):
-                entry[f"cf:{cf_key}"] = value
+                entry[f"cf:{cf_key}"] = _cf_field(cf_key, value)
         result[str(name)] = entry
     return result
 
@@ -1235,7 +1246,7 @@ def _sanitize_variable_attrs(collection: dict[str, Any]) -> None:
             value = attrs.get(cf_key)
             if isinstance(value, str):
                 kept_attrs[cf_key] = value
-                variable[f"cf:{cf_key}"] = value
+                variable[f"cf:{cf_key}"] = _cf_field(cf_key, value)
         variable["attrs"] = kept_attrs
 
 

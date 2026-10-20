@@ -232,7 +232,8 @@ def test_collection_uses_xstac_and_adds_expected_fields(client: TestClient, monk
     # (CLIM-828). Prefixed at this level because that is the defined STAC field; the raw CF
     # spellings stay inside `attrs`, which passes the store's own attribute names through.
     assert payload["cube:variables"]["precip"]["cf:standard_name"] == "lwe_precipitation_rate"
-    assert payload["cube:variables"]["precip"]["cf:cell_methods"] == "time: mean"
+    # An array, as the CF extension's schema defines it (CLIM-1484); the CF string is its entry.
+    assert payload["cube:variables"]["precip"]["cf:cell_methods"] == ["time: mean"]
     assert "standard_name" not in payload["cube:variables"]["precip"]
     assert payload["cube:variables"]["precip"]["attrs"] == {
         "long_name": "Precipitation",
