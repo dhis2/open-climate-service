@@ -538,7 +538,7 @@ def _require_zarr_v3(url: str, ds: xr.Dataset) -> None:
     raise RuntimeError(
         f"Earth Data Hub store {url} is not Zarr v3, and OCS reads only v3 stores. EDH applies "
         f"updates only to its Zarr v3 stores, so this one no longer advances.{latest} "
-        f"Repoint it at the v3 store for this dataset. See CLIM-955."
+        "Repoint it at the v3 store for this dataset."
     )
 
 
