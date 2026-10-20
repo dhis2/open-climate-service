@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 from fastapi import FastAPI
@@ -73,22 +74,23 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(main, "get_workflow_automation_service", lambda: FakeAutomationService())
     monkeypatch.setattr(main, "get_scheduler_service", lambda: FakeSchedulerService())
 
-    warm_started = asyncio.Event()
-    warm_cancelled = asyncio.Event()
+    from open_climate_service.openeo import processes
 
-    async def fake_warm() -> None:
-        warm_started.set()
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            warm_cancelled.set()
-            raise
+    # The real warm-up, around a registry build that blocks its worker thread until released.
+    loading = threading.Event()
+    release = threading.Event()
 
-    monkeypatch.setattr(main, "_warm_process_registry", fake_warm)
+    def slow_list_openeo_processes() -> list[dict[str, object]]:
+        loading.set()
+        release.wait(timeout=5)
+        calls.append("processes-loaded")
+        return []
+
+    monkeypatch.setattr(processes, "list_openeo_processes", slow_list_openeo_processes)
 
     async with main._lifespan(FastAPI()):
         # The process registry loads in the background, without holding up startup.
-        await asyncio.wait_for(warm_started.wait(), timeout=1)
+        assert await asyncio.to_thread(loading.wait, 1)
         assert calls == [
             "recover",
             "automation-start",
@@ -102,6 +104,8 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
             "automation-replay",
             "scheduler-start",
         ]
+        # Released only once shutdown has begun: shutdown must wait for the thread to finish.
+        threading.Timer(0.1, release.set).start()
 
     assert calls == [
         "recover",
@@ -115,6 +119,7 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         "automation-reconcile",
         "automation-replay",
         "scheduler-start",
+        "processes-loaded",
         "consumer-unset",
         "openeo-consumer-unset",
         "finished-listener-cleared",
@@ -122,13 +127,10 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         "shutdown",
         "openeo-shutdown",
     ]
-    await asyncio.wait_for(warm_cancelled.wait(), timeout=1)
 
 
 @pytest.mark.anyio
 async def test_the_process_registry_is_loaded_in_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    import threading
-
     from open_climate_service.openeo import processes
 
     loaded_on: list[str] = []

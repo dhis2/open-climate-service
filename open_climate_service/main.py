@@ -215,7 +215,11 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     try:
         yield
     finally:
-        process_registry.cancel()
+        # Cancelling would only stop the wait: the imports carry on in their worker thread, and
+        # the interpreter waits for that thread at exit anyway. Let a warm-up still in progress
+        # finish here, so nothing of it runs after shutdown. It costs time only when the server
+        # stops within seconds of starting.
+        await process_registry
         if maintenance is not None:
             maintenance.cancel()
         if pipeline_recovery is not None:
