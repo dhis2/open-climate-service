@@ -540,9 +540,9 @@ What this means:
   `extent.spatial_wgs84`, the same convention a raster in a projected CRS uses.
 - `geometry_types` is read from the stored file's own metadata. An empty list means the file
   declares none, which is "not stated" rather than "no geometry".
-- `description`, `license` and `attribution` come from the collection's template. Until feature
-  templates land (CLIM-926) they read as `null` and `other` — `license` is never absent, and an
-  undeclared licence reports `other` rather than something that reads as permissive.
+- `description`, `license` and `attribution` come from the collection's template. `license` is
+  never absent: a template that declares no licence reports `other` rather than something that
+  reads as permissive.
 - Unpublished collections are listed. `/features` reports what this instance *holds*;
   publication decides what the catalogues *advertise*, which is a different question.
 

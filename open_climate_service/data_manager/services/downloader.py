@@ -464,13 +464,6 @@ def _get_cache_prefix(dataset: dict[str, Any]) -> str:
     return str(dataset["id"])
 
 
-def get_cache_files(dataset: dict[str, Any]) -> list[Path]:
-    """Return all NetCDF cache files matching this dataset's prefix."""
-    # TODO: not bulletproof -- e.g. 2m_temperature matches 2m_temperature_modified
-    prefix = _get_cache_prefix(dataset)
-    return list(DOWNLOAD_DIR.glob(f"{prefix}*.nc"))
-
-
 def get_zarr_path(dataset: dict[str, Any]) -> Path | None:
     """Return the optimised zarr archive path if it exists."""
     prefix = _get_cache_prefix(dataset)

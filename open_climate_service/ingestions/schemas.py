@@ -337,7 +337,7 @@ class FeatureDetail(BaseModel):
             "Name of the geometry *column* in the stored GeoParquet, not a geometry type — one "
             "column may hold points and polygons together. Named rather than assumed, because a "
             "collection may carry more than one geometry column, and this is what the STAC table "
-            "extension publishes as `table:primary_geometry` (CLIM-1069)."
+            "extension publishes as `table:primary_geometry`."
         ),
     )
     crs: str = Field(
@@ -362,7 +362,7 @@ class FeatureDetail(BaseModel):
             "must not be silently overwritten. None means no feature provider owns the "
             "collection — a hand-registered file, or one promoted from some other origin — so "
             "no provider may claim it without an explicit adoption step. Set from the "
-            "orchestration layer's own selected registry name (CLIM-926), never from a "
+            "orchestration layer's own selected registry name, never from a "
             "provider's returned payload, so a provider cannot claim an identity that is not "
             "its own."
         ),

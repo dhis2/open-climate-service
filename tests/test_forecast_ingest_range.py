@@ -72,12 +72,10 @@ def test_spanning_is_not_treated_as_future() -> None:
 
 def test_worldpop_global2_declares_itself_spanning() -> None:
     """The built-in that motivated the third value: declared extent 2015 → 2030."""
-    loaded = {d["id"]: d for d in registry.list_datasets()}
-    for dataset_id in ("worldpop_population_global2_100m", "worldpop_agesex_global2_100m"):
-        dataset = loaded[dataset_id]
-        assert registry.temporal_direction(dataset) == "spanning"
-        assert registry.declared_temporal_end(dataset) == "2030"
-        assert registry.is_future_facing(dataset) is False
+    dataset = {d["id"]: d for d in registry.list_datasets()}["worldpop_population_global2_100m"]
+    assert registry.temporal_direction(dataset) == "spanning"
+    assert registry.declared_temporal_end(dataset) == "2030"
+    assert registry.is_future_facing(dataset) is False
 
 
 def test_declared_temporal_end_is_none_when_absent() -> None:

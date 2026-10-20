@@ -21,6 +21,7 @@ from open_climate_service.data_registry.services import datasets as registry_dat
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
 from open_climate_service.scheduler.presets import form_values, schedule_description, suggested_frequency
+from open_climate_service.shared.classes import class_colors, classification_from_template
 from open_climate_service.shared.time import datetime_to_period_string, has_calendar_periods
 
 from .schemas import Link, RootResponse
@@ -301,6 +302,21 @@ def _record_licence_label(record: Any) -> str:
     return str(record.license)
 
 
+def _class_legend(template: dict[str, Any]) -> list[dict[str, str]]:
+    """A categorical template's classes as legend rows, label and colour, or none.
+
+    Shown in place of the display range and colour scale, which a categorical dataset does not
+    use: the map viewer and the thumbnail draw each class in these colours.
+    """
+    classification = classification_from_template(template)
+    if classification is None:
+        return []
+    return [
+        {"label": item.label, "color": color}
+        for item, color in zip(classification.classes, class_colors(classification), strict=True)
+    ]
+
+
 def _dataset_page_context(
     record: Any, template: dict[str, Any] | None, refreshable: bool = False, refresh_blocked: str = ""
 ) -> dict[str, Any]:
@@ -333,6 +349,7 @@ def _dataset_page_context(
         if isinstance(display_range, list | tuple) and len(display_range) == 2
         else ""
     )
+    classes = _class_legend(template)
 
     if template and vector:
         # Linked, not described: a template without a provider declares a hand-registered
@@ -387,8 +404,8 @@ def _dataset_page_context(
         ("Release", version_label, None),
         # Above the scale it describes, and above the bar below the list: the range is what makes
         # the colours mean anything, so it reads before the name of the ramp rather than after.
-        ("Display range", range_label, None),
-        ("Colour scale", str(display.get("colormap") or ""), None),
+        ("Display range", "" if classes else range_label, None),
+        ("Colour scale", "" if classes else str(display.get("colormap") or ""), None),
     ]
 
     def present(facts: list[Fact]) -> list[Fact]:
@@ -396,6 +413,7 @@ def _dataset_page_context(
 
     return {
         "dataset": summary,
+        "classes": classes,
         # Static datasets and workflow outputs have no upstream to sync from; the console offers
         # the button for them and the planner answers "not syncable", which is noise here.
         "syncable": bool(template) and sync_kind in {"temporal", "release"},
@@ -648,6 +666,7 @@ def _data_source_page_context(
 ) -> dict[str, Any]:
     """Everything the data source page shows, and whether it can offer the ingest form."""
     display = _mapping(template.get("display"))
+    classes = _class_legend(template)
     sync = _mapping(template.get("sync"))
     sync_kind = str(sync.get("kind") or "")
     extents = _mapping(template.get("extents"))
@@ -710,11 +729,11 @@ def _data_source_page_context(
         (
             "Display range",
             f"{display_range[0]} – {display_range[1]}"
-            if isinstance(display_range, list | tuple) and len(display_range) == 2
+            if isinstance(display_range, list | tuple) and len(display_range) == 2 and not classes
             else "",
             None,
         ),
-        ("Colour scale", str(display.get("colormap") or ""), None),
+        ("Colour scale", "" if classes else str(display.get("colormap") or ""), None),
     ]
 
     def present(facts: list[Fact]) -> list[Fact]:
@@ -728,6 +747,7 @@ def _data_source_page_context(
             "provider": template.get("source") or "",
             "ramp": _colormap_ramp(display.get("colormap") if isinstance(display.get("colormap"), str) else None),
         },
+        "classes": classes,
         "paragraphs": _paragraphs(str(template.get("description") or "")),
         # One list, as on the dataset page: what the source measures, then where it comes from.
         "data": present(data + about),

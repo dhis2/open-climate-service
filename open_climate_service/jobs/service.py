@@ -27,7 +27,7 @@ from open_climate_service.jobs.models import (
     JobRecord,
     JobStatus,
 )
-from open_climate_service.shared.compute import get_job_slots
+from open_climate_service.shared.compute import get_job_slots, max_concurrent_jobs
 from open_climate_service.shared.dynamic_import import get_dynamic_function
 from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.time import utc_now
@@ -135,8 +135,12 @@ class ThreadProcessExecutor:
 
     kind = "thread"
 
-    def __init__(self, *, max_workers: int = 4) -> None:
-        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="climate-service-job")
+    def __init__(self, *, max_workers: int | None = None) -> None:
+        # As many threads as job slots: fewer would cap concurrency below the configured limit.
+        self._pool = ThreadPoolExecutor(
+            max_workers=max_concurrent_jobs() if max_workers is None else max_workers,
+            thread_name_prefix="climate-service-job",
+        )
 
     def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[None]:
         """Submit one callable to the thread pool."""
@@ -150,7 +154,7 @@ class ThreadProcessExecutor:
 class JobService:
     """Persisted job store plus in-process executor runtime."""
 
-    def __init__(self, *, executor: ProcessExecutor | None = None, max_workers: int = 4) -> None:
+    def __init__(self, *, executor: ProcessExecutor | None = None, max_workers: int | None = None) -> None:
         self._executor = executor or ThreadProcessExecutor(max_workers=max_workers)
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()

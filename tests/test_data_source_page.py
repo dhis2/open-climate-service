@@ -448,3 +448,18 @@ def test_the_dataset_page_links_back_to_the_data_source(monkeypatch: pytest.Monk
 
 def _ingest_defaults_start(today: date) -> str:
     return str(landing._ingest_defaults(_ingestable("chirps_daily"), today)["start"])
+
+
+def test_a_categorical_source_lists_its_classes_collapsed_instead_of_a_colour_scale() -> None:
+    template = _ingestable(
+        "heat_levels",
+        display={"colormap": "viridis", "range": [0, 1]},
+        classes=[{"value": 0, "label": "No warning", "color": "#ffffb2"}, {"value": 1, "label": "Caution"}],
+    )
+
+    html = landing.render_data_source_page(template, "")
+
+    assert '<details class="class-legend">' in html
+    assert "Classes (2)" in html and "No warning" in html and "Caution" in html
+    assert 'class="ramp-bar"' not in html
+    assert "Colour scale" not in html and "Display range" not in html
