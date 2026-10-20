@@ -1,24 +1,18 @@
 """ESA CCI / C3S land cover (300 m, yearly) from the Copernicus Climate Data Store (CDS).
 
-Two plugins over the same source:
-
-- ``ESACCILandCoverClassPlugin`` stores the class codes as published (the 37 LCCS classes,
-  ``lccs_class``), for display. Its pyramid must use ``mode`` resampling so coarse zoom levels
-  show a real class rather than an average of codes.
-- ``ESACCILandCoverFractionPlugin`` stores, for each of ten class groups, the fraction of each
-  output cell the group covers, along a ``land_cover_class`` dimension. Cells are blocks of
-  ``block`` x ``block`` native pixels (3 by default, about 1 km). Averaging a fraction layer
-  over a district with the existing ``mean`` aggregation gives the share of the district under
-  that group, so land cover goes through the same aggregation and export path as any other
-  continuous variable.
+``ESACCILandCoverClassPlugin`` stores the class codes as published (the 37 LCCS classes,
+``lccs_class``), for display. Its pyramid must use ``mode`` resampling so coarse zoom levels
+show a real class rather than an average of codes.
 
 The groups follow the IPCC land categories the CCI user guide maps LCCS classes onto, with
 shrubland, sparse vegetation and bare areas kept apart because they matter in drylands.
 
 The CDS serves the maps as ``satellite-land-cover``: version 2.0.7 for 1992-2015 and the C3S
 continuation, version 2.1.1, from 2016. Each year is requested for the extent only. Requests need
-a CDS key (see the README) and the dataset's licence accepted once in the browser; they queue
-on the CDS, so one year can take several minutes.
+a CDS key (see the README) and the dataset's licence accepted once in the browser. 
+The plugin submits each year as a separate request to avoid CDS request size limit, and supports
+multiple concurrent requests to CDS. The CDS either processes these in parallell or queues them;
+either way the downloads can take up to several minutes per year.
 """
 
 from __future__ import annotations

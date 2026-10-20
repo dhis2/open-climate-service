@@ -2,10 +2,9 @@
   name: Land cover class (ESA CCI / C3S, yearly)
   short_name: Land cover class
   description: >-
-    Land cover class of each 300 m cell, worldwide, yearly from 1992 to 2022, in the 37 LCCS
-    classes of the ESA CCI / C3S maps. For display; use the land cover fractions to
-    aggregate to districts. Needs a Copernicus CDS key, with the dataset's licence accepted once in the
-    browser.
+    Land cover class of each 300 m cell, worldwide, updated yearly since 1992, in the 37 LCCS
+    classes of the ESA CCI / C3S maps. Needs a Copernicus CDS key, with the dataset's licence 
+    accepted once in the browser.
   variable: lccs_class
   period_type: yearly
   sync:
@@ -18,7 +17,6 @@
       bbox: [-180, -90, 180, 90]
     temporal:
       begin: "1992"
-      end: "2022"
       resolution: P1Y
   ingestion:
     plugin: open_climate_service.plugins.rasters.esa_cci_lc.ESACCILandCoverClassPlugin
