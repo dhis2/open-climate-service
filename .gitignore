@@ -11,5 +11,9 @@ site/
 .venv
 .claude
 
+# Local installs from `npx skills add`; the guide is linked from AGENTS.md.
+.agents/skills/
+skills-lock.json
+
 # Anchored to the repo root, so a nested tests/data/ stays visible to git.
 /data
