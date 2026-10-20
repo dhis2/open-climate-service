@@ -733,10 +733,12 @@ def write_to_icechunk_store(
         ds = ds.assign_attrs({**ds.attrs, **geozarr_attrs})
         ds = _uniform_chunks(ds)
         # Bound the time-coordinate chunk so map clients read the axis in a few requests
-        # rather than one per timestep (data variables keep their own chunking).
+        # rather than one per timestep (data variables keep their own chunking). Set it for
+        # every length: a store reopened after a streaming ingest carries a chunk of 1 in the
+        # coordinate's encoding, which the write would otherwise keep.
         flat_encoding = {}
-        if t_dim is not None and t_dim in ds.coords and ds.sizes.get(t_dim, 0) > _ROOT_TIME_COORD_MAX_CHUNK:
-            flat_encoding[t_dim] = {"chunks": (_ROOT_TIME_COORD_MAX_CHUNK,)}
+        if t_dim is not None and t_dim in ds.coords and ds.sizes.get(t_dim, 0) > 0:
+            flat_encoding[t_dim] = {"chunks": (min(ds.sizes[t_dim], _ROOT_TIME_COORD_MAX_CHUNK),)}
         ds.to_zarr(session.store, mode="w", zarr_format=3, encoding=flat_encoding or None)
 
         # xarray demotes scalar coordinates (like spatial_ref) to data variables in zarr v3.
