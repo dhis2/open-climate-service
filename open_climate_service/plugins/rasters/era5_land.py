@@ -641,10 +641,18 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
                 xmax_sel = (xmax % 360) + lon_pad
             else:
                 xmin_sel, xmax_sel = xmin - lon_pad, xmax + lon_pad
-            self._cached_region = ds[[self.variable]].sel(
-                latitude=slice(ymax + lat_pad, ymin - lat_pad),
-                longitude=slice(xmin_sel, xmax_sel),
-            )
+            region = ds[[self.variable]].sel(latitude=slice(ymax + lat_pad, ymin - lat_pad))
+            if xmin_sel <= xmax_sel:
+                region = region.sel(longitude=slice(xmin_sel, xmax_sel))
+            else:
+                # An extent across the prime meridian wraps on a 0-360 axis (Ghana's -3.3 to
+                # 1.2 becomes 356.7 to 1.2). Take the western piece first so that, once
+                # longitude is normalised to -180..180, the axis still runs west to east.
+                region = xr.concat(
+                    [region.sel(longitude=slice(xmin_sel, None)), region.sel(longitude=slice(None, xmax_sel))],
+                    dim="longitude",
+                )
+            self._cached_region = region
             self._cached_bbox = bbox_tuple
             return self._cached_region
 

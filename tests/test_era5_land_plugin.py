@@ -813,3 +813,40 @@ def test_hourly_cds_tail_days_land_on_the_edh_grid(
     edh = _noisy_edh_daily_grid(["2026-09-30"]).sel(latitude=slice(30.5, 26.3), longitude=slice(80.0, 88.25))
     assert day[variable].shape == (1, edh.latitude.size, edh.longitude.size) == (1, 42, 82)
     np.testing.assert_array_equal(day.y.values, edh.latitude.values)
+
+
+def test_an_extent_crossing_greenwich_selects_both_sides_from_both_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Earth Data Hub stores longitude 0-360, so an extent across the prime meridian (Ghana's
+    # spans -3.3 to 1.2) is a wrapped interval there: 358 to 2, not 2 to 358. Both the hub days
+    # and the CDS-tail days aligned to them must cover it, west to east.
+    lat = np.round(np.arange(5.0, -0.05, -0.1), 1) + 1e-12
+    lon = np.round(np.arange(0.0, 360.0, 0.1), 1)
+    hub = xr.Dataset(
+        {"t2m": (("valid_time", "latitude", "longitude"), np.full((1, lat.size, lon.size), 290.0, "float32"))},
+        coords={
+            "valid_time": np.array(["2026-09-30"], dtype="datetime64[D]").astype("datetime64[ns]"),
+            "latitude": lat,
+            "longitude": lon,
+        },
+    )
+    bbox = [-2.0, 1.0, 2.0, 2.0]
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._edh_open_zarr", lambda _url: hub)
+    plugin = ERA5LandTempDailyPlugin(variable="t2m")
+    monkeypatch.setattr(plugin, "_latest_available", lambda: "2026-09-30")
+    cds_lon = np.round(np.arange(-2.0, 2.05, 0.1), 1)
+    cds_lat = np.round(np.arange(2.0, 0.95, -0.1), 1)
+    cds_day = xr.Dataset(
+        {"t2m": (("t", "y", "x"), np.full((1, cds_lat.size, cds_lon.size), 25.0, "float32"))},
+        coords={"t": np.array(["2026-10-01"], dtype="datetime64[ns]"), "y": cds_lat, "x": cds_lon},
+    )
+    assert plugin._cds_plugin is not None
+    monkeypatch.setattr(plugin._cds_plugin, "fetch_period", lambda period_id, bbox, **_: cds_day)
+
+    from_edh = plugin.fetch_period("2026-09-30", bbox)
+    from_cds = plugin.fetch_period("2026-10-01", bbox)
+
+    np.testing.assert_allclose(from_edh.x.values, cds_lon, atol=1e-9)
+    assert from_edh.x.values[0] < 0 < from_edh.x.values[-1]
+    assert from_cds["t2m"].shape == from_edh["t2m"].shape
+    np.testing.assert_array_equal(from_cds.x.values, from_edh.x.values)
+    np.testing.assert_allclose(from_cds["t2m"].values, 25.0)
