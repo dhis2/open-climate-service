@@ -63,8 +63,9 @@ from open_climate_service.shared.cancellation import (
     raise_if_cancelled,
 )
 from open_climate_service.shared.cf import is_temperature_like
-from open_climate_service.shared.compute import get_job_slots
+from open_climate_service.shared.compute import get_job_slots, max_concurrent_jobs
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
+from open_climate_service.shared.netcdf import write_netcdf
 from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
@@ -336,8 +337,10 @@ def triggered_job_id(source_event_id: str, trigger_id: str) -> str:
 class OpenEOJobService:
     """Manages openEO job lifecycle and asynchronous execution."""
 
-    def __init__(self, *, max_workers: int = 4) -> None:
-        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="openeo-job")
+    def __init__(self, *, max_workers: int | None = None) -> None:
+        self._pool = ThreadPoolExecutor(
+            max_workers=max_concurrent_jobs() if max_workers is None else max_workers, thread_name_prefix="openeo-job"
+        )
         self._futures: dict[str, Future[None]] = {}
         self._lock = threading.Lock()
         self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
@@ -2468,7 +2471,7 @@ def _write_xarray(ds: Any, results_dir: Any, fmt: str) -> str | None:
 
     if ext == ".nc":
         path = str(results_dir / "result.nc")
-        _netcdf_safe_attrs(ds).to_netcdf(path)
+        write_netcdf(_netcdf_safe_attrs(ds), path)
         return path
 
     if ext == ".tif":

@@ -32,7 +32,7 @@ def _empty_store_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) ->
     it for a reason unrelated to the code.
 
     Redirecting the directory rather than stubbing the absent-data result keeps the real
-    three-source fall-through in play — icechunk miss, zarr miss, empty glob — so the code under
+    two-source fall-through in play — icechunk miss, zarr miss — so the code under
     test still runs. Stubbing it would assert that a stub returns stubs.
     """
     monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
@@ -118,7 +118,7 @@ def test_an_id_that_is_not_a_template_is_still_404(client: TestClient) -> None:
 
 
 def test_get_data_raises_a_typed_error_when_no_source_exists(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drives the real three-source fall-through rather than the exception the route catches.
+    """Drives the real two-source fall-through rather than the exception the route catches.
 
     Typed rather than the bare `OSError: no files to open` that `open_mfdataset` produced: that
     message named no dataset and could not be told apart from a genuinely unreadable store, so
@@ -126,7 +126,6 @@ def test_get_data_raises_a_typed_error_when_no_source_exists(monkeypatch: pytest
     """
     monkeypatch.setattr(accessor, "get_icechunk_path", lambda _: __import__("pathlib").Path("/nonexistent/store"))
     monkeypatch.setattr(accessor, "get_zarr_path", lambda _: None)
-    monkeypatch.setattr(accessor, "get_cache_files", lambda _: [])
 
     with pytest.raises(accessor.DatasetDataUnavailable, match="has no ingested data"):
         accessor.get_data({"id": "never_ingested", "period_type": "daily"})
@@ -137,7 +136,6 @@ def test_reading_data_still_fails_while_describing_it_does_not(monkeypatch: pyte
     template that has not been ingested must not."""
     monkeypatch.setattr(accessor, "get_icechunk_path", lambda _: __import__("pathlib").Path("/nonexistent/store"))
     monkeypatch.setattr(accessor, "get_zarr_path", lambda _: None)
-    monkeypatch.setattr(accessor, "get_cache_files", lambda _: [])
     dataset = {"id": "never_ingested", "period_type": "daily"}
 
     with pytest.raises(accessor.DatasetDataUnavailable):

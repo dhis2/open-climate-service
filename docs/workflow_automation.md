@@ -194,7 +194,7 @@ Workflow execution and status remain owned by the openEO batch-job service and a
 Triggered jobs share the existing openEO job pool with manually submitted jobs — there is no
 separate automation queue or concurrency limit. A fan-out of several triggers therefore runs
 independently in that pool. Bounding total workflow concurrency is a general resource-policy
-concern deferred to CLIM-845; until then the per-store lock remains the write-safety boundary for
+concern left to later work; until then the per-store lock remains the write-safety boundary for
 workflows that publish managed datasets.
 
 ## Retries and restarts
@@ -315,6 +315,6 @@ the server environment. See
 This mechanism dispatches workflows owned by the same OCS instance. It does not provide workflow
 dependency graphs, cross-service retries, webhooks, or distributed event consumption. A delivery
 that ends partial, rejected, or unknown is reported on its delivery job but does not yet notify
-anyone (CLIM-919), and a workflow job that exhausts its attempts is not reported beyond its own
+anyone, and a workflow job that exhausts its attempts is not reported beyond its own
 status. Exactly one writable OCS process should perform automation until the stores and
 leadership model become shared and transactional.

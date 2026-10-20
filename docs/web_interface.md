@@ -387,6 +387,8 @@ GeoZarr stores, vector datasets from vector tiles. Only published datasets appea
   for a categorical or irregular one.
 - **Legend** — a colour bar with the value range and units, derived from the dataset's
   metadata (including the colour scheme defined in its template).
+  A [categorical dataset](adding_custom_datasets.md#categorical-datasets) shows one
+  colour per class instead, with its label.
 - **Source and units** — shown alongside the legend for context.
 - **Link to the dataset** — opens the dataset's page.
 - The map fits to the instance's configured extent on load.

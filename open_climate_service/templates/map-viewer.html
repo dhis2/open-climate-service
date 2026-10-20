@@ -193,6 +193,31 @@
         text-align: center;
         margin-top: 0.2rem;
       }
+      .legend-classes {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        font-size: 0.8rem;
+        line-height: 1.3;
+        color: #334155;
+      }
+      /* The swatch sits on the first line of a label that wraps, not beside its middle. */
+      .legend-classes li {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.45rem;
+      }
+      .legend-swatch {
+        flex: none;
+        width: 14px;
+        height: 14px;
+        margin-top: calc((1.3em - 14px) / 2);
+        border-radius: 3px;
+        border: 1px solid rgba(0, 0, 0, 0.15);
+      }
     </style>
   </head>
   <body class="map-page">
@@ -235,11 +260,14 @@
 
           <div id="legend" class="panel-section hidden">
             <label>Legend</label>
-            <div id="legend-bar" class="legend-bar"></div>
-            <div class="legend-labels">
-              <span id="legend-min"></span>
-              <span id="legend-max"></span>
+            <div id="legend-scale">
+              <div id="legend-bar" class="legend-bar"></div>
+              <div class="legend-labels">
+                <span id="legend-min"></span>
+                <span id="legend-max"></span>
+              </div>
             </div>
+            <ul id="legend-classes" class="legend-classes hidden"></ul>
             <div id="legend-units" class="legend-units"></div>
           </div>
 
@@ -462,6 +490,8 @@
       const legendMin = document.getElementById("legend-min");
       const legendMax = document.getElementById("legend-max");
       const legendUnits = document.getElementById("legend-units");
+      const legendScale = document.getElementById("legend-scale");
+      const legendClasses = document.getElementById("legend-classes");
       const statusEl = document.getElementById("status");
 
       function updateLegend(cm, clim, units) {
@@ -473,6 +503,53 @@
         legendMin.textContent = clim[0];
         legendMax.textContent = clim[1];
         legendUnits.textContent = units ? `(${units})` : "";
+        legendScale.classList.remove("hidden");
+        legendClasses.classList.add("hidden");
+        legendEl.classList.remove("hidden");
+      }
+
+      // A categorical dataset publishes its classes on the Zarr asset as STAC
+      // `classification:classes`. A class without a `color_hint` takes the next colour of a
+      // categorical palette, so neighbouring codes are told apart rather than shaded.
+      const CLASS_PALETTE = chroma.brewer.Set3;
+
+      function classColors(classes) {
+        return classes.map((c, i) =>
+          c.color_hint ? `#${c.color_hint}` : CLASS_PALETTE[i % CLASS_PALETTE.length]
+        );
+      }
+
+      // One colormap entry per integer from the lowest code to the highest, and a clim half a
+      // code wider on each side, put every code on the centre of its own entry. ZarrLayer
+      // samples the colormap with linear filtering, and a centre is where a colour is exact,
+      // so no code is blended with its neighbour. An integer between two codes is no class
+      // and takes the colour below it.
+      function classColormap(classes, colors) {
+        const byValue = new Map(classes.map((c, i) => [c.value, colors[i]]));
+        const lo = Math.min(...byValue.keys());
+        const hi = Math.max(...byValue.keys());
+        const cm = [];
+        for (let value = lo, color = byValue.get(lo); value <= hi; value++) {
+          color = byValue.get(value) ?? color;
+          cm.push(color);
+        }
+        return { cm, clim: [lo - 0.5, hi + 0.5] };
+      }
+
+      function updateClassLegend(classes, colors) {
+        legendClasses.replaceChildren(
+          ...classes.map((c, i) => {
+            const item = document.createElement("li");
+            const swatch = document.createElement("span");
+            swatch.className = "legend-swatch";
+            swatch.style.background = colors[i];
+            item.append(swatch, c.description ?? c.name ?? String(c.value));
+            return item;
+          })
+        );
+        legendUnits.textContent = "";
+        legendScale.classList.add("hidden");
+        legendClasses.classList.remove("hidden");
         legendEl.classList.remove("hidden");
       }
 
@@ -660,8 +737,14 @@
           return;
         }
 
-        const clim = renders.rescale?.[0] ?? [0, 100];
-        const colormapName = renders.colormap_name ?? "viridis";
+        const classes = zarr["classification:classes"] ?? [];
+        const colors = classColors(classes);
+        const { cm, clim } = classes.length
+          ? classColormap(classes, colors)
+          : {
+              cm: buildColormap(renders.colormap_name ?? "viridis"),
+              clim: renders.rescale?.[0] ?? [0, 100],
+            };
         const fillValue = renders.nodata ?? null;
         const variable =
           renders["open_climate_service:variable"] ??
@@ -714,9 +797,7 @@
         // invisible at country zoom, wrong as you zoom in. The store knows which it holds
         // and the viewer does not, so let the library read the store.
 
-        let cm;
         try {
-          cm = buildColormap(colormapName);
           const zarrVersion = zarr["zarr:zarr_format"] ?? null;
           activeLayer = new ZarrLayer({
             id: "zarr-layer",
@@ -777,7 +858,8 @@
         metaDescription.textContent = description;
         metaDescription.classList.toggle("hidden", !description || generated);
 
-        updateLegend(cm, clim, units);
+        if (classes.length) updateClassLegend(classes, colors);
+        else updateLegend(cm, clim, units);
 
         setStatus("");
       }

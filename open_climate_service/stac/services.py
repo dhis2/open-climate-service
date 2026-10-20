@@ -25,6 +25,11 @@ from open_climate_service.features import tiles
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord, FeatureDetail
 from open_climate_service.shared import geoparquet
+from open_climate_service.shared.classes import (
+    STAC_CLASSIFICATION_EXTENSION,
+    classification_from_template,
+    stac_classes,
+)
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.licences import DatasetLicence, parse_licence
@@ -259,6 +264,17 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             "roles": ["data"],
             "xarray:open_kwargs": {"zarr_format": 3, "consolidated": False, **data_group},
         }
+    # A categorical dataset's classes, on both data assets, so a client can label and colour the
+    # codes rather than read them as a continuous scale (CLIM-895).
+    classification = classification_from_template(source_dataset)
+    if classification is not None:
+        classes = stac_classes(classification)
+        for key in ("zarr", "icechunk"):
+            if key in collection_payload["assets"]:
+                collection_payload["assets"][key]["classification:classes"] = classes
+        collection_payload["stac_extensions"] = sorted(
+            {*collection_payload.get("stac_extensions", []), STAC_CLASSIFICATION_EXTENSION}
+        )
     collection_payload["license"] = template.license
     providers = _build_providers(source_dataset)
     if providers:

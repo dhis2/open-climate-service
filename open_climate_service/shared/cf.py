@@ -23,36 +23,42 @@ logger = logging.getLogger(__name__)
 CF_VARIABLE_FIELDS = ("units", "standard_name", "cell_methods")
 
 
-def cf_attrs_from_template(template: dict[str, Any] | None) -> dict[str, str]:
+def cf_attrs_from_template(template: dict[str, Any] | None) -> dict[str, Any]:
     """Return the CF variable attributes declared on a dataset template.
 
     ``units: ""`` is kept (an explicitly dimensionless quantity, e.g. a standardized index).
+    A categorical dataset's classes become ``flag_values`` and ``flag_meanings`` (CLIM-895).
     """
     if not template:
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, Any] = {}
     for key in CF_VARIABLE_FIELDS:
         value = template.get(key)
         if isinstance(value, str):
             out[key] = value
+    from open_climate_service.shared.classes import cf_flag_attrs, classification_from_template
+
+    classification = classification_from_template(template)
+    if classification is not None:
+        out.update(cf_flag_attrs(classification))
     return out
 
 
 @overload
 def apply_cf_metadata(
-    obj: "xr.Dataset", attrs: dict[str, str], *, variable: str | None = ..., overwrite: bool = ...
+    obj: "xr.Dataset", attrs: dict[str, Any], *, variable: str | None = ..., overwrite: bool = ...
 ) -> "xr.Dataset": ...
 
 
 @overload
 def apply_cf_metadata(
-    obj: "xr.DataArray", attrs: dict[str, str], *, variable: str | None = ..., overwrite: bool = ...
+    obj: "xr.DataArray", attrs: dict[str, Any], *, variable: str | None = ..., overwrite: bool = ...
 ) -> "xr.DataArray": ...
 
 
 def apply_cf_metadata(
     obj: "xr.Dataset | xr.DataArray",
-    attrs: dict[str, str],
+    attrs: dict[str, Any],
     *,
     variable: str | None = None,
     overwrite: bool = False,

@@ -393,6 +393,16 @@ def test_the_map_viewer_lists_vector_datasets_and_draws_their_tiles(client: Test
     assert 'map.on("click", id, showFeatureName);' in body
 
 
+def test_the_map_viewer_draws_each_class_in_its_own_colour(client: TestClient) -> None:
+    """A dataset with STAC classes gets one colormap entry per code and a legend of labels."""
+    body = client.get("/map").text
+
+    assert 'const classes = zarr["classification:classes"] ?? [];' in body
+    assert "c.color_hint ? `#${c.color_hint}` : CLASS_PALETTE[i % CLASS_PALETTE.length]" in body
+    assert "return { cm, clim: [lo - 0.5, hi + 0.5] };" in body
+    assert "if (classes.length) updateClassLegend(classes, colors);" in body
+
+
 def test_a_selection_made_while_tiles_load_still_runs(client: TestClient) -> None:
     """`isStyleLoaded()` is false while basemap tiles load, long after `load` fired once."""
     body = client.get("/map").text
