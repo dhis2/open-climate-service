@@ -7,7 +7,7 @@ collections to an instance, and they complement each other:
   instance-specific customisation, one-off datasets, or overriding a built-in. No packaging.
   See [Extensibility](extensibility.md) and [Adding custom datasets](adding_custom_datasets.md).
 - **Installable packages** — package a plugin and publish it, so any instance can `uv add` it
-  and OCS discovers it automatically ([#118](https://github.com/dhis2/open-climate-service/issues/118)).
+  and OCS discovers it automatically.
   Ideal for a **reusable** plugin shared across countries or organisations, versioned independently.
 
 This guide covers the installable-package option. It is purely additive — `plugins_dir`

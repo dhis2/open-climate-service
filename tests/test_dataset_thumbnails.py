@@ -229,6 +229,35 @@ def test_an_enlarged_thumbnail_keeps_its_cell_boundaries(tmp_path: Path) -> None
         assert np.allclose(quadrant, quadrant[0, 0]), "an enlarged cell was interpolated"
 
 
+def test_a_categorical_dataset_draws_each_class_in_its_colour(tmp_path: Path) -> None:
+    """As the map viewer does: a declared colour, else the fallback palette, and a code that is
+    no class transparent. Class 20 declares no colour and is second, so takes the second."""
+    grid = xr.Dataset(
+        {"level": (("y", "x"), np.array([[10.0, 20.0], [0.0, np.nan]], dtype="float32"))},
+        coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
+    )
+    dataset = {
+        "id": "thumb_classes",
+        "variable": "level",
+        "display": {"colormap": "viridis", "range": [10, 20]},
+        "classes": [{"value": 10, "label": "Forest", "color": "#006400"}, {"value": 20, "label": "Grassland"}],
+    }
+
+    written = write_dataset_thumbnail(_store(tmp_path, grid, t_dim=None), dataset, now=GENERATED_AT)
+
+    assert written is not None
+    from matplotlib import image as mpimg
+    from matplotlib.colors import to_rgba
+
+    image = mpimg.imread(written)
+    quarter = THUMBNAIL_LONG_SIDE_PIXELS // 4
+    near = 3 * quarter
+    assert np.allclose(image[quarter, quarter], to_rgba("#006400"), atol=1 / 255)
+    assert np.allclose(image[quarter, near], to_rgba("#ffffb3"), atol=1 / 255)
+    assert image[near, quarter][3] == 0  # 0 is no class
+    assert image[near, near][3] == 0  # missing
+
+
 # -- how much is read ---------------------------------------------------------------------
 
 

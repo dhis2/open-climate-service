@@ -72,6 +72,9 @@ def refresh_feature_collection(
 
 
 @router.get("/{collection_id}/data.parquet", response_class=FileResponse)
+# HEAD as well, for a client that sizes the file before reading ranges of it. Kept out of the
+# OpenAPI schema so the operation is listed once.
+@router.head("/{collection_id}/data.parquet", response_class=FileResponse, include_in_schema=False)
 def download_feature_collection(collection_id: str) -> FileResponse:
     """Serve the GeoParquet a published collection is stored as.
 

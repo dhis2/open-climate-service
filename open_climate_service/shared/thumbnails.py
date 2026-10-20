@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from open_climate_service import config as api_config
+from open_climate_service.shared.classes import class_colors, classification_from_template
 
 # The longest side is rendered at this size and the other follows, so the aspect ratio is
 # never distorted. Every thumbnail therefore has the same longest side whatever the store's
@@ -153,12 +154,17 @@ def render_png(
     colormap: str | None = None,
     clim: tuple[float, float] | None = None,
     long_side: int | None = None,
+    classes: list[tuple[int, str]] | None = None,
 ) -> Path:
     """Render a 2-D DataArray to a styled PNG at *path*, and return that path.
 
     ``clim`` is the value range the colours span; without one the slice's own min/max are
     used, which is right for a one-off render and wrong for comparing two of them, so
     callers that have a declared display range should pass it.
+
+    ``classes`` draws a categorical dataset instead: each ``(code, colour)`` in its own colour,
+    as the map viewer does, with ``colormap`` and ``clim`` unused. A code that is no class, such
+    as a no-data 0, is transparent.
 
     ``long_side`` renders the longest side at exactly that many pixels, scaling up as well as
     down, with the other side following so the aspect ratio holds. Left as None, the figure is
@@ -186,13 +192,25 @@ def render_png(
         if float(y_values[1]) > float(y_values[0]):
             data = data[::-1]
 
-    cmap = resolve_colormap(colormap).copy()
-    cmap.set_bad(alpha=0)  # NaN → transparent
-    if clim is not None:
-        vmin, vmax = float(clim[0]), float(clim[1])
+    norm: Normalize
+    if classes:
+        from matplotlib.colors import BoundaryNorm, ListedColormap
+
+        ordered = sorted(classes)
+        cmap = ListedColormap([color for _, color in ordered])
+        # One bin from half a code below each class to half a code below the next, so every
+        # code lands in its own class; a value below the lowest or above the highest is none.
+        norm = BoundaryNorm([value - 0.5 for value, _ in ordered] + [ordered[-1][0] + 0.5], cmap.N)
+        cmap.set_under(alpha=0)
+        cmap.set_over(alpha=0)
     else:
-        vmin, vmax = float(np.nanmin(data)), float(np.nanmax(data))
-    norm = Normalize(vmin=vmin, vmax=vmax, clip=False)
+        cmap = resolve_colormap(colormap).copy()
+        if clim is not None:
+            vmin, vmax = float(clim[0]), float(clim[1])
+        else:
+            vmin, vmax = float(np.nanmin(data)), float(np.nanmax(data))
+        norm = Normalize(vmin=vmin, vmax=vmax, clip=False)
+    cmap.set_bad(alpha=0)  # NaN → transparent
 
     height, width = data.shape
     path = Path(path)
@@ -352,6 +370,10 @@ def write_dataset_thumbnail(
         if clim is None:
             logger.warning("Every value in the slice chosen for '%s' is missing; no thumbnail", dataset_id)
             return None
+        classification = classification_from_template(dataset)
+        classes = (
+            list(zip(classification.values, class_colors(classification), strict=True)) if classification else None
+        )
 
         return _publish_thumbnail(
             dataset_id,
@@ -361,6 +383,7 @@ def write_dataset_thumbnail(
                 colormap=display.get("colormap"),
                 clim=clim,
                 long_side=THUMBNAIL_LONG_SIDE_PIXELS,
+                classes=classes,
             ),
         )
     except Exception:

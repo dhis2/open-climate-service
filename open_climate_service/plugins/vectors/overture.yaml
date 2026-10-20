@@ -1,5 +1,5 @@
 # Overture Maps administrative divisions, for a country with no usable DHIS2 hierarchy of its
-# own (CLIM-893). The extract is per-instance: `bbox` defaults to this instance's declared
+# own. The extract is per-instance: `bbox` defaults to this instance's declared
 # extent and `country` to its `extent.country_code`, so the template below needs neither a
 # coordinate list nor a country. The `release` is pinned deliberately rather than resolved to
 # "latest", so an upgrade is a visible config change — but bumping it only selects what the
@@ -30,6 +30,10 @@
   providers:
     - name: Overture Maps
       url: https://overturemaps.org
+      roles: [producer, licensor]
+  # The extract mirrors Overture: its page, and its own STAC collection for the release read.
+  source_url: https://docs.overturemaps.org/guides/divisions/
+  source_stac: https://stac.overturemaps.org/{version}/divisions/division_area/collection.json
   id_property: id
   provider: overture
   params:

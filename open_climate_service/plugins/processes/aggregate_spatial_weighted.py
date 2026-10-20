@@ -114,26 +114,41 @@ def aggregate_spatial_weighted(
         and the non-spatial dimensions of the input cube preserved.
     """
     # NOTE: adapted from openeo_processes_dask.processes.aggregate_spatial to support exactextract
+    from open_climate_service.data_manager.services.utils import get_x_y_dims
+    from open_climate_service.shared.classes import cube_classes
     from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
     from open_climate_service.shared.vectors import features_in_crs, single_raster, vector_result
 
+    # Validate the reducer argument
     if not isinstance(reducer, str) or reducer not in REDUCERS:
         raise ValueError(
             f"aggregate_spatial_weighted: reducer must be one of {', '.join(REDUCERS)}, by name; "
             "to aggregate with an openEO reducer process, use aggregate_spatial instead"
         )
-    record_features(geometries)
+
+    # Ensure the input data is a single raster variable (DataArray)
     raster = single_raster(data)
+
+    # Protect against aggregating categorical datasets using this process
+    if cube_classes(raster) is not None:
+        # Averaging codes gives a plausible but wrong class: land cover 10 and 50 average to 30.
+        raise ValueError(
+            f"aggregate_spatial_weighted: '{raster.name or 'the input'}' is a categorical dataset, so "
+            f"'{reducer}' would aggregate class codes as numbers; use aggregate_spatial_classes for a "
+            "share, majority or total per class"
+        )
+
+    # Process and prepare the input geometries
+    record_features(geometries)
     frame = features_in_crs(geometries, raster.rio.crs)
 
-    # Run xvec zonal stats with exactextract backend.
     # The cube's own spatial axes may be x/y, lon/lat or longitude/latitude. exactextract finds
     # only x and y, so they are renamed; the aggregation consumes them, so no name reaches the result.
-    from open_climate_service.data_manager.services.utils import get_x_y_dims
-
     x_dim, y_dim = get_x_y_dims(raster)
     if (x_dim, y_dim) != ("x", "y"):
         raster = raster.rename({x_dim: "x", y_dim: "y"}).rio.set_spatial_dims(x_dim="x", y_dim="y")
+
+    # Run xvec zonal stats with exactextract backend
     dim, reads = _read_chunks(raster)
     parts = [
         (raster if dim is None else raster.isel({dim: read}))
@@ -142,6 +157,7 @@ def aggregate_spatial_weighted(
         for read in reads
     ]
     vec_cube: xr.DataArray = parts[0] if len(parts) == 1 else cast(xr.DataArray, xr.concat(parts, dim=str(dim)))
+
     # The named method, so a DHIS2 export can check the aggregation it declares against this one.
     record_spatial_aggregation(reducer)
     return vector_result(vec_cube, raster, frame.index)

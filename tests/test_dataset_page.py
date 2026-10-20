@@ -489,3 +489,24 @@ def test_a_sync_leaves_an_unpublished_dataset_unpublished(monkeypatch: pytest.Mo
 
     assert 'name="publish"' not in html
     assert "The dataset stays unpublished." in _visible_text(html)
+
+
+def test_a_categorical_dataset_lists_its_classes_collapsed_instead_of_a_colour_scale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its colours are the classes', so the range and ramp would describe colours never drawn."""
+    template = _template(
+        "chirps_monthly",
+        display={"colormap": "viridis", "range": [10, 20]},
+        classes=[{"value": 10, "label": "Forest", "color": "#006400"}, {"value": 20, "label": "Grassland"}],
+    )
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: template)
+
+    html = landing.render_dataset_page(_record(), "/ocs")
+
+    assert '<details class="class-legend">' in html  # not open
+    assert "Classes (2)" in html
+    assert 'style="background: #006400"' in html and 'style="background: #ffffb3"' in html
+    assert "Forest" in html and "Grassland" in html
+    assert 'class="ramp-bar"' not in html
+    assert "Colour scale" not in html and "Display range" not in html

@@ -76,6 +76,9 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[s
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
     monkeypatch.setattr(native_store, "JOBS_INDEX_PATH", tmp_path / "data" / "jobs" / "jobs.json")
     monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
+    # Create the index before background ingestion/event-consumer threads can race
+    # its first initialization with a reader.
+    openeo_jobs.store_list_jobs()
 
     job_service_module.reset_job_service()
     openeo = openeo_jobs.OpenEOJobService()

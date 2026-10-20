@@ -146,6 +146,9 @@ def resampling_method_from_template(template: dict[str, Any] | None) -> str:
     """
     ingestion = (template or {}).get("ingestion")
     raw = ingestion.get("resampling") if isinstance(ingestion, dict) else None
+    if raw is None and (template or {}).get("classes"):
+        # A dataset that declares classes holds codes: the most common code, never an average.
+        return "mode"
     return _normalize_resampling_method(raw)
 
 
@@ -459,13 +462,6 @@ def append_pyramid_levels(
 
 def _get_cache_prefix(dataset: dict[str, Any]) -> str:
     return str(dataset["id"])
-
-
-def get_cache_files(dataset: dict[str, Any]) -> list[Path]:
-    """Return all NetCDF cache files matching this dataset's prefix."""
-    # TODO: not bulletproof -- e.g. 2m_temperature matches 2m_temperature_modified
-    prefix = _get_cache_prefix(dataset)
-    return list(DOWNLOAD_DIR.glob(f"{prefix}*.nc"))
 
 
 def get_zarr_path(dataset: dict[str, Any]) -> Path | None:

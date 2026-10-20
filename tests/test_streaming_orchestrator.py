@@ -554,3 +554,57 @@ def test_orchestrator_resume_supports_custom_time_dimension(tmp_path: Path) -> N
         period_type="daily",
     )
     assert rerun.periods_written == 0
+
+
+class _DailyGridPlugin(_FakePlugin):
+    """One 2x2 grid per day, so the normalised store gets a `spatial_ref` and a transform."""
+
+    async def periods(self, start: str, end: str) -> list[str]:
+        days = np.arange(np.datetime64(start, "D"), np.datetime64(end, "D") + 1)
+        return [str(day) for day in days]
+
+    async def fetch_period(self, period_id: str, bbox: list[float], **params: Any) -> xr.Dataset:
+        _ = bbox, params
+        value = float(period_id[-2:])
+        return xr.Dataset(
+            {"t2m": (("t", "y", "x"), np.full((1, 2, 2), value, dtype=np.float32))},
+            coords={"t": [np.datetime64(period_id, "D")], "y": [1.5, 0.5], "x": [0.5, 1.5]},
+        )
+
+
+def test_sync_append_keeps_spatial_ref_a_coordinate(tmp_path: Path) -> None:
+    """An append to a normalised flat store keeps `spatial_ref` a coordinate.
+
+    _maybe_build_pyramid normalises the store as a sync does; a 2x2 grid is far below the
+    pyramid threshold, so the store stays flat.
+    """
+    import zarr
+
+    from open_climate_service.ingestions import services
+
+    store_path = tmp_path / "flat-store.icechunk"
+
+    def ingest(start: str, end: str) -> None:
+        run_streaming_ingest_sync(
+            plugin=_DailyGridPlugin(),
+            params={},
+            bbox=[0.0, 0.0, 2.0, 2.0],
+            start=start,
+            end=end,
+            store_path=store_path,
+            period_type="daily",
+        )
+        assert services._maybe_build_pyramid(store_path, {}).completed
+
+    ingest("2026-01-01", "2026-01-02")
+    ingest("2026-01-03", "2026-01-03")
+
+    store = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path))).readonly_session("main").store
+    assert zarr.open_group(store, mode="r").attrs.get("coordinates") == "spatial_ref"
+    ds = xr.open_zarr(store, zarr_format=3)
+    try:
+        assert list(ds.data_vars) == ["t2m"]
+        assert "spatial_ref" in ds.coords
+        assert ds["t2m"].values[:, 0, 0].tolist() == [1.0, 2.0, 3.0]
+    finally:
+        ds.close()
