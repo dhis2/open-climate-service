@@ -104,6 +104,22 @@ async def _recover_pipeline_runs_periodically() -> None:
             logger.exception("Pipeline run recovery failed; retrying at the next interval")
 
 
+async def _warm_process_registry() -> None:
+    """Load the openEO process implementations in a worker thread, once, at startup.
+
+    Listing the processes imports xclim, openeo-processes-dask and the process plugins: about
+    3 s on a laptop. Without this, whoever first opens `/processes` or runs a process graph
+    waits for it. In the background it delays neither startup nor any request that does not
+    need them.
+    """
+    from open_climate_service.openeo.processes import list_openeo_processes
+
+    try:
+        await asyncio.to_thread(list_openeo_processes)
+    except Exception:
+        logger.exception("Could not load the openEO processes at startup; they load on first use")
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
@@ -195,9 +211,15 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         logger.exception("Workflow automation replay failed; continuing startup")
     scheduler_service = get_scheduler_service()
     scheduler_service.start()
+    process_registry = asyncio.create_task(_warm_process_registry())
     try:
         yield
     finally:
+        # Cancelling would only stop the wait: the imports carry on in their worker thread, and
+        # the interpreter waits for that thread at exit anyway. Let a warm-up still in progress
+        # finish here, so nothing of it runs after shutdown. It costs time only when the server
+        # stops within seconds of starting.
+        await process_registry
         if maintenance is not None:
             maintenance.cancel()
         if pipeline_recovery is not None:

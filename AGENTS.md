@@ -37,12 +37,37 @@ docs/
 
 ```bash
 make run      # start uvicorn with --reload
+make fix      # ruff autofix + format, whole tree
 make lint     # ruff check + ruff format + mypy + pyright
 make test     # pytest
 make start    # docker compose up --build
 ```
 
 The `.env` file is required for `make run`. Copy `.env.example` if it exists.
+
+Before handing work back, fix and format only the files you changed (`uv run ruff check --fix <files>`, `uv run ruff format <files>`), then run `make lint` and `make test`. Do not run `make fix`: it rewrites the whole tree, including a developer's uncommitted work. All of `make lint` must pass, not only ruff and mypy: pyright runs in strict mode and rejects code mypy accepts, such as a parameter reassigned after its `None` check.
+
+## Working rules
+
+- **Test through the entry point.** Drive the route, `fetch_period`, or the publish path, not the helper underneath. Bugs found in review usually sit in a caller that bypassed a correct, well-tested helper.
+- **Count the places that enforce a rule.** If the same rule is checked in more than one place, decide it once and call that.
+- **Run the real path once.** Ingest a period or call the route on a local instance and read the output. Implausible values and leaked metadata show up there, not in unit tests.
+- **Size defaults for a laptop.** OCS normally runs on one. Concurrency, thread pools and memory-heavy work default low; servers raise them through settings.
+- **Build the simplest version first.** Add server-side machinery for speed or size only when the plain approach is too slow where OCS runs, and name the optimisation as a follow-up instead.
+- **No backward compatibility yet.** Renames, schema changes and forced re-downloads on existing instances are fine; say so in one line of the PR.
+- **Suppress narrowly.** A `# type: ignore`, `# pyright: ignore` or `# noqa` names the specific code it silences. Lint rejects a blanket `# type: ignore` or `# noqa`; a blanket `# pyright: ignore` is not caught, so review for it. Fix the type rather than suppress it where you can.
+- **Wording.** "Data source" in the API and web interface; "dataset template" for the YAML files that describe one.
+
+## Known pitfalls
+
+Silent failures found the hard way. Each passed its tests at first.
+
+- **Timestamps in openEO process arguments lose their offset.** Every argument that parses as an ISO 8601 timestamp is made timezone-naive before the process sees it (`_normalise_temporal_arguments` in `openeo/execution.py`). Never pass one through as an opaque token and compare it as a string; compare parsed instants.
+- **`TestClient(root_path=...)` does not prefix the path** the way uvicorn does, so a test of prefix handling passes with the fix removed. Use the `mounted_client_factory` fixture in `tests/conftest.py`.
+- **topozarr above 0.1.8 shards pyramids along time by default.** On an appending store every daily sync then rewrites the partial shard, about 25 times more data written. Set the shard size explicitly before upgrading.
+- **Tests that assert on a submitted request** (a process graph, a job body) do not show that it runs. Execute it once.
+
+For adding a data source, follow the checklist in [docs/adding_custom_datasets.md](docs/adding_custom_datasets.md#contributing-a-data-source).
 
 ## Dataset templates
 
@@ -56,11 +81,9 @@ ingestion:
 
 `write_to_icechunk_store` in `data_manager/services/downloader.py` builds a multiscale Zarr pyramid when the grid has more than 1024×1024 pixels; otherwise it writes a flat store. Ingestion and sync write one time step per chunk; see `docs/zarr_and_geozarr.md`.
 
-## Active design work
+## Planned work
 
-- **#64** — streaming ingest via Icechunk; per-period writes; no intermediate files
-- **#111** — async job execution; OGC API Processes; progress reporting
-- **#137** — spatial aggregation to DHIS2 org units; multi-dataset grid alignment
+Tracked in Jira, project [CLIM](https://dhis2.atlassian.net/jira/software/c/projects/CLIM/issues), component "Climate Service", grouped under one epic per area (data ingestion, processing and workflows, openEO, catalogue and metadata, GeoZarr and Icechunk storage, vector data, DHIS2 integration, and so on). GitHub issues are not used.
 
 ## Commit conventions
 

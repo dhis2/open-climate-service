@@ -249,6 +249,7 @@ aggregation processes use — they need no forecast awareness.
   resolution: 4 km x 4 km
   source: ENACTS
   source_url: https://enacts.example.org
+  license: CC-BY-4.0
 ```
 
 ### Template field reference
@@ -263,6 +264,7 @@ aggregation processes use — they need no forecast awareness.
 | `variable`   | Yes      | Name of the data variable in the Zarr store (e.g. `precip`, `t2m`, `rainfall`) |
 | `source`     | No       | Name of the upstream data source                                               |
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
+| `license`    | No       | The data's licence: an SPDX identifier (`CC-BY-4.0`), or `name` and `url` where none exists (`Licence to Use Copernicus Products`). Published on the STAC collection; without it the collection is published as `other`. Take it from the licence the source names, not from how its page describes the data |
 | `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /data-sources`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
 | `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Derived datasets](#derived-datasets) |
 
@@ -467,7 +469,7 @@ Levels are aggregated from the full-resolution data, and `ingestion.resampling` 
 
 - **Continuous data** (temperature, precipitation, NDVI, …) — leave the default `mean`.
 - **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a mask into meaningless fractions.
-- **Multi-class categorical** (land-cover class codes, etc.) — use `mode` (majority class). `mean` would average class codes into a _different, non-existent_ class (e.g. `mean(10, 80) = 45`).
+- **Multi-class categorical** (land-cover class codes, etc.) — use `mode` (majority class). `mean` would average class codes into a _different, non-existent_ class (e.g. `mean(10, 80) = 45`). A dataset that declares [`classes`](#categorical-datasets) gets `mode` unless it sets `resampling` itself.
 
 `mean`/`max`/`min`/`sum`/`nearest` are computed by [topozarr](https://github.com/carbonplan/topozarr), which builds each level from the one above. That is valid for all five because they are _composable_ — for `nearest`, taking the corner of each corner gives the same cell as taking every nth cell of the original.
 
@@ -513,6 +515,32 @@ The following parameters control how the datasets are displayed visually and in 
 | `display.range`    | No       | `[min, max]` display range for the colormap              |
 | `display.nodata`   | No       | No-data / fill value                                     |
 
+### Categorical datasets
+
+A dataset whose values are codes rather than measurements (land cover, hazard or warning levels,
+binary masks) declares its classes. Each class has an integer `value` as stored, a `label`, and
+optionally a `color`. A cell that is no class is stored as missing (NaN): `normalize_period(..., nodata=...)`
+masks a source's no-data code.
+
+```yaml
+classes:
+  - { value: 0, label: No warning, color: "#ffffb2" }
+  - { value: 1, label: Caution (35-38 °C), color: "#fecc5c" }
+  - { value: 2, label: Warning (38-40 °C), color: "#fd8d3c" }
+  - { value: 3, label: Danger (40 °C and above), color: "#e31a1c" }
+```
+
+The classes are written to the stored variable as CF `flag_values` and `flag_meanings`, and
+published in STAC as `classification:classes` on the data assets. The pyramid is resampled with
+`mode`. The map viewer and the dataset's thumbnail draw each class in its colour, and the map
+viewer and the dataset page list the classes as a legend; a class without a `color` takes one
+from a categorical palette, and `display` is not used. A categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
+`share` of each class, the `majority` class, or a `total` of a weight such as population per
+class.
+`aggregate_spatial_weighted` refuses it, since a mean or sum of codes is not a class. A template
+with duplicate values, a non-integer value, an empty label or a malformed colour is refused when
+it is loaded.
+
 ## Step 3: Point the instance at your plugins directory
 
 Add `plugins_dir` to your `climate-service.yaml`:
@@ -550,6 +578,22 @@ Verify it appears in the STAC catalog:
 ```bash
 curl -s http://127.0.0.1:9000/stac/catalog.json | jq '.links[] | select(.rel == "child")'
 ```
+
+## Contributing a data source
+
+A data source added to OCS core is maintained by the team rather than by one instance, so it needs a little more than a working plugin. Check before you start:
+
+- **Open access.** The source can be fetched with a free account at most, from the provider itself.
+- **Maintained.** The provider still updates and supports the dataset.
+- **A declared licence.** `license` is set from the licence the source names; a non-commercial licence is allowed, but must be declared.
+- **Useful beyond one instance.** Core holds sources that most instances can use. A more specialised source works as well from a `plugins_dir` or an [installable package](installable_plugins.md).
+
+And before opening the PR:
+
+- **One data source per PR.** A plugin shared by several templates of one source (daily and monthly ERA5-Land, say) counts as one.
+- **Ingest a real period.** Run Step 4 on a small extent and open the dataset in the map viewer. Check that units and values are plausible and that the store has the expected time steps.
+- **Tests.** Test `periods()` and `fetch_period()` with the network faked, and run `make lint` and `make test`.
+- **Describe access.** The `description` names the account or key the source needs, and any limit (a short rolling window, a data lag).
 
 ## Distributing a plugin as an installable package
 
