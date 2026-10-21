@@ -284,6 +284,9 @@ def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, mon
     for node in chain:
         assert f'data-id="{node}"' in diagram
     assert 'class="ag-node ag-node-pipeline ag-current"' in diagram
+    # Its own box opens the workflow it runs, not this same page again.
+    assert 'href="/workflows/aggregate_by_features"><g class="ag-node ag-node-pipeline ag-current"' in diagram
+    assert 'href="/pipelines/daily-temperature-to-dhis2"' not in diagram
     # Nothing beside it: the CHIRPS3 chain belongs to the Overview, not to this page.
     assert "trigger:chirps-anomaly" not in diagram
     assert "dataset:chirps_monthly" not in diagram

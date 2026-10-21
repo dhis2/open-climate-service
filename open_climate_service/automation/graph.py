@@ -581,10 +581,18 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def render_svg(graph: AutomationGraph, mount: str = "", *, current: str | None = None) -> Markup:
+def render_svg(
+    graph: AutomationGraph,
+    mount: str = "",
+    *,
+    current: str | None = None,
+    current_href: str | None = None,
+) -> Markup:
     """Draw the graph as an inline SVG, laid out in columns, each node linking to its page.
 
-    ``current`` marks the step whose page the diagram sits on.
+    ``current`` marks the step whose page the diagram sits on. A link from it to that same page
+    would go nowhere, so ``current_href`` gives it somewhere useful instead, such as the
+    workflow a pipeline runs.
     """
     if not graph.nodes:
         return Markup("")
@@ -664,8 +672,9 @@ def render_svg(graph: AutomationGraph, mount: str = "", *, current: str | None =
             f"<title>{escape(tooltip)}</title>"
             f'<rect x="{x}" y="{y}" width="{_NODE_W}" height="{_NODE_H}" rx="4"/>' + "".join(lines) + "</g>"
         )
-        if node.href:
-            shape = f'<a href="{escape(mount + node.href)}">{shape}</a>'
+        href = current_href if node.id == current and current_href else node.href
+        if href:
+            shape = f'<a href="{escape(mount + href)}">{shape}</a>'
         parts.append(shape)
     parts.append("</svg>")
     return Markup("".join(parts))

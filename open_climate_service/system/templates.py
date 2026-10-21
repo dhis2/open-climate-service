@@ -2057,13 +2057,18 @@ def render_pipelines_page(
     )
 
 
-def _pipeline_diagram(pipeline_id: str, mount: str) -> Markup:
-    """This pipeline's chain from the automation graph, drawn as on the Automation overview."""
+def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
+    """This pipeline's chain from the automation graph, drawn as on the Automation overview.
+
+    The pipeline's own box links to the workflow it runs, not back to this page.
+    """
     try:
         from open_climate_service.automation.graph import build_graph, focus, render_svg
 
         node_id = f"pipeline:{pipeline_id}"
-        return render_svg(focus(build_graph(), node_id), mount, current=node_id)
+        return render_svg(
+            focus(build_graph(), node_id), mount, current=node_id, current_href=f"/workflows/{workflow_id}"
+        )
     except Exception:
         _log.exception("The automation diagram could not be drawn for pipeline '%s'", pipeline_id)
         return Markup("")
@@ -2088,7 +2093,7 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         {"name": name, "value": value if isinstance(value, str) else json.dumps(value)}
         for name, value in spec.workflow.arguments.items()
     ]
-    diagram = _pipeline_diagram(spec.id, mount)
+    diagram = _pipeline_diagram(spec.id, spec.workflow.id, mount)
     return get_template("pipeline_page.html").render(
         version=app_version,
         mount=mount,
