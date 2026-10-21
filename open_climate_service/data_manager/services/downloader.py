@@ -569,7 +569,9 @@ def write_to_icechunk_store(
 
     # Bring the cube up to the published-store contract, and resolve the CRS that describes it,
     # at the write boundary — rather than relying on every plugin to get it right (CLIM-821).
-    prepared = prepare_for_publication(ds, fallback_crs=crs, x_dim=x_dim, y_dim=y_dim)
+    # The published axis is always `t`; a dataset without one (CLIM-1448) has none to name.
+    published_time = "t" if t_dim is not None else None
+    prepared = prepare_for_publication(ds, fallback_crs=crs, time_dim=published_time, x_dim=x_dim, y_dim=y_dim)
     ds, crs = prepared.dataset, prepared.crs
     # Onto the cube itself, not only the root attrs written below, because a client reads the
     # `proj:` convention from the innermost source that declares any of it: the data array,

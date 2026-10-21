@@ -117,7 +117,9 @@ def _source_context(template: dict[str, Any], **overrides: Any) -> dict[str, Any
 def test_the_ingest_form_is_prefilled_for_the_direction_of_the_source(
     direction: str | None, extents: dict[str, Any], expected: dict[str, Any]
 ) -> None:
-    template = _ingestable("src", extents=extents, **({"temporal_direction": direction} if direction else {}))
+    template = _ingestable(
+        "src", period_type="daily", extents=extents, **({"temporal_direction": direction} if direction else {})
+    )
 
     defaults = _source_context(template)["defaults"]
 
@@ -447,7 +449,7 @@ def test_the_dataset_page_links_back_to_the_data_source(monkeypatch: pytest.Monk
 
 
 def _ingest_defaults_start(today: date) -> str:
-    return str(landing._ingest_defaults(_ingestable("chirps_daily"), today)["start"])
+    return str(landing._ingest_defaults(_ingestable("chirps_daily", period_type="daily"), today)["start"])
 
 
 def test_a_categorical_source_lists_its_classes_collapsed_instead_of_a_colour_scale() -> None:

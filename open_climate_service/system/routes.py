@@ -161,7 +161,8 @@ async def manage_ingest(request: Request) -> Response:
         # ...and only a forecast may leave the start blank.
         # A climatology has no start to give: its ids are ordinals and its reference period is
         # fixed by the template, so the form offers no date and the refusal must not demand one.
-        dated = has_calendar_periods(template.get("period_type"))
+        # A static dataset without a time axis (CLIM-1448) has no periods at all.
+        dated = not registry_datasets.is_timeless(template) and has_calendar_periods(template.get("period_type"))
         future = registry_datasets.is_future_facing(template)
         if start is None and dated and not future:
             return _refusal(400, f"Start period is required for '{dataset_id}': its periods are not in the future")

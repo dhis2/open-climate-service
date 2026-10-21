@@ -15,11 +15,12 @@ from open_climate_service.shared.time import daily_period_ids, monthly_period_id
 from open_climate_service.streaming.base import BaseDatasetPlugin
 from open_climate_service.streaming.helpers import bbox_slice, cell_pad, normalize_period
 from open_climate_service.streaming.orchestrator import StreamingIngestResult, run_streaming_ingest_sync
-from open_climate_service.streaming.protocol import IngestionPlugin
+from open_climate_service.streaming.protocol import IngestionPlugin, StaticIngestionPlugin
 
 __all__ = [
     "BaseDatasetPlugin",
     "IngestionPlugin",
+    "StaticIngestionPlugin",
     "StreamingIngestResult",
     "bbox_slice",
     "cell_pad",

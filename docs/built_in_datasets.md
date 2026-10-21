@@ -87,17 +87,14 @@ WorldPop Global2 provides gridded population estimates and projections at 100 m 
 | **Dataset ID**         | `copdem30_elevation_static`                                                                          |
 | **Variable**           | `elevation`                                                                                          |
 | **Units**              | meters                                                                                               |
-| **Period**             | Yearly                                                                                               |
+| **Period**             | None: no time axis                                                                                   |
 | **Spatial coverage**   | Global                                                                                               |
 | **Spatial resolution** | ~30 m                                                                                                |
-| **Record start**       | 2010                                                                                                 |
-| **Record end**         | 2010                                                                                                 |
 | **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
 
 Copernicus DEM Global 30m, recording elevation height above sea level. 
 
-**Note**: This dataset is static and non-varying over time, but currently implemented as yearly data for the year 2010
-when the data measurements were made. 
+The dataset is static: it has no time axis, so it is ingested whole and shown without a time slider.
 
 ---
 
