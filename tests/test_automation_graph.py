@@ -185,15 +185,10 @@ def test_arrows_say_when_they_fire(client: TestClient) -> None:
     assert labels[("dataset:chirps_normal", "trigger:chirps-anomaly")] is None
     assert labels[("pipeline:daily-temperature-to-dhis2", "destination:dhis2:national-hmis")] is None
 
-    page = client.get("/automation", headers={"Accept": "text/html"}).text
-    assert ">daily 06:00 UTC<" in page
     fires = {(e.source, e.target): e.fires for e in _graph(client).edges}
     assert fires[("source:ERA5-Land Reanalysis", "dataset:era5_daily")] == "schedule"
     assert fires[("dataset:chirps_monthly", "trigger:chirps-anomaly")] == "update"
-    # Each label leads with its symbol, and the legend explains them.
-    assert page.count("<title>Runs on its sync schedule</title>") == 2
-    assert "<title>Runs when the dataset updates</title>" in page
-    assert ">runs on update</span>" in page and ">sync schedule</span>" in page
+    assert fires[("dataset:chirps_normal", "trigger:chirps-anomaly")] is None
 
 
 def test_each_step_carries_its_latest_run(client: TestClient) -> None:
@@ -220,55 +215,9 @@ def test_a_chain_through_a_derived_dataset_reads_left_to_right(client: TestClien
     assert column["destination:dhis2:national-hmis"] == column["trigger:anomaly-to-districts"] + 1
 
 
-def test_the_overview_page_draws_the_graph_with_links(client: TestClient) -> None:
-    page = client.get("/automation", headers={"Accept": "text/html"}).text
-
-    assert '<svg class="automation-graph"' in page
-    assert ">DATA SOURCES<" in page
-    assert ">WORKFLOWS<" in page
-    # The column heading names what a box is; the box itself does not repeat it.
-    assert 'class="ag-kind"' not in page
-    assert "<title>Pipeline: Daily temperature to DHIS2" in page
-    assert 'href="/datasets/era5_daily"' in page
-    assert 'href="/pipelines/daily-temperature-to-dhis2"' in page
-    assert "Checked 21 Oct 06:00 UTC" in page
-    assert 'class="page-tabs automation-tabs"' in page
-    # Hovering a box lights up its chain: edges name their ends, and a blue arrow is defined.
-    assert 'data-source="dataset:chirps_monthly" data-target="trigger:chirps-anomaly"' in page
-    assert 'id="ag-arrow-lit"' in page
-
-
-def test_the_overview_answers_json_to_an_api_client(client: TestClient) -> None:
-    response = client.get("/automation", headers={"Accept": "application/json"})
-
-    assert response.headers["content-type"].startswith("application/json")
-    assert {node["id"] for node in response.json()["nodes"]} >= {"dataset:era5_daily", "trigger:chirps-anomaly"}
-
-
-def test_the_triggers_page_lists_triggers_read_only(client: TestClient) -> None:
-    page = client.get("/automation/triggers").text
-
-    assert "chirps-anomaly" in page and "anomaly-to-districts" in page
-    assert 'href="/datasets/chirps_anomaly"' in page
-    assert "<form" not in page
-
-
-def test_an_instance_with_nothing_automated_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ingestion_services, "list_datasets", lambda: SimpleNamespace(items=[]))
-    empty = ScheduleListResponse(enabled=False, running=False, timezone="UTC", schedules=[])
-    monkeypatch.setattr(scheduler_service, "get_scheduler_service", lambda: SimpleNamespace(status=lambda: empty))
-    monkeypatch.setattr(automation_config, "get_automation_config", lambda: AutomationConfig())
-    monkeypatch.setattr(pipeline_store, "list_records", lambda: [])
-
-    page = TestClient(app).get("/automation", headers={"Accept": "text/html"}).text
-
-    assert "Nothing is automated yet" in page
-    assert "<svg" not in page.split("<main", 1)[1]
-
-
-def test_schedules_and_pipelines_live_under_automation(client: TestClient) -> None:
+def test_automation_opens_on_pipelines_then_schedules(client: TestClient) -> None:
     nav = str(page_nav("", "automation"))
-    assert 'href="/automation" aria-current="page"' in nav
+    assert 'href="/pipelines" aria-current="page">Automation<' in nav
     assert ">Schedules<" not in nav and ">Pipelines<" not in nav
     assert nav.index(">Data sources<") < nav.index(">Automation<") < nav.index(">Workflows<")
 
@@ -276,6 +225,12 @@ def test_schedules_and_pipelines_live_under_automation(client: TestClient) -> No
     assert '<a href="/schedules" aria-current="page">Schedules</a>' in schedules
     pipelines = client.get("/pipelines", headers={"Accept": "text/html"}).text
     assert '<a href="/pipelines" aria-current="page">Pipelines</a>' in pipelines
+    assert pipelines.index(">Pipelines</a>") < pipelines.index(">Schedules</a>")
+    assert "Overview</a>" not in pipelines.split("<main", 1)[1] and ">Triggers</a>" not in pipelines
+
+    response = client.get("/automation", follow_redirects=False)
+    assert response.status_code == 307 and response.headers["location"] == "/pipelines"
+    assert client.get("/automation/triggers").status_code == 404
 
 
 def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -297,7 +252,15 @@ def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, mon
     # Its own box opens the workflow it runs, not this same page again.
     assert 'href="/workflows/aggregate_by_features"><g class="ag-node ag-node-pipeline ag-current"' in diagram
     assert 'href="/pipelines/daily-temperature-to-dhis2"' not in diagram
-    # Nothing beside it: the CHIRPS3 chain belongs to the Overview, not to this page.
+    # Its arrows: the schedule that keeps its dataset current, the update that runs it.
+    assert ">daily 06:00 UTC</text>" in diagram and ">on update</text>" in diagram
+    assert diagram.count("<title>Runs on its sync schedule</title>") == 1
+    assert diagram.count("<title>Runs when the dataset updates</title>") == 1
+    assert 'data-source="dataset:era5_daily" data-target="pipeline:daily-temperature-to-dhis2"' in diagram
+    assert "<title>Pipeline: Daily temperature to DHIS2" in diagram
+    assert 'id="ag-arrow-lit"' in diagram
+    assert ">runs on update</span>" in page and ">sync schedule</span>" in page
+    # Nothing beside it: the CHIRPS3 chain is not part of this pipeline.
     assert "trigger:chirps-anomaly" not in diagram
     assert "dataset:chirps_monthly" not in diagram
     # One box to a column here, so the headings are singular.

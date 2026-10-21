@@ -1334,7 +1334,7 @@ button.danger:hover:not(:disabled) {
   max-width: 100%;
   margin-bottom: var(--spacers-dp16);
 }
-/* The Overview uses the full width for the diagram; its text keeps the usual measure. */
+/* A page with a diagram uses the full width for it; its text keeps the usual measure. */
 main.automation-wide {
   max-width: none;
 }
@@ -1379,7 +1379,7 @@ main.automation-wide > :not(.automation-canvas) {
 .ag-icon {
   fill: var(--colors-white);
   stroke: var(--colors-grey700);
-  stroke-width: 1.1;
+  stroke-width: 0.9;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1389,7 +1389,7 @@ main.automation-wide > :not(.automation-canvas) {
 }
 .ag-key-icon {
   display: inline-block;
-  vertical-align: -1px;
+  vertical-align: -3px;
   margin-right: 4px;
 }
 .ag-arrow-lit {

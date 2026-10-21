@@ -604,6 +604,7 @@ _FIRES_ICONS = {
     "manual": '<path d="M3.4 9.4 V3.2 a1 1 0 0 1 2 0 V6 M5.4 5.4 a1 1 0 0 1 2 0 V6.6 M7.4 6 a1 1 0 0 1 2 0 '
     'V7.6 C9.4 9 8.4 9.8 7 9.8 H5.2 L2 7.2 a0.9 0.9 0 0 1 1.4 -1"/>',
 }
+_ICON_SIZE = 14
 _FIRES_TITLES = {
     "schedule": "Runs on its sync schedule",
     "update": "Runs when the dataset updates",
@@ -621,7 +622,7 @@ def render_legend() -> Markup:
     icons = (("schedule", "sync schedule"), ("update", "runs on update"), ("manual", "runs by hand"))
     parts = [f'<span><i class="ag-key ag-key-{kind}"></i>{escape(text)}</span>' for kind, text in lines]
     parts += [
-        f'<span><svg class="ag-key-icon" width="11" height="11" viewBox="-0.5 -0.5 11 11" aria-hidden="true">'
+        f'<span><svg class="ag-key-icon" width="14" height="14" viewBox="-0.5 -0.5 11 11" aria-hidden="true">'
         f'<g class="ag-icon">{_FIRES_ICONS[kind]}</g></svg>{escape(text)}</span>'
         for kind, text in icons
     ]
@@ -629,20 +630,19 @@ def render_legend() -> Markup:
 
 
 def _edge_label(edge: GraphEdge, mid_x: float, y: float) -> str:
-    """An arrow's label, centred on the arrow, led by the symbol for what fires it."""
+    """An arrow's label, centred on the arrow, under the symbol for what fires it."""
     label = edge.label or ""
     icon = _FIRES_ICONS.get(edge.fires or "")
-    text_width = 5.4 * len(label)  # 10px text; close enough to centre the pair
-    width = text_width + (14 if icon else 0)
-    left = mid_x - width / 2
     data = f'data-source="{escape(edge.source)}" data-target="{escape(edge.target)}"'
     parts = [f'<g class="ag-edge-text" {data}>']
     if icon:
+        # The 10-unit symbol drawn at 14px, its foot just clear of the label.
+        left, top = mid_x - _ICON_SIZE / 2, y - 11 - _ICON_SIZE
         parts.append(
-            f'<g class="ag-icon" transform="translate({left:.1f},{y - 8.5:.1f})">'
+            f'<g class="ag-icon" transform="translate({left:.1f},{top:.1f}) scale({_ICON_SIZE / 10:g})">'
             f"<title>{escape(_FIRES_TITLES[edge.fires or ''])}</title>{icon}</g>"
         )
-    parts.append(f'<text x="{left + (14 if icon else 0):.1f}" y="{y:.1f}">{escape(label)}</text></g>')
+    parts.append(f'<text x="{mid_x:.1f}" y="{y:.1f}" text-anchor="middle">{escape(label)}</text></g>')
     return "".join(parts)
 
 

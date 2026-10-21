@@ -153,7 +153,7 @@ _NAV_ITEMS = (
     ("overview", "Overview", "/"),
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
-    ("automation", "Automation", "/automation"),
+    ("automation", "Automation", "/pipelines"),
     ("workflows", "Workflows", "/workflows"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
@@ -188,12 +188,10 @@ def page_nav(mount: str, current: str) -> Markup:
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
 
 
-# The Automation section's pages: the Overview diagram, and the lists it draws from.
+# The Automation section's pages; the first is where the section opens.
 _AUTOMATION_TABS = (
-    ("overview", "Overview", "/automation"),
-    ("schedules", "Schedules", "/schedules"),
-    ("triggers", "Triggers", "/automation/triggers"),
     ("pipelines", "Pipelines", "/pipelines"),
+    ("schedules", "Schedules", "/schedules"),
 )
 
 
@@ -1796,56 +1794,6 @@ def _landing_catalogue(
     }
 
 
-def _trigger_views(triggers: list[Any], graph: Any) -> list[dict[str, Any]]:
-    statuses = {node.ref: node.status for node in graph.nodes if node.kind == "trigger"}
-    names = {node.ref: node.label for node in graph.nodes if node.kind == "dataset"}
-    views = []
-    for trigger in triggers:
-        arguments = dict(trigger.arguments or {})
-        output = arguments.get("output_dataset_id")
-        deliver = getattr(trigger, "deliver", None)
-        views.append(
-            {
-                "id": trigger.id,
-                "on_update_of": trigger.on_update_of,
-                "on_update_name": names.get(trigger.on_update_of),
-                "workflow_id": trigger.workflow_id,
-                "output": output if isinstance(output, str) and not output.startswith("$") else None,
-                "output_name": names.get(output) if isinstance(output, str) else None,
-                "deliver": deliver.export if deliver is not None else None,
-                "status": statuses.get(trigger.id),
-            }
-        )
-    return views
-
-
-def render_automation_page(mount: str, *, tab: str) -> str:
-    """Render the Automation section's Overview diagram or its read-only list of triggers."""
-    from open_climate_service.automation.graph import build_graph, render_legend, render_svg
-
-    graph = build_graph()
-    return get_template("automation_page.html").render(
-        version=app_version,
-        mount=mount,
-        name=api_config.get_name(),
-        logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "automation"),
-        automation_tabs=automation_tabs(mount, tab),
-        tab=tab,
-        read_only=api_config.is_read_only(),
-        graph=graph,
-        diagram=render_svg(graph, mount),
-        legend=render_legend(),
-        counts={
-            kind: sum(1 for node in graph.nodes if node.kind == kind)
-            for kind in ("dataset", "trigger", "pipeline", "destination")
-        },
-        scheduled=sum(1 for node in graph.nodes if node.kind == "dataset" and node.status is not None),
-        triggers=_trigger_views(_load_triggers(), graph),
-    )
-
-
 def render_workflows_page(mount: str) -> str:
     """Render the list of workflows, with the datasets each one produces.
 
@@ -2065,7 +2013,7 @@ def _automation_legend() -> Markup:
 
 
 def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
-    """This pipeline's chain from the automation graph, drawn as on the Automation overview.
+    """This pipeline's chain from the automation graph, drawn as an automation diagram.
 
     The pipeline's own box links to the workflow it runs, not back to this page.
     """
