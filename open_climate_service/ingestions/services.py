@@ -2919,9 +2919,10 @@ def _dataset_period_type(latest: ArtifactRecord, source_dataset: dict[str, Any])
     if latest.format == ArtifactFormat.GEOPARQUET:
         return None
     declared = _as_optional_str(source_dataset.get("period_type")) or latest.period_type
-    if declared is None and registry_datasets.is_timeless(source_dataset):
+    if declared is None and source_dataset and registry_datasets.is_timeless(source_dataset):
         # A static raster without a time axis (CLIM-1448): no period axis, like a feature collection.
-        # A cadence recorded for a workflow result that has one still wins, above.
+        # A cadence recorded for a workflow result that has one still wins, above. Only a template
+        # can say so: with no template left, the period type is unknown, as before.
         return None
     return declared if declared is not None else "unknown"
 
