@@ -636,6 +636,9 @@ def _ingest_defaults(template: dict[str, Any], today: date) -> dict[str, Any]:
     """
     direction = str(template.get("temporal_direction") or "past")
     period = str(template.get("period_type") or "")
+    if registry_datasets.is_timeless(template):
+        # No time axis (CLIM-1448): the dataset is fetched whole, so there is no range to choose.
+        return {"start": "", "end": "", "start_required": False, "direction": "static"}
     if period and not has_calendar_periods(period):
         # A climatology covers a reference period fixed by the template — ERA5-Land's normals
         # carry `period: [1991, 2020]` in their ingestion params — so there is nothing for an

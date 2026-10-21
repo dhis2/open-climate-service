@@ -58,6 +58,8 @@ logger = logging.getLogger(__name__)
 # Source spellings for the temporal dimension, mapped onto the canonical ``t``. The map
 # viewer looks for `t`; a store that ships `time` renders without a time control.
 _TIME_ALIASES = ("time", "valid_time", "date", "time_counter")
+TIME_ALIASES = _TIME_ALIASES
+"""Names a source may give its time axis; publication renames each to ``t``."""
 
 # Beyond this longitude a geographic x axis is on the 0…360 frame rather than −180…180.
 _LON_ROLL_THRESHOLD = 180.0
@@ -75,7 +77,7 @@ def prepare_for_publication(
     ds: "xr.Dataset",
     *,
     fallback_crs: str | int | None = None,
-    time_dim: str = "t",
+    time_dim: str | None = "t",
     x_dim: str = "x",
     y_dim: str = "y",
 ) -> PreparedCube:
@@ -116,11 +118,13 @@ def prepare_for_publication(
 def normalize_dim_layout(
     ds: "xr.Dataset",
     *,
-    time_dim: str = "t",
+    time_dim: str | None = "t",
     x_dim: str = "x",
     y_dim: str = "y",
 ) -> "xr.Dataset":
     """Rename the temporal dimension to ``time_dim`` and order spatial dims ``(…, y, x)``.
+
+    ``time_dim=None`` is a static dataset with no time axis (CLIM-1448): nothing is renamed.
 
     Renames only coordinate/dimension *names* and axis order — no coordinate value changes —
     so this is safe to apply to a single period being appended to an existing store as well
@@ -130,7 +134,7 @@ def normalize_dim_layout(
     A no-op when the dataset already conforms, so the common case costs one dims comparison
     rather than a copy of the data.
     """
-    if time_dim not in ds.dims:
+    if time_dim is not None and time_dim not in ds.dims:
         for alias in _TIME_ALIASES:
             if alias in ds.dims or alias in ds.coords:
                 ds = ds.rename({alias: time_dim})
@@ -360,7 +364,7 @@ class Violation:
 def published_contract_violations(
     ds: "xr.Dataset",
     *,
-    time_dim: str = "t",
+    time_dim: str | None = "t",
     x_dim: str = "x",
     y_dim: str = "y",
 ) -> list[Violation]:
@@ -372,7 +376,8 @@ def published_contract_violations(
     """
     problems: list[Violation] = []
     dims = set(str(d) for d in ds.dims)
-    if time_dim not in dims:
+    # A static dataset has no time axis to name (CLIM-1448).
+    if time_dim is not None and time_dim not in dims:
         found = [a for a in _TIME_ALIASES if a in dims]
         problems.append(
             Violation(
