@@ -1330,6 +1330,15 @@ button.danger:hover:not(:disabled) {
 }
 .automation-canvas {
   overflow-x: auto;
+  width: fit-content;
+  max-width: 100%;
+}
+/* The Overview uses the full width for the diagram; its text keeps the usual measure. */
+main.automation-wide {
+  max-width: none;
+}
+main.automation-wide > :not(.automation-canvas) {
+  max-width: 1080px;
 }
 .automation-graph {
   display: block;

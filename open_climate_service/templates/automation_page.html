@@ -20,7 +20,7 @@
     <div class="layout">
       {{ nav }}
 
-      <main id="content">
+      <main id="content"{% if tab != 'triggers' %} class="automation-wide"{% endif %}>
         {{ automation_tabs }}
 
         {% if tab == 'triggers' %}
