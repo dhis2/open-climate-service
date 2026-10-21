@@ -553,7 +553,7 @@ def layout(graph: AutomationGraph) -> dict[str, tuple[int, int]]:
 
 # --- rendering -----------------------------------------------------------------------------
 
-_NODE_W, _NODE_H = 224, 84
+_NODE_W, _NODE_H = 224, 70
 _COL_GAP, _ROW_GAP, _HEAD = 96, 16, 30
 _KIND_LABELS = {
     "source": "Data source",
@@ -566,14 +566,17 @@ _KIND_LABELS = {
 
 
 def _column_title(kinds: list[str], index: int) -> str:
+    """The heading over a column, singular when the column holds one box."""
+    one = len(kinds) == 1
     if all(k == "source" for k in kinds):
-        return "Data sources"
+        return "Data source" if one else "Data sources"
     if all(k == "destination" for k in kinds):
-        return "Destinations"
+        return "Destination" if one else "Destinations"
     if all(k in ("trigger", "pipeline") for k in kinds):
-        return "Workflows"
+        return "Workflow" if one else "Workflows"
     if all(k in ("dataset", "features") for k in kinds):
-        return "Datasets" if index <= 1 else "Derived datasets"
+        title = "Dataset" if index <= 1 else "Derived dataset"
+        return title if one else f"{title}s"
     return ""
 
 
@@ -652,20 +655,21 @@ def render_svg(
     for node in graph.nodes:
         x, y = box(node.id)
         lines = [
-            f'<text class="ag-kind" x="{x + 10}" y="{y + 16}">{escape(_KIND_LABELS[node.kind].upper())}</text>',
-            f'<text class="ag-label" x="{x + 10}" y="{y + 34}">{escape(_clip(node.label, 29))}</text>',
+            f'<text class="ag-label" x="{x + 10}" y="{y + 21}">{escape(_clip(node.label, 29))}</text>',
         ]
         detail = node.meta[0] if node.meta else (node.ref if node.ref and node.ref != node.label else "")
         if detail:
-            lines.append(f'<text class="ag-meta" x="{x + 10}" y="{y + 52}">{escape(_clip(detail, 36))}</text>')
+            lines.append(f'<text class="ag-meta" x="{x + 10}" y="{y + 39}">{escape(_clip(detail, 36))}</text>')
         if node.status is not None:
             label = _clip(node.status.label, 30)
             chip_w = 18 + 6.2 * len(label)
             lines.append(
-                f'<g class="ag-status ag-{node.status.state}"><rect x="{x + 10}" y="{y + 61}" rx="9" '
-                f'width="{chip_w:.0f}" height="17"/><text x="{x + 19}" y="{y + 73}">{escape(label)}</text></g>'
+                f'<g class="ag-status ag-{node.status.state}"><rect x="{x + 10}" y="{y + 47}" rx="9" '
+                f'width="{chip_w:.0f}" height="17"/><text x="{x + 19}" y="{y + 59}">{escape(label)}</text></g>'
             )
-        tooltip = " · ".join([node.label, *node.meta, *([node.status.label] if node.status else [])])
+        tooltip = " · ".join(
+            [f"{_KIND_LABELS[node.kind]}: {node.label}", *node.meta, *([node.status.label] if node.status else [])]
+        )
         shape = (
             f'<g class="ag-node ag-node-{node.kind}{" ag-current" if node.id == current else ""}" '
             f'data-id="{escape(node.id)}">'

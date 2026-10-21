@@ -1440,11 +1440,6 @@ a:focus-visible .ag-node rect {
   stroke: var(--colors-blue800);
   stroke-width: 2;
 }
-.ag-kind {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  fill: var(--colors-grey600);
-}
 .ag-label {
   font-size: 13px;
   font-weight: var(--font-weight-medium);

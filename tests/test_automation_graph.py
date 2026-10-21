@@ -219,6 +219,9 @@ def test_the_overview_page_draws_the_graph_with_links(client: TestClient) -> Non
     assert '<svg class="automation-graph"' in page
     assert ">DATA SOURCES<" in page
     assert ">WORKFLOWS<" in page
+    # The column heading names what a box is; the box itself does not repeat it.
+    assert 'class="ag-kind"' not in page
+    assert "<title>Pipeline: Daily temperature to DHIS2" in page
     assert 'href="/datasets/era5_daily"' in page
     assert 'href="/pipelines/daily-temperature-to-dhis2"' in page
     assert "Checked 21 Oct 06:00 UTC" in page
@@ -290,3 +293,5 @@ def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, mon
     # Nothing beside it: the CHIRPS3 chain belongs to the Overview, not to this page.
     assert "trigger:chirps-anomaly" not in diagram
     assert "dataset:chirps_monthly" not in diagram
+    # One box to a column here, so the headings are singular.
+    assert ">DATA SOURCE<" in diagram and ">DESTINATION<" in diagram and ">WORKFLOW<" in diagram
