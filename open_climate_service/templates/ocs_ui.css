@@ -1358,6 +1358,38 @@ button.danger:hover:not(:disabled) {
 .ag-arrow-delivers {
   fill: var(--colors-teal800);
 }
+.ag-arrow-lit {
+  fill: var(--colors-blue600);
+}
+/* Hover highlight: what a box comes from and what it feeds, the rest dimmed. */
+.ag-node text,
+.ag-status,
+.ag-edge {
+  transition: opacity 0.15s;
+}
+/* Dim a box's contents, not the box: an opaque fill keeps a lit edge passing behind it hidden. */
+.ag-focus .ag-node:not(.ag-lit) text,
+.ag-focus .ag-node:not(.ag-lit) .ag-status,
+.ag-focus .ag-edge:not(.ag-lit) {
+  opacity: 0.25;
+}
+.ag-focus .ag-node:not(.ag-lit) > rect {
+  stroke: var(--colors-grey300);
+}
+.ag-focus .ag-edge.ag-lit {
+  stroke: var(--colors-blue600);
+  stroke-width: 2.2;
+}
+.ag-focus .ag-edge-delivers.ag-lit {
+  stroke: var(--colors-teal800);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-node text,
+  .ag-status,
+  .ag-edge {
+    transition: none;
+  }
+}
 .ag-node rect {
   fill: var(--colors-white);
   stroke: var(--colors-grey400);

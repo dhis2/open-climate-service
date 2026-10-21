@@ -514,7 +514,7 @@ def render_svg(graph: AutomationGraph, mount: str = "") -> Markup:
         *(
             f'<marker id="ag-arrow-{kind}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" '
             f'orient="auto-start-reverse"><path class="ag-arrow ag-arrow-{kind}" d="M0,0 L10,5 L0,10 z"/></marker>'
-            for kind in ("updates", "input", "delivers")
+            for kind in ("updates", "input", "delivers", "lit")
         ),
         "</defs>",
     ]

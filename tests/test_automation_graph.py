@@ -207,6 +207,9 @@ def test_the_overview_page_draws_the_graph_with_links(client: TestClient) -> Non
     assert 'href="/pipelines/daily-temperature-to-dhis2"' in page
     assert "Checked 21 Oct 06:00 UTC" in page
     assert 'class="page-tabs automation-tabs"' in page
+    # Hovering a box lights up its chain: edges name their ends, and a blue arrow is defined.
+    assert 'data-source="dataset:chirps_monthly" data-target="trigger:chirps-anomaly"' in page
+    assert 'id="ag-arrow-lit"' in page
 
 
 def test_the_overview_answers_json_to_an_api_client(client: TestClient) -> None:
@@ -241,6 +244,7 @@ def test_schedules_and_pipelines_live_under_automation(client: TestClient) -> No
     nav = str(page_nav("", "automation"))
     assert 'href="/automation" aria-current="page"' in nav
     assert ">Schedules<" not in nav and ">Pipelines<" not in nav
+    assert nav.index(">Data sources<") < nav.index(">Automation<") < nav.index(">Workflows<")
 
     schedules = client.get("/schedules", headers={"Accept": "text/html"}).text
     assert '<a href="/schedules" aria-current="page">Schedules</a>' in schedules

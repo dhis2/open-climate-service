@@ -28,8 +28,8 @@ JavaScript.
 | **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, data sources and workflows, the size of everything stored, plus access mode and version |
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
 | **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
-| **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
 | **Automation** (`/automation`) | What runs unattended, and how it connects: an overview diagram of sync schedules, workflow triggers and pipelines, with tabs for each list |
+| **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
 The overview counts the collections and links to them rather than listing them, so the root
