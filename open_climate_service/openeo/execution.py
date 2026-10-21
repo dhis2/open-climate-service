@@ -415,7 +415,18 @@ def _build_process_registry() -> Any:
     global _registry
     if _registry is not None:
         return _registry
+    from open_climate_service.shared.import_lock import IMPORT_LOCK
 
+    # Built once, by whichever thread comes first; another waits for it rather than importing
+    # the same libraries alongside it (CLIM-1549).
+    with IMPORT_LOCK:
+        if _registry is None:
+            _registry = _new_process_registry()
+    return _registry
+
+
+def _new_process_registry() -> Any:
+    """The base process registry, built from scratch; `_build_process_registry` keeps the one."""
     from openeo_pg_parser_networkx.process_registry import Process, ProcessRegistry
 
     # openeo-processes-dask eagerly imports its whole implementation stack (xvec, odc,
@@ -478,7 +489,6 @@ def _build_process_registry() -> Any:
     for process_id, func in load_plugin_processes():
         registry[process_id] = Process(spec=to_openeo_descriptor(func), implementation=func)
 
-    _registry = registry
     return registry
 
 

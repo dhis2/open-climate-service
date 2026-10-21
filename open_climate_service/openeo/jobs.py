@@ -2010,8 +2010,11 @@ def _reject_incompatible_template_units(ds: Any, variable: str, cf_attrs: dict[s
     declared = declared.strip()
     if declared == produced:
         return
+    from open_climate_service.shared.import_lock import IMPORT_LOCK
+
     try:
-        from xclim.core.units import units2pint
+        with IMPORT_LOCK:  # see shared/import_lock (CLIM-1549)
+            from xclim.core.units import units2pint
     except ImportError:
         return  # client-only install; validate_units() makes the same allowance
     try:

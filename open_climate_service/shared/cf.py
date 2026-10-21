@@ -105,8 +105,12 @@ def validate_units(units: str) -> str | None:
     """
     if units == "":
         return None
+    from open_climate_service.shared.import_lock import IMPORT_LOCK
+
     try:
-        from xclim.core.units import units2pint
+        # Not alongside the process warm-up's own first import of xclim (CLIM-1549).
+        with IMPORT_LOCK:
+            from xclim.core.units import units2pint
     except ImportError:
         # xclim is an optional (server-only) dependency; skip validation when absent.
         return None
