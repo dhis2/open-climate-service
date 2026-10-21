@@ -96,6 +96,14 @@ Copernicus DEM Global 30m, recording elevation height above sea level.
 
 The dataset is static: it has no time axis, so it is ingested whole and shown without a time slider.
 
+It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account. Add your key to `~/.netrc`
+as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.destine.eu`:
+
+```
+machine data.earthdatahub.destine.eu
+  password <your-api-key>
+```
+
 ---
 
 ## Overture Maps — administrative divisions (feature collection)
