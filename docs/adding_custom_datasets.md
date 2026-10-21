@@ -220,6 +220,23 @@ Multiple templates can share the same plugin class and differ only in `params`:
       variable: total_precipitation
 ```
 
+### Static datasets without a time axis
+
+Elevation, slope or distance to a road do not refer to a period. Declare such a dataset
+`sync: {kind: static}` **without** a `period_type`, and its store is `(y, x)`: no time slider on
+the map, no time axis in a process, and a `load_collection` that returns `(y, x)`. Its plugin
+implements `fetch(bbox, **params)` instead of `periods` and `fetch_period`, returning the dataset
+without a time dimension; `normalize_period` without a `period` does that. The ingest form asks
+for no dates, an ingest fetches the whole dataset once, and ingesting again keeps the stored
+data unless `overwrite` is set.
+
+```python
+class ElevationPlugin(BaseDatasetPlugin):
+    def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
+        ds = xr.open_dataset(SOURCE_URL, engine="zarr", chunks={})
+        return normalize_period(ds, source_variable="dsm", variable="elevation", bbox=bbox).load()
+```
+
 ### Derived datasets
 
 In contrast to ingestable datasets, **derived** datasets are those that cannot be ingested but rather have to be produced by running a workflow, and therefore should not have the `ingestion.plugin` parameter. Roughly half the shipped catalogue is derived and lacks this parameter. Anomalies, normals and change rasters are *produced* by a workflow through `save_result` and registered as static templates, so there is nothing upstream to fetch. 
@@ -445,9 +462,9 @@ classes:
 
 The classes are written to the stored variable as CF `flag_values` and `flag_meanings`, and
 published in STAC as `classification:classes` on the data assets. The pyramid is resampled with
-`mode`. The map viewer draws each class in its colour, with a legend of the labels; a class
-without a `color` takes one from a categorical palette, and `display` is not used. A
-categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
+`mode`. The map viewer and the dataset's thumbnail draw each class in its colour, and the map
+viewer and the dataset page list the classes as a legend; a class without a `color` takes one
+from a categorical palette, and `display` is not used. A categorical dataset is aggregated per class, with `aggregate_spatial_classes`: the area
 `share` of each class, the `majority` class, or a `total` of a weight such as population per
 class.
 `aggregate_spatial_weighted` refuses it, since a mean or sum of codes is not a class. A template

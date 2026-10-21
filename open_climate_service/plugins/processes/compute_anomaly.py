@@ -311,7 +311,7 @@ def _match_spatial_grid(normal: xr.DataArray, observed: xr.DataArray, t_dim: str
                 "100·(observed − normal)/normal). 'relative' is only meaningful for a "
                 "ratio-scale variable such as precipitation, not temperature. "
                 "'standardised' (z-score) needs a standard-deviation normal — not yet "
-                "supported (see CLIM-887)."
+                "supported."
             )
         },
     },
@@ -327,7 +327,8 @@ def compute_anomaly(observed: xr.DataArray, normal: xr.DataArray, method: str = 
     """
     if method not in _METHODS:
         if method == "standardised":
-            raise ValueError("method 'standardised' (z-score) needs a standard-deviation normal — see CLIM-887")
+            # CLIM-887 tracks standard-deviation normals.
+            raise ValueError("method 'standardised' (z-score) needs a standard-deviation normal, not yet supported")
         raise ValueError(f"method must be one of {_METHODS}, got {method!r}")
 
     # earthkit 1.0 auto-detects the time dimension, so passing time_dim below is belt and

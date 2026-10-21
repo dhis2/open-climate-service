@@ -18,8 +18,7 @@ release metadata (currently ``R2025A``):
   ``sex`` and ``age_group`` dimensions (built directly, not via ``normalize_period``),
   100 m per-country only.
 
-Global 1 km mosaics are not yet supported (they are not COGs — see
-https://github.com/dhis2/open-climate-service/issues/269).
+Global 1 km mosaics are not yet supported (they are not COGs).
 """
 
 from __future__ import annotations

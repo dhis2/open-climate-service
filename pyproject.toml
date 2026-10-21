@@ -148,14 +148,14 @@ server = [
     "ecmwf-datastores-client>=0.4",
     "netcdf4>=1.7",
     "apscheduler>=3.11,<4",
-    # The Overture feature provider (CLIM-893). Pure Python over pyarrow, which is already a
+    # The Overture feature provider. Pure Python over pyarrow, which is already a
     # dependency, so this adds a client rather than a stack.
     "overturemaps>=0.17",
     # ISO 3166 alpha-3 to alpha-2, to match an instance's declared country_code against
     # Overture's own country column. The register, and nothing else, at about 40 KB — pycountry
     # answers the same question but carries ~21 MB of translations this has no use for.
     "iso3166>=2.1",
-    # Builds the PMTiles archive the map viewer draws a feature collection from (CLIM-1177),
+    # Builds the PMTiles archive the map viewer draws a feature collection from,
     # straight from the stored GeoParquet. Pinned: it is pre-1.0 and its overview format is
     # expected to change, and the archive is derived output a refresh rebuilds anyway.
     "tylertoo==0.8.0",

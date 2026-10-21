@@ -82,6 +82,17 @@ def declared_temporal_end(dataset: dict[str, Any]) -> str | None:
     return str(end) if end is not None else None
 
 
+def is_timeless(dataset: dict[str, Any]) -> bool:
+    """True when a dataset has no ``period_type`` and therefore no time axis (CLIM-1448).
+
+    Elevation, slope or distance to a road: the value does not refer to a period. Its plugin
+    implements ``fetch(bbox)`` instead of ``periods`` and ``fetch_period``, and the store is
+    ``(y, x)``. ``sync.kind`` controls sync policy, not storage shape: a static-sync dataset
+    that declares a ``period_type`` (a workflow output, a climatology) keeps its time axis.
+    """
+    return dataset.get("period_type") is None
+
+
 def list_datasets() -> list[dict[str, Any]]:
     """Load all dataset templates and return a flat list.
 
