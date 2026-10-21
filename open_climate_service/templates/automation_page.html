@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ 'Triggers' if tab == 'triggers' else 'Automation' }} · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+
+    <div class="layout">
+      {{ nav }}
+
+      <main id="content">
+        {{ automation_tabs }}
+
+        {% if tab == 'triggers' %}
+        <div class="page-title">
+          <h2 id="automation-title" tabindex="-1">Triggers</h2>
+          <span class="chip">{{ triggers | length }} trigger{{ 's' if triggers | length != 1 }}</span>
+        </div>
+        <p class="lead">A workflow trigger runs a workflow each time a dataset updates, for example to recompute an anomaly after a sync. Triggers are set under <span class="mono">automation.workflow_triggers</span> in <span class="mono">climate-service.yaml</span>, so this list is read-only.</p>
+
+        {% if triggers %}
+        <div class="panel table-wrap records-table">
+          <table>
+            <thead>
+              <tr><th>Trigger</th><th>When this updates</th><th>Runs</th><th>Publishes or delivers</th><th>Latest run</th></tr>
+            </thead>
+            <tbody>
+              {% for t in triggers %}
+              <tr>
+                <td class="mono">{{ t.id }}</td>
+                <td><a href="{{ mount }}/datasets/{{ t.on_update_of }}">{{ t.on_update_name or t.on_update_of }}</a></td>
+                <td><a href="{{ mount }}/workflows/{{ t.workflow_id }}" class="mono">{{ t.workflow_id }}</a></td>
+                <td>
+                  {% if t.output %}<a href="{{ mount }}/datasets/{{ t.output }}">{{ t.output_name or t.output }}</a>{% endif %}
+                  {% if t.deliver %}{% if t.output %}<br />{% endif %}Export <span class="mono">{{ t.deliver }}</span>{% endif %}
+                  {% if not t.output and not t.deliver %}<span class="note">The workflow's own result</span>{% endif %}
+                </td>
+                <td>{% if t.status %}<span class="chip ag-chip-{{ t.status.state }}">{{ t.status.label }}</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="panel empty-state">
+          <h3>No triggers</h3>
+          <p class="note">Add one under <span class="mono">automation.workflow_triggers</span> in <span class="mono">climate-service.yaml</span> to run a workflow when a dataset updates.</p>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="page-title">
+          <h2 id="automation-title" tabindex="-1">Automation</h2>
+          <span class="chip">{{ scheduled }} scheduled dataset{{ 's' if scheduled != 1 }}</span>
+          <span class="chip">{{ counts.trigger }} trigger{{ 's' if counts.trigger != 1 }}</span>
+          <span class="chip">{{ counts.pipeline }} pipeline{{ 's' if counts.pipeline != 1 }}</span>
+        </div>
+        <p class="lead">What runs without anyone pressing a button. Schedules keep datasets current from their sources; when a dataset updates, its triggers and pipelines run and publish derived datasets or deliver results. Each box shows its latest run and opens its page.</p>
+
+        {% if graph.nodes %}
+        <div class="automation-legend" aria-label="Legend">
+          <span><i class="ag-key ag-key-updates"></i>updates</span>
+          <span><i class="ag-key ag-key-input"></i>read as an input</span>
+          <span><i class="ag-key ag-key-delivers"></i>delivers</span>
+        </div>
+        <div class="panel automation-canvas">
+          {{ diagram }}
+        </div>
+        <p class="note">The diagram shows what is set up to run. A job started by hand appears on its dataset's page, not here. Schedule results come from the process that runs the scheduler and reset when it restarts.</p>
+        {% else %}
+        <div class="panel empty-state">
+          <h3>Nothing is automated yet</h3>
+          <p class="note">Schedule a dataset's sync from its Sync panel, add a workflow trigger in <span class="mono">climate-service.yaml</span>, or create a pipeline. What you set up appears here, connected.</p>
+          <a class="button-link primary empty-state-action" href="{{ mount }}/datasets">Datasets</a>
+        </div>
+        {% endif %}
+        {% endif %}
+      </main>
+    </div>
+  </body>
+</html>

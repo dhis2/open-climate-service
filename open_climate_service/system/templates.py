@@ -154,8 +154,7 @@ _NAV_ITEMS = (
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
     ("workflows", "Workflows", "/workflows"),
-    ("schedules", "Schedules", "/schedules"),
-    ("pipelines", "Pipelines", "/pipelines"),
+    ("automation", "Automation", "/automation"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -187,6 +186,26 @@ def page_nav(mount: str, current: str) -> Markup:
         for key, label, path in _NAV_ITEMS
     )
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
+
+
+# The Automation section's pages: the Overview diagram, and the lists it draws from.
+_AUTOMATION_TABS = (
+    ("overview", "Overview", "/automation"),
+    ("schedules", "Schedules", "/schedules"),
+    ("triggers", "Triggers", "/automation/triggers"),
+    ("pipelines", "Pipelines", "/pipelines"),
+)
+
+
+def automation_tabs(mount: str, current: str) -> Markup:
+    """The tabs shared by the Automation section's pages, with *current* marked."""
+    links = Markup("").join(
+        Markup('<a href="{}{}"{}>{}</a>').format(
+            mount, path, Markup(' aria-current="page"') if key == current else "", label
+        )
+        for key, label, path in _AUTOMATION_TABS
+    )
+    return Markup('<nav class="page-tabs automation-tabs" aria-label="Automation">{}</nav>').format(links)
 
 
 def _licence_label(template: dict[str, Any]) -> str | None:
@@ -555,7 +574,8 @@ def render_schedules_page(status: Any, mount: str, *, change_warning: str | None
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "schedules"),
+        nav=page_nav(mount, "automation"),
+        automation_tabs=automation_tabs(mount, "schedules"),
         read_only=api_config.is_read_only(),
         status=status,
         schedules=rows,
@@ -571,7 +591,7 @@ def render_schedule_delete_page(dataset_id: str, mount: str) -> str:
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "schedules"),
+        nav=page_nav(mount, "automation"),
         dataset_id=dataset_id,
     )
 
@@ -1424,6 +1444,7 @@ _API_GROUP_NOTES = {
     "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
     "Extent": "The area this instance covers.",
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
+    "Automation": "How schedules, workflow triggers and pipelines connect, with each step's latest status.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "Pipelines": "Run a reusable workflow over bound inputs and deliver its result: save, dry-run, run, pause.",
     "System": "Health, version and the landing page's JSON form.",
@@ -1775,6 +1796,55 @@ def _landing_catalogue(
     }
 
 
+def _trigger_views(triggers: list[Any], graph: Any) -> list[dict[str, Any]]:
+    statuses = {node.ref: node.status for node in graph.nodes if node.kind == "trigger"}
+    names = {node.ref: node.label for node in graph.nodes if node.kind == "dataset"}
+    views = []
+    for trigger in triggers:
+        arguments = dict(trigger.arguments or {})
+        output = arguments.get("output_dataset_id")
+        deliver = getattr(trigger, "deliver", None)
+        views.append(
+            {
+                "id": trigger.id,
+                "on_update_of": trigger.on_update_of,
+                "on_update_name": names.get(trigger.on_update_of),
+                "workflow_id": trigger.workflow_id,
+                "output": output if isinstance(output, str) and not output.startswith("$") else None,
+                "output_name": names.get(output) if isinstance(output, str) else None,
+                "deliver": deliver.export if deliver is not None else None,
+                "status": statuses.get(trigger.id),
+            }
+        )
+    return views
+
+
+def render_automation_page(mount: str, *, tab: str) -> str:
+    """Render the Automation section's Overview diagram or its read-only list of triggers."""
+    from open_climate_service.automation.graph import build_graph, render_svg
+
+    graph = build_graph()
+    return get_template("automation_page.html").render(
+        version=app_version,
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("ocs_ui.css"),
+        nav=page_nav(mount, "automation"),
+        automation_tabs=automation_tabs(mount, tab),
+        tab=tab,
+        read_only=api_config.is_read_only(),
+        graph=graph,
+        diagram=render_svg(graph, mount),
+        counts={
+            kind: sum(1 for node in graph.nodes if node.kind == kind)
+            for kind in ("dataset", "trigger", "pipeline", "destination")
+        },
+        scheduled=sum(1 for node in graph.nodes if node.kind == "dataset" and node.status is not None),
+        triggers=_trigger_views(_load_triggers(), graph),
+    )
+
+
 def render_workflows_page(mount: str) -> str:
     """Render the list of workflows, with the datasets each one produces.
 
@@ -1966,7 +2036,8 @@ def render_pipelines_page(
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "pipelines"),
+        nav=page_nav(mount, "automation"),
+        automation_tabs=automation_tabs(mount, "pipelines"),
         tab=tab,
         pipelines=rows,
         workflows=choices.get("workflows", []),
@@ -2011,7 +2082,7 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "pipelines"),
+        nav=page_nav(mount, "automation"),
         title=spec.name or spec.id,
         spec=spec,
         revision=record.revision,

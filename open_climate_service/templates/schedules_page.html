@@ -21,6 +21,8 @@
       {{ nav }}
 
       <main id="content">
+        {{ automation_tabs }}
+
         <div class="page-title">
           <h2 id="schedules-title" tabindex="-1">Schedules</h2>
           <span class="chip">{{ schedules | length }} schedule{{ 's' if schedules | length != 1 }}</span>

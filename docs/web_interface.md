@@ -29,8 +29,7 @@ JavaScript.
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
 | **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
-| **Schedules** (`/schedules`) | Everything on the instance's clock: each dataset's sync schedule, with pause, resume and delete; set up and edited on the dataset page |
-| **Pipelines** (`/pipelines`) | Run a registered workflow over its bound inputs and deliver the result to a destination such as DHIS2: validate, dry-run, go live, run, pause and delete |
+| **Automation** (`/automation`) | What runs unattended, and how it connects: an overview diagram of sync schedules, workflow triggers and pipelines, with tabs for each list |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
 The overview counts the collections and links to them rather than listing them, so the root
@@ -88,6 +87,29 @@ Selecting a process opens its page: its description, origin and categories, its 
 and return value, the workflows on this instance that use it, and its reference links. As
 with datasets, the URL still returns the openEO process description as JSON to API clients;
 a browser gets the page, and `?f=json` and `?f=html` choose explicitly.
+
+### The Automation section (`/automation`)
+
+Everything that runs without anyone pressing a button sits under one Automation entry, with four
+tabs: **Overview**, **Schedules**, **Triggers** and **Pipelines**.
+
+The **Overview** draws how the pieces connect, left to right: a data source, the dataset its
+sync schedule keeps current, the workflow triggers and pipelines that run when that dataset
+updates, the datasets they publish, and the destinations they deliver to. A chain through a
+derived dataset (a sync recomputes an anomaly, and the anomaly's update runs an aggregation)
+reads as one path. Solid arrows drive the next step, dashed arrows are inputs a step reads
+(a climate normal, a feature collection), and teal arrows deliver. Each box shows its latest
+run and links to its page. The diagram shows what is set up to run, not history: a job
+started by hand appears on its dataset's page, not here. `GET /automation/graph` returns the
+same graph as JSON, and `GET /automation` does too for an API client.
+
+The **Triggers** tab lists the workflow triggers set under `automation.workflow_triggers` in
+`climate-service.yaml`, read-only: the dataset each one watches, the workflow it runs, what it
+publishes or delivers, and its latest run.
+
+Schedule results come from the process that runs the scheduler and reset when it restarts. On
+a deployment where a separate process runs the schedules, the public instance shows no runs
+yet.
 
 ### The Schedules page (`/schedules`)
 
