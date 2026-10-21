@@ -55,6 +55,9 @@ class GraphEdge(BaseModel):
     source: str
     target: str
     kind: EdgeKind = Field(description="updates: drives the target; input: read by it; delivers: sent to it.")
+    label: str | None = Field(
+        default=None, description="When this edge fires: a sync schedule, 'on update' or 'by hand'."
+    )
 
 
 class AutomationGraph(BaseModel):
@@ -81,9 +84,9 @@ class _Builder:
             self.nodes[node.id] = node
         return node.id
 
-    def edge(self, source: str, target: str, kind: EdgeKind) -> None:
+    def edge(self, source: str, target: str, kind: EdgeKind, label: str | None = None) -> None:
         if not any(e.source == source and e.target == target for e in self.edges):
-            self.edges.append(GraphEdge(source=source, target=target, kind=kind))
+            self.edges.append(GraphEdge(source=source, target=target, kind=kind, label=label))
 
     def graph(self) -> AutomationGraph:
         return AutomationGraph(nodes=list(self.nodes.values()), edges=self.edges)
@@ -136,6 +139,51 @@ def _schedule_status(schedule: Any) -> NodeStatus:
         return NodeStatus(state="idle", label=f"{outcome.replace('_', ' ').capitalize()} {_when(last)}".strip())
     next_check = getattr(schedule, "next_check", None)
     return NodeStatus(state="waiting", label=f"Next check {_when(next_check)}" if next_check else "No checks yet")
+
+
+_WEEKDAY_PLURALS = {
+    "mon": "Mondays",
+    "tue": "Tuesdays",
+    "wed": "Wednesdays",
+    "thu": "Thursdays",
+    "fri": "Fridays",
+    "sat": "Saturdays",
+    "sun": "Sundays",
+}
+
+
+def _schedule_label(schedule: Any) -> str:
+    """When a sync schedule checks, short enough to sit on an arrow: 'daily 06:00 UTC'."""
+    from open_climate_service.scheduler.presets import form_values
+
+    if not getattr(schedule, "enabled", True):
+        return "sync paused"
+    tz = schedule.timezone
+    values = form_values(schedule.cron, None)
+    clock = values.get("check_time")
+    frequency = values.get("frequency")
+    if frequency == "daily":
+        return f"daily {clock} {tz}"
+    if frequency == "weekly":
+        day = _WEEKDAY_PLURALS.get(str(values.get("weekday")), str(values.get("weekday")))
+        return f"{day} {clock} {tz}"
+    if frequency == "monthly":
+        return f"monthly, day {values.get('month_day')} {clock} {tz}"
+    every = _interval_label(schedule.cron)
+    return every if every else f"cron {schedule.cron} {tz}"
+
+
+def _interval_label(cron: str) -> str | None:
+    """'every 5 min' for '*/5 * * * *', 'every 6 h' for '0 */6 * * *'; None for anything else."""
+    fields = cron.split()
+    if len(fields) != 5 or fields[2:] != ["*", "*", "*"]:
+        return None
+    minute, hour = fields[0], fields[1]
+    if minute.startswith("*/") and hour == "*" and minute[2:].isdigit():
+        return f"every {minute[2:]} min"
+    if minute.isdigit() and hour.startswith("*/") and hour[2:].isdigit():
+        return f"every {hour[2:]} h"
+    return None
 
 
 def _schedule_text(schedule: Any) -> str:
@@ -254,7 +302,8 @@ def assemble_graph(
         node.status = _schedule_status(schedule)
         dataset = b.node(node)
         if record is not None:
-            b.edge(b.node(_source_node(record, schedule.dataset_id)), dataset, "updates")
+            source = b.node(_source_node(record, schedule.dataset_id))
+            b.edge(source, dataset, "updates", _schedule_label(schedule))
 
     for trigger in triggers:
         arguments = dict(trigger.arguments or {})
@@ -270,7 +319,7 @@ def assemble_graph(
                 href=f"/workflows/{trigger.workflow_id}",
             )
         )
-        b.edge(b.node(_dataset_node(trigger.on_update_of, datasets)), trigger_node, "updates")
+        b.edge(b.node(_dataset_node(trigger.on_update_of, datasets)), trigger_node, "updates", "on update")
         inputs = {k: v for k, v in arguments.items() if k != "output_dataset_id"}
         for dataset_id in dict.fromkeys(_literal_datasets(inputs, datasets)):
             if dataset_id != trigger.on_update_of:
@@ -308,7 +357,12 @@ def assemble_graph(
         dataset_ids, collection_ids = _pipeline_inputs(record, datasets)
         drive: EdgeKind = "updates" if spec.delivery.policy == "on_update" else "input"
         for dataset_id in dataset_ids:
-            b.edge(b.node(_dataset_node(dataset_id, datasets)), pipeline_node, drive)
+            b.edge(
+                b.node(_dataset_node(dataset_id, datasets)),
+                pipeline_node,
+                drive,
+                "on update" if drive == "updates" else "by hand",
+            )
         for collection_id in collection_ids:
             b.edge(b.node(_features_node(collection_id, feature_names)), pipeline_node, "input")
         connection = spec.destination.settings.get("connection")
@@ -500,7 +554,7 @@ def layout(graph: AutomationGraph) -> dict[str, tuple[int, int]]:
 # --- rendering -----------------------------------------------------------------------------
 
 _NODE_W, _NODE_H = 224, 84
-_COL_GAP, _ROW_GAP, _HEAD = 64, 16, 30
+_COL_GAP, _ROW_GAP, _HEAD = 96, 16, 30
 _KIND_LABELS = {
     "source": "Data source",
     "dataset": "Dataset",
@@ -579,6 +633,13 @@ def render_svg(graph: AutomationGraph, mount: str = "", *, current: str | None =
             f'data-target="{escape(edge.target)}" marker-end="url(#ag-arrow-{edge.kind})" '
             f'd="M{x1:.1f},{y1:.1f} C{x1 + dx:.1f},{y1:.1f} {x2 - dx:.1f},{y2:.1f} {x2:.1f},{y2:.1f}"/>'
         )
+        if edge.label:
+            # At the curve's midpoint, so two arrows leaving one box keep their labels apart.
+            parts.append(
+                f'<text class="ag-edge-text" data-source="{escape(edge.source)}" '
+                f'data-target="{escape(edge.target)}" x="{(x1 + x2) / 2:.1f}" y="{(y1 + y2) / 2 - 5:.1f}" '
+                f'text-anchor="middle">{escape(edge.label)}</text>'
+            )
 
     for node in graph.nodes:
         x, y = box(node.id)

@@ -43,6 +43,10 @@
               svg.querySelectorAll(".ag-node").forEach((n) => {
                 if (before.has(n.dataset.id) || after.has(n.dataset.id)) n.classList.add("ag-lit");
               });
+              for (const label of svg.querySelectorAll(".ag-edge-text")) {
+                const s = label.dataset.source, t = label.dataset.target;
+                if ((before.has(s) && before.has(t)) || (after.has(s) && after.has(t))) label.classList.add("ag-lit");
+              }
               for (const e of edges) {
                 const s = e.dataset.source, t = e.dataset.target;
                 if ((before.has(s) && before.has(t)) || (after.has(s) && after.has(t))) {

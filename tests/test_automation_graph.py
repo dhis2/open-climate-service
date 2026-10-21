@@ -175,6 +175,20 @@ def test_the_graph_connects_schedules_triggers_and_pipelines(client: TestClient)
     }
 
 
+def test_arrows_say_when_they_fire(client: TestClient) -> None:
+    labels = {(e.source, e.target): e.label for e in _graph(client).edges}
+
+    assert labels[("source:ERA5-Land Reanalysis", "dataset:era5_daily")] == "daily 06:00 UTC"
+    assert labels[("dataset:chirps_monthly", "trigger:chirps-anomaly")] == "on update"
+    assert labels[("dataset:era5_daily", "pipeline:daily-temperature-to-dhis2")] == "on update"
+    # Inputs and deliveries carry no label: they read or send, they do not start anything.
+    assert labels[("dataset:chirps_normal", "trigger:chirps-anomaly")] is None
+    assert labels[("pipeline:daily-temperature-to-dhis2", "destination:dhis2:national-hmis")] is None
+
+    page = client.get("/automation", headers={"Accept": "text/html"}).text
+    assert '<text class="ag-edge-text"' in page and ">daily 06:00 UTC<" in page
+
+
 def test_each_step_carries_its_latest_run(client: TestClient) -> None:
     nodes = {node.id: node for node in _graph(client).nodes}
 
