@@ -10,9 +10,10 @@ import numpy as np
 import xarray as xr
 from pyproj import Transformer
 
-from ...data_manager.services.downloader import get_cache_files, get_icechunk_path, get_zarr_path
+from ...data_manager.services.downloader import get_icechunk_path, get_zarr_path
 from ...data_manager.services.utils import get_time_dim, get_x_y_dims
 from ...shared.crs import dataset_crs
+from ...shared.netcdf import write_netcdf
 from ...shared.time import numpy_datetime_to_period_string
 
 logger = logging.getLogger(__name__)
@@ -45,36 +46,25 @@ def get_data(
         ds = open_icechunk_dataset(icechunk_path)
     else:
         zarr_path = get_zarr_path(dataset)
-        if zarr_path:
-            logger.info(f"Using optimized zarr file: {zarr_path}")
-            ds = open_zarr_dataset(str(zarr_path))
-        else:
-            files = get_cache_files(dataset)
-            if not files:
-                # The last of the three sources, so nothing has been ingested. Raised rather
-                # than left to `open_mfdataset`, whose "no files to open" gave no dataset id
-                # and could not be told apart from a genuinely broken store (CLIM-897).
-                raise DatasetDataUnavailable(
-                    f"Dataset '{dataset['id']}' has no ingested data: no Icechunk store, no Zarr "
-                    f"archive and no cached NetCDF files. Ingest it before reading it."
-                )
-            # Logged only once files are known to exist. Before, every never-ingested dataset
-            # warned about falling back to NetCDF when there was no NetCDF either — on a fresh
-            # instance that is one misleading warning per template.
-            logger.warning(
-                f"Could not find optimized zarr file for dataset {dataset['id']}, using slower netcdf files instead."
+        if not zarr_path:
+            # Neither source, so nothing has been ingested. A typed error, so a caller can tell
+            # it apart from a genuinely broken store (CLIM-897).
+            raise DatasetDataUnavailable(
+                f"Dataset '{dataset['id']}' has no ingested data: no Icechunk store and no Zarr "
+                f"archive. Ingest it before reading it."
             )
-            ds = xr.open_mfdataset(
-                files,
-                data_vars="minimal",
-                coords="minimal",  # pyright: ignore[reportArgumentType]
-                compat="override",
-            )
+        logger.info(f"Using optimized zarr file: {zarr_path}")
+        ds = open_zarr_dataset(str(zarr_path))
 
     if start and end:
-        logger.info(f"Subsetting time to {start} and {end}")
-        time_dim = get_time_dim(ds)
-        ds = ds.sel(**{time_dim: slice(start, end)})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        try:
+            time_dim = get_time_dim(ds)
+        except ValueError:
+            # A static dataset without a time axis (CLIM-1448): there is nothing to select in time.
+            time_dim = None
+        if time_dim is not None:
+            logger.info(f"Subsetting time to {start} and {end}")
+            ds = ds.sel(**{time_dim: slice(start, end)})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
     if bbox is not None:
         logger.info(f"Subsetting xy to {bbox}")
@@ -101,7 +91,9 @@ def get_data_coverage(dataset: dict[str, Any]) -> dict[str, Any]:
     except DatasetDataUnavailable:
         return _empty_coverage()
     try:
-        return _coverage_from_dataset(ds=ds, period_type=str(dataset["period_type"]), native_crs=dataset_crs(ds))
+        return _coverage_from_dataset(
+            ds=ds, period_type=str(dataset.get("period_type") or ""), native_crs=dataset_crs(ds)
+        )
     finally:
         ds.close()
 
@@ -111,28 +103,22 @@ def get_data_coverage_for_paths(
     *,
     zarr_path: str | None = None,
     icechunk_path: str | None = None,
-    netcdf_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return coverage metadata for the concrete files created for one artifact."""
-    provided = sum(value is not None for value in (zarr_path, icechunk_path)) + int(bool(netcdf_paths))
+    provided = sum(value is not None for value in (zarr_path, icechunk_path))
     if provided != 1:
         raise ValueError("Coverage calculation requires exactly one artifact source")
 
     if icechunk_path is not None:
         ds = open_icechunk_dataset(icechunk_path)
-    elif zarr_path is not None:
-        ds = open_zarr_dataset(zarr_path)
     else:
-        assert netcdf_paths is not None
-        ds = xr.open_mfdataset(
-            netcdf_paths,
-            data_vars="minimal",
-            coords="minimal",  # pyright: ignore[reportArgumentType]
-            compat="override",
-        )
+        assert zarr_path is not None
+        ds = open_zarr_dataset(zarr_path)
 
     try:
-        return _coverage_from_dataset(ds=ds, period_type=str(dataset["period_type"]), native_crs=dataset_crs(ds))
+        return _coverage_from_dataset(
+            ds=ds, period_type=str(dataset.get("period_type") or ""), native_crs=dataset_crs(ds)
+        )
     finally:
         ds.close()
 
@@ -347,7 +333,7 @@ def xarray_to_temporary_netcdf(ds: xr.Dataset) -> str:
     fd = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
     path = fd.name
     fd.close()
-    ds.to_netcdf(path)
+    write_netcdf(ds, path)
     return path
 
 

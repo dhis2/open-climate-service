@@ -80,24 +80,6 @@ WorldPop Global2 provides gridded population estimates and projections at 100 m 
 
 ---
 
-## WorldPop Global2 — population by age and sex (yearly)
-
-| Property               | Value                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------- |
-| **Dataset ID**         | `worldpop_agesex_global2_100m`                                                            |
-| **Variable**           | `population` (over `sex` and `age_group` dimensions)                                      |
-| **Units**              | people                                                                                    |
-| **Period**             | Yearly                                                                                    |
-| **Spatial coverage**   | Per-country (set `extent.country_code`)                                                   |
-| **Spatial resolution** | ~100 m                                                                                    |
-| **Record start**       | 2015                                                                                      |
-| **Record end**         | 2030                                                                                      |
-| **Source**             | [WorldPop Global2 age & sex structures](https://hub.worldpop.org/project/categories?id=8) |
-
-Population disaggregated by sex and 5-year age band. Population is the quantity; sex and age are both disaggregation dimensions of it — so WorldPop's ~40 per-(sex, age) GeoTIFFs per country-year are combined into a **single `population` variable** over a `sex` dimension (`female`, `male`) and an ordinal `age_group` dimension (the lower bound of each band: 0, 1, 5, 10, … 90).
-
----
-
 ## Copernicus — elevation (static)
 
 | Property               | Value                                                                                                |
@@ -105,17 +87,14 @@ Population disaggregated by sex and 5-year age band. Population is the quantity;
 | **Dataset ID**         | `copdem30_elevation_static`                                                                          |
 | **Variable**           | `elevation`                                                                                          |
 | **Units**              | meters                                                                                               |
-| **Period**             | Yearly                                                                                               |
+| **Period**             | None: no time axis                                                                                   |
 | **Spatial coverage**   | Global                                                                                               |
 | **Spatial resolution** | ~30 m                                                                                                |
-| **Record start**       | 2010                                                                                                 |
-| **Record end**         | 2010                                                                                                 |
 | **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
 
 Copernicus DEM Global 30m, recording elevation height above sea level. 
 
-**Note**: This dataset is static and non-varying over time, but currently implemented as yearly data for the year 2010
-when the data measurements were made. 
+The dataset is static: it has no time axis, so it is ingested whole and shown without a time slider.
 
 ---
 

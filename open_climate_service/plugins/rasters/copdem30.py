@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
 
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
@@ -10,33 +11,21 @@ _DEM30_ZARR_URL = "https://api.earthdatahub.destine.eu/copernicus-dem/GLO-30-v0.
 
 
 class CopDEM30Plugin(BaseDatasetPlugin):
-    """Streaming plugin for Copernicus DEM 30m elevation data from the DestinE Earth Data Hub.
+    """Copernicus DEM 30m elevation data from the DestinE Earth Data Hub.
 
-    This is a static dataset but currently represented as a temporal dataset with the year
-    2010 as the only valid period (the year the measurements were made).
+    A static dataset without a time axis (CLIM-1448): elevation does not refer to a period, so
+    the plugin implements `fetch` and the store is ``(y, x)``.
     """
 
-    async def periods(self, start: str, end: str) -> list[str]:
-        if int(end[:4]) < 2010 or int(start[:4]) > 2010:
-            # start-end range does not include 2010, we therefore return no valid periods
-            return []
-        else:
-            # start-end range includes 2010, we can then constrain that range to only 2010
-            return ["2010"]
-
-    def fetch_period(self, period_id: str, bbox: list[float], **params: Any) -> xr.Dataset:
-        # read the source raster for this period
+    def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
         ds = xr.open_dataset(
             _DEM30_ZARR_URL,
             storage_options={"client_kwargs": {"trust_env": True}},
             chunks={},
             engine="zarr",
         )
-        # make rio compatible by adding crs
+        # The store declares no CRS; it is geographic.
         ds = ds.rio.write_crs("EPSG:4326")
-        # normalize ds
-        ds = normalize_period(ds, source_variable="dsm", variable="elevation", period=period_id, bbox=bbox)
-        # load into memory before returning
-        ds = ds.load()
-
-        return ds
+        # No period, so no time axis is added.
+        ds = normalize_period(ds, source_variable="dsm", variable="elevation", bbox=bbox)
+        return ds.load()

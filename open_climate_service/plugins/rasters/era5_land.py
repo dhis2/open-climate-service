@@ -24,6 +24,7 @@ import xarray as xr
 from earthkit.transforms import climatology as ek_climatology
 from ecmwf.datastores import Client as _CdsClient
 
+from open_climate_service.shared.netcdf import load_netcdf
 from open_climate_service.shared.time import (
     daily_period_ids,
     datetime_to_period_string,
@@ -137,7 +138,7 @@ class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):
             target = Path(tmp) / "era5land_hourly.nc"
             remote = _CdsClient().submit("reanalysis-era5-land", params)
             remote.download(str(target))
-            ds = xr.open_dataset(target, engine="netcdf4").load()
+            ds = load_netcdf(target)
         ds = _collapse_expver(ds[[self.variable]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
         ds = ds.rename({"longitude": "x", "latitude": "y", time_dim: "t"})
@@ -219,7 +220,7 @@ class ERA5LandDailyTemperaturePlugin(BaseDatasetPlugin):
             target = Path(tmp) / "era5land_daily.nc"
             remote = _CdsClient().submit("derived-era5-land-daily-statistics", params)
             remote.download(str(target))
-            ds = xr.open_dataset(target, engine="netcdf4").load()
+            ds = load_netcdf(target)
 
         ds = _collapse_expver(ds[["t2m"]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
@@ -336,7 +337,7 @@ class ERA5LandMonthlyPlugin(BaseDatasetPlugin):
             remote.download(str(target))
             # Loaded, not lazy: the framework closes what `fetch_period` returns, and every
             # month of the year is served from this one object.
-            ds = xr.open_dataset(target, engine="netcdf4").load()
+            ds = load_netcdf(target)
 
         ds = _collapse_expver(ds[[self.variable]])
         time_dim = "valid_time" if "valid_time" in ds.dims else "time"
@@ -538,7 +539,7 @@ def _require_zarr_v3(url: str, ds: xr.Dataset) -> None:
     raise RuntimeError(
         f"Earth Data Hub store {url} is not Zarr v3, and OCS reads only v3 stores. EDH applies "
         f"updates only to its Zarr v3 stores, so this one no longer advances.{latest} "
-        f"Repoint it at the v3 store for this dataset. See CLIM-955."
+        "Repoint it at the v3 store for this dataset."
     )
 
 
@@ -640,12 +641,39 @@ class _ERA5LandEDHBase(BaseDatasetPlugin):
                 xmax_sel = (xmax % 360) + lon_pad
             else:
                 xmin_sel, xmax_sel = xmin - lon_pad, xmax + lon_pad
-            self._cached_region = ds[[self.variable]].sel(
-                latitude=slice(ymax + lat_pad, ymin - lat_pad),
-                longitude=slice(xmin_sel, xmax_sel),
-            )
+            region = ds[[self.variable]].sel(latitude=slice(ymax + lat_pad, ymin - lat_pad))
+            if xmin_sel <= xmax_sel:
+                region = region.sel(longitude=slice(xmin_sel, xmax_sel))
+            else:
+                # An extent across the prime meridian wraps on a 0-360 axis (Ghana's -3.3 to
+                # 1.2 becomes 356.7 to 1.2). Take the western piece first so that, once
+                # longitude is normalised to -180..180, the axis still runs west to east.
+                region = xr.concat(
+                    [region.sel(longitude=slice(xmin_sel, None)), region.sel(longitude=slice(None, xmax_sel))],
+                    dim="longitude",
+                )
+            self._cached_region = region
             self._cached_bbox = bbox_tuple
             return self._cached_region
+
+    def _on_edh_grid(self, ds: xr.Dataset, bbox: list[float]) -> xr.Dataset:
+        """Put a CDS-tail day on the grid points the Earth Data Hub selection holds for ``bbox``.
+
+        Both sources pad the bbox by half a grid step, so on an extent whose edges sit on half
+        steps (Nepal's 26.35 and 30.45) each padded edge lands exactly on a grid point. The CDS
+        keeps every point on its area boundary, while Earth Data Hub's coordinates carry float
+        noise (30.500000000001) that decides which of those points its selection keeps. The
+        two sources then disagree by a row or column and the append is refused. Selecting the
+        Earth Data Hub points, and taking their coordinate values, makes both sources write the
+        same grid whatever the extent.
+        """
+        region = self._region_for_bbox(bbox)
+        lat = region.latitude.values
+        lon = region.longitude.values
+        if self._edh_lon_360:
+            lon = ((lon + 180) % 360) - 180
+        tolerance = _HALF_GRID_STEP / 2
+        return ds.sel(y=lat, x=lon, method="nearest", tolerance=tolerance).assign_coords(y=lat, x=lon)
 
     def _apply_transforms(self, ds: xr.Dataset) -> xr.Dataset:
         if self.variable == "t2m":
@@ -788,7 +816,7 @@ class ERA5LandTempDailyPlugin(ERA5LandEDHDailyPlugin):
         if self._cds_plugin is None or period_id <= edh_latest:
             ds = super().fetch_period(period_id, bbox)
         else:
-            ds = self._cds_plugin.fetch_period(period_id, bbox)
+            ds = self._on_edh_grid(self._cds_plugin.fetch_period(period_id, bbox), bbox)
         # The EDH path is already cleaned by the base; this also covers the CDS-tail source.
         return _drop_auxiliary_variables(ds, self.variable)
 
@@ -893,7 +921,8 @@ class ERA5LandPrecipDailyPlugin(ERA5LandEDHPrecipitationDailyPlugin):
             # Delegate rather than repeat the parent's cleaning, so a future override of this
             # method cannot silently shed it the way this one did (CLIM-923).
             return super().fetch_period(period_id, bbox)
-        return _drop_auxiliary_variables(self._fetch_cds_daily_sync(period_id, bbox), self.variable)
+        cube = self._on_edh_grid(self._fetch_cds_daily_sync(period_id, bbox), bbox)
+        return _drop_auxiliary_variables(cube, self.variable)
 
     def _fetch_cds_daily_sync(self, period_id: str, bbox: list[float]) -> xr.Dataset:
         from open_climate_service import config as api_config
@@ -962,7 +991,7 @@ class ERA5LandTempDailyFromHourlyPlugin(_ERA5LandEDHBase):
         if period_id <= edh_latest[:10]:
             cube = self._fetch_daily_sync(period_id, bbox)
         else:
-            cube = self._fetch_cds_daily_sync(period_id, bbox)
+            cube = self._on_edh_grid(self._fetch_cds_daily_sync(period_id, bbox), bbox)
         return _drop_auxiliary_variables(cube, self.variable)
 
     def _fetch_daily_sync(self, period_id: str, bbox: list[float]) -> xr.Dataset:

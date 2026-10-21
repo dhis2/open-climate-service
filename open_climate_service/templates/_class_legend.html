@@ -1,0 +1,8 @@
+<details class="class-legend">
+  <summary>Classes ({{ classes|length }})</summary>
+  <ul>
+    {% for item in classes %}
+    <li><span class="class-swatch" style="background: {{ item.color }}" aria-hidden="true"></span>{{ item.label }}</li>
+    {% endfor %}
+  </ul>
+</details>

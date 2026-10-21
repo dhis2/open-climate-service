@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,8 +62,9 @@ def _feature_artifact(
     artifact_id: str = "f1",
     dataset_id: str = "districts",
     status: PublicationStatus = PublicationStatus.PUBLISHED,
-    path: str = "/tmp/districts.parquet",
+    path: str | None = None,
 ) -> ArtifactRecord:
+    artifact_path = path if path is not None else str(Path(tempfile.gettempdir()) / f"{dataset_id}.parquet")
     return ArtifactRecord(
         artifact_id=artifact_id,
         dataset_id=dataset_id,
@@ -70,8 +72,8 @@ def _feature_artifact(
         variable=None,
         period_type=None,
         format=ArtifactFormat.GEOPARQUET,
-        path=path,
-        asset_paths=[path],
+        path=artifact_path,
+        asset_paths=[artifact_path],
         variables=[],
         request_scope=ArtifactRequestScope(start=None, end=None, bbox=(-13.5, 6.9, -10.1, 10.0)),
         coverage=ArtifactCoverage(

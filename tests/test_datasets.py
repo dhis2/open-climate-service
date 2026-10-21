@@ -1017,7 +1017,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
     plugin = _PeriodsPlugin(["2026-01-01", "2026-01-02", "2026-01-03"])
     captured: dict[str, object] = {}
 
-    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object]) -> object:
+    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object], static: bool = False) -> object:
         captured["plugin_path"] = plugin_path
         captured["params"] = params
         return plugin
@@ -1036,12 +1036,10 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
         *,
         zarr_path: str | None = None,
         icechunk_path: str | None = None,
-        netcdf_paths: list[str] | None = None,
     ) -> dict[str, object]:
         captured["dataset_id"] = dataset_arg["id"]
         captured["zarr_path"] = zarr_path
         captured["icechunk_path"] = icechunk_path
-        captured["netcdf_paths"] = netcdf_paths
         return {
             "coverage": {
                 "temporal": {"start": "2026-01-01", "end": "2026-01-03"},
@@ -1067,7 +1065,6 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
     assert captured["dataset_id"] == "chirps3_precipitation_daily"
     assert captured["zarr_path"] is None
     assert captured["icechunk_path"] == str(store_path.resolve())
-    assert captured["netcdf_paths"] is None
     assert captured["run"] == {
         "plugin": plugin,
         "params": {"stage": "final"},
@@ -1360,7 +1357,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
     store_path = tmp_path / "worldpop_population_yearly.icechunk"
     captured: dict[str, object] = {}
 
-    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object]) -> object:
+    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object], static: bool = False) -> object:
         captured["plugin_path"] = plugin_path
         captured["params"] = dict(params)
         return plugin
@@ -1475,12 +1472,10 @@ def test_create_artifact_allows_streaming_coverage_clamped_to_source_availabilit
         *,
         zarr_path: str | None = None,
         icechunk_path: str | None = None,
-        netcdf_paths: list[str] | None = None,
     ) -> dict[str, object]:
         assert dataset_arg["id"] == "chirps3_precipitation_daily"
         assert zarr_path is None
         assert icechunk_path == str(store_path.resolve())
-        assert netcdf_paths is None
         return {
             "coverage": {
                 "temporal": {"start": "2026-01-01", "end": "2026-01-31"},
