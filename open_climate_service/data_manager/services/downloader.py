@@ -464,13 +464,6 @@ def _get_cache_prefix(dataset: dict[str, Any]) -> str:
     return str(dataset["id"])
 
 
-def get_cache_files(dataset: dict[str, Any]) -> list[Path]:
-    """Return all NetCDF cache files matching this dataset's prefix."""
-    # TODO: not bulletproof -- e.g. 2m_temperature matches 2m_temperature_modified
-    prefix = _get_cache_prefix(dataset)
-    return list(DOWNLOAD_DIR.glob(f"{prefix}*.nc"))
-
-
 def get_zarr_path(dataset: dict[str, Any]) -> Path | None:
     """Return the optimised zarr archive path if it exists."""
     prefix = _get_cache_prefix(dataset)
@@ -576,7 +569,9 @@ def write_to_icechunk_store(
 
     # Bring the cube up to the published-store contract, and resolve the CRS that describes it,
     # at the write boundary — rather than relying on every plugin to get it right (CLIM-821).
-    prepared = prepare_for_publication(ds, fallback_crs=crs, x_dim=x_dim, y_dim=y_dim)
+    # The published axis is always `t`; a dataset without one (CLIM-1448) has none to name.
+    published_time = "t" if t_dim is not None else None
+    prepared = prepare_for_publication(ds, fallback_crs=crs, time_dim=published_time, x_dim=x_dim, y_dim=y_dim)
     ds, crs = prepared.dataset, prepared.crs
     # Onto the cube itself, not only the root attrs written below, because a client reads the
     # `proj:` convention from the innermost source that declares any of it: the data array,
@@ -740,10 +735,12 @@ def write_to_icechunk_store(
         ds = ds.assign_attrs({**ds.attrs, **geozarr_attrs})
         ds = _uniform_chunks(ds)
         # Bound the time-coordinate chunk so map clients read the axis in a few requests
-        # rather than one per timestep (data variables keep their own chunking).
+        # rather than one per timestep (data variables keep their own chunking). Set it for
+        # every length: a store reopened after a streaming ingest carries a chunk of 1 in the
+        # coordinate's encoding, which the write would otherwise keep.
         flat_encoding = {}
-        if t_dim is not None and t_dim in ds.coords and ds.sizes.get(t_dim, 0) > _ROOT_TIME_COORD_MAX_CHUNK:
-            flat_encoding[t_dim] = {"chunks": (_ROOT_TIME_COORD_MAX_CHUNK,)}
+        if t_dim is not None and t_dim in ds.coords and ds.sizes.get(t_dim, 0) > 0:
+            flat_encoding[t_dim] = {"chunks": (min(ds.sizes[t_dim], _ROOT_TIME_COORD_MAX_CHUNK),)}
         ds.to_zarr(session.store, mode="w", zarr_format=3, encoding=flat_encoding or None)
 
         # xarray demotes scalar coordinates (like spatial_ref) to data variables in zarr v3.

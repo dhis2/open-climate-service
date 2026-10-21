@@ -14,6 +14,8 @@ from open_climate_service.plugins.rasters.era5_land import (
     ERA5LandMonthlyPrecipitationPlugin,
     ERA5LandPrecipDailyPlugin,
     ERA5LandPrecipitationPlugin,
+    ERA5LandTempDailyFromHourlyPlugin,
+    ERA5LandTempDailyPlugin,
     _cds_fallback_area,
     _collapse_expver,
     _daily_availability_cutoff,
@@ -729,3 +731,122 @@ def test_cds_daily_fallback_requests_the_same_grid_points_as_edh(monkeypatch: py
 def test_cds_fallback_area_stays_within_the_globe() -> None:
     # A worldwide extent pads to the poles and the antimeridian, not past them.
     assert _cds_fallback_area((-180.0, -90.0, 180.0, 90.0)) == [90.0, -180.0, -90.0, 180.0]
+
+
+def _noisy_edh_daily_grid(days: list[str]) -> xr.Dataset:
+    """An Earth Data Hub daily store as it really is: longitude 0-360, and coordinates off the
+    0.1 degree grid by float noise (30.500000000001, 79.99999999999973)."""
+    lat = np.round(np.arange(35.0, 20.0, -0.1), 1) + 1e-12
+    lon = np.round(np.arange(70.0, 100.0, 0.1), 1) - 3e-13
+    times = np.array(days, dtype="datetime64[D]").astype("datetime64[ns]")
+    return xr.Dataset(
+        {
+            name: (("valid_time", "latitude", "longitude"), np.full((times.size, lat.size, lon.size), 290.0, "float32"))
+            for name in ("t2m", "tp")
+        },
+        coords={"valid_time": times, "latitude": lat, "longitude": lon},
+    )
+
+
+def test_cds_tail_days_land_on_the_edh_grid_for_an_extent_on_half_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The Nepal extent: every edge sits on a half step, so edge +- 0.05 lands exactly on grid
+    # points (30.5, 26.3, 80.0). Earth Data Hub's float noise decides which of those it keeps
+    # (here 42 x 82), while the CDS keeps every grid point on its area boundary (43 x 83).
+    # A day from the CDS must still come out on the Earth Data Hub grid, or the append fails.
+    bbox = [80.05, 26.35, 88.20, 30.45]
+    monkeypatch.setattr(
+        "open_climate_service.plugins.rasters.era5_land._edh_open_zarr",
+        lambda _url: _noisy_edh_daily_grid(["2026-09-30"]),
+    )
+    plugin = ERA5LandTempDailyPlugin(variable="t2m")
+    monkeypatch.setattr(plugin, "_latest_available", lambda: "2026-09-30")
+
+    north, west, south, east = _cds_fallback_area(tuple(bbox))  # type: ignore[arg-type]
+    lat = np.round(np.arange(north, south - 0.05, -0.1), 1)
+    lon = np.round(np.arange(west, east + 0.05, 0.1), 1)
+    lon = lon[lon <= east]
+    cds_day = xr.Dataset(
+        {"t2m": (("t", "y", "x"), np.full((1, lat.size, lon.size), 18.0, "float32"))},
+        coords={"t": np.array(["2026-10-01"], dtype="datetime64[ns]"), "y": lat, "x": lon},
+    )
+    assert (lat.size, lon.size) == (43, 83)
+    assert plugin._cds_plugin is not None
+    monkeypatch.setattr(plugin._cds_plugin, "fetch_period", lambda period_id, bbox, **_: cds_day)
+
+    from_edh = plugin.fetch_period("2026-09-30", bbox)
+    from_cds = plugin.fetch_period("2026-10-01", bbox)
+
+    assert from_edh["t2m"].shape == (1, 42, 82)
+    assert from_cds["t2m"].shape == from_edh["t2m"].shape
+    np.testing.assert_array_equal(from_cds.y.values, from_edh.y.values)
+    np.testing.assert_array_equal(from_cds.x.values, from_edh.x.values)
+    np.testing.assert_allclose(from_cds["t2m"].values, 18.0)
+
+
+@pytest.mark.parametrize(
+    ("plugin_type", "variable"),
+    [(ERA5LandPrecipDailyPlugin, "tp"), (ERA5LandTempDailyFromHourlyPlugin, "t2m")],
+)
+def test_hourly_cds_tail_days_land_on_the_edh_grid(
+    monkeypatch: pytest.MonkeyPatch, plugin_type: type, variable: str
+) -> None:
+    # The same half-step extent for the plugins that build a CDS-tail day from hourly data.
+    bbox = [80.05, 26.35, 88.20, 30.45]
+    monkeypatch.setattr(
+        "open_climate_service.plugins.rasters.era5_land._edh_open_zarr",
+        lambda _url: _noisy_edh_daily_grid(["2026-09-30"]),
+    )
+    plugin = plugin_type() if variable == "t2m" else plugin_type(variable=variable)
+    monkeypatch.setattr(plugin, "_latest_available", lambda: "2026-09-30")
+    north, west, south, east = _cds_fallback_area(tuple(bbox))  # type: ignore[arg-type]
+    lat = np.round(np.arange(north, south - 0.05, -0.1), 1)
+    lon = np.round(np.arange(west, east + 0.05, 0.1), 1)
+    lon = lon[lon <= east]
+    cds_day = xr.Dataset(
+        {variable: (("t", "y", "x"), np.full((1, lat.size, lon.size), 1.0, "float32"))},
+        coords={"t": np.array(["2026-10-01"], dtype="datetime64[ns]"), "y": lat, "x": lon},
+    )
+    monkeypatch.setattr(plugin, "_fetch_cds_daily_sync", lambda period_id, bbox: cds_day)
+
+    day = plugin.fetch_period("2026-10-01", bbox)
+
+    edh = _noisy_edh_daily_grid(["2026-09-30"]).sel(latitude=slice(30.5, 26.3), longitude=slice(80.0, 88.25))
+    assert day[variable].shape == (1, edh.latitude.size, edh.longitude.size) == (1, 42, 82)
+    np.testing.assert_array_equal(day.y.values, edh.latitude.values)
+
+
+def test_an_extent_crossing_greenwich_selects_both_sides_from_both_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Earth Data Hub stores longitude 0-360, so an extent across the prime meridian (Ghana's
+    # spans -3.3 to 1.2) is a wrapped interval there: 358 to 2, not 2 to 358. Both the hub days
+    # and the CDS-tail days aligned to them must cover it, west to east.
+    lat = np.round(np.arange(5.0, -0.05, -0.1), 1) + 1e-12
+    lon = np.round(np.arange(0.0, 360.0, 0.1), 1)
+    hub = xr.Dataset(
+        {"t2m": (("valid_time", "latitude", "longitude"), np.full((1, lat.size, lon.size), 290.0, "float32"))},
+        coords={
+            "valid_time": np.array(["2026-09-30"], dtype="datetime64[D]").astype("datetime64[ns]"),
+            "latitude": lat,
+            "longitude": lon,
+        },
+    )
+    bbox = [-2.0, 1.0, 2.0, 2.0]
+    monkeypatch.setattr("open_climate_service.plugins.rasters.era5_land._edh_open_zarr", lambda _url: hub)
+    plugin = ERA5LandTempDailyPlugin(variable="t2m")
+    monkeypatch.setattr(plugin, "_latest_available", lambda: "2026-09-30")
+    cds_lon = np.round(np.arange(-2.0, 2.05, 0.1), 1)
+    cds_lat = np.round(np.arange(2.0, 0.95, -0.1), 1)
+    cds_day = xr.Dataset(
+        {"t2m": (("t", "y", "x"), np.full((1, cds_lat.size, cds_lon.size), 25.0, "float32"))},
+        coords={"t": np.array(["2026-10-01"], dtype="datetime64[ns]"), "y": cds_lat, "x": cds_lon},
+    )
+    assert plugin._cds_plugin is not None
+    monkeypatch.setattr(plugin._cds_plugin, "fetch_period", lambda period_id, bbox, **_: cds_day)
+
+    from_edh = plugin.fetch_period("2026-09-30", bbox)
+    from_cds = plugin.fetch_period("2026-10-01", bbox)
+
+    np.testing.assert_allclose(from_edh.x.values, cds_lon, atol=1e-9)
+    assert from_edh.x.values[0] < 0 < from_edh.x.values[-1]
+    assert from_cds["t2m"].shape == from_edh["t2m"].shape
+    np.testing.assert_array_equal(from_cds.x.values, from_edh.x.values)
+    np.testing.assert_allclose(from_cds["t2m"].values, 25.0)

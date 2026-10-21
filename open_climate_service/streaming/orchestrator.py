@@ -19,7 +19,7 @@ import asyncio
 import inspect
 import logging
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -29,10 +29,16 @@ import zarr
 
 from open_climate_service.shared.cf import apply_cf_metadata, cf_attrs_from_template
 from open_climate_service.shared.raster_contract import (
+    TIME_ALIASES,
     prepare_for_publication,
     spatial_coords_match,
 )
-from open_climate_service.streaming.protocol import GridSpec, IngestionPlugin, close_ingestion_plugin
+from open_climate_service.streaming.protocol import (
+    GridSpec,
+    IngestionPlugin,
+    StaticIngestionPlugin,
+    close_ingestion_plugin,
+)
 from open_climate_service.streaming.store import (
     committed_data_group,
     is_store_empty,
@@ -54,7 +60,7 @@ class StreamingIngestResult:
     """
 
     store_path: Path
-    period_type: str
+    period_type: str | None
     periods_written: int
 
 
@@ -409,3 +415,80 @@ def run_streaming_ingest_sync(
             committed_periods=committed_periods,
         )
     )
+
+
+def run_static_ingest_sync(
+    *,
+    plugin: StaticIngestionPlugin,
+    params: dict[str, Any],
+    dataset: dict[str, Any] | None = None,
+    bbox: list[float],
+    store_path: Path,
+    is_cancel_requested: Callable[[], bool] | None = None,
+) -> StreamingIngestResult:
+    """Fetch a static dataset without a time axis once and write it as a ``(y, x)`` store (CLIM-1448).
+
+    The counterpart of a streaming ingest's first write, for a plugin implementing ``fetch``:
+    there are no periods to plan, append or resume, so the whole dataset is one commit. The
+    caller hands it an empty path (a new store, or a replacement beside the published one).
+    """
+    from open_climate_service.jobs.models import JobCancelledError
+
+    x_dim: str = getattr(plugin, "x_dim", "x")
+    y_dim: str = getattr(plugin, "y_dim", "y")
+    fallback_crs: int | str = getattr(plugin, "crs", 4326)
+
+    def _check_cancelled() -> None:
+        if is_cancel_requested and is_cancel_requested():
+            raise JobCancelledError("Static ingest cancelled")
+
+    try:
+        _check_cancelled()
+        fetch = plugin.fetch
+        ds: xr.Dataset
+        if inspect.iscoroutinefunction(fetch):
+            ds = asyncio.run(cast("Coroutine[Any, Any, xr.Dataset]", fetch(bbox, **params)))
+        else:
+            ds = cast("xr.Dataset", fetch(bbox, **params))
+        try:
+            # A leftover length-one time axis, or the scalar time coordinate `isel` leaves behind,
+            # would make readers treat the store as a series.
+            extra = [str(d) for d in ds.dims if d not in (x_dim, y_dim)]
+            if extra:
+                raise RuntimeError(
+                    f"A static dataset without a time axis must be fetched as ({y_dim}, {x_dim}); got dims "
+                    f"{tuple(str(d) for d in ds.dims)}. Drop the extra dimensions {extra} in the plugin."
+                )
+            time_coords = [
+                str(name)
+                for name, coord in ds.coords.items()
+                if name not in (x_dim, y_dim) and (name in ("t", *TIME_ALIASES) or coord.dtype.kind == "M")
+            ]
+            if time_coords:
+                raise RuntimeError(
+                    f"A static dataset without a time axis must not carry a time coordinate; got {time_coords}. "
+                    "Drop it in the plugin, for example with ds.drop_vars(...) after isel."
+                )
+            prepared = prepare_for_publication(ds, fallback_crs=fallback_crs, time_dim=None, x_dim=x_dim, y_dim=y_dim)
+            ds = prepared.dataset
+            spec = _grid_spec_from_dataset(ds, time_dim="t", x_dim=x_dim, y_dim=y_dim, crs=prepared.crs)
+            # Written once and never appended to, so each variable keeps its fill value: an integer
+            # raster's no-data sentinel (255, say) would otherwise be stored as an ordinary value.
+            fills = {
+                name: ds[name].encoding.get("_FillValue", ds[name].attrs.get("_FillValue")) for name in ds.data_vars
+            }
+            _strip_cf_encoding(ds, "", time_dim="t")
+            for name, fill in fills.items():
+                if fill is not None:
+                    ds[name].encoding["_FillValue"] = fill
+            apply_cf_metadata(ds, cf_attrs_from_template(dataset), overwrite=True)
+            _check_cancelled()
+            session = open_or_create_repo(store_path).writable_session("main")
+            ds.to_zarr(session.store, mode="w", zarr_format=3)
+            write_geozarr_attrs(session.store, spec=spec, bbox=bbox)
+            session.commit("ingest: static")
+        finally:
+            ds.close()
+    finally:
+        close_ingestion_plugin(plugin)
+    return StreamingIngestResult(store_path=store_path, period_type=None, periods_written=1)
