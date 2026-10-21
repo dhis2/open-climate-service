@@ -1821,7 +1821,7 @@ def _trigger_views(triggers: list[Any], graph: Any) -> list[dict[str, Any]]:
 
 def render_automation_page(mount: str, *, tab: str) -> str:
     """Render the Automation section's Overview diagram or its read-only list of triggers."""
-    from open_climate_service.automation.graph import build_graph, render_svg
+    from open_climate_service.automation.graph import build_graph, render_legend, render_svg
 
     graph = build_graph()
     return get_template("automation_page.html").render(
@@ -1836,6 +1836,7 @@ def render_automation_page(mount: str, *, tab: str) -> str:
         read_only=api_config.is_read_only(),
         graph=graph,
         diagram=render_svg(graph, mount),
+        legend=render_legend(),
         counts={
             kind: sum(1 for node in graph.nodes if node.kind == kind)
             for kind in ("dataset", "trigger", "pipeline", "destination")
@@ -2057,6 +2058,12 @@ def render_pipelines_page(
     )
 
 
+def _automation_legend() -> Markup:
+    from open_climate_service.automation.graph import render_legend
+
+    return render_legend()
+
+
 def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
     """This pipeline's chain from the automation graph, drawn as on the Automation overview.
 
@@ -2102,6 +2109,7 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "automation"),
         diagram=diagram,
+        legend=_automation_legend(),
         title=spec.name or spec.id,
         spec=spec,
         revision=record.revision,

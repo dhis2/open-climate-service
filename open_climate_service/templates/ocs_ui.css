@@ -1368,13 +1368,29 @@ main.automation-wide > :not(.automation-canvas) {
 .ag-arrow-delivers {
   fill: var(--colors-teal800);
 }
-.ag-edge-text {
+.ag-edge-text text {
   font-size: 10px;
   fill: var(--colors-grey700);
   paint-order: stroke;
   stroke: var(--colors-white);
   stroke-width: 3px;
   stroke-linejoin: round;
+}
+.ag-icon {
+  fill: var(--colors-white);
+  stroke: var(--colors-grey700);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ag-icon .ag-icon-solid {
+  fill: var(--colors-grey700);
+  stroke: none;
+}
+.ag-key-icon {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-right: 4px;
 }
 .ag-arrow-lit {
   fill: var(--colors-blue600);
@@ -1393,7 +1409,13 @@ main.automation-wide > :not(.automation-canvas) {
 .ag-focus .ag-edge-text:not(.ag-lit) {
   opacity: 0.25;
 }
-.ag-focus .ag-edge-text.ag-lit {
+.ag-focus .ag-edge-text.ag-lit text {
+  fill: var(--colors-blue800);
+}
+.ag-focus .ag-edge-text.ag-lit .ag-icon {
+  stroke: var(--colors-blue800);
+}
+.ag-focus .ag-edge-text.ag-lit .ag-icon-solid {
   fill: var(--colors-blue800);
 }
 .ag-focus .ag-node:not(.ag-lit) > rect {

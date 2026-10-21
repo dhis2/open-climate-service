@@ -1,10 +1,6 @@
 {# The automation diagram with its legend, and the hover script that lights up a box's chain.
-   Included by the Automation overview and a pipeline's page; expects `diagram`. #}
-        <div class="automation-legend" aria-label="Legend">
-          <span><i class="ag-key ag-key-updates"></i>updates</span>
-          <span><i class="ag-key ag-key-input"></i>read as an input</span>
-          <span><i class="ag-key ag-key-delivers"></i>delivers</span>
-        </div>
+   Included by the Automation overview and a pipeline's page; expects `diagram` and `legend`. #}
+        {{ legend }}
         <div class="panel automation-canvas">
           {{ diagram }}
         </div>

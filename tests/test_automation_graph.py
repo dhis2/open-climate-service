@@ -186,7 +186,14 @@ def test_arrows_say_when_they_fire(client: TestClient) -> None:
     assert labels[("pipeline:daily-temperature-to-dhis2", "destination:dhis2:national-hmis")] is None
 
     page = client.get("/automation", headers={"Accept": "text/html"}).text
-    assert '<text class="ag-edge-text"' in page and ">daily 06:00 UTC<" in page
+    assert ">daily 06:00 UTC<" in page
+    fires = {(e.source, e.target): e.fires for e in _graph(client).edges}
+    assert fires[("source:ERA5-Land Reanalysis", "dataset:era5_daily")] == "schedule"
+    assert fires[("dataset:chirps_monthly", "trigger:chirps-anomaly")] == "update"
+    # Each label leads with its symbol, and the legend explains them.
+    assert page.count("<title>Runs on its sync schedule</title>") == 2
+    assert "<title>Runs when the dataset updates</title>" in page
+    assert ">runs on update</span>" in page and ">sync schedule</span>" in page
 
 
 def test_each_step_carries_its_latest_run(client: TestClient) -> None:

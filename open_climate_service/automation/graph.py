@@ -27,6 +27,7 @@ _log = logging.getLogger(__name__)
 
 NodeKind = Literal["source", "dataset", "features", "trigger", "pipeline", "destination"]
 EdgeKind = Literal["updates", "input", "delivers"]
+FiresOn = Literal["schedule", "update", "manual"]
 StatusState = Literal["ok", "idle", "waiting", "running", "failed", "paused", "dry_run"]
 
 
@@ -58,6 +59,10 @@ class GraphEdge(BaseModel):
     label: str | None = Field(
         default=None, description="When this edge fires: a sync schedule, 'on update' or 'by hand'."
     )
+    fires: FiresOn | None = Field(
+        default=None,
+        description="What starts the target: its sync schedule, an update of the source, or a person.",
+    )
 
 
 class AutomationGraph(BaseModel):
@@ -84,9 +89,16 @@ class _Builder:
             self.nodes[node.id] = node
         return node.id
 
-    def edge(self, source: str, target: str, kind: EdgeKind, label: str | None = None) -> None:
+    def edge(
+        self,
+        source: str,
+        target: str,
+        kind: EdgeKind,
+        label: str | None = None,
+        fires: FiresOn | None = None,
+    ) -> None:
         if not any(e.source == source and e.target == target for e in self.edges):
-            self.edges.append(GraphEdge(source=source, target=target, kind=kind, label=label))
+            self.edges.append(GraphEdge(source=source, target=target, kind=kind, label=label, fires=fires))
 
     def graph(self) -> AutomationGraph:
         return AutomationGraph(nodes=list(self.nodes.values()), edges=self.edges)
@@ -303,7 +315,7 @@ def assemble_graph(
         dataset = b.node(node)
         if record is not None:
             source = b.node(_source_node(record, schedule.dataset_id))
-            b.edge(source, dataset, "updates", _schedule_label(schedule))
+            b.edge(source, dataset, "updates", _schedule_label(schedule), "schedule")
 
     for trigger in triggers:
         arguments = dict(trigger.arguments or {})
@@ -319,7 +331,7 @@ def assemble_graph(
                 href=f"/workflows/{trigger.workflow_id}",
             )
         )
-        b.edge(b.node(_dataset_node(trigger.on_update_of, datasets)), trigger_node, "updates", "on update")
+        b.edge(b.node(_dataset_node(trigger.on_update_of, datasets)), trigger_node, "updates", "on update", "update")
         inputs = {k: v for k, v in arguments.items() if k != "output_dataset_id"}
         for dataset_id in dict.fromkeys(_literal_datasets(inputs, datasets)):
             if dataset_id != trigger.on_update_of:
@@ -362,6 +374,7 @@ def assemble_graph(
                 pipeline_node,
                 drive,
                 "on update" if drive == "updates" else "by hand",
+                "update" if drive == "updates" else "manual",
             )
         for collection_id in collection_ids:
             b.edge(b.node(_features_node(collection_id, feature_names)), pipeline_node, "input")
@@ -584,6 +597,55 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+# Symbols for what starts a step, drawn 10 units square with the origin at the top left.
+_FIRES_ICONS = {
+    "schedule": '<circle cx="5" cy="5" r="4.2"/><path d="M5 2.6 V5 L6.8 6.2"/>',
+    "update": '<path class="ag-icon-solid" d="M6.2 0.4 L1.6 5.6 H4.6 L3.6 9.6 L8.4 4.2 H5.4 Z"/>',
+    "manual": '<path d="M3.4 9.4 V3.2 a1 1 0 0 1 2 0 V6 M5.4 5.4 a1 1 0 0 1 2 0 V6.6 M7.4 6 a1 1 0 0 1 2 0 '
+    'V7.6 C9.4 9 8.4 9.8 7 9.8 H5.2 L2 7.2 a0.9 0.9 0 0 1 1.4 -1"/>',
+}
+_FIRES_TITLES = {
+    "schedule": "Runs on its sync schedule",
+    "update": "Runs when the dataset updates",
+    "manual": "Runs when someone starts it",
+}
+
+
+def render_legend() -> Markup:
+    """The diagram's key: the three kinds of arrow, and the symbols for what starts a step."""
+    lines = (
+        ("updates", "updates"),
+        ("input", "read as an input"),
+        ("delivers", "delivers"),
+    )
+    icons = (("schedule", "sync schedule"), ("update", "runs on update"), ("manual", "runs by hand"))
+    parts = [f'<span><i class="ag-key ag-key-{kind}"></i>{escape(text)}</span>' for kind, text in lines]
+    parts += [
+        f'<span><svg class="ag-key-icon" width="11" height="11" viewBox="-0.5 -0.5 11 11" aria-hidden="true">'
+        f'<g class="ag-icon">{_FIRES_ICONS[kind]}</g></svg>{escape(text)}</span>'
+        for kind, text in icons
+    ]
+    return Markup('<div class="automation-legend" aria-label="Legend">{}</div>').format(Markup("".join(parts)))
+
+
+def _edge_label(edge: GraphEdge, mid_x: float, y: float) -> str:
+    """An arrow's label, centred on the arrow, led by the symbol for what fires it."""
+    label = edge.label or ""
+    icon = _FIRES_ICONS.get(edge.fires or "")
+    text_width = 5.4 * len(label)  # 10px text; close enough to centre the pair
+    width = text_width + (14 if icon else 0)
+    left = mid_x - width / 2
+    data = f'data-source="{escape(edge.source)}" data-target="{escape(edge.target)}"'
+    parts = [f'<g class="ag-edge-text" {data}>']
+    if icon:
+        parts.append(
+            f'<g class="ag-icon" transform="translate({left:.1f},{y - 8.5:.1f})">'
+            f"<title>{escape(_FIRES_TITLES[edge.fires or ''])}</title>{icon}</g>"
+        )
+    parts.append(f'<text x="{left + (14 if icon else 0):.1f}" y="{y:.1f}">{escape(label)}</text></g>')
+    return "".join(parts)
+
+
 def render_svg(
     graph: AutomationGraph,
     mount: str = "",
@@ -645,12 +707,9 @@ def render_svg(
             f'd="M{x1:.1f},{y1:.1f} C{x1 + dx:.1f},{y1:.1f} {x2 - dx:.1f},{y2:.1f} {x2:.1f},{y2:.1f}"/>'
         )
         if edge.label:
-            # At the curve's midpoint, so two arrows leaving one box keep their labels apart.
-            parts.append(
-                f'<text class="ag-edge-text" data-source="{escape(edge.source)}" '
-                f'data-target="{escape(edge.target)}" x="{(x1 + x2) / 2:.1f}" y="{(y1 + y2) / 2 - 5:.1f}" '
-                f'text-anchor="middle">{escape(edge.label)}</text>'
-            )
+            # At the curve's midpoint, so two arrows leaving one box keep their labels apart, with a
+            # symbol for what starts the step: a clock, an update or a person.
+            parts.append(_edge_label(edge, (x1 + x2) / 2, (y1 + y2) / 2 - 5))
 
     for node in graph.nodes:
         x, y = box(node.id)
