@@ -203,6 +203,7 @@ def test_the_overview_page_draws_the_graph_with_links(client: TestClient) -> Non
     page = client.get("/automation", headers={"Accept": "text/html"}).text
 
     assert '<svg class="automation-graph"' in page
+    assert ">DATA SOURCES<" in page
     assert 'href="/datasets/era5_daily"' in page
     assert 'href="/pipelines/daily-temperature-to-dhis2"' in page
     assert "Checked 21 Oct 06:00 UTC" in page

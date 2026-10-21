@@ -467,7 +467,7 @@ def layout(graph: AutomationGraph) -> dict[str, tuple[int, int]]:
 _NODE_W, _NODE_H = 224, 84
 _COL_GAP, _ROW_GAP, _HEAD = 64, 16, 30
 _KIND_LABELS = {
-    "source": "Source",
+    "source": "Data source",
     "dataset": "Dataset",
     "features": "Feature collection",
     "trigger": "Trigger",
@@ -478,7 +478,7 @@ _KIND_LABELS = {
 
 def _column_title(kinds: list[str], index: int) -> str:
     if all(k == "source" for k in kinds):
-        return "Sources"
+        return "Data sources"
     if all(k == "destination" for k in kinds):
         return "Destinations"
     if all(k in ("trigger", "pipeline") for k in kinds):
