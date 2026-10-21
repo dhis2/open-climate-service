@@ -449,6 +449,34 @@ def test_ensure_time_coordinate_chunking_rechunks_appended_store(tmp_path: Path)
     assert downloader.ensure_time_coordinate_chunking(store_path, "t") is False
 
 
+def test_write_to_icechunk_store_writes_a_flat_time_axis_as_one_chunk(tmp_path: Path) -> None:
+    """A flat store holds its time coordinate in one chunk, however the source chunked it.
+
+    A store reopened after a streaming ingest carries its `t` coordinate at one value per
+    chunk, and that encoding travels with the dataset into the rewrite. Without an explicit
+    chunk size the flat store keeps it, so a map client reads the axis in one request per
+    period: 441 for 1990-2026 monthly data, enough to trip a proxy's rate limit.
+    """
+    times = pd.date_range("1990-01-01", periods=441, freq="MS")
+    ds = xr.Dataset(
+        {"t2m": (("t", "y", "x"), np.zeros((len(times), 2, 2), "float32"))},
+        coords={"t": times, "y": [1.0, 2.0], "x": [1.0, 2.0]},
+    ).chunk({"t": 1})
+    ds["t"].encoding["chunks"] = (1,)  # as read back from a streaming-ingest store
+    ds.attrs["proj:code"] = "EPSG:4326"
+
+    store = tmp_path / "monthly.icechunk"
+    downloader.write_to_icechunk_store(ds, store, commit_message="test")
+
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store)))
+    group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    t = group["t"]
+    assert isinstance(t, zarr.Array)
+    assert t.chunks == (441,)
+    out = open_icechunk_dataset(str(store))
+    assert list(out.t.values) == list(times)
+
+
 def test_write_to_icechunk_store_handles_a_reversed_dask_chunk_tuple(tmp_path: Path) -> None:
     """A south-up, dask-backed source must still publish.
 

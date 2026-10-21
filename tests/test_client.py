@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -6,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from fastapi.testclient import TestClient
 
 from open_climate_service.client import (
     _FALLBACK_BASE_URL,
@@ -300,3 +302,79 @@ def test_strips_trailing_slash() -> None:
     mock_http.get.return_value = _make_response(_make_catalog(["http://localhost/stac/collections/ds"]))
     service.datasets()
     mock_http.get.assert_called_once_with("http://localhost/stac/catalog.json")
+
+
+# ── error detail (CLIM-1140) ───────────────────────────────────────────────────
+
+
+def _service_on(http: httpx.Client, base_url: str = "http://testserver") -> ClimateService:
+    service = ClimateService(base_url)
+    service._http.close()
+    service._http = http
+    return service
+
+
+def _service_replying(status_code: int, **response: Any) -> ClimateService:
+    transport = httpx.MockTransport(lambda request: httpx.Response(status_code, **response))
+    return _service_on(httpx.Client(transport=transport), "http://ocs.example")
+
+
+def test_an_unknown_collection_names_what_was_missing(client: TestClient) -> None:
+    """The case from the review: a wrong dataset id in a process graph."""
+    service = _service_on(client)
+    graph = {
+        "load": {
+            "process_id": "load_collection",
+            "arguments": {"id": "missing", "spatial_extent": None, "temporal_extent": None},
+            "result": True,
+        }
+    }
+
+    with pytest.raises(httpx.HTTPStatusError, match="Collection 'missing' not found") as raised:
+        service.execute(graph)
+
+    assert raised.value.response.status_code == 404
+    assert "POST http://testserver/result" in str(raised.value)
+
+
+def test_open_dataset_names_the_missing_collection(client: TestClient) -> None:
+    with pytest.raises(httpx.HTTPStatusError, match="STAC collection 'missing' not found"):
+        _service_on(client).open_dataset("missing")
+
+
+def test_an_openeo_error_message_reaches_the_caller() -> None:
+    service = _service_replying(400, json={"code": "ProcessGraphInvalid", "message": "Node 'x' has no process_id"})
+
+    with pytest.raises(httpx.HTTPStatusError, match="Node 'x' has no process_id"):
+        service.processes()
+
+
+def test_a_list_of_validation_errors_reaches_the_caller() -> None:
+    service = _service_replying(422, json={"detail": [{"loc": ["body", "process"], "msg": "Field required"}]})
+
+    with pytest.raises(httpx.HTTPStatusError, match="Field required"):
+        service.workflows()
+
+
+def test_a_plain_text_error_body_reaches_the_caller() -> None:
+    service = _service_replying(502, text="Bad gateway: upstream timed out")
+
+    with pytest.raises(httpx.HTTPStatusError, match="upstream timed out"):
+        service.datasets()
+
+
+def test_an_empty_error_body_still_raises_the_status() -> None:
+    service = _service_replying(500)
+
+    with pytest.raises(httpx.HTTPStatusError, match="500 Internal Server Error") as raised:
+        service.datasets()
+
+    assert raised.value.response.status_code == 500
+
+
+def test_the_module_level_functions_keep_the_detail_too() -> None:
+    request = httpx.Request("GET", "http://localhost/stac/catalog.json")
+    response = httpx.Response(503, json={"detail": "Catalog is rebuilding"}, request=request)
+    with patch("open_climate_service.client.httpx.get", return_value=response):
+        with pytest.raises(httpx.HTTPStatusError, match="Catalog is rebuilding"):
+            list_datasets("http://localhost")

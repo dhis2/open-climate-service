@@ -32,6 +32,7 @@ Example:
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -110,6 +111,41 @@ def _open_zarr(href: str, open_kwargs: dict) -> xr.Dataset:
     return ds
 
 
+def _raise_for_status(response: httpx.Response) -> None:
+    """Raise for a 4xx or 5xx response, with the server's reason in the message.
+
+    ``raise_for_status()`` alone reports only the status and URL; why the request failed
+    ("Collection 'x' not found") is in the body, which it drops. The error stays an
+    :class:`httpx.HTTPStatusError`, with the response attached.
+    """
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        reason = _error_reason(error.response)
+        if not reason:
+            raise
+        request, failed = error.request, error.response
+        message = f"{failed.status_code} {failed.reason_phrase} for {request.method} {request.url}: {reason}"
+        raise httpx.HTTPStatusError(message, request=request, response=failed) from error
+
+
+def _error_reason(response: httpx.Response) -> str:
+    """The server's reason for an error: FastAPI's ``detail``, openEO's ``message``, or the body text."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text.strip()[:500]
+    if isinstance(body, dict):
+        for key in ("detail", "message"):
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                return value
+            if value:
+                # FastAPI reports request validation errors as a list
+                return json.dumps(value)
+    return ""
+
+
 def _process_graph_body(process_graph: dict[str, Any]) -> dict[str, Any]:
     """Wrap a process-graph nodes mapping into the POST /result request body.
 
@@ -154,7 +190,7 @@ class ClimateService:
         Each entry is a STAC child link dict with at least ``id``, ``title``, and ``href``.
         """
         response = self._http.get(f"{self.base_url}/stac/catalog.json")
-        response.raise_for_status()
+        _raise_for_status(response)
         return _child_links(response.json(), self.base_url)
 
     def open_dataset(self, dataset_id: str) -> xr.Dataset:
@@ -164,21 +200,21 @@ class ClimateService:
         and returns the opened (lazy) dataset. Requires the ``xarray`` extra.
         """
         response = self._http.get(f"{self.base_url}/stac/collections/{dataset_id}")
-        response.raise_for_status()
+        _raise_for_status(response)
         href, open_kwargs = _zarr_asset(response.json(), dataset_id, self.base_url)
         return _open_zarr(href, open_kwargs)
 
     def processes(self) -> list[dict]:
         """Return all openEO processes available on the instance (``GET /processes``)."""
         response = self._http.get(f"{self.base_url}/processes")
-        response.raise_for_status()
+        _raise_for_status(response)
         processes: list[dict] = response.json().get("processes", [])
         return processes
 
     def workflows(self) -> list[dict]:
         """Return the reusable workflows (stored process graphs / UDPs) (``GET /process_graphs``)."""
         response = self._http.get(f"{self.base_url}/process_graphs")
-        response.raise_for_status()
+        _raise_for_status(response)
         workflows: list[dict] = response.json().get("processes", [])
         return workflows
 
@@ -204,7 +240,7 @@ class ClimateService:
             json=_process_graph_body(process_graph),
             timeout=timeout,
         )
-        response.raise_for_status()
+        _raise_for_status(response)
         if "application/json" in response.headers.get("content-type", ""):
             return response.json()
         if path is not None:
@@ -222,7 +258,7 @@ def list_datasets(base_url: str | None = None) -> list[dict]:
     """
     url = (base_url or _default_base_url()).rstrip("/")
     response = httpx.get(f"{url}/stac/catalog.json", timeout=_DEFAULT_TIMEOUT)
-    response.raise_for_status()
+    _raise_for_status(response)
     return _child_links(response.json(), url)
 
 
@@ -236,6 +272,6 @@ def open_dataset(dataset_id: str, *, base_url: str | None = None) -> xr.Dataset:
     """
     url = (base_url or _default_base_url()).rstrip("/")
     response = httpx.get(f"{url}/stac/collections/{dataset_id}", timeout=_DEFAULT_TIMEOUT)
-    response.raise_for_status()
+    _raise_for_status(response)
     href, open_kwargs = _zarr_asset(response.json(), dataset_id, url)
     return _open_zarr(href, open_kwargs)
