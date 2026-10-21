@@ -109,6 +109,19 @@ def test_stac_catalog_lists_child_collections(client: TestClient, monkeypatch: p
     assert child_links[0]["href"].endswith("/stac/collections/chirps3_precipitation_daily")
 
 
+def test_catalog_links_leave_out_unset_fields(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Core STAC requires a link title to be a string, so `"title": null` fails validation (CLIM-1484)."""
+    monkeypatch.setattr(
+        stac_services,
+        "_eligible_artifacts_by_dataset",
+        lambda: {"chirps3_precipitation_daily": _artifact(artifact_id="a1")},
+    )
+
+    for path in ("/stac", "/stac/catalog.json"):
+        links = client.get(path).json()["links"]
+        assert all(None not in link.values() for link in links), links
+
+
 def test_stac_landing_links_to_collections(client: TestClient) -> None:
     response = client.get("/stac")
 
@@ -232,7 +245,8 @@ def test_collection_uses_xstac_and_adds_expected_fields(client: TestClient, monk
     # (CLIM-828). Prefixed at this level because that is the defined STAC field; the raw CF
     # spellings stay inside `attrs`, which passes the store's own attribute names through.
     assert payload["cube:variables"]["precip"]["cf:standard_name"] == "lwe_precipitation_rate"
-    assert payload["cube:variables"]["precip"]["cf:cell_methods"] == "time: mean"
+    # An array, as the CF extension's schema defines it (CLIM-1484); the CF string is its entry.
+    assert payload["cube:variables"]["precip"]["cf:cell_methods"] == ["time: mean"]
     assert "standard_name" not in payload["cube:variables"]["precip"]
     assert payload["cube:variables"]["precip"]["attrs"] == {
         "long_name": "Precipitation",

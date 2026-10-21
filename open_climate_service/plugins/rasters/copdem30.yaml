@@ -3,20 +3,12 @@
   short_name: Elevation
   variable: elevation
   description: Digital Elevation Model (DEM) representing height in meters above sea level. Note that height is recorded as the highest point at each location, so e.g. will capture the height of tree canopy rather than ground level. 
-  period_type: yearly
+  # No period_type: elevation has no time axis, so the store is (y, x).
   sync:
-    kind: release
-    execution: rematerialize
-    version:
-      value: v0
-      authority: destine
+    kind: static
   extents:
     spatial:
       bbox: [-180, -90, 180, 90]
-    temporal:
-      begin: "2010"
-      end: "2010"
-      resolution: P1Y
   ingestion:
     plugin: open_climate_service.plugins.rasters.copdem30.CopDEM30Plugin
   standard_name: surface_altitude

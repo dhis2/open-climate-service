@@ -1017,7 +1017,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
     plugin = _PeriodsPlugin(["2026-01-01", "2026-01-02", "2026-01-03"])
     captured: dict[str, object] = {}
 
-    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object]) -> object:
+    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object], static: bool = False) -> object:
         captured["plugin_path"] = plugin_path
         captured["params"] = params
         return plugin
@@ -1357,7 +1357,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
     store_path = tmp_path / "worldpop_population_yearly.icechunk"
     captured: dict[str, object] = {}
 
-    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object]) -> object:
+    def fake_load_streaming_plugin(plugin_path: str, *, params: dict[str, object], static: bool = False) -> object:
         captured["plugin_path"] = plugin_path
         captured["params"] = dict(params)
         return plugin

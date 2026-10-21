@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 import xarray as xr
 
+from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.shared.cf import apply_cf_metadata, cf_attrs_from_template, validate_units
 
 
@@ -200,3 +203,39 @@ def test_netcdf_export_survives_a_store_carrying_geozarr_metadata(tmp_path) -> N
         assert list(written.attrs["spatial:transform"]) == [1.0, 0.0, 33.0, 0.0, -1.0, -9.0]
     finally:
         written.close()
+
+
+# The methods CF defines for cell_methods (CF 1.11, Appendix E).
+CF_CELL_METHODS = {
+    "point",
+    "sum",
+    "maximum",
+    "maximum_absolute_value",
+    "median",
+    "mid_range",
+    "minimum",
+    "minimum_absolute_value",
+    "mean",
+    "mean_absolute_value",
+    "mean_of_upper_decile",
+    "mode",
+    "range",
+    "root_mean_square",
+    "standard_deviation",
+    "sum_of_squares",
+    "variance",
+}
+
+
+def test_builtin_templates_use_cf_method_names_in_cell_methods() -> None:
+    """`time: max` is not CF; a CF-aware reader does not recognise it (CLIM-1484)."""
+    invalid = {}
+    for template in registry_datasets._load_builtin_datasets():  # pyright: ignore[reportPrivateUsage]
+        cell_methods = template.get("cell_methods")
+        if not cell_methods:
+            continue
+        # Each "name: method" pair; parenthesised interval and comment text is not a method.
+        methods = re.findall(r":\s*([a-z_]+)", re.sub(r"\([^)]*\)", "", cell_methods))
+        if not methods or not set(methods) <= CF_CELL_METHODS:
+            invalid[template["id"]] = cell_methods
+    assert not invalid
