@@ -101,7 +101,7 @@ as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.dest
 
 ```
 machine data.earthdatahub.destine.eu
-  password <your-api-key>
+  password <your-standard-api-key>
 ```
 
 ---
