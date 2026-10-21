@@ -57,9 +57,14 @@ def get_data(
         ds = open_zarr_dataset(str(zarr_path))
 
     if start and end:
-        logger.info(f"Subsetting time to {start} and {end}")
-        time_dim = get_time_dim(ds)
-        ds = ds.sel(**{time_dim: slice(start, end)})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        try:
+            time_dim = get_time_dim(ds)
+        except ValueError:
+            # A static dataset without a time axis (CLIM-1448): there is nothing to select in time.
+            time_dim = None
+        if time_dim is not None:
+            logger.info(f"Subsetting time to {start} and {end}")
+            ds = ds.sel(**{time_dim: slice(start, end)})  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
     if bbox is not None:
         logger.info(f"Subsetting xy to {bbox}")
@@ -86,7 +91,9 @@ def get_data_coverage(dataset: dict[str, Any]) -> dict[str, Any]:
     except DatasetDataUnavailable:
         return _empty_coverage()
     try:
-        return _coverage_from_dataset(ds=ds, period_type=str(dataset["period_type"]), native_crs=dataset_crs(ds))
+        return _coverage_from_dataset(
+            ds=ds, period_type=str(dataset.get("period_type") or ""), native_crs=dataset_crs(ds)
+        )
     finally:
         ds.close()
 
@@ -109,7 +116,9 @@ def get_data_coverage_for_paths(
         ds = open_zarr_dataset(zarr_path)
 
     try:
-        return _coverage_from_dataset(ds=ds, period_type=str(dataset["period_type"]), native_crs=dataset_crs(ds))
+        return _coverage_from_dataset(
+            ds=ds, period_type=str(dataset.get("period_type") or ""), native_crs=dataset_crs(ds)
+        )
     finally:
         ds.close()
 

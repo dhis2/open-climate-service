@@ -7,6 +7,19 @@ from open_climate_service import config as api_config
 from open_climate_service.data_registry.services import datasets
 
 
+@pytest.mark.parametrize(
+    ("dataset", "expected"),
+    [
+        ({"sync": {"kind": "static"}}, True),
+        ({"sync": {"kind": "temporal"}, "period_type": "daily"}, False),
+        ({"sync": {"kind": "static"}, "period_type": "daily"}, False),
+        ({"sync": {"kind": "release"}, "period_type": "yearly"}, False),
+    ],
+)
+def test_is_timeless_depends_only_on_period_type(dataset: dict[str, object], expected: bool) -> None:
+    assert datasets.is_timeless(dataset) is expected
+
+
 def test_dataset_registry_requires_sync_kind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     registry_file = tmp_path / "missing_sync_kind.yaml"
     registry_file.write_text(

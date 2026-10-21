@@ -52,7 +52,7 @@
     params: 
       temporal_aggregation: max
   units: degC
-  cell_methods: "time: max"
+  cell_methods: "time: maximum"
   resolution: 0.25 deg x 0.25 deg
   source: ERA5-Heat
   source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview
@@ -86,7 +86,7 @@
     params: 
       temporal_aggregation: min
   units: degC
-  cell_methods: "time: min"
+  cell_methods: "time: minimum"
   resolution: 0.25 deg x 0.25 deg
   source: ERA5-Heat
   source_url: https://cds.climate.copernicus.eu/datasets/derived-utci-historical?tab=overview

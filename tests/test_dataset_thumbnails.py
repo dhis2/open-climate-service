@@ -627,7 +627,7 @@ def test_one_ingest_produces_exactly_one_render(tmp_path: Path, monkeypatch: pyt
             return ["2026-01-01", "2026-01-02", "2026-01-03"]
 
     monkeypatch.setattr(thumbnails, "render_png", counting_render)
-    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params: _Plugin())
+    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params, static=False: _Plugin())
     monkeypatch.setattr(ingestion_services.downloader, "get_icechunk_path", lambda _: store_path)
     monkeypatch.setattr(ingestion_services, "run_streaming_ingest_sync", fake_sync)
     monkeypatch.setattr(ingestion_services, "_upsert_artifact_record", lambda record, **_: record)
