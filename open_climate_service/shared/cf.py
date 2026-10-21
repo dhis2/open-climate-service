@@ -1,8 +1,9 @@
 """CF Conventions metadata helpers (issue #280).
 
-Stamp CF attributes (``units``, ``standard_name``, ``cell_methods``) onto stored variables
-from the dataset template, so CF-aware tools — xclim's climate indices, cf-xarray, QGIS,
-earthkit — work against our GeoZarr stores without per-process wrappers.
+Stamp CF attributes (``units``, ``standard_name``, ``cell_methods``, ``long_name``,
+``description``) onto stored variables from the dataset template, so CF-aware tools — xclim's
+climate indices, cf-xarray, QGIS, earthkit — work against our GeoZarr stores without
+per-process wrappers.
 
 The single source of truth is the dataset template. Attributes are stamped only on the
 write paths (streaming ingest and managed publish) so the store is CF-compliant on disk;
@@ -22,11 +23,20 @@ logger = logging.getLogger(__name__)
 # Variable-level CF attributes we propagate from the dataset template.
 CF_VARIABLE_FIELDS = ("units", "standard_name", "cell_methods")
 
+# Template fields stamped as the variable's descriptive attributes, under these names. They replace
+# what a source or a process left there: xclim describes a count of days from WBGT maxima as days
+# "with maximum temperature above" the threshold, since it assumes air temperature.
+LABEL_FIELDS = {"name": "long_name", "description": "description"}
+
 
 def cf_attrs_from_template(template: dict[str, Any] | None) -> dict[str, Any]:
     """Return the CF variable attributes declared on a dataset template.
 
     ``units: ""`` is kept (an explicitly dimensionless quantity, e.g. a standardized index).
+    The template's ``name`` and ``description`` become ``long_name`` and ``description``.
+    ``standard_name: null`` maps to None: the template declares that the variable has no
+    standard name, so one a source or process left is removed. CF has none for many derived
+    quantities, and a wrong one is worse than none.
     A categorical dataset's classes become ``flag_values`` and ``flag_meanings`` (CLIM-895).
     """
     if not template:
@@ -36,6 +46,12 @@ def cf_attrs_from_template(template: dict[str, Any] | None) -> dict[str, Any]:
         value = template.get(key)
         if isinstance(value, str):
             out[key] = value
+    if "standard_name" in template and template["standard_name"] is None:
+        out["standard_name"] = None
+    for field, attr in LABEL_FIELDS.items():
+        value = template.get(field)
+        if isinstance(value, str) and value.strip():
+            out[attr] = " ".join(value.split())
     from open_climate_service.shared.classes import cf_flag_attrs, classification_from_template
 
     classification = classification_from_template(template)
@@ -80,6 +96,11 @@ def apply_cf_metadata(
 
     def _set(da: xr.DataArray) -> None:
         for key, value in attrs.items():
+            # None declares the attribute absent (see `cf_attrs_from_template`).
+            if value is None:
+                if overwrite:
+                    da.attrs.pop(key, None)
+                continue
             # An empty-string units means "dimensionless" and is intentional, so treat it
             # as present; for the others, only fill when missing/blank.
             present = key in da.attrs and (da.attrs[key] != "" or key == "units")
