@@ -217,9 +217,9 @@ def test_a_chain_through_a_derived_dataset_reads_left_to_right(client: TestClien
 
 def test_automation_opens_on_pipelines_then_schedules(client: TestClient) -> None:
     nav = str(page_nav("", "automation"))
-    assert 'href="/pipelines" aria-current="page">Automation<' in nav
-    assert ">Schedules<" not in nav and ">Pipelines<" not in nav
-    assert nav.index(">Data sources<") < nav.index(">Automation<") < nav.index(">Workflows<")
+    assert 'href="/pipelines" aria-current="page">Pipelines<' in nav
+    assert ">Schedules<" not in nav and ">Automation<" not in nav
+    assert nav.index(">Data sources<") < nav.index(">Pipelines<") < nav.index(">Workflows<")
 
     schedules = client.get("/schedules", headers={"Accept": "text/html"}).text
     assert '<a href="/schedules" aria-current="page">Schedules</a>' in schedules
@@ -265,3 +265,22 @@ def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, mon
     assert "dataset:chirps_monthly" not in diagram
     # One box to a column here, so the headings are singular.
     assert ">DATA SOURCE<" in diagram and ">DESTINATION<" in diagram and ">WORKFLOW<" in diagram
+
+
+def test_the_pipelines_page_draws_each_pipeline_or_lists_them(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline_store, "list_records", lambda: [PIPELINE])
+
+    page = client.get("/pipelines", headers={"Accept": "text/html"}).text
+
+    # Diagrams first, then List: the switch remembers the choice under its own key.
+    assert 'data-views="pipelines"' in page
+    assert page.index('data-view-button="diagrams"') < page.index('data-view-button="list"')
+    diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
+    assert 'data-id="dataset:era5_daily"' in diagram and "trigger:chirps-anomaly" not in diagram
+    # Its ids carry the pipeline's id, so several diagrams can share a page.
+    assert 'id="ag-arrow-lit-daily-temperature-to-dhis2"' in diagram
+    # The box opens the pipeline's page, and the table is still there for the List view.
+    assert 'href="/pipelines/daily-temperature-to-dhis2"><g class="ag-node ag-node-pipeline ag-current"' in diagram
+    assert '<div class="panel table-wrap pipeline-table">' in page

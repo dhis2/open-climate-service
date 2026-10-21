@@ -1,0 +1,57 @@
+{# Hover or focus a box to light up its chain, in every automation diagram on the page. #}
+        <script>
+          // Hover or focus a box to light up everything it comes from and everything it feeds.
+          // Without JavaScript the diagram is unchanged; every box still links to its page.
+          // The arrow markers are the diagram's own, so a page can hold several diagrams.
+          document.querySelectorAll(".automation-graph").forEach((svg) => {
+            const litMarker = `url(#${svg.querySelector('marker[id^="ag-arrow-lit"]').id})`;
+            const edges = [...svg.querySelectorAll(".ag-edge")];
+            const up = new Map(), down = new Map();
+            for (const e of edges) {
+              const s = e.dataset.source, t = e.dataset.target;
+              if (!down.has(s)) down.set(s, []);
+              if (!up.has(t)) up.set(t, []);
+              down.get(s).push(t);
+              up.get(t).push(s);
+              e.dataset.marker = e.getAttribute("marker-end");
+            }
+            const reach = (start, links) => {
+              const seen = new Set([start]), queue = [start];
+              while (queue.length) for (const next of links.get(queue.shift()) || []) {
+                if (!seen.has(next)) { seen.add(next); queue.push(next); }
+              }
+              return seen;
+            };
+            const clear = () => {
+              svg.classList.remove("ag-focus");
+              svg.querySelectorAll(".ag-lit").forEach((el) => el.classList.remove("ag-lit"));
+              for (const e of edges) e.setAttribute("marker-end", e.dataset.marker);
+            };
+            const light = (id) => {
+              clear();
+              const before = reach(id, up), after = reach(id, down);
+              svg.classList.add("ag-focus");
+              svg.querySelectorAll(".ag-node").forEach((n) => {
+                if (before.has(n.dataset.id) || after.has(n.dataset.id)) n.classList.add("ag-lit");
+              });
+              for (const label of svg.querySelectorAll(".ag-edge-text")) {
+                const s = label.dataset.source, t = label.dataset.target;
+                if ((before.has(s) && before.has(t)) || (after.has(s) && after.has(t))) label.classList.add("ag-lit");
+              }
+              for (const e of edges) {
+                const s = e.dataset.source, t = e.dataset.target;
+                if ((before.has(s) && before.has(t)) || (after.has(s) && after.has(t))) {
+                  e.classList.add("ag-lit");
+                  if (!e.classList.contains("ag-edge-delivers")) e.setAttribute("marker-end", litMarker);
+                }
+              }
+            };
+            svg.querySelectorAll(".ag-node").forEach((n) => {
+              const target = n.closest("a") || n;
+              target.addEventListener("pointerenter", () => light(n.dataset.id));
+              target.addEventListener("pointerleave", clear);
+              target.addEventListener("focusin", () => light(n.dataset.id));
+              target.addEventListener("focusout", clear);
+            });
+          });
+        </script>

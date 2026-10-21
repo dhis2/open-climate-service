@@ -28,7 +28,7 @@ JavaScript.
 | **Overview** (`/`)        | The instance's extent on a globe, counts of datasets, data sources and workflows, the size of everything stored, plus access mode and version |
 | **Datasets** (`/datasets`) | The data this instance holds, with temporal coverage and publication status                                                        |
 | **Data sources** (`/data-sources`) | Data the instance can fetch from outside providers, rasters and feature collections, titled by dataset with the provider beneath |
-| **Automation** (`/automation`) | What runs unattended: tabs for pipelines and sync schedules, each pipeline drawn with the schedule and triggers that feed it |
+| **Pipelines** (`/pipelines`) | What runs unattended: tabs for pipelines and sync schedules, each pipeline drawn with the schedule and triggers that feed it |
 | **Workflows** (`/workflows`) | Each workflow and what it makes: a published dataset or an exported file                                                         |
 | **Processes** (`/processes`) | The processes this instance can run, tagged by origin and filterable by it                                                       |
 
@@ -88,12 +88,13 @@ and return value, the workflows on this instance that use it, and its reference 
 with datasets, the URL still returns the openEO process description as JSON to API clients;
 a browser gets the page, and `?f=json` and `?f=html` choose explicitly.
 
-### The Automation section (`/automation`)
+### Pipelines and schedules (`/pipelines`)
 
-Everything that runs without anyone pressing a button sits under one Automation entry, with two
-tabs: **Pipelines**, where the section opens, and **Schedules**.
+Everything that runs without anyone pressing a button sits under one Pipelines entry, with two
+tabs: **Pipelines**, where it opens, and **Schedules**. The Pipelines tab shows each pipeline
+as a diagram, or as a table with **List**; the choice is remembered in the browser.
 
-A pipeline's page draws its chain left to right: the data source, the dataset its sync schedule
+A pipeline's diagram draws its chain left to right: the data source, the dataset its sync schedule
 keeps current, the pipeline itself, the datasets it reads, and the destination it delivers to.
 Solid arrows drive the next step, dashed arrows are inputs a step reads (a climate normal, a
 feature collection), and teal arrows deliver. A symbol over an arrow's label says what starts

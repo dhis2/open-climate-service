@@ -153,7 +153,7 @@ _NAV_ITEMS = (
     ("overview", "Overview", "/"),
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
-    ("automation", "Automation", "/pipelines"),
+    ("automation", "Pipelines", "/pipelines"),
     ("workflows", "Workflows", "/workflows"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
@@ -188,7 +188,7 @@ def page_nav(mount: str, current: str) -> Markup:
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
 
 
-# The Automation section's pages; the first is where the section opens.
+# The pages under the Pipelines entry; the first is where it opens.
 _AUTOMATION_TABS = (
     ("pipelines", "Pipelines", "/pipelines"),
     ("schedules", "Schedules", "/schedules"),
@@ -196,14 +196,14 @@ _AUTOMATION_TABS = (
 
 
 def automation_tabs(mount: str, current: str) -> Markup:
-    """The tabs shared by the Automation section's pages, with *current* marked."""
+    """The tabs shared by the Pipelines and Schedules pages, with *current* marked."""
     links = Markup("").join(
         Markup('<a href="{}{}"{}>{}</a>').format(
             mount, path, Markup(' aria-current="page"') if key == current else "", label
         )
         for key, label, path in _AUTOMATION_TABS
     )
-    return Markup('<nav class="page-tabs automation-tabs" aria-label="Automation">{}</nav>').format(links)
+    return Markup('<nav class="page-tabs automation-tabs" aria-label="Pipelines and schedules">{}</nav>').format(links)
 
 
 def _licence_label(template: dict[str, Any]) -> str | None:
@@ -1962,6 +1962,9 @@ def render_pipelines_page(
                 "last_run": record.runs[0] if record.runs else None,
             }
         )
+    if tab == "list":
+        for row, diagram in zip(rows, _pipeline_diagrams(rows, mount), strict=True):
+            row["diagram"] = diagram
     draft = draft or {}
     selection = selection or {}
     arguments = dict((draft.get("workflow") or {}).get("arguments") or {})
@@ -1989,6 +1992,8 @@ def render_pipelines_page(
         automation_tabs=automation_tabs(mount, "pipelines"),
         tab=tab,
         pipelines=rows,
+        legend=_automation_legend(),
+        list_script=_read_asset("ocs_list.js"),
         workflows=choices.get("workflows", []),
         destinations=choices.get("destinations", []),
         datasets=choices.get("datasets", []),
@@ -2027,6 +2032,21 @@ def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
     except Exception:
         _log.exception("The automation diagram could not be drawn for pipeline '%s'", pipeline_id)
         return Markup("")
+
+
+def _pipeline_diagrams(rows: list[dict[str, Any]], mount: str) -> list[Markup]:
+    """Each listed pipeline's chain, drawn from one read of the automation graph."""
+    try:
+        from open_climate_service.automation.graph import build_graph, focus, render_svg
+
+        graph = build_graph()
+        return [
+            render_svg(focus(graph, f"pipeline:{row['id']}"), mount, current=f"pipeline:{row['id']}", key=row["id"])
+            for row in rows
+        ]
+    except Exception:
+        _log.exception("The pipeline diagrams could not be drawn")
+        return [Markup("") for _ in rows]
 
 
 def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) -> str:

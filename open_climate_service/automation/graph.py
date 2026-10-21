@@ -652,13 +652,16 @@ def render_svg(
     *,
     current: str | None = None,
     current_href: str | None = None,
+    key: str = "",
 ) -> Markup:
     """Draw the graph as an inline SVG, laid out in columns, each node linking to its page.
 
     ``current`` marks the step whose page the diagram sits on. A link from it to that same page
     would go nowhere, so ``current_href`` gives it somewhere useful instead, such as the
-    workflow a pipeline runs.
+    workflow a pipeline runs. ``key`` keeps the ids inside the SVG unique when a page draws more
+    than one diagram.
     """
+    suffix = f"-{key}" if key else ""
     if not graph.nodes:
         return Markup("")
     places = layout(graph)
@@ -673,12 +676,14 @@ def render_svg(
 
     parts: list[str] = [
         f'<svg class="automation-graph" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
-        'role="img" aria-labelledby="automation-graph-title">',
-        '<title id="automation-graph-title">How schedules, triggers and pipelines connect on this instance</title>',
+        f'role="img" aria-labelledby="automation-graph-title{suffix}">',
+        f'<title id="automation-graph-title{suffix}">'
+        "How schedules, triggers and pipelines connect on this instance</title>",
         "<defs>",
         *(
-            f'<marker id="ag-arrow-{kind}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" '
-            f'orient="auto-start-reverse"><path class="ag-arrow ag-arrow-{kind}" d="M0,0 L10,5 L0,10 z"/></marker>'
+            f'<marker id="ag-arrow-{kind}{suffix}" viewBox="0 0 10 10" refX="9" refY="5" '
+            'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+            f'<path class="ag-arrow ag-arrow-{kind}" d="M0,0 L10,5 L0,10 z"/></marker>'
             for kind in ("updates", "input", "delivers", "lit")
         ),
         "</defs>",
@@ -703,7 +708,7 @@ def render_svg(
         dx = max(24.0, (x2 - x1) / 2)
         parts.append(
             f'<path class="ag-edge ag-edge-{edge.kind}" data-source="{escape(edge.source)}" '
-            f'data-target="{escape(edge.target)}" marker-end="url(#ag-arrow-{edge.kind})" '
+            f'data-target="{escape(edge.target)}" marker-end="url(#ag-arrow-{edge.kind}{suffix})" '
             f'd="M{x1:.1f},{y1:.1f} C{x1 + dx:.1f},{y1:.1f} {x2 - dx:.1f},{y2:.1f} {x2:.1f},{y2:.1f}"/>'
         )
         if edge.label:

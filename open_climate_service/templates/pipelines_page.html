@@ -20,7 +20,7 @@
     <div class="layout">
       {{ nav }}
 
-      <main id="content">
+      <main id="content"{% if tab == 'list' and pipelines %} class="automation-wide"{% endif %}>
         {{ automation_tabs }}
 
         <div class="page-title">
@@ -37,6 +37,23 @@
 
         {% if tab == 'list' %}
         {% if pipelines %}
+        <div class="pipeline-views" data-list data-views="pipelines">
+          <div class="toolbar">
+            <div class="view-switch" role="group" aria-label="Layout">
+              <button type="button" data-view-button="diagrams" aria-pressed="true">Diagrams</button>
+              <button type="button" data-view-button="list" aria-pressed="false">List</button>
+            </div>
+          </div>
+          <div data-view-target>
+          <div class="pipeline-diagrams">
+            {{ legend }}
+            {% for p in pipelines %}
+            <section class="pipeline-diagram" aria-labelledby="diagram-{{ p.id }}">
+              <h3 id="diagram-{{ p.id }}"><a href="{{ mount }}/pipelines/{{ p.id }}">{{ p.title }}</a> <span class="chip">{{ p.mode | replace('_', ' ') }}</span></h3>
+              {% if p.diagram %}<div class="panel automation-canvas">{{ p.diagram }}</div>{% else %}<p class="note">Nothing feeds this pipeline yet.</p>{% endif %}
+            </section>
+            {% endfor %}
+          </div>
         <div class="panel table-wrap pipeline-table">
           <table>
             <thead>
@@ -57,6 +74,12 @@
             </tbody>
           </table>
         </div>
+          </div>
+        </div>
+        {% include "_automation_graph_script.html" %}
+        <script>
+{{ list_script | safe }}
+        </script>
         {% else %}
         <div class="panel empty-state">
           <h3>No pipelines yet</h3>

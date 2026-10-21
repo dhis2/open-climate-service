@@ -1338,8 +1338,20 @@ button.danger:hover:not(:disabled) {
 main.automation-wide {
   max-width: none;
 }
-main.automation-wide > :not(.automation-canvas) {
+main.automation-wide > :not(.automation-canvas, .pipeline-views) {
   max-width: 1080px;
+}
+/* The Pipelines page: one diagram per pipeline, or the table. Without JavaScript both show. */
+.pipeline-views .view-diagrams .pipeline-table,
+.pipeline-views .view-list .pipeline-diagrams {
+  display: none;
+}
+.pipeline-diagram h3 {
+  margin: var(--spacers-dp16) 0 var(--spacers-dp8);
+  font-size: 1rem;
+}
+.pipeline-diagram .automation-canvas {
+  margin-bottom: var(--spacers-dp8);
 }
 .automation-graph {
   display: block;
