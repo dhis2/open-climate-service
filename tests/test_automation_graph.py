@@ -204,6 +204,7 @@ def test_the_overview_page_draws_the_graph_with_links(client: TestClient) -> Non
 
     assert '<svg class="automation-graph"' in page
     assert ">DATA SOURCES<" in page
+    assert ">WORKFLOWS<" in page
     assert 'href="/datasets/era5_daily"' in page
     assert 'href="/pipelines/daily-temperature-to-dhis2"' in page
     assert "Checked 21 Oct 06:00 UTC" in page
@@ -251,3 +252,24 @@ def test_schedules_and_pipelines_live_under_automation(client: TestClient) -> No
     assert '<a href="/schedules" aria-current="page">Schedules</a>' in schedules
     pipelines = client.get("/pipelines", headers={"Accept": "text/html"}).text
     assert '<a href="/pipelines" aria-current="page">Pipelines</a>' in pipelines
+
+
+def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipeline_store, "get_record", lambda pipeline_id: PIPELINE)
+
+    page = client.get("/pipelines/daily-temperature-to-dhis2", headers={"Accept": "text/html"}).text
+    diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
+
+    # Its chain: the data source, the dataset that runs it, the districts it reads, its destination.
+    chain = (
+        "source:ERA5-Land Reanalysis",
+        "dataset:era5_daily",
+        "features:districts",
+        "destination:dhis2:national-hmis",
+    )
+    for node in chain:
+        assert f'data-id="{node}"' in diagram
+    assert 'class="ag-node ag-node-pipeline ag-current"' in diagram
+    # Nothing beside it: the CHIRPS3 chain belongs to the Overview, not to this page.
+    assert "trigger:chirps-anomaly" not in diagram
+    assert "dataset:chirps_monthly" not in diagram

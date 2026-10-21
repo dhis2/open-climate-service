@@ -1332,6 +1332,7 @@ button.danger:hover:not(:disabled) {
   overflow-x: auto;
   width: fit-content;
   max-width: 100%;
+  margin-bottom: var(--spacers-dp16);
 }
 /* The Overview uses the full width for the diagram; its text keeps the usual measure. */
 main.automation-wide {
@@ -1413,6 +1414,9 @@ main.automation-wide > :not(.automation-canvas) {
 .ag-node-pipeline rect {
   fill: var(--colors-blue050);
   stroke: var(--colors-blue600);
+}
+.ag-current > rect {
+  stroke-width: 2.5;
 }
 .ag-node-destination rect {
   fill: var(--colors-teal100);

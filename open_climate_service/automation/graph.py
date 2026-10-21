@@ -405,6 +405,41 @@ def _read_pipelines() -> list[Any]:
         return []
 
 
+def focus(graph: AutomationGraph, node_id: str) -> AutomationGraph:
+    """The part of *graph* one step belongs to: everything it comes from and everything it feeds.
+
+    The same set the Overview lights up on hover, so a pipeline's page shows its own chain and
+    nothing beside it. Empty when the step is not in the graph.
+    """
+    if not any(node.id == node_id for node in graph.nodes):
+        return AutomationGraph()
+    up: dict[str, list[str]] = defaultdict(list)
+    down: dict[str, list[str]] = defaultdict(list)
+    for edge in graph.edges:
+        up[edge.target].append(edge.source)
+        down[edge.source].append(edge.target)
+
+    def reach(links: Mapping[str, list[str]]) -> set[str]:
+        seen, queue = {node_id}, [node_id]
+        while queue:
+            for nxt in links.get(queue.pop(), []):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        return seen
+
+    before, after = reach(up), reach(down)
+    keep = before | after
+    return AutomationGraph(
+        nodes=[node for node in graph.nodes if node.id in keep],
+        edges=[
+            edge
+            for edge in graph.edges
+            if (edge.source in before and edge.target in before) or (edge.source in after and edge.target in after)
+        ],
+    )
+
+
 # --- layout --------------------------------------------------------------------------------
 
 _BASE_LAYER: dict[str, int] = {"source": 0, "dataset": 1, "features": 1, "trigger": 2, "pipeline": 2, "destination": 2}
@@ -482,7 +517,7 @@ def _column_title(kinds: list[str], index: int) -> str:
     if all(k == "destination" for k in kinds):
         return "Destinations"
     if all(k in ("trigger", "pipeline") for k in kinds):
-        return "Triggers and pipelines"
+        return "Workflows"
     if all(k in ("dataset", "features") for k in kinds):
         return "Datasets" if index <= 1 else "Derived datasets"
     return ""
@@ -492,8 +527,11 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def render_svg(graph: AutomationGraph, mount: str = "") -> Markup:
-    """Draw the graph as an inline SVG, laid out in columns, each node linking to its page."""
+def render_svg(graph: AutomationGraph, mount: str = "", *, current: str | None = None) -> Markup:
+    """Draw the graph as an inline SVG, laid out in columns, each node linking to its page.
+
+    ``current`` marks the step whose page the diagram sits on.
+    """
     if not graph.nodes:
         return Markup("")
     places = layout(graph)
@@ -560,7 +598,8 @@ def render_svg(graph: AutomationGraph, mount: str = "") -> Markup:
             )
         tooltip = " · ".join([node.label, *node.meta, *([node.status.label] if node.status else [])])
         shape = (
-            f'<g class="ag-node ag-node-{node.kind}" data-id="{escape(node.id)}">'
+            f'<g class="ag-node ag-node-{node.kind}{" ag-current" if node.id == current else ""}" '
+            f'data-id="{escape(node.id)}">'
             f"<title>{escape(tooltip)}</title>"
             f'<rect x="{x}" y="{y}" width="{_NODE_W}" height="{_NODE_H}" rx="4"/>' + "".join(lines) + "</g>"
         )
