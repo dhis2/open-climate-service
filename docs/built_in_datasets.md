@@ -95,7 +95,7 @@ WorldPop Global2 provides gridded population estimates and projections at 100 m 
 | **Source**             | [ESA CCI / C3S land cover](https://cds.climate.copernicus.eu/datasets/satellite-land-cover) |
 
 Each yearly raster contains the ESA CCI / C3S land-cover map in its 37 Land Cover Classification
-System (LCCS) classes. This is a categorical dataset for display; use categorical **mode**
+System (LCCS) classes. This is a categorical dataset which uses categorical **mode**
 resampling when building overviews rather than averaging the class codes. The no-data code (0) is
 stored as missing data.
 

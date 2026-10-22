@@ -7,7 +7,7 @@ The CDS serves the maps as ``satellite-land-cover``: version 2.0.7 for 1992-2015
 continuation, version 2.1.1, from 2016. Each year is requested for the extent only. Requests need
 a CDS key (see the README) and the dataset's licence accepted once in the browser.
 The plugin submits each year as a separate request to avoid CDS request size limit, and supports
-multiple concurrent requests to CDS. The CDS either processes these in parallell or queues them;
+multiple concurrent requests to CDS. The CDS either processes these in parallel or queues them;
 either way the downloads can take up to several minutes per year.
 """
 
