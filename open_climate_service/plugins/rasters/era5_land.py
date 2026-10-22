@@ -22,14 +22,45 @@ from open_climate_service.shared.zarr import DEFAULT_MAX_CACHE_BYTES, CachedTime
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
 
+_CDS_ZARR_GROUPS = {
+    "sfc-soil-water": "005",
+    "sfc-soil-temperature": "006",
+    "sfc-2m-temperature": "007",
+    "sfc-wind": "008",
+    "sfc-pressure-precipitation": "009",
+    "sfc-radiation-heat": "010",
+    "sfc-snow": "030",
+    "sfc-skin-temperature": "043",
+}
+_CDS_ZARR_VARIABLE_GROUPS = {
+    **{f"swvl{layer}": "sfc-soil-water" for layer in range(1, 5)},
+    **{f"stl{layer}": "sfc-soil-temperature" for layer in range(1, 5)},
+    "d2m": "sfc-2m-temperature",
+    "t2m": "sfc-2m-temperature",
+    "u10": "sfc-wind",
+    "v10": "sfc-wind",
+    "sp": "sfc-pressure-precipitation",
+    "tp": "sfc-pressure-precipitation",
+    "ssrd": "sfc-radiation-heat",
+    "strd": "sfc-radiation-heat",
+    "skt": "sfc-skin-temperature",
+}
 _CDS_ZARR_STORES = {
-    "t2m": "https://arco.datastores.ecmwf.int/cadl-arco-geo-007/arco/reanalysis_era5_land/sfc-2m-temperature/geoChunked.zarr",
-    "tp": "https://arco.datastores.ecmwf.int/cadl-arco-geo-009/arco/reanalysis_era5_land/sfc-pressure-precipitation/geoChunked.zarr",
+    variable: (
+        f"https://arco.datastores.ecmwf.int/cadl-arco-geo-{_CDS_ZARR_GROUPS[group]}"
+        f"/arco/reanalysis_era5_land/{group}/geoChunked.zarr"
+    )
+    for variable, group in _CDS_ZARR_VARIABLE_GROUPS.items()
 }
 _CDS_TIME_DIM = "time"
 _UNIT_TRANSFORMS = {
     "kelvin_to_celsius": kelvin_to_celsius,
     "metres_to_mm": metres_to_mm,
+}
+_DEFAULT_VARIABLE_UNIT_TRANSFORMS = {
+    **{variable: "kelvin_to_celsius" for variable in ("d2m", "t2m", "skt")},
+    **{f"stl{layer}": "kelvin_to_celsius" for layer in range(1, 5)},
+    "tp": "metres_to_mm",
 }
 
 
@@ -45,17 +76,23 @@ class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
         zarr_url: str | None = None,
         unit_transform: str | None = None,
         max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES,
-        **_: Any,
+        **kwargs: Any,
     ) -> None:
         source_url = zarr_url or _CDS_ZARR_STORES.get(variable)
         if not source_url:
             raise ValueError(
-                f"Unsupported ERA5-Land variable {variable!r}; specify its CDS geo-chunked Zarr URL with 'zarr_url'"
+                f"Unsupported ERA5-Land ARCO variable {variable!r}; specify its CDS geo-chunked Zarr URL with 'zarr_url'"
             )
-        if unit_transform not in (None, "", "none", *_UNIT_TRANSFORMS):
-            raise ValueError(f"Unknown unit_transform {unit_transform!r}; expected one of {list(_UNIT_TRANSFORMS)}")
+        
+        if unit_transform:
+            if unit_transform not in _UNIT_TRANSFORMS.keys():
+                raise ValueError(f"Unknown unit_transform {unit_transform!r}; expected one of {list(_UNIT_TRANSFORMS)}")
+        else:
+            unit_transform = _DEFAULT_VARIABLE_UNIT_TRANSFORMS.get(variable)
+        
         self.variable = variable
         self.unit_transform = unit_transform
+
         self._zarr = CachedTimeSeriesZarr(
             source_url,
             variable,
@@ -78,7 +115,7 @@ class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
             current += timedelta(hours=1)
         return periods
 
-    def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
+    def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
         dt = parse_period_string_to_datetime(period_id)
         start = np.datetime64(dt.replace(tzinfo=None), "h").astype("datetime64[ns]")
         return self._fetch_time_range(start, start + np.timedelta64(1, "h"), bbox)
@@ -94,9 +131,6 @@ class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
         return ds
 
     def _prepare_zarr_dataset(self, ds: xr.Dataset, bbox: list[float]) -> xr.Dataset:
-        x_dim = "longitude" if "longitude" in ds.dims else "x"
-        y_dim = "latitude" if "latitude" in ds.dims else "y"
-        ds = ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
         ds = ds.rio.write_crs("EPSG:4326")
         ds = normalize_period(ds, variable=self.variable, bbox=list(bbox), time_dim=_CDS_TIME_DIM)
         ds = normalize_y_direction(ds)
@@ -131,13 +165,12 @@ class ERA5LandZarrDailyPlugin(ERA5LandZarrHourlyPlugin):
         self.temporal_aggregation = temporal_aggregation
 
     async def periods(self, start: str, end: str) -> list[str]:
-        latest_hour = await asyncio.to_thread(self._fetch_cutoff)
-        latest_complete_day = latest_hour.date()
-        if latest_hour.hour < 23:
-            latest_complete_day -= timedelta(days=1)
-        return daily_period_ids(start, end, cutoff=latest_complete_day)
+        cutoff = super()._fetch_cutoff()
+        periods = daily_period_ids(start=start, end=end, cutoff=cutoff)
 
-    def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
+        return periods
+
+    def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
         start = np.datetime64(period_id, "D").astype("datetime64[ns]")
         hourly = self._fetch_time_range(start, start + np.timedelta64(1, "D"), bbox)
         daily = daily_reduce(
