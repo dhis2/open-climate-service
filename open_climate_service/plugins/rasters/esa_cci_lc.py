@@ -47,9 +47,9 @@ def _cds_version(year: int) -> str:
     return "v2_0_7cds" if year <= 2015 else "v2_1_1"
 
 
-def _load_year(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArray:
-    """The ``lccs_class`` raster for ``year`` on the native grid over ``bbox`` (+ ``pad`` degrees)."""
-    xmin, ymin, xmax, ymax = (bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad)
+def _load_year(year: str, bbox: list[float]) -> xr.DataArray:
+    """The ``lccs_class`` raster for ``year`` on the native grid over ``bbox``."""
+    xmin, ymin, xmax, ymax = bbox
     request = {
         "variable": "all",
         "year": [year],
