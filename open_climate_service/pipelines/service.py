@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import jsonschema
+
 from open_climate_service import config as api_config
 from open_climate_service.exports.base import BaseExportPlugin, DestinationContext, PipelineDataset
 from open_climate_service.exports.manifest import plugin_identity
@@ -79,6 +81,17 @@ def destination_context(spec: PipelineSpec, bound: BoundWorkflow) -> Destination
 def compile_export(spec: PipelineSpec, bound: BoundWorkflow) -> dict[str, Any]:
     """The named-export definition the destination plugin compiles from its settings."""
     plugin = destination_plugin(spec)
+    schema = plugin.destination_settings_schema()
+    if schema is None:
+        raise ValueError(f"export plugin '{plugin.id}' no longer declares the pipeline destination capability")
+    try:
+        jsonschema.validate(instance=spec.destination.settings, schema=schema)
+    except jsonschema.SchemaError as exc:
+        message = f"export plugin '{plugin.id}' has an invalid destination settings schema: {exc.message}"
+        raise ValueError(message) from None
+    except jsonschema.ValidationError as exc:
+        location = ".".join(str(part) for part in exc.absolute_path)
+        raise ValueError(f"destination setting {location + ': ' if location else ''}{exc.message}") from None
     definition = plugin.export_definition(spec.destination.settings, destination_context(spec, bound))
     return {**definition, "id": spec.id, "plugin": plugin.id}
 
@@ -166,7 +179,12 @@ def choices() -> dict[str, Any]:
         for record in list_feature_collections().items
     ]
     destinations = [
-        {"id": plugin_id, "format": plugin.format, "schema": plugin.destination_settings_schema()}
+        {
+            "id": plugin_id,
+            "format": plugin.format,
+            "schema": plugin.destination_settings_schema(),
+            "settings_form": plugin.pipeline_settings_form(),
+        }
         for plugin_id, plugin in sorted(destination_plugins().items())
     ]
     return {"workflows": workflows, "datasets": datasets, "collections": collections, "destinations": destinations}

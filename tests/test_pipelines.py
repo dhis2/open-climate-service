@@ -22,7 +22,15 @@ from fastapi.testclient import TestClient
 
 from open_climate_service import config as api_config
 from open_climate_service.exports import dhis2_destination
-from open_climate_service.exports.base import BaseExportPlugin, DestinationCheck, DestinationContext, RenderedExport
+from open_climate_service.exports.base import (
+    BaseExportPlugin,
+    DestinationCheck,
+    DestinationContext,
+    PipelineSettingsForm,
+    RenderedExport,
+    SettingsFormField,
+    SettingsFormSection,
+)
 from open_climate_service.openeo import workflows as workflow_store
 from open_climate_service.pipelines import forms, runner, service, store
 from open_climate_service.pipelines import workflow as workflow_binding
@@ -58,7 +66,6 @@ _FORM = {
     "dest.connection": "local",
     "dest.data_set": "N63vVmt2uY0",
     "dest.series.0.data_element": _ELEMENT,
-    "dest.series.0.variable": "",
 }
 
 
@@ -638,6 +645,14 @@ class _DropPlugin(BaseExportPlugin):
     def destination_settings_schema(self) -> dict[str, Any] | None:
         return {"type": "object", "properties": {"folder": {"type": "string"}}, "required": ["folder"]}
 
+    def pipeline_settings_form(self) -> PipelineSettingsForm | None:
+        return PipelineSettingsForm(
+            title="Secure file drop",
+            description="A deliberately different destination form used to exercise the public plugin contract.",
+            sections=(SettingsFormSection(title="Storage", fields=("folder",)),),
+            fields=(SettingsFormField(name="folder", label="Destination folder"),),
+        )
+
     def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
         if not settings.get("folder"):
             raise ValueError("folder is required")
@@ -699,6 +714,195 @@ def test_form_parsing_preserves_enum_and_row_scalar_types() -> None:
     }
 
 
+def test_pipeline_settings_metadata_orders_sections_and_safely_falls_back() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": ["append", "replace"]},
+            "notes": {"type": "string"},
+            "advanced": {"type": "object"},
+        },
+        "required": ["mode"],
+    }
+    presentation = PipelineSettingsForm(
+        title="Warehouse",
+        sections=(SettingsFormSection(title="Description", fields=("notes", "missing")),),
+        fields=(
+            SettingsFormField(name="notes", label="Notes", widget="textarea"),
+            SettingsFormField(name="mode", widget="unsupported-widget"),
+        ),
+    )
+
+    view = forms.settings_form(schema, presentation, plugin_id="warehouse")
+
+    assert view["title"] == "Warehouse"
+    assert [section["title"] for section in view["sections"]] == ["Description", "Additional settings"]
+    assert [field["name"] for section in view["sections"] for field in section["fields"]] == [
+        "notes",
+        "mode",
+        "advanced",
+    ]
+    fields = {field["name"]: field for section in view["sections"] for field in section["fields"]}
+    assert fields["notes"]["title"] == "Notes" and fields["notes"]["widget"] == "textarea"
+    assert fields["mode"]["widget"] == "select", "unknown hints fall back to the schema-derived control"
+    assert fields["advanced"]["widget"] == "json"
+
+
+def test_schema_only_destination_gets_sensible_form_defaults() -> None:
+    view = forms.settings_form(
+        {"type": "object", "properties": {"folder": {"type": "string", "title": "Folder"}}},
+        None,
+        plugin_id="drop",
+    )
+
+    assert view["title"] == "drop" and view["description"] == ""
+    assert view["sections"][0]["title"] == ""
+    assert view["sections"][0]["fields"][0]["title"] == "Folder"
+
+
+def test_an_incompatible_text_hint_keeps_a_boolean_checkbox() -> None:
+    fields = forms.settings_fields(
+        {"type": "object", "properties": {"enabled": {"type": "boolean"}}},
+        PipelineSettingsForm(
+            title="Destination",
+            fields=(SettingsFormField(name="enabled", widget="text"),),
+        ),
+    )
+
+    assert fields[0]["widget"] == "checkbox"
+
+
+def test_dhis2_destination_rejects_the_removed_variable_selector() -> None:
+    legacy = {**_SETTINGS, "series": [{"data_element": _ELEMENT, "variable": "tp"}]}
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        dhis2_destination.parse_settings(legacy)
+
+
+def test_deprecated_plugin_settings_are_not_rendered() -> None:
+    fields = forms.settings_fields(
+        {
+            "type": "object",
+            "properties": {
+                "current": {"type": "string"},
+                "legacy": {"type": "string", "deprecated": True},
+            },
+        }
+    )
+
+    assert [field["name"] for field in fields] == ["current"]
+
+
+def test_pipeline_settings_form_round_trips_scalar_enum_json_and_repeatable_rows() -> None:
+    fields = forms.settings_fields(
+        {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "mode": {"type": "string", "enum": ["append", "replace"]},
+                "options": {"type": "object"},
+                "series": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}, "factor": {"type": "number"}},
+                    },
+                },
+            },
+        }
+    )
+    submitted = forms.read_settings(
+        {
+            "dest.enabled.__present": "true",
+            "dest.mode": "replace",
+            "dest.options": '{"precision": 2}',
+            "dest.series.0.name": "rain",
+            "dest.series.0.factor": "1.5",
+            "dest.series.1.name": "",
+            "dest.series.1.factor": "",
+        },
+        fields,
+    )
+
+    assert submitted == {
+        "enabled": False,
+        "mode": "replace",
+        "options": {"precision": 2},
+        "series": [{"name": "rain", "factor": 1.5}],
+    }
+    by_name = {field["name"]: field for field in fields}
+    assert forms.setting_value(submitted, by_name["enabled"]) == "false"
+    assert forms.setting_value(submitted, by_name["options"]) == '{"precision": 2}'
+    assert forms.setting_rows(submitted, by_name["series"])[0] == {
+        "values": {"name": "rain", "factor": 1.5},
+        "existing": True,
+    }
+
+
+def test_pipeline_settings_form_preserves_an_existing_false_only_row() -> None:
+    fields = forms.settings_fields(
+        {
+            "type": "object",
+            "properties": {
+                "switches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"enabled": {"type": "boolean"}},
+                    },
+                }
+            },
+        }
+    )
+    rendered = forms.setting_rows({"switches": [{"enabled": False}]}, fields[0])
+
+    submitted = forms.read_settings(
+        {
+            "dest.switches.0.__present": "true",
+            "dest.switches.0.enabled.__present": "true",
+            "dest.switches.1.enabled.__present": "true",
+        },
+        fields,
+    )
+
+    assert rendered == [
+        {"values": {"enabled": False}, "existing": True},
+        {"values": {}, "existing": False},
+    ]
+    assert submitted == {"switches": [{"enabled": False}]}
+
+
+def test_boolean_enums_use_the_same_text_as_their_select_options() -> None:
+    setting = forms.settings_fields(
+        {"type": "object", "properties": {"enabled": {"type": "boolean", "enum": [True, False]}}}
+    )[0]
+    argument = forms.parameter_fields([{"name": "enabled", "schema": {"type": "boolean", "enum": [True, False]}}])[0]
+
+    assert setting["widget"] == "select"
+    assert forms.setting_value({"enabled": False}, setting) == "False"
+    assert forms.argument_value({"enabled": False}, argument) == "False"
+
+
+def test_an_empty_required_enum_does_not_populate_a_spare_row() -> None:
+    fields = forms.settings_fields(
+        {
+            "type": "object",
+            "properties": {
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"mode": {"type": "string", "enum": ["append", "replace"]}},
+                        "required": ["mode"],
+                    },
+                }
+            },
+        }
+    )
+
+    assert forms.read_settings({"dest.rules.0.mode": ""}, fields) == {}
+
+
 def test_the_core_needs_no_dhis2_identifiers(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
     _only_drop(monkeypatch)
     spec = _spec(destination={"plugin": "drop", "settings": {"folder": "/srv/out"}})
@@ -724,6 +928,18 @@ def test_the_core_needs_no_dhis2_identifiers(instance: None, monkeypatch: pytest
         assert "dhis2" not in text.lower(), module
     for template in ("pipeline_page.html", "pipelines_page.html"):
         assert "dhis2" not in (source.parent / "templates" / template).read_text(encoding="utf-8").lower(), template
+
+
+def test_destination_settings_are_validated_by_the_plugin_schema(
+    instance: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _only_drop(monkeypatch)
+    invalid = _spec(destination={"plugin": "drop", "settings": {"folder": 42}})
+
+    check = _by_id(service.validate_pipeline(store.create_record(invalid)))["destination"]
+
+    assert check.status == "fail"
+    assert "destination setting folder" in check.message and "string" in check.message
 
 
 # --- dry run ---------------------------------------------------------------------------------
@@ -810,12 +1026,69 @@ def client(instance: None) -> TestClient:
     return TestClient(app)
 
 
+def test_repeatable_plugin_fields_render_stored_rows_and_an_empty_spare_row(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _RowsPlugin(_DropPlugin):
+        id = "rows"
+
+        def destination_settings_schema(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean", "enum": [True, False]},
+                    "switches": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"enabled": {"type": "boolean"}},
+                        },
+                    },
+                    "rules": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"mode": {"type": "string", "enum": ["append", "replace"]}},
+                            "required": ["mode"],
+                        },
+                    },
+                },
+            }
+
+        def pipeline_settings_form(self) -> None:
+            return None
+
+    plugin = _RowsPlugin()
+    monkeypatch.setattr(service, "destination_plugins", lambda: {"rows": plugin})
+    record = store.create_record(
+        _spec(
+            id="row-form",
+            destination={
+                "plugin": "rows",
+                "settings": {"enabled": False, "switches": [{"enabled": False}]},
+            },
+        )
+    )
+
+    page = client.get(f"/pipelines/{record.spec.id}/edit", headers={"Accept": "text/html"})
+
+    assert page.status_code == 200
+    assert '<option value="False" selected>False</option>' in page.text
+    assert 'name="dest.switches.0.__present" value="true"' in page.text
+    assert 'name="dest.switches.1.__present"' not in page.text
+    assert 'name="dest.rules.0.mode">\n                        <option value="">(select)</option>' in page.text
+
+
 def test_page_creates_validates_and_shows_a_pipeline(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _dhis2(monkeypatch)
     page = client.get("/pipelines", headers={"Accept": "text/html"})
     assert page.status_code == 200 and "Configured pipelines" in page.text and "New pipeline" not in page.text
     create_page = client.get("/pipelines/new?dataset=rain_monthly", headers={"Accept": "text/html"})
     assert create_page.status_code == 200 and "New pipeline" in create_page.text
+    assert "Configure DHIS2" in create_page.text
+    assert "Target" in create_page.text and "Series mapping" in create_page.text
+    assert '<select id="dest-connection"' in create_page.text
+    assert 'name="dest.series.0.variable"' not in create_page.text
     for name in ("arg.dataset_id", "arg.geometries", "arg.method", "dest.connection", "dest.series.0.data_element"):
         assert f'name="{name}"' in create_page.text, name
     assert 'name="arg.temporal_extent"' in create_page.text and "Supplied by each run" in create_page.text
@@ -833,9 +1106,24 @@ def test_page_creates_validates_and_shows_a_pipeline(client: TestClient, monkeyp
     assert shown.status_code == 200
     assert "dhis2_metadata" in shown.text and "every organisation unit assigned" in shown.text
     assert "aggregate_by_features" in shown.text and "Export definition" in shown.text
+    assert '<span class="flow-label">Destination</span><strong>DHIS2</strong>' in shown.text
+    assert "<dt>Destination</dt><dd>DHIS2</dd>" in shown.text
     listed = client.get("/pipelines", headers={"Accept": "application/json"}).json()
     assert [item["spec"]["id"] for item in listed["items"]] == ["rain-to-dhis2"]
     assert listed["items"][0]["validation"]["valid"] is True
+
+
+def test_a_second_plugin_renders_its_own_pipeline_settings(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin = _DropPlugin()
+    monkeypatch.setattr(service, "destination_plugins", lambda: {plugin.id: plugin})
+
+    page = client.get("/pipelines/new", headers={"Accept": "text/html"})
+
+    assert page.status_code == 200
+    assert "Configure Secure file drop" in page.text
+    assert "Storage" in page.text and "Destination folder" in page.text
+    assert 'type="text"' in page.text and 'name="dest.folder"' in page.text
+    assert "Configure DHIS2" not in page.text
 
 
 def test_pipeline_list_never_exposes_a_pending_run_process(client: TestClient) -> None:
@@ -2294,6 +2582,12 @@ class _WarehousePlugin(_DropPlugin):
 
     def __init__(self) -> None:
         self.sent: list[tuple[Any, bool]] = []
+
+    def destination_settings_schema(self) -> dict[str, Any] | None:
+        return {"type": "object", "properties": {"database": {"type": "string"}}, "required": ["database"]}
+
+    def pipeline_settings_form(self) -> PipelineSettingsForm | None:
+        return None
 
     def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
         return {"dataset": context.datasets[0].id, "connection": settings["database"]}

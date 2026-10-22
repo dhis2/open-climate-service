@@ -217,6 +217,7 @@ destination by overriding these optional hooks of `BaseExportPlugin`:
 | Hook | Purpose |
 |---|---|
 | `destination_settings_schema()` | JSON Schema of the settings; drives the pipeline form. Returning `None` (the default) means "not a destination". |
+| `pipeline_settings_form()` | Optional structured presentation metadata for the plugin's pipeline settings: display title and description, sections, field order, labels, help text and widget hints. Returning `None` keeps schema-derived defaults. |
 | `export_definition(settings, context)` | Compile the settings into an export definition (mapping plus `dataset`/`connection` references), resolved like a configured named export. Pure; raise `ValueError` for bad settings. |
 | `check_destination(settings, context)` | Destination-side checks run on save, re-check and going live, returned as `DestinationCheck`s. May contact the destination. |
 | `preview(content, limit)` | A few rendered records for the dry-run summary. |
@@ -232,6 +233,57 @@ plugin delivering anywhere else, a database or a file store, overrides both hook
 `context` is a `DestinationContext`: the pipeline's export id, the datasets its workflow binds
 (id, variable, cadence) and the feature collections it binds. The built-in DHIS2 plugin
 implements all of them in `open_climate_service/exports/dhis2_destination.py`.
+
+### Configure the plugin's pipeline settings
+
+JSON Schema remains authoritative for property names, types, required values, enums and
+validation. `pipeline_settings_form()` only controls presentation. It returns
+`PipelineSettingsForm` with ordered `SettingsFormSection`s and optional `SettingsFormField`
+overrides:
+
+```python
+from open_climate_service.exports import (
+    PipelineSettingsForm,
+    SettingsFormField,
+    SettingsFormSection,
+)
+
+
+def pipeline_settings_form(self):
+    return PipelineSettingsForm(
+        title="Object storage",
+        description="Write each completed result to a configured bucket.",
+        sections=(
+            SettingsFormSection(
+                title="Target",
+                description="Where the rendered result is stored.",
+                fields=("bucket", "prefix"),
+            ),
+        ),
+        fields=(
+            SettingsFormField(name="bucket", label="Bucket", widget="select"),
+            SettingsFormField(name="prefix", label="Key prefix", help_text="No leading slash."),
+        ),
+    )
+```
+
+Top-level field names refer to properties in the settings schema. A dotted name such as
+`series.data_element` customises a column of an array-of-objects field. Supported widget hints are
+`text`, `select`, `checkbox`, `textarea`, `json` and `rows`. A hint is used only
+when it is compatible with the property's schema shape; unknown or incompatible hints fall
+back to the safe schema-derived control. Schema properties omitted from the declared sections
+are appended under **Additional settings**, so presentation metadata cannot hide a new setting.
+Properties explicitly marked `deprecated: true` remain valid for stored configuration but are
+not offered for new input.
+
+Choices remain part of the schema's `enum`. A plugin can derive that enum from instance
+configuration each time `destination_settings_schema()` is called, as the built-in DHIS2
+plugin does for named connections. The schema and form hooks must not contact the destination.
+Use `option_labels` on `SettingsFormField` when enum values need friendlier labels.
+
+Destination settings are persisted in pipeline records and returned by the API. They must not
+contain passwords, tokens or other credentials. Store credentials through the instance's
+connection configuration and expose only a connection reference in the destination schema.
 
 ## Saved results and delivery eligibility
 

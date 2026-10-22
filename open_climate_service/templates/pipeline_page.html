@@ -33,7 +33,7 @@
         <ol class="pipeline-flow" aria-label="Pipeline flow">
           <li><span class="flow-label">Workflow</span><strong>{{ spec.workflow.id }}</strong></li>
           <li><span class="flow-label">Runs</span><strong>{{ 'after each update' if spec.delivery.policy == 'on_update' else 'by hand' }}</strong></li>
-          <li><span class="flow-label">Destination</span><strong>{{ spec.destination.plugin }}</strong></li>
+          <li><span class="flow-label">Destination</span><strong>{{ destination_title }}</strong></li>
           <li><span class="flow-label">Delivery</span><strong>{{ spec.delivery.mode | replace('_', ' ') }}</strong></li>
         </ol>
 
@@ -47,7 +47,7 @@
               {% endfor %}
               <dt>Source kept current</dt><dd>{{ source_schedule }}</dd>
               <dt>Runs</dt><dd>{{ 'after each update of a source dataset, over the updated interval' if spec.delivery.policy == 'on_update' else 'only when run by hand' }}{% if automation_since %}; updates since {{ automation_since }}{% endif %}</dd>
-              <dt>Destination</dt><dd class="mono">{{ spec.destination.plugin }}</dd>
+              <dt>Destination</dt><dd>{{ destination_title }}</dd>
               <dt>Revision</dt><dd>{{ revision }}</dd>
               <dt>Created</dt><dd>{{ created_at }}</dd>
             </dl>

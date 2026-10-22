@@ -14,6 +14,7 @@ from open_climate_service.exports.base import (
     DeliveryContext,
     DestinationCheck,
     DestinationContext,
+    PipelineSettingsForm,
     RenderedExport,
 )
 from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
@@ -68,6 +69,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         from open_climate_service.exports import dhis2_destination
 
         return dhis2_destination.settings_schema()
+
+    def pipeline_settings_form(self) -> PipelineSettingsForm | None:
+        from open_climate_service.exports import dhis2_destination
+
+        return dhis2_destination.pipeline_settings_form()
 
     def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
         from open_climate_service.exports import dhis2_destination

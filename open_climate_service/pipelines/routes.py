@@ -57,11 +57,19 @@ def _form_selection(choices: dict[str, Any], workflow_id: str | None, plugin_id:
         workflows.get(workflow_id or "") or workflows.get(_DEFAULT_WORKFLOW) or next(iter(workflows.values()), None)
     )
     destination = destinations.get(plugin_id or "") or next(iter(destinations.values()), None)
+    settings_form = (
+        forms.settings_form(destination["schema"], destination.get("settings_form"), plugin_id=destination["id"])
+        if destination
+        else None
+    )
     return {
         "workflow": workflow,
         "destination": destination,
         "parameter_fields": forms.parameter_fields(workflow["parameters"]) if workflow else [],
-        "settings_fields": forms.settings_fields(destination["schema"]) if destination else [],
+        "settings_fields": [
+            field for section in (settings_form or {}).get("sections", []) for field in section["fields"]
+        ],
+        "settings_form": settings_form,
     }
 
 

@@ -41,6 +41,45 @@ class DestinationCheck:
 
 
 @dataclass(frozen=True)
+class SettingsFormField:
+    """Presentation hints for one schema property, or a column below an array property.
+
+    ``name`` is a property name such as ``connection`` or a dotted row-column path such
+    as ``series.data_element``. The JSON Schema still decides the field's type, whether it
+    is required, and its allowed values. Unknown or incompatible widget hints are ignored.
+    """
+
+    name: str
+    label: str | None = None
+    help_text: str | None = None
+    widget: str | None = None
+    option_labels: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class SettingsFormSection:
+    """A titled, ordered group of top-level plugin settings."""
+
+    title: str
+    fields: tuple[str, ...]
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class PipelineSettingsForm:
+    """Plugin-owned presentation of its settings in the pipeline form.
+
+    Presentation is deliberately data, not HTML. Properties omitted from ``sections`` are
+    appended safely, so adding a schema property cannot make it impossible to configure.
+    """
+
+    title: str
+    description: str = ""
+    sections: tuple[SettingsFormSection, ...] = ()
+    fields: tuple[SettingsFormField, ...] = ()
+
+
+@dataclass(frozen=True)
 class RenderedExport:
     """Serialized payload and counts; the framework owns file creation."""
 
@@ -137,6 +176,14 @@ class BaseExportPlugin(ABC):
 
         Read when rendering the pipeline form, so it may list instance choices such as
         configured connections. It must be pure.
+        """
+        return None
+
+    def pipeline_settings_form(self) -> PipelineSettingsForm | None:
+        """Presentation metadata for this plugin's pipeline settings, or schema defaults.
+
+        This hook may derive labels and choices from instance configuration but must not
+        contact the destination. JSON Schema remains the data and validation contract.
         """
         return None
 

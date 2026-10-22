@@ -998,6 +998,10 @@ button.primary:disabled {
 .pipeline-create {
   border-top: var(--spacers-dp4) solid var(--theme-primary600);
 }
+.pipeline-select-action button {
+  align-self: flex-start;
+  min-height: 38px;
+}
 
 .pipeline-form,
 .record-form {
@@ -1035,8 +1039,55 @@ button.primary:disabled {
   display: block;
   margin: var(--spacers-dp4) 0 0 var(--spacers-dp32);
 }
+.destination-form-section > .hint {
+  max-width: 64ch;
+}
+.plugin-settings-section {
+  margin-top: var(--spacers-dp16);
+}
+.plugin-settings-section + .plugin-settings-section {
+  margin-top: var(--spacers-dp24);
+  padding-top: var(--spacers-dp16);
+  border-top: 1px solid var(--colors-grey300);
+}
+.plugin-settings-header {
+  color: var(--colors-grey900);
+}
+.plugin-settings-header h4 {
+  margin: 0;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-bold);
+}
+.plugin-settings-header > .hint {
+  display: block;
+  margin-top: var(--spacers-dp4);
+}
+.plugin-settings-grid {
+  margin-top: var(--spacers-dp12);
+}
+.repeatable-field {
+  padding: 0;
+}
+.repeatable-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacers-dp12);
+}
+.repeatable-row {
+  margin-top: var(--spacers-dp8);
+}
+.repeatable-row + .repeatable-row {
+  padding-top: var(--spacers-dp12);
+  border-top: 1px solid var(--colors-grey300);
+}
+.repeatable-field > .hint {
+  margin-top: var(--spacers-dp4);
+}
 .pipeline-form .form-grid,
 .record-form .form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.pipeline-form .repeatable-row {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .pipeline-form .field-wide,

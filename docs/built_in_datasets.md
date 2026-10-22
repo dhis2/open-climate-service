@@ -29,9 +29,37 @@ See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, incl
 
 CHIRPS (Climate Hazards Group InfraRed Precipitation with Station data) v3 is a quasi-global daily precipitation dataset merging satellite thermal infrared imagery with station observations. It is widely used for drought monitoring, food security analysis, and WASH planning in low- and middle-income countries.
 
-**Sync behaviour** — new data is ingested incrementally as it becomes available. CHIRPS has a nominal publication lag of around 3–7 days, so data through yesterday is not always present. The API uses a custom availability function that checks the actual latest available date from the CHIRPS server before each sync.
+**Sync behaviour** — new data is ingested incrementally as it becomes available. The final product is published a month at a time, a month or more after it, so the current month is never present. The API probes the CHIRPS server for the newest complete month before each sync. For the current month, use the preliminary dataset below.
 
 **Transforms** — none applied; data is stored as received in mm.
+
+---
+
+## CHIRPS v3 — preliminary daily precipitation
+
+| Property               | Value                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| **Dataset ID**         | `chirps3_precipitation_daily_prelim`                                               |
+| **Variable**           | `precip`                                                                           |
+| **Units**              | mm/d                                                                               |
+| **Period**             | Daily                                                                              |
+| **Spatial coverage**   | Global land, 50°S–50°N                                                             |
+| **Spatial resolution** | ~5 km                                                                              |
+| **Record start**       | 2025-01-01                                                                         |
+| **Source**             | [CHIRPS v3 preliminary](https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/prelim/) |
+
+Daily rainfall a few days after it falls, including the current month, for in-season monitoring. It is satellite-only, without the station blending of the final product, and **provisional**: the final daily dataset replaces these values a month or so later.
+
+It is a separate dataset from `chirps3_precipitation_daily` on purpose. A store holding both would rewrite its own history when the final values arrive, with nothing to say which values were provisional. A client wanting a continuous series uses the final dataset up to its last month and the preliminary one after it.
+
+**Sync behaviour** — the newest published day is found by probing the CHIRPS server day by day from today, up to 21 days back. The lag is typically 4–5 days.
+
+**Preliminary first, final later, in DHIS2** — push both datasets to the same data element. The DHIS2 export imports with `CREATE_AND_UPDATE`, so a value for an org unit and period that already exists is overwritten:
+
+1. Daily, push `chirps3_precipitation_daily_prelim` for the days after the final dataset's last date, so a late run never puts provisional values back over final ones.
+2. When the final product publishes a month, push `chirps3_precipitation_daily` for that month; its values replace the preliminary ones.
+
+DHIS2 then holds the best value available for each day. It does not show which values are still provisional; to mark them, push the preliminary dataset with its own attribute option combo or data element instead, which gives up the overwrite.
 
 ---
 
@@ -163,6 +191,14 @@ national seasonal outlook, not for district-level maps.
 Copernicus DEM Global 30m, recording elevation height above sea level. 
 
 The dataset is static: it has no time axis, so it is ingested whole and shown without a time slider.
+
+It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account. Add your key to `~/.netrc`
+as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.destine.eu`:
+
+```
+machine data.earthdatahub.destine.eu
+  password <your-standard-api-key>
+```
 
 ---
 
