@@ -105,6 +105,12 @@ class ESACCILandCoverClassPlugin(BaseDatasetPlugin):
         return _years(start, end, available_years)
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
+        # Fetch the land cover class codes for a single year and bounding box
         classes = _load_year(period_id, bbox)
-        classes.attrs = {"units": "1", "flag_meanings": "LCCS class codes, see the template description"}
+
+        # Set ds attributes
+        # NOTE: flag_meanings attr are not set here since they are later set by the template definition during ingestion
+        classes.attrs = {"units": "1"}
+
+        # Return with time dimension added
         return _with_time(classes.to_dataset(name="lccs_class"), period_id)
