@@ -3,7 +3,7 @@
   short_name: Land cover class
   description: >-
     Land cover class of each 300 m cell, worldwide, updated yearly since 1992, in the 37 LCCS
-    classes of the ESA CCI / C3S maps. Needs a Copernicus CDS key, with the dataset's licence 
+    classes of the ESA CCI / C3S maps. Needs a Copernicus CDS key, with the dataset's licence
     accepted once in the browser.
   variable: lccs_class
   period_type: yearly

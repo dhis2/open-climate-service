@@ -1,7 +1,7 @@
 """ESA CCI / C3S land cover (300 m, yearly) from the Copernicus Climate Data Store (CDS).
 
-Generating the pyramid must use ``mode`` resampling so coarse zoom levels
-show a real class rather than an average of codes.
+Like all categorical datasets, the pyramid used to visualize this dataset uses ``mode``
+resampling so coarse zoom levels show a real class rather than an average of codes.
 
 The CDS serves the maps as ``satellite-land-cover``: version 2.0.7 for 1992-2015 and the C3S
 continuation, version 2.1.1, from 2016. Each year is requested for the extent only. Requests need
