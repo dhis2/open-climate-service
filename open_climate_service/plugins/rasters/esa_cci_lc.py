@@ -96,7 +96,7 @@ def _with_time(ds: xr.Dataset, year: str) -> xr.Dataset:
 
 
 class ESACCILandCoverClassPlugin(BaseDatasetPlugin):
-    """Yearly LCCS land cover class codes (uint8; 0 is no data)."""
+    """Yearly LCCS land cover class codes as float32, with 0/no-data cells set to NaN."""
 
     max_concurrency = 5
 
