@@ -1381,15 +1381,12 @@ button.danger:hover:not(:disabled) {
 }
 .automation-canvas {
   overflow-x: auto;
-  width: fit-content;
-  max-width: 100%;
+  width: 100%;
   margin-bottom: var(--spacers-dp16);
 }
-/* A page with a diagram uses the full width for it; its text keeps the usual measure. */
+/* Every pipeline card has the same page measure. Longer chains keep their natural SVG width and
+   scroll inside the card instead of making one pipeline wider than the others. */
 main.automation-wide {
-  max-width: none;
-}
-main.automation-wide > :not(.automation-canvas, .pipeline-views) {
   max-width: 1080px;
 }
 /* The Pipelines page: one diagram per pipeline, or the table. Without JavaScript both show. */
@@ -1400,6 +1397,9 @@ main.automation-wide > :not(.automation-canvas, .pipeline-views) {
 .pipeline-diagram h3 {
   margin: var(--spacers-dp16) 0 var(--spacers-dp8);
   font-size: 1rem;
+}
+.pipeline-diagram {
+  width: 100%;
 }
 .pipeline-diagram .automation-canvas {
   margin-bottom: var(--spacers-dp8);
@@ -1508,8 +1508,7 @@ main.automation-wide > :not(.automation-canvas, .pipeline-views) {
 .ag-node-features rect {
   stroke-dasharray: 4 3;
 }
-.ag-node-trigger rect,
-.ag-node-pipeline rect {
+.ag-node-workflow rect {
   fill: var(--colors-blue050);
   stroke: var(--colors-blue600);
 }

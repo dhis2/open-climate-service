@@ -2037,11 +2037,14 @@ def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
     The pipeline's own box links to the workflow it runs, not back to this page.
     """
     try:
-        from open_climate_service.automation.graph import build_graph, focus, render_svg
+        from open_climate_service.automation.graph import build_graph, pipeline_focus, render_svg
 
-        node_id = f"pipeline:{pipeline_id}"
+        node_id = f"workflow:pipeline:{pipeline_id}"
         return render_svg(
-            focus(build_graph(), node_id), mount, current=node_id, current_href=f"/workflows/{workflow_id}"
+            pipeline_focus(build_graph(), pipeline_id),
+            mount,
+            current=node_id,
+            current_href=f"/workflows/{workflow_id}",
         )
     except Exception:
         _log.exception("The automation diagram could not be drawn for pipeline '%s'", pipeline_id)
@@ -2051,11 +2054,17 @@ def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
 def _pipeline_diagrams(rows: list[dict[str, Any]], mount: str) -> list[Markup]:
     """Each listed pipeline's chain, drawn from one read of the automation graph."""
     try:
-        from open_climate_service.automation.graph import build_graph, focus, render_svg
+        from open_climate_service.automation.graph import build_graph, pipeline_focus, render_svg
 
         graph = build_graph()
         return [
-            render_svg(focus(graph, f"pipeline:{row['id']}"), mount, current=f"pipeline:{row['id']}", key=row["id"])
+            render_svg(
+                pipeline_focus(graph, row["id"]),
+                mount,
+                current=f"workflow:pipeline:{row['id']}",
+                current_href=f"/workflows/{row['workflow']}",
+                key=row["id"],
+            )
             for row in rows
         ]
     except Exception:

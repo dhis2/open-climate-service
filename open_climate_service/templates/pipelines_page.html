@@ -27,7 +27,7 @@
           <h2 id="pipelines-title" tabindex="-1">Pipelines</h2>
           <span class="chip">{{ pipelines | length }} configured</span>
         </div>
-        <p class="lead">A pipeline runs one reusable workflow over its bound inputs and delivers the result to a destination: validated first, dry-run, then live.</p>
+        <p class="lead">A pipeline shows the complete journey from source data, through workflows and derived datasets, to a destination.</p>
 
         <nav class="page-tabs" aria-label="Pipeline views">
           <a href="{{ mount }}/pipelines" {% if tab == 'list' %}aria-current="page"{% endif %}>Configured pipelines</a>

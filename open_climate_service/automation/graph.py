@@ -25,8 +25,8 @@ from pydantic import BaseModel, Field
 
 _log = logging.getLogger(__name__)
 
-NodeKind = Literal["source", "dataset", "features", "trigger", "pipeline", "destination"]
-EdgeKind = Literal["updates", "input", "delivers"]
+NodeKind = Literal["source", "dataset", "features", "workflow", "destination"]
+EdgeKind = Literal["origin", "updates", "input", "delivers"]
 FiresOn = Literal["schedule", "update", "manual"]
 StatusState = Literal["ok", "idle", "waiting", "running", "failed", "paused", "dry_run"]
 
@@ -39,7 +39,7 @@ class NodeStatus(BaseModel):
 
 
 class GraphNode(BaseModel):
-    """One step: a data source, dataset, feature collection, trigger, pipeline or destination."""
+    """One component: a data source, dataset, feature collection, workflow or destination."""
 
     id: str = Field(description="Unique within the graph, prefixed by kind (dataset:era5land_temperature_daily).")
     kind: NodeKind
@@ -55,7 +55,9 @@ class GraphEdge(BaseModel):
 
     source: str
     target: str
-    kind: EdgeKind = Field(description="updates: drives the target; input: read by it; delivers: sent to it.")
+    kind: EdgeKind = Field(
+        description="origin: provenance; updates: drives the target; input: read by it; delivers: sent to it."
+    )
     label: str | None = Field(
         default=None, description="When this edge fires: a sync schedule, 'on update' or 'by hand'."
     )
@@ -303,9 +305,13 @@ def assemble_graph(
     triggers: Sequence[Any],
     trigger_jobs: Mapping[str, Any],
     pipelines: Sequence[Any],
+    destination_titles: Mapping[str, str] | None = None,
+    workflow_titles: Mapping[str, str] | None = None,
 ) -> AutomationGraph:
     """Build the graph from already-read inputs. ``trigger_jobs`` holds each trigger's latest job."""
     b = _Builder()
+    destination_titles = destination_titles or {}
+    workflow_titles = workflow_titles or {}
 
     for schedule in schedules:
         record = datasets.get(schedule.dataset_id)
@@ -320,26 +326,27 @@ def assemble_graph(
     for trigger in triggers:
         arguments = dict(trigger.arguments or {})
         output = arguments.get("output_dataset_id")
-        trigger_node = b.node(
+        workflow_title = workflow_titles.get(trigger.workflow_id) or str(trigger.workflow_id)
+        workflow_node = b.node(
             GraphNode(
-                id=f"trigger:{trigger.id}",
-                kind="trigger",
-                label=trigger.id,
-                ref=trigger.id,
-                meta=[f"Runs {trigger.workflow_id}"],
+                id=f"workflow:trigger:{trigger.id}",
+                kind="workflow",
+                label=workflow_title,
+                ref=trigger.workflow_id,
+                meta=[trigger.workflow_id],
                 status=_job_status(trigger_jobs.get(trigger.id)),
                 href=f"/workflows/{trigger.workflow_id}",
             )
         )
-        b.edge(b.node(_dataset_node(trigger.on_update_of, datasets)), trigger_node, "updates", "on update", "update")
+        b.edge(b.node(_dataset_node(trigger.on_update_of, datasets)), workflow_node, "updates", "on update", "update")
         inputs = {k: v for k, v in arguments.items() if k != "output_dataset_id"}
         for dataset_id in dict.fromkeys(_literal_datasets(inputs, datasets)):
             if dataset_id != trigger.on_update_of:
-                b.edge(b.node(_dataset_node(dataset_id, datasets)), trigger_node, "input")
+                b.edge(b.node(_dataset_node(dataset_id, datasets)), workflow_node, "input")
         for collection_id in dict.fromkeys(_feature_refs(inputs)):
-            b.edge(b.node(_features_node(collection_id, feature_names)), trigger_node, "input")
+            b.edge(b.node(_features_node(collection_id, feature_names)), workflow_node, "input")
         if isinstance(output, str) and not output.startswith("$"):
-            b.edge(trigger_node, b.node(_dataset_node(output, datasets)), "updates")
+            b.edge(workflow_node, b.node(_dataset_node(output, datasets)), "updates")
         deliver = getattr(trigger, "deliver", None)
         if deliver is not None:
             destination = b.node(
@@ -351,47 +358,60 @@ def assemble_graph(
                     meta=["Named export", "Dry run" if deliver.dry_run else "Live"],
                 )
             )
-            b.edge(trigger_node, destination, "delivers")
+            b.edge(workflow_node, destination, "delivers")
 
     for record in pipelines:
         spec = record.spec
-        pipeline_node = b.node(
+        workflow_title = workflow_titles.get(spec.workflow.id) or str(spec.workflow.id)
+        workflow_node = b.node(
             GraphNode(
-                id=f"pipeline:{spec.id}",
-                kind="pipeline",
-                label=spec.name or spec.id,
-                ref=spec.id,
-                meta=[f"Runs {spec.workflow.id}", "On update" if spec.delivery.policy == "on_update" else "By hand"],
+                id=f"workflow:pipeline:{spec.id}",
+                kind="workflow",
+                label=workflow_title,
+                ref=spec.workflow.id,
+                meta=[spec.workflow.id, "On update" if spec.delivery.policy == "on_update" else "By hand"],
                 status=_pipeline_status(record),
-                href=f"/pipelines/{spec.id}",
+                href=f"/workflows/{spec.workflow.id}",
             )
         )
         dataset_ids, collection_ids = _pipeline_inputs(record, datasets)
         drive: EdgeKind = "updates" if spec.delivery.policy == "on_update" else "input"
         for dataset_id in dataset_ids:
+            dataset_node = b.node(_dataset_node(dataset_id, datasets))
+            record = datasets.get(dataset_id)
+            produced_by_workflow = any(
+                edge.target == dataset_node and edge.source.startswith("workflow:") for edge in b.edges
+            )
+            has_source = record is not None and bool(
+                getattr(record, "source", None) or getattr(record, "source_dataset_id", None)
+            )
+            if has_source and not produced_by_workflow:
+                source = b.node(_source_node(record, dataset_id))
+                b.edge(source, dataset_node, "origin")
             b.edge(
-                b.node(_dataset_node(dataset_id, datasets)),
-                pipeline_node,
+                dataset_node,
+                workflow_node,
                 drive,
                 "on update" if drive == "updates" else "by hand",
                 "update" if drive == "updates" else "manual",
             )
         for collection_id in collection_ids:
-            b.edge(b.node(_features_node(collection_id, feature_names)), pipeline_node, "input")
-        connection = spec.destination.settings.get("connection")
-        key = f"{spec.destination.plugin}:{connection}" if connection else spec.destination.plugin
+            b.edge(b.node(_features_node(collection_id, feature_names)), workflow_node, "input")
+        # Destination settings are plugin-owned and opaque to the graph. A destination node is
+        # scoped to its pipeline until plugins expose a generic, credential-free display binding;
+        # guessing a target from a setting such as ``connection`` would make the core integration-
+        # specific and could incorrectly merge two unknown destinations.
+        destination_id = f"destination:pipeline:{spec.id}"
+        destination_title = destination_titles.get(spec.destination.plugin) or str(spec.destination.plugin)
         destination = b.node(
             GraphNode(
-                id=f"destination:{key}",
+                id=destination_id,
                 kind="destination",
-                label=spec.destination.plugin.upper()
-                if spec.destination.plugin == "dhis2"
-                else spec.destination.plugin,
-                ref=key,
-                meta=[f"Connection {connection}"] if connection else [],
+                label=destination_title,
+                ref=spec.destination.plugin,
             )
         )
-        b.edge(pipeline_node, destination, "delivers")
+        b.edge(workflow_node, destination, "delivers")
 
     return b.graph()
 
@@ -405,7 +425,35 @@ def build_graph() -> AutomationGraph:
         triggers=_read_triggers(),
         trigger_jobs=_read_trigger_jobs(),
         pipelines=_read_pipelines(),
+        destination_titles=_read_destination_titles(),
+        workflow_titles=_read_workflow_titles(),
     )
+
+
+def _read_destination_titles() -> dict[str, str]:
+    """Plugin-owned destination titles, without interpreting any destination settings."""
+    try:
+        from open_climate_service.pipelines.service import destination_plugins
+
+        titles: dict[str, str] = {}
+        for plugin_id, plugin in destination_plugins().items():
+            presentation = plugin.pipeline_settings_form()
+            titles[plugin_id] = presentation.title if presentation is not None else plugin_id
+        return titles
+    except Exception:
+        _log.exception("Destination plugin titles could not be read for the automation graph")
+        return {}
+
+
+def _read_workflow_titles() -> dict[str, str]:
+    """Human-readable workflow titles from the workflow registry."""
+    try:
+        from open_climate_service.openeo.workflows import list_workflows
+
+        return {record.id: record.summary or record.id for record in list_workflows().processes}
+    except Exception:
+        _log.exception("Workflow titles could not be read for the automation graph")
+        return {}
 
 
 def _read_datasets() -> dict[str, Any]:
@@ -507,9 +555,49 @@ def focus(graph: AutomationGraph, node_id: str) -> AutomationGraph:
     )
 
 
+def pipeline_focus(graph: AutomationGraph, pipeline_id: str) -> AutomationGraph:
+    """The end-to-end lineage that feeds one pipeline's destination.
+
+    The enclosing diagram is the pipeline. Each executable box inside it is a workflow,
+    including an upstream workflow activated by a dataset update. Update and schedule semantics
+    stay on the connecting arrows rather than becoming component names.
+    """
+    node_id = f"workflow:pipeline:{pipeline_id}"
+    kinds = {node.id: node.kind for node in graph.nodes}
+    if kinds.get(node_id) != "workflow":
+        return AutomationGraph()
+
+    up: dict[str, list[str]] = defaultdict(list)
+    down: dict[str, list[str]] = defaultdict(list)
+    for edge in graph.edges:
+        up[edge.target].append(edge.source)
+        down[edge.source].append(edge.target)
+
+    def reach(links: Mapping[str, list[str]]) -> set[str]:
+        seen, queue = {node_id}, [node_id]
+        while queue:
+            for nxt in links.get(queue.pop(), []):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        return seen
+
+    keep = reach(up) | reach(down)
+    return AutomationGraph(
+        nodes=[node for node in graph.nodes if node.id in keep],
+        edges=[edge for edge in graph.edges if edge.source in keep and edge.target in keep],
+    )
+
+
 # --- layout --------------------------------------------------------------------------------
 
-_BASE_LAYER: dict[str, int] = {"source": 0, "dataset": 1, "features": 1, "trigger": 2, "pipeline": 2, "destination": 2}
+_BASE_LAYER: dict[str, int] = {
+    "source": 0,
+    "dataset": 1,
+    "features": 1,
+    "workflow": 2,
+    "destination": 2,
+}
 
 
 def layout(graph: AutomationGraph) -> dict[str, tuple[int, int]]:
@@ -542,6 +630,12 @@ def layout(graph: AutomationGraph) -> dict[str, tuple[int, int]]:
         if kind == "destination":
             layer[node_id] = last
 
+    # A focused pipeline can begin with an unscheduled or derived dataset, so no source node
+    # occupies layer zero. Remove empty leading (or intermediate) layers instead of rendering
+    # unexplained whitespace where a Data source would otherwise appear.
+    occupied = {old: new for new, old in enumerate(sorted(set(layer.values())))}
+    layer = {node_id: occupied[index] for node_id, index in layer.items()}
+
     columns: dict[int, list[str]] = defaultdict(list)
     for node in graph.nodes:
         columns[layer[node.id]].append(node.id)
@@ -572,8 +666,7 @@ _KIND_LABELS = {
     "source": "Data source",
     "dataset": "Dataset",
     "features": "Feature collection",
-    "trigger": "Trigger",
-    "pipeline": "Pipeline",
+    "workflow": "Workflow",
     "destination": "Destination",
 }
 
@@ -585,11 +678,14 @@ def _column_title(kinds: list[str], index: int) -> str:
         return "Data source" if one else "Data sources"
     if all(k == "destination" for k in kinds):
         return "Destination" if one else "Destinations"
-    if all(k in ("trigger", "pipeline") for k in kinds):
+    if all(k == "workflow" for k in kinds):
         return "Workflow" if one else "Workflows"
     if all(k in ("dataset", "features") for k in kinds):
-        title = "Dataset" if index <= 1 else "Derived dataset"
-        return title if one else f"{title}s"
+        if index <= 1:
+            if one:
+                return "Dataset" if kinds[0] == "dataset" else "Input"
+            return "Datasets and inputs"
+        return "Derived dataset" if one else "Derived datasets"
     return ""
 
 
@@ -615,6 +711,7 @@ _FIRES_TITLES = {
 def render_legend() -> Markup:
     """The diagram's key: the three kinds of arrow, and the symbols for what starts a step."""
     lines = (
+        ("origin", "comes from"),
         ("updates", "updates"),
         ("input", "read as an input"),
         ("delivers", "delivers"),
@@ -677,14 +774,13 @@ def render_svg(
     parts: list[str] = [
         f'<svg class="automation-graph" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
         f'role="img" aria-labelledby="automation-graph-title{suffix}">',
-        f'<title id="automation-graph-title{suffix}">'
-        "How schedules, triggers and pipelines connect on this instance</title>",
+        f'<title id="automation-graph-title{suffix}">How data moves through this pipeline</title>',
         "<defs>",
         *(
             f'<marker id="ag-arrow-{kind}{suffix}" viewBox="0 0 10 10" refX="9" refY="5" '
             'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
             f'<path class="ag-arrow ag-arrow-{kind}" d="M0,0 L10,5 L0,10 z"/></marker>'
-            for kind in ("updates", "input", "delivers", "lit")
+            for kind in ("origin", "updates", "input", "delivers", "lit")
         ),
         "</defs>",
     ]
