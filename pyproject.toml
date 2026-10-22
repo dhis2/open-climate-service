@@ -72,6 +72,9 @@ server = [
     # this package is the one SPDX tooling in Python agrees on, and it is pure Python.
     "license-expression>=30.4",
     "jinja2>=3.1",
+    # Export-plugin destination settings are validated against the same JSON Schema that
+    # drives their pipeline form; presentation metadata never becomes a second contract.
+    "jsonschema>=4.23",
     # 0.39 added Range support to FileResponse, which the feature asset routes rely on; 0.49.1
     # fixed a vulnerability in its Range parsing (GHSA-7f5h-v6xp-fcq8).
     "starlette>=0.49.1",
@@ -247,6 +250,7 @@ dev = [
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "ruff>=0.16.6",
+    "types-jsonschema>=4.23",
     "types-shapely>=2.1,<3",
     "watchfiles>=1.2.0",
 ]

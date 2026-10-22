@@ -35,6 +35,48 @@
     range: [0.0, 20.0]
     nodata: -9999.0
 
+# A separate dataset from the final one, not an extension of it: preliminary values are replaced
+# when the final product appears a month or so later, and one store holding both would rewrite
+# its own history with nothing to say which values were provisional.
+- id: chirps3_precipitation_daily_prelim
+  name: Precipitation rate (CHIRPS3, preliminary)
+  short_name: Precipitation (preliminary)
+  description: >-
+    Daily rainfall over land at 5 km, a few days after it falls, for the current month too.
+    Satellite estimates only, without the station blending of the final product, and
+    provisional: the final CHIRPS3 daily dataset replaces these values a month or so later.
+    Kept from January 2025 onwards.
+  standard_name: lwe_precipitation_rate
+  variable: precip
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -50, 180, 50]
+    temporal:
+      begin: "2025-01-01"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
+    params:
+      stage: prelim
+      flavor: sat
+  units: mm/d
+  cell_methods: "time: mean"
+  resolution: 5 km x 5 km
+  source: CHIRPS v3 preliminary
+  source_url: https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/prelim/
+  license: CC-BY-4.0
+  providers:
+    - name: UCSB Climate Hazards Center
+      url: https://www.chc.ucsb.edu/data/chirps
+  display:
+    colormap: blues
+    range: [0.0, 20.0]
+    nodata: -9999.0
+
 - id: chirps3_precipitation_monthly
   name: Precipitation rate (CHIRPS3, monthly)
   short_name: Precipitation

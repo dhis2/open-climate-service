@@ -10,7 +10,7 @@ from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from textwrap import dedent
-from typing import Any
+from typing import Any, cast
 
 import jinja2
 from fastapi import Request
@@ -1979,12 +1979,23 @@ def render_pipelines_page(
             value = prefill
         parameter_fields.append({**field, "value": value})
     settings = dict((draft.get("destination") or {}).get("settings") or {})
-    settings_fields = []
-    for field in selection.get("settings_fields", []):
-        entry = {**field, "value": forms.setting_value(settings, field)}
-        if field["kind"] == "rows":
-            entry["rows"] = forms.setting_rows(settings, field)
-        settings_fields.append(entry)
+    settings_form: dict[str, Any] = selection.get("settings_form") or {
+        "title": "",
+        "description": "",
+        "sections": [],
+    }
+    rendered_sections: list[dict[str, Any]] = []
+    for raw_section in settings_form["sections"]:
+        section = cast(dict[str, Any], raw_section)
+        rendered_fields: list[dict[str, Any]] = []
+        for raw_field in section["fields"]:
+            field = cast(dict[str, Any], raw_field)
+            entry = {**field, "value": forms.setting_value(settings, field)}
+            if field["kind"] == "rows":
+                entry["rows"] = forms.setting_rows(settings, field)
+            rendered_fields.append(entry)
+        rendered_sections.append({**section, "fields": rendered_fields})
+    settings_form = {**settings_form, "sections": rendered_sections}
     return get_template("pipelines_page.html").render(
         version=app_version,
         mount=mount,
@@ -2004,7 +2015,7 @@ def render_pipelines_page(
         workflow=selection.get("workflow"),
         destination=selection.get("destination"),
         parameter_fields=parameter_fields,
-        settings_fields=settings_fields,
+        settings_form=settings_form,
         error=error,
         checks=checks,
         draft=draft,
@@ -2054,10 +2065,16 @@ def _pipeline_diagrams(rows: list[dict[str, Any]], mount: str) -> list[Markup]:
 
 def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) -> str:
     """Render one pipeline: its workflow binding, destination, validation, dry run, delivery and runs."""
-    from open_climate_service.pipelines.service import approved
+    from open_climate_service.pipelines.service import approved, destination_plugins
 
     spec = record.spec
     validation = record.validation
+    destination_title = spec.destination.plugin
+    plugin = destination_plugins().get(spec.destination.plugin)
+    if plugin is not None:
+        presentation = plugin.pipeline_settings_form()
+        if presentation is not None:
+            destination_title = presentation.title
     datasets = {d.dataset_id: d for d in _load_datasets()}
     coverages = [
         datasets[dataset_id].extent.temporal
@@ -2083,6 +2100,7 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         legend=_automation_legend(),
         title=spec.name or spec.id,
         spec=spec,
+        destination_title=destination_title,
         revision=record.revision,
         arguments=arguments,
         settings=json.dumps(spec.destination.settings, indent=2),

@@ -7,7 +7,9 @@ import xarray as xr
 
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
-_DEM30_ZARR_URL = "https://api.earthdatahub.destine.eu/copernicus-dem/GLO-30-v0.zarr"
+# v1 is the v0 data rewritten as Zarr v3: north-up, one column per pixel (v0 repeated 180
+# degrees), its CRS declared, and smaller chunks.
+_DEM30_ZARR_URL = "https://data.earthdatahub.destine.eu/copernicus-dem/GLO-30-v1.zarr"
 
 
 class CopDEM30Plugin(BaseDatasetPlugin):
@@ -24,7 +26,8 @@ class CopDEM30Plugin(BaseDatasetPlugin):
             chunks={},
             engine="zarr",
         )
-        # The store declares no CRS; it is geographic.
+        # The store's CRS is compound (EPSG:9518, WGS 84 with EGM2008 heights); the grid is its
+        # horizontal part, and the heights stay in metres above the geoid.
         ds = ds.rio.write_crs("EPSG:4326")
         # No period, so no time axis is added.
         ds = normalize_period(ds, source_variable="dsm", variable="elevation", bbox=bbox)
