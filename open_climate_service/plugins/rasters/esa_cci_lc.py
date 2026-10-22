@@ -1,11 +1,7 @@
 """ESA CCI / C3S land cover (300 m, yearly) from the Copernicus Climate Data Store (CDS).
 
-``ESACCILandCoverClassPlugin`` stores the class codes as published (the 37 LCCS classes,
-``lccs_class``), for display. Its pyramid must use ``mode`` resampling so coarse zoom levels
+Generating the pyramid must use ``mode`` resampling so coarse zoom levels
 show a real class rather than an average of codes.
-
-The groups follow the IPCC land categories the CCI user guide maps LCCS classes onto, with
-shrubland, sparse vegetation and bare areas kept apart because they matter in drylands.
 
 The CDS serves the maps as ``satellite-land-cover``: version 2.0.7 for 1992-2015 and the C3S
 continuation, version 2.1.1, from 2016. Each year is requested for the extent only. Requests need
