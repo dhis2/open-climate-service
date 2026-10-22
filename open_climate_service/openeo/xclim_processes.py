@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from open_climate_service.process import _OCS_PROCESS_ATTR
+from open_climate_service.shared.import_lock import IMPORT_LOCK
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +52,22 @@ def call_with_ocs_time_dim(func: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 def scan() -> list[Any]:
-    """Return all xclim indicators as process callables (cached after first call)."""
+    """Return all xclim indicators as process callables (cached after first call).
+
+    Holds `IMPORT_LOCK` itself, since `_collect` is where xclim's indicator modules are imported,
+    so no caller has to reach this under the lock (CLIM-1549). It is re-entrant, so the callers
+    that already hold it pay nothing, and the cache is filled once.
+    """
     global _cache
-    if _cache is not None:
-        return _cache
-    try:
-        _cache = _collect()
-        return _cache
-    except Exception:
-        logger.warning("Failed to load xclim indicators", exc_info=True)
-        return []
+    with IMPORT_LOCK:
+        if _cache is not None:
+            return _cache
+        try:
+            _cache = _collect()
+            return _cache
+        except Exception:
+            logger.warning("Failed to load xclim indicators", exc_info=True)
+            return []
 
 
 def _collect() -> list[Any]:

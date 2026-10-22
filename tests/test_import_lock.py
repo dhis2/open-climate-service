@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.openeo import execution, plugin_processes
+from open_climate_service.openeo import execution, plugin_processes, xclim_processes
 from open_climate_service.shared import cf
 
 
@@ -76,3 +76,30 @@ def test_two_threads_build_the_registry_once(monkeypatch: pytest.MonkeyPatch) ->
 
     assert len(builds) == 1
     assert results == [builds[0], builds[0]]
+
+
+def test_xclim_indicators_are_collected_once_without_the_caller_holding_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A caller of scan() that does not go through load_plugin_processes still reaches the xclim
+    # imports one thread at a time.
+    collects: list[list[object]] = []
+
+    def collect() -> list[object]:
+        threading.Event().wait(0.2)  # long enough for the other thread to arrive
+        indicators: list[object] = [object()]
+        collects.append(indicators)
+        return indicators
+
+    monkeypatch.setattr(xclim_processes, "_cache", None)
+    monkeypatch.setattr(xclim_processes, "_collect", collect)
+
+    results: list[list[object]] = []
+    threads = [threading.Thread(target=lambda: results.append(xclim_processes.scan())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert len(collects) == 1
+    assert results == [collects[0], collects[0]]
