@@ -1376,6 +1376,11 @@ button.danger:hover:not(:disabled) {
 .ag-key-input {
   border-top-style: dashed;
 }
+/* Provenance, not execution: dotted and muted, so it never reads as a step that runs. */
+.ag-key-origin {
+  border-top-style: dotted;
+  border-top-color: var(--colors-grey400);
+}
 .ag-key-delivers {
   border-top-color: var(--colors-teal800);
 }
@@ -1422,6 +1427,11 @@ main.automation-wide {
 .ag-edge-input {
   stroke-dasharray: 5 4;
 }
+.ag-edge-origin {
+  stroke: var(--colors-grey400);
+  stroke-dasharray: 1 4;
+  stroke-linecap: round;
+}
 .ag-edge-delivers {
   stroke: var(--colors-teal800);
 }
@@ -1430,6 +1440,9 @@ main.automation-wide {
 }
 .ag-arrow-delivers {
   fill: var(--colors-teal800);
+}
+.ag-arrow-origin {
+  fill: var(--colors-grey400);
 }
 .ag-edge-text text {
   font-size: 10px;

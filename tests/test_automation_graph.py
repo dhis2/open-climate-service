@@ -302,6 +302,8 @@ def test_an_unscheduled_ingested_dataset_still_shows_its_data_source(
     )
     assert ">DATA SOURCE<" in diagram
     assert "daily 06:00 UTC" not in diagram
+    # The legend names the provenance arrow; its dotted style lives in the stylesheet.
+    assert '<i class="ag-key ag-key-origin"></i>comes from' in page
 
 
 def test_a_pipeline_view_includes_the_upstream_workflow_that_published_its_input(
