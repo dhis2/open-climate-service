@@ -77,11 +77,14 @@ def _load_year(year: str, bbox: list[float]) -> xr.DataArray:
     if "time" in classes.dims:
         classes = classes.isel(time=0, drop=True)
 
-    # A declared fill value is decoded to NaN
-    classes = classes.fillna(_NO_DATA).astype("uint8")
+    # Convert both NaN values and _NO_DATA to NaN
+    classes = classes.where(classes != _NO_DATA).astype("float32")
+
+    # Misc cleaning
     classes = classes.rename({"lat": "y", "lon": "x"}).sortby("y", ascending=False)
     classes = classes.drop_vars([name for name in classes.coords if name not in ("x", "y")])
     classes.attrs = {}
+
     return classes
 
 
@@ -103,6 +106,5 @@ class ESACCILandCoverClassPlugin(BaseDatasetPlugin):
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
         classes = _load_year(period_id, bbox)
-        classes = classes.where(classes != _NO_DATA).astype("float32")
         classes.attrs = {"units": "1", "flag_meanings": "LCCS class codes, see the template description"}
         return _with_time(classes.to_dataset(name="lccs_class"), period_id)
