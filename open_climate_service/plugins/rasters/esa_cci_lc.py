@@ -32,20 +32,6 @@ from open_climate_service.streaming import BaseDatasetPlugin
 _DATASET = "satellite-land-cover"
 _NO_DATA = 0
 
-# Class group -> LCCS codes. Every code except 0 (no data) belongs to exactly one group.
-CLASS_GROUPS: dict[str, tuple[int, ...]] = {
-    "cropland": (10, 11, 12, 20, 30, 40),
-    "tree_cover": (50, 60, 61, 62, 70, 71, 72, 80, 81, 82, 90, 100),
-    "shrubland": (120, 121, 122),
-    "grassland": (110, 130),
-    "sparse_vegetation": (140, 150, 151, 152, 153),
-    "wetland": (160, 170, 180),
-    "urban": (190,),
-    "bare": (200, 201, 202),
-    "water": (210,),
-    "snow_ice": (220,),
-}
-
 
 def _available_years() -> list[str]:
     constraints = _CdsClient().apply_constraints(_DATASET, {})
@@ -95,8 +81,7 @@ def _load_year(year: str, bbox: list[float], pad: float = 0.0) -> xr.DataArray:
     if "time" in classes.dims:
         classes = classes.isel(time=0, drop=True)
 
-    # A declared fill value is decoded to NaN; make it the class code for no data, so the fractions
-    # leave it out of the denominator instead of counting it as observed and unclassified.
+    # A declared fill value is decoded to NaN
     classes = classes.fillna(_NO_DATA).astype("uint8")
     classes = classes.rename({"lat": "y", "lon": "x"}).sortby("y", ascending=False)
     classes = classes.drop_vars([name for name in classes.coords if name not in ("x", "y")])
