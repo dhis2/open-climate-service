@@ -10,13 +10,15 @@ from open_climate_service.stac.schemas import StacCatalogResponse
 router = APIRouter()
 
 
-@router.get("", response_model=StacCatalogResponse)
+# `response_model_exclude_none`: a link with no title or type leaves the field out. The core
+# catalog schema allows `title` only as a string, so a `null` one fails validation.
+@router.get("", response_model=StacCatalogResponse, response_model_exclude_none=True)
 def get_stac_landing(request: Request) -> dict[str, object]:
     """Return the STAC catalog landing page."""
     return stac_services.build_catalog(request)
 
 
-@router.get("/catalog.json", response_model=StacCatalogResponse)
+@router.get("/catalog.json", response_model=StacCatalogResponse, response_model_exclude_none=True)
 def get_stac_catalog_json(request: Request) -> dict[str, object]:
     """Return the STAC catalog landing page (catalog.json alias)."""
     return stac_services.build_catalog(request)

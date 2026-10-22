@@ -154,7 +154,7 @@ Current STAC details:
 - temporal extents are normalized to RFC 3339 in both STAC and Datacube temporal extent fields
 - STAC collection `license` publishes the dataset template's declared licence — an SPDX
   identifier, or `other` for a licence that has none, with a `rel: license` link and
-  `providers` for attribution (CLIM-946). An undeclared licence warns at template load
+  `providers` for attribution. An undeclared licence warns at template load
   and publishes `other`.
 - spatial `step` values are rounded for readability while preserving axis direction
 - an opt-in live interoperability smoke test exists at `tests/integration/test_stac_interop.py`

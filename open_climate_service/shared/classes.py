@@ -25,6 +25,22 @@ STAC_CLASSIFICATION_EXTENSION = "https://stac-extensions.github.io/classificatio
 
 _COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
 
+# ColorBrewer Set3: a categorical palette, so neighbouring codes are told apart rather than shaded.
+_FALLBACK_PALETTE = (
+    "#8dd3c7",
+    "#ffffb3",
+    "#bebada",
+    "#fb8072",
+    "#80b1d3",
+    "#fdb462",
+    "#b3de69",
+    "#fccde5",
+    "#d9d9d9",
+    "#bc80bd",
+    "#ccebc5",
+    "#ffed6f",
+)
+
 
 @dataclass(frozen=True)
 class DataClass:
@@ -77,6 +93,18 @@ def classification_from_template(template: dict[str, Any] | None) -> Classificat
     if len(set(values)) != len(values):
         raise ValueError(f"'classes' declares a value more than once: {values}")
     return Classification(classes=tuple(classes))
+
+
+def class_colors(classification: Classification) -> list[str]:
+    """Each class's display colour: its declared one, else the next of the fallback palette.
+
+    The map viewer falls back to the same palette in the same order, so a class without a
+    declared colour looks the same on the map, in a thumbnail and in a page's legend.
+    """
+    return [
+        item.color or _FALLBACK_PALETTE[index % len(_FALLBACK_PALETTE)]
+        for index, item in enumerate(classification.classes)
+    ]
 
 
 def cf_flag_attrs(classification: Classification) -> dict[str, Any]:

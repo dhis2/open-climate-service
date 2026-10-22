@@ -113,7 +113,7 @@ def test_a_streaming_ingest_records_the_size_of_the_published_store(
             return ["2026-01-01", "2026-01-02", "2026-01-03"]
 
     recorded: list[Any] = []
-    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params: _Plugin())
+    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params, static=False: _Plugin())
     monkeypatch.setattr(ingestion_services.downloader, "get_icechunk_path", lambda _: store_path)
     monkeypatch.setattr(ingestion_services, "run_streaming_ingest_sync", fake_sync)
 
@@ -214,7 +214,7 @@ def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
         async def periods(self, start: str, end: str) -> list[str]:
             return [day.strftime("%Y-%m-%d") for day in pd.date_range(start, end, freq="D")]
 
-    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params: _Plugin())
+    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda path, *, params, static=False: _Plugin())
     monkeypatch.setattr(ingestion_services.downloader, "get_icechunk_path", lambda _: store_path)
     monkeypatch.setattr(
         ingestion_services,

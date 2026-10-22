@@ -129,8 +129,8 @@ happens; if it exits without finishing, the new process takes the job over withi
 it would have at startup. The operating system releases both locks when their process exits,
 so a crash never leaves a store or job locked.
 
-Job, artifact and scheduler records are still whole-file JSON without transactions
-(CLIM-927). Direct store mutation outside the shared services must therefore still require
+Job, artifact and scheduler records are still whole-file JSON without transactions.
+Direct store mutation outside the shared services must therefore still require
 a stopped server or otherwise guarantee a single writer.
 
 ---

@@ -163,7 +163,7 @@ def test_a_non_v3_store_is_refused_and_closed(monkeypatch: pytest.MonkeyPatch) -
 
     assert "not Zarr v3" in str(raised.value)
     assert "2026-05-31T23:00" in str(raised.value), "the operator needs the gap, not just the verdict"
-    assert "CLIM-955" in str(raised.value)
+    assert "Repoint it at the v3 store" in str(raised.value), "the operator needs the fix, not just the verdict"
     assert ds.closed, "the refused store was left open"
 
 

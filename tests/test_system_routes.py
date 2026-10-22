@@ -250,6 +250,8 @@ async def test_manage_ingest_rejects_blank_start(monkeypatch: pytest.MonkeyPatch
         lambda dataset_id: {
             "id": dataset_id,
             "name": "CHIRPS3 precipitation",
+            "period_type": "daily",
+            "sync": {"kind": "temporal"},
             "ingestion": {"plugin": "some.Plugin"},
         },
     )

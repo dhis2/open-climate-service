@@ -123,7 +123,21 @@ class IngestionPlugin(Protocol):
         ...
 
 
-def close_ingestion_plugin(plugin: IngestionPlugin) -> None:
+@runtime_checkable
+class StaticIngestionPlugin(Protocol):
+    """Source contract for a static dataset without a time axis.
+
+    Only `fetch(...)` is required: there are no periods, so the whole dataset is fetched once,
+    normalized to (y, x). It may be ``async def``. The optional attributes are those of
+    `IngestionPlugin` (`x_dim`, `y_dim`, `crs`).
+    """
+
+    def fetch(self, bbox: list[float], **params: Any) -> "xr.Dataset | Awaitable[xr.Dataset]":
+        """Fetch the whole dataset for ``bbox``, without a time dimension."""
+        ...
+
+
+def close_ingestion_plugin(plugin: IngestionPlugin | StaticIngestionPlugin) -> None:
     """Close an ingestion plugin when it exposes an optional close hook."""
     close = getattr(plugin, "close", None)
     if callable(close):

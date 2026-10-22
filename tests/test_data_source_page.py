@@ -117,7 +117,9 @@ def _source_context(template: dict[str, Any], **overrides: Any) -> dict[str, Any
 def test_the_ingest_form_is_prefilled_for_the_direction_of_the_source(
     direction: str | None, extents: dict[str, Any], expected: dict[str, Any]
 ) -> None:
-    template = _ingestable("src", extents=extents, **({"temporal_direction": direction} if direction else {}))
+    template = _ingestable(
+        "src", period_type="daily", extents=extents, **({"temporal_direction": direction} if direction else {})
+    )
 
     defaults = _source_context(template)["defaults"]
 
@@ -447,4 +449,19 @@ def test_the_dataset_page_links_back_to_the_data_source(monkeypatch: pytest.Monk
 
 
 def _ingest_defaults_start(today: date) -> str:
-    return str(landing._ingest_defaults(_ingestable("chirps_daily"), today)["start"])
+    return str(landing._ingest_defaults(_ingestable("chirps_daily", period_type="daily"), today)["start"])
+
+
+def test_a_categorical_source_lists_its_classes_collapsed_instead_of_a_colour_scale() -> None:
+    template = _ingestable(
+        "heat_levels",
+        display={"colormap": "viridis", "range": [0, 1]},
+        classes=[{"value": 0, "label": "No warning", "color": "#ffffb2"}, {"value": 1, "label": "Caution"}],
+    )
+
+    html = landing.render_data_source_page(template, "")
+
+    assert '<details class="class-legend">' in html
+    assert "Classes (2)" in html and "No warning" in html and "Caution" in html
+    assert 'class="ramp-bar"' not in html
+    assert "Colour scale" not in html and "Display range" not in html

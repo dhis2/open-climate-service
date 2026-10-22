@@ -4,7 +4,7 @@ An open-source platform that integrates data from many different sources to prod
 
 > **Status: under active development.** APIs and data models may change without notice.
 
-📖 **Documentation: <https://dhis2.github.io/open-climate-service/>**
+**Documentation: <https://dhis2.github.io/open-climate-service/>**
 
 Each instance is configured for a specific country or region: it scopes all data extraction, processing, and storage to that spatial extent, draws from sources such as CHIRPS, ERA5, and WorldPop, stores outputs as GeoZarr, and exposes them through open standards (STAC, Zarr over HTTP, openEO). It runs independently of DHIS2 and can be deployed on local, cloud-hosted, or sovereign country infrastructure.
 
