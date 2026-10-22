@@ -85,6 +85,16 @@ ingestion:
 
 Tracked in Jira, project [CLIM](https://dhis2.atlassian.net/jira/software/c/projects/CLIM/issues), component "Climate Service", grouped under one epic per area (data ingestion, processing and workflows, openEO, catalogue and metadata, GeoZarr and Icechunk storage, vector data, DHIS2 integration, and so on). GitHub issues are not used.
 
+When writing a Jira epic or issue, follow the [write-issue guide](https://github.com/dhis2-chap/claude-plugins/blob/main/plugins/write-issue/skills/write-issue/SKILL.md). Filing details for this repo:
+
+- Project `CLIM`, component `Climate Service`.
+- Parent: the area epic, named "OCS: <area>" (for example CLIM-802 "OCS: Processing and workflows").
+- Label: `ch-obj-open-climate-service` on every issue, as a placeholder until the OCS objectives are in Jira.
+- Sprint: the current sprint for work being done now; no sprint for work filed for later.
+- Assignee: none.
+
+To install the guide as a skill in Claude Code, Codex, Copilot or another agent: `npx skills add dhis2-chap/claude-plugins --skill write-issue`.
+
 ## Commit conventions
 
 - **Conventional Commits** for all git activity — commit messages, branch names, and PR titles.

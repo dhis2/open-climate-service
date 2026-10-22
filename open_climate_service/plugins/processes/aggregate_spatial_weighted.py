@@ -117,7 +117,7 @@ def aggregate_spatial_weighted(
     from open_climate_service.data_manager.services.utils import get_x_y_dims
     from open_climate_service.shared.classes import cube_classes
     from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
-    from open_climate_service.shared.vectors import features_in_crs, single_raster, vector_result
+    from open_climate_service.shared.vectors import features_on_raster, single_raster, vector_result
 
     # Validate the reducer argument
     if not isinstance(reducer, str) or reducer not in REDUCERS:
@@ -140,7 +140,7 @@ def aggregate_spatial_weighted(
 
     # Process and prepare the input geometries
     record_features(geometries)
-    frame = features_in_crs(geometries, raster.rio.crs)
+    frame = features_on_raster(geometries, raster)
 
     # The cube's own spatial axes may be x/y, lon/lat or longitude/latitude. exactextract finds
     # only x and y, so they are renamed; the aggregation consumes them, so no name reaches the result.

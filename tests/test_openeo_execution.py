@@ -1650,6 +1650,31 @@ def test_persist_result_writes_icechunk_when_dataset_id_in_options(
     assert publish_flag is True  # publish defaults to True when key is absent
 
 
+def test_persist_result_covers_a_projected_result_in_its_own_crs(
+    job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A result that keeps `spatial_ref` but lost `proj:code` was stored in its CRS and covered as
+    if it were WGS 84, so its WGS 84 coverage was never derived."""
+    import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
+
+    ds = _small_dataset().assign_coords(x=500000 + _small_dataset().x * 1000, y=6000000 + _small_dataset().y * 1000)
+    envelope = SaveResultEnvelope(ds.rio.write_crs("EPSG:32633"), "Zarr", {"dataset_id": "utm_aggregate"})
+    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    registered: list[Any] = []
+    monkeypatch.setattr(
+        "open_climate_service.ingestions.services.register_artifact_record",
+        lambda record, publish: registered.append(record) or record,
+    )
+
+    job_service._persist_result("job-utm", envelope)
+
+    record = registered[0]
+    assert record.coverage.spatial.xmin == pytest.approx(501000)
+    assert record.coverage.spatial_wgs84 is not None
+    assert record.coverage.spatial_wgs84.xmin == pytest.approx(15.0, abs=0.1)  # UTM 33's central meridian
+
+
 def test_persist_result_stamps_cf_attrs_from_template(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2059,7 +2084,7 @@ def test_derive_coverage_falls_back_to_reduced_dimensions_attrs() -> None:
     ds["temperature"].attrs["reduced_dimensions_min_values"] = {"t": np.datetime64("2018-01-01")}
     ds["temperature"].attrs["reduced_dimensions_max_values"] = {"t": np.datetime64("2018-03-01")}
 
-    coverage = _derive_coverage(ds, "x", "y", None)
+    coverage = _derive_coverage(ds, "x", "y", None, "EPSG:4326")
     assert coverage.temporal.start == "2018-01-01"
     assert coverage.temporal.end == "2018-03-01"
 
@@ -2089,7 +2114,7 @@ def test_derive_coverage_returns_spatial_and_temporal_from_dataset() -> None:
         {"v": (("t", "y", "x"), np.ones((2, 3, 4)))},
         coords={"t": t, "y": [10.0, 20.0, 30.0], "x": [1.0, 2.0, 3.0, 4.0]},
     )
-    coverage = _derive_coverage(ds, "x", "y", "t")
+    coverage = _derive_coverage(ds, "x", "y", "t", "EPSG:4326")
 
     assert coverage.spatial.xmin == pytest.approx(1.0)
     assert coverage.spatial.xmax == pytest.approx(4.0)
