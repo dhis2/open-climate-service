@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     import geopandas as gpd
     import xarray as xr
+
+logger = logging.getLogger(__name__)
 
 _Cube = TypeVar("_Cube", "xr.Dataset", "xr.DataArray")
 
@@ -172,8 +175,9 @@ def features_on_raster(geometries: Any, raster: xr.DataArray) -> gpd.GeoDataFram
 
     See :func:`geometries_to_frame` for what is accepted. The geometries are reprojected, never
     the raster, which would resample it. Features without a CRS are WGS 84. When none of them
-    overlaps the raster this raises, naming both CRSes and bounds, rather than returning NaN for
-    every feature: that is what a wrong CRS, or features from another country, looks like.
+    overlaps the raster, each still gets no value, as openEO's ``aggregate_spatial`` has it, and a
+    warning names both CRSes and bounds: that is what a wrong CRS looks like, and what features
+    from another area than the raster's look like too.
     """
     from shapely.geometry import box
 
@@ -189,9 +193,14 @@ def features_on_raster(geometries: Any, raster: xr.DataArray) -> gpd.GeoDataFram
     if len(projected) and not projected.intersects(box(*bounds)).any():
         given = ", ".join(f"{value:g}" for value in frame.total_bounds)
         covered = ", ".join(f"{value:g}" for value in bounds)
-        raise ValueError(
-            f"None of the {len(frame)} geometries overlaps the raster: the geometries span ({given}) "
-            f"in {frame.crs}, the raster ({covered}) in {raster.rio.crs}"
+        logger.warning(
+            "None of the %d geometries overlaps the raster, so none gets a value: the geometries span "
+            "(%s) in %s, the raster (%s) in %s",
+            len(frame),
+            given,
+            frame.crs,
+            covered,
+            raster.rio.crs,
         )
     return projected
 

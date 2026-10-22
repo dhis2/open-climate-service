@@ -1,9 +1,10 @@
 """Aggregation over projected rasters: the geometries move into the raster's CRS, never the
-raster into theirs, and geometries that miss the raster are refused rather than returned as NaN.
+raster into theirs, and geometries that all miss the raster get no value and a warning.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import numpy as np
@@ -63,20 +64,26 @@ def test_a_projected_raster_gives_the_values_of_its_lonlat_original(aggregate: A
 
 
 @pytest.mark.parametrize("aggregate", [_builtin, _weighted])
-def test_a_raster_in_metres_read_as_degrees_is_refused(aggregate: Any) -> None:
+def test_a_raster_in_metres_read_as_degrees_warns(aggregate: Any, caplog: pytest.LogCaptureFixture) -> None:
     """Ingestion records a CRS on every store, so this takes a cube that lost it. Read as WGS 84,
-    its metres overlap no district, and the job fails instead of returning NaN for each."""
+    its metres overlap no district: each gets no value, and the server log says why."""
     untagged = _lonlat_grid().rio.reproject("EPSG:3857", nodata=np.nan).drop_vars("spatial_ref")
     assert untagged.rio.crs is None
 
-    with pytest.raises(ValueError, match="None of the 2 geometries overlaps the raster"):
-        aggregate(untagged, _DISTRICTS)
+    with caplog.at_level("WARNING", logger="open_climate_service.shared.vectors"):
+        result = aggregate(untagged, _DISTRICTS)
+    assert all(np.isnan(value) for value in _by_id(result).values())
+    assert "None of the 2 geometries overlaps the raster" in caplog.text
 
 
 @pytest.mark.parametrize("aggregate", [_builtin, _weighted])
-def test_geometries_that_miss_the_raster_are_refused_naming_both_crses(aggregate: Any) -> None:
+def test_geometries_that_miss_the_raster_warn_naming_both_crses(
+    aggregate: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     projected = _lonlat_grid().rio.reproject("EPSG:3857", nodata=np.nan)
     elsewhere = {"type": "Feature", "id": "far", "properties": {}, "geometry": box(10, 50, 11, 51).__geo_interface__}
 
-    with pytest.raises(ValueError, match=r"None of the 1 geometries overlaps the raster.*EPSG:4326.*EPSG:3857"):
-        aggregate(projected, elsewhere)
+    with caplog.at_level("WARNING", logger="open_climate_service.shared.vectors"):
+        result = aggregate(projected, elsewhere)
+    assert np.isnan(_by_id(result)["far"])
+    assert re.search(r"None of the 1 geometries overlaps the raster.*EPSG:4326.*EPSG:3857", caplog.text)

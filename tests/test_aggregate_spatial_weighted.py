@@ -221,10 +221,12 @@ def test_aggregate_spatial_fully_outside():
     assert np.isnan(out.isel(geometry=1))
 
 
-def test_aggregate_spatial_nothing_inside_is_refused():
-    # A CRS mismatch, or features from another country, would otherwise return NaN throughout.
-    with pytest.raises(ValueError, match="None of the 1 geometries overlaps the raster"):
-        aggregate_spatial_weighted(_flat_grid(y_ascending=True), _box(-2, -2, -1, -1), "sum")
+def test_aggregate_spatial_nothing_inside_has_no_value_and_warns(caplog: pytest.LogCaptureFixture):
+    # A CRS mismatch looks like this, so it is logged; the result still follows openEO.
+    with caplog.at_level("WARNING", logger="open_climate_service.shared.vectors"):
+        out = aggregate_spatial_weighted(_flat_grid(y_ascending=True), _box(-2, -2, -1, -1), "mean")
+    assert np.isnan(out.isel(geometry=0))
+    assert "None of the 1 geometries overlaps the raster" in caplog.text
 
 
 def test_aggregate_spatial_mixed_geometry_types():
