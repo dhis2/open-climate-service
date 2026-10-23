@@ -57,11 +57,6 @@ _UNIT_TRANSFORMS = {
     "kelvin_to_celsius": kelvin_to_celsius,
     "metres_to_mm": metres_to_mm,
 }
-_DEFAULT_VARIABLE_UNIT_TRANSFORMS = {
-    **{variable: "kelvin_to_celsius" for variable in ("d2m", "t2m", "skt")},
-    **{f"stl{layer}": "kelvin_to_celsius" for layer in range(1, 5)},
-    "tp": "metres_to_mm",
-}
 
 
 class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
@@ -87,8 +82,6 @@ class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
         if unit_transform:
             if unit_transform not in _UNIT_TRANSFORMS.keys():
                 raise ValueError(f"Unknown unit_transform {unit_transform!r}; expected one of {list(_UNIT_TRANSFORMS)}")
-        else:
-            unit_transform = _DEFAULT_VARIABLE_UNIT_TRANSFORMS.get(variable)
         
         self.variable = variable
         self.unit_transform = unit_transform
@@ -151,7 +144,7 @@ class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
         return self._cached_cutoff
 
 
-class ERA5LandZarrDailyPlugin(ERA5LandZarrHourlyPlugin):
+class ERA5LandZarrDailyFromHourlyPlugin(ERA5LandZarrHourlyPlugin):
     """Aggregate hourly ERA5-Land ARCO values into UTC calendar-day outputs."""
 
     commit_batch_size = 30
