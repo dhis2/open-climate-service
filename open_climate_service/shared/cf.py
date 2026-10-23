@@ -23,9 +23,7 @@ logger = logging.getLogger(__name__)
 # Variable-level CF attributes we propagate from the dataset template.
 CF_VARIABLE_FIELDS = ("units", "standard_name", "cell_methods")
 
-# Template fields stamped as the variable's descriptive attributes, under these names. They replace
-# what a source or a process left there: xclim describes a count of days from WBGT maxima as days
-# "with maximum temperature above" the threshold, since it assumes air temperature.
+# Template fields stamped as the variable's descriptive attributes, under these names.
 LABEL_FIELDS = {"name": "long_name", "description": "description"}
 
 
@@ -34,9 +32,7 @@ def cf_attrs_from_template(template: dict[str, Any] | None) -> dict[str, Any]:
 
     ``units: ""`` is kept (an explicitly dimensionless quantity, e.g. a standardized index).
     The template's ``name`` and ``description`` become ``long_name`` and ``description``.
-    ``standard_name: null`` maps to None: the template declares that the variable has no
-    standard name, so one a source or process left is removed. CF has none for many derived
-    quantities, and a wrong one is worse than none.
+    ``standard_name: null`` maps to None, which removes one a source or process left.
     A categorical dataset's classes become ``flag_values`` and ``flag_meanings`` (CLIM-895).
     """
     if not template:
