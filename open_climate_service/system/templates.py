@@ -1966,8 +1966,8 @@ def render_pipelines_page(
             }
         )
     if tab == "list":
-        for row, diagram in zip(rows, _pipeline_diagrams(rows, mount), strict=True):
-            row["diagram"] = diagram
+        for row, (diagram, fed) in zip(rows, _pipeline_diagrams(rows, mount), strict=True):
+            row["diagram"], row["fed"] = diagram, fed
     draft = draft or {}
     selection = selection or {}
     arguments = dict((draft.get("workflow") or {}).get("arguments") or {})
@@ -2051,25 +2051,32 @@ def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
         return Markup("")
 
 
-def _pipeline_diagrams(rows: list[dict[str, Any]], mount: str) -> list[Markup]:
-    """Each listed pipeline's chain, drawn from one read of the automation graph."""
+def _pipeline_diagrams(rows: list[dict[str, Any]], mount: str) -> list[tuple[Markup, bool]]:
+    """Each listed pipeline's chain, drawn from one read of the automation graph.
+
+    With each drawing, whether the pipeline reads any dataset or feature collection: one that
+    reads none still has its workflow and destination to draw, but nothing feeds it.
+    """
     try:
         from open_climate_service.automation.graph import build_graph, pipeline_focus, render_svg
 
         graph = build_graph()
-        return [
-            render_svg(
-                pipeline_focus(graph, row["id"]),
+        drawn: list[tuple[Markup, bool]] = []
+        for row in rows:
+            chain = pipeline_focus(graph, row["id"])
+            fed = any(node.kind in ("dataset", "features") for node in chain.nodes)
+            svg = render_svg(
+                chain,
                 mount,
                 current=f"workflow:pipeline:{row['id']}",
                 current_href=f"/workflows/{row['workflow']}",
                 key=row["id"],
             )
-            for row in rows
-        ]
+            drawn.append((svg, fed))
+        return drawn
     except Exception:
         _log.exception("The pipeline diagrams could not be drawn")
-        return [Markup("") for _ in rows]
+        return [(Markup(""), True) for _ in rows]
 
 
 def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) -> str:

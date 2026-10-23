@@ -50,7 +50,8 @@
             {% for p in pipelines %}
             <section class="pipeline-diagram" aria-labelledby="diagram-{{ p.id }}">
               <h3 id="diagram-{{ p.id }}"><a href="{{ mount }}/pipelines/{{ p.id }}">{{ p.title }}</a> <span class="chip">{{ p.mode | replace('_', ' ') }}</span></h3>
-              {% if p.diagram %}<div class="panel automation-canvas">{{ p.diagram }}</div>{% else %}<p class="note">Nothing feeds this pipeline yet.</p>{% endif %}
+              {% if not p.fed %}<p class="note">Nothing feeds this pipeline yet: its workflow reads no dataset or feature collection.</p>{% endif %}
+              {% if p.diagram %}<div class="panel automation-canvas">{{ p.diagram }}</div>{% endif %}
             </section>
             {% endfor %}
           </div>

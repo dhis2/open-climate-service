@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from open_climate_service.automation import config as automation_config
 from open_climate_service.automation.config import AutomationConfig, WorkflowTrigger
 from open_climate_service.automation.graph import AutomationGraph, layout
+from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.features import services as feature_services
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.main import app
@@ -119,10 +120,24 @@ PIPELINE = PipelineRecord(
 )
 
 
+# Fetched from a data source; the normal and the anomaly are workflow outputs, whose generated
+# templates have no ingestion block.
+INGESTED = {"era5_daily", "era5_precip_monthly", "chirps_monthly"}
+
+
+def _template(dataset_id: str) -> dict[str, Any]:
+    template: dict[str, Any] = {"id": dataset_id, "source": "copied from the input for a derived one"}
+    if dataset_id in INGESTED:
+        template["ingestion"] = {"plugin": "example.Plugin"}
+    return template
+
+
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch) -> None:
     """A Nepal-like instance: two schedules, a trigger chain through a derived dataset, a pipeline."""
     monkeypatch.setattr(ingestion_services, "list_datasets", lambda: SimpleNamespace(items=DATASETS))
+    templates = [_template(d.dataset_id) for d in DATASETS] + [_template("era5_precip_monthly")]
+    monkeypatch.setattr(registry_datasets, "list_datasets", lambda: templates)
     monkeypatch.setattr(
         feature_services,
         "list_feature_collections",
@@ -162,8 +177,8 @@ def test_the_graph_connects_schedules_triggers_and_pipelines(client: TestClient)
     graph = _graph(client)
 
     assert _edges(graph) == {
-        ("source:ERA5-Land Reanalysis", "dataset:era5_daily", "updates"),
-        ("source:CHIRPS v3 (monthly)", "dataset:chirps_monthly", "updates"),
+        ("source:era5_daily", "dataset:era5_daily", "updates"),
+        ("source:chirps_monthly", "dataset:chirps_monthly", "updates"),
         ("dataset:chirps_monthly", "workflow:trigger:chirps-anomaly", "updates"),
         ("dataset:chirps_normal", "workflow:trigger:chirps-anomaly", "input"),
         ("workflow:trigger:chirps-anomaly", "dataset:chirps_anomaly", "updates"),
@@ -178,7 +193,7 @@ def test_the_graph_connects_schedules_triggers_and_pipelines(client: TestClient)
 def test_arrows_say_when_they_fire(client: TestClient) -> None:
     labels = {(e.source, e.target): e.label for e in _graph(client).edges}
 
-    assert labels[("source:ERA5-Land Reanalysis", "dataset:era5_daily")] == "daily 06:00 UTC"
+    assert labels[("source:era5_daily", "dataset:era5_daily")] == "daily 06:00 UTC"
     assert labels[("dataset:chirps_monthly", "workflow:trigger:chirps-anomaly")] == "on update"
     assert labels[("dataset:era5_daily", "workflow:pipeline:daily-temperature-to-dhis2")] == "on update"
     # Inputs and deliveries carry no label: they read or send, they do not start anything.
@@ -189,7 +204,7 @@ def test_arrows_say_when_they_fire(client: TestClient) -> None:
     )
 
     fires = {(e.source, e.target): e.fires for e in _graph(client).edges}
-    assert fires[("source:ERA5-Land Reanalysis", "dataset:era5_daily")] == "schedule"
+    assert fires[("source:era5_daily", "dataset:era5_daily")] == "schedule"
     assert fires[("dataset:chirps_monthly", "workflow:trigger:chirps-anomaly")] == "update"
     assert fires[("dataset:chirps_normal", "workflow:trigger:chirps-anomaly")] is None
 
@@ -213,9 +228,7 @@ def test_a_chain_through_a_derived_dataset_reads_left_to_right(client: TestClien
     column = {node_id: layer for node_id, (layer, _) in places.items()}
 
     assert (
-        column["source:CHIRPS v3 (monthly)"]
-        < column["dataset:chirps_monthly"]
-        < column["workflow:trigger:chirps-anomaly"]
+        column["source:chirps_monthly"] < column["dataset:chirps_monthly"] < column["workflow:trigger:chirps-anomaly"]
     )
     assert (
         column["workflow:trigger:chirps-anomaly"]
@@ -254,7 +267,7 @@ def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, mon
 
     # Its chain: the data source, the dataset that runs it, the districts it reads, its destination.
     chain = (
-        "source:ERA5-Land Reanalysis",
+        "source:era5_daily",
         "dataset:era5_daily",
         "features:districts",
         "destination:pipeline:daily-temperature-to-dhis2",
@@ -295,11 +308,8 @@ def test_an_unscheduled_ingested_dataset_still_shows_its_data_source(
     page = client.get("/pipelines/daily-temperature-to-dhis2", headers={"Accept": "text/html"}).text
     diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
 
-    assert 'data-id="source:ERA5-Land Reanalysis"' in diagram
-    assert (
-        'class="ag-edge ag-edge-origin" data-source="source:ERA5-Land Reanalysis" '
-        'data-target="dataset:era5_daily"' in diagram
-    )
+    assert 'data-id="source:era5_daily"' in diagram
+    assert 'class="ag-edge ag-edge-origin" data-source="source:era5_daily" data-target="dataset:era5_daily"' in diagram
     assert ">DATA SOURCE<" in diagram
     assert "daily 06:00 UTC" not in diagram
     # The legend names the provenance arrow; its dotted style lives in the stylesheet.
@@ -346,3 +356,83 @@ def test_the_pipelines_page_draws_each_pipeline_or_lists_them(
     assert '<a href="/pipelines/daily-temperature-to-dhis2">Daily temperature to DHIS2</a>' in page
     assert 'href="/workflows/aggregate_by_features"><g class="ag-node ag-node-workflow ag-current"' in diagram
     assert '<div class="panel table-wrap pipeline-table">' in page
+
+
+def test_two_templates_with_one_provider_name_keep_their_own_data_source_box(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ERA5-Land templates share the name "ERA5-Land Reanalysis"; each box links to its own template."""
+    precipitation = _dataset(
+        "era5_precip_monthly", "ERA5-Land precipitation, monthly", "ERA5-Land Reanalysis", "2025-01", "2026-09"
+    )
+    monkeypatch.setattr(ingestion_services, "list_datasets", lambda: SimpleNamespace(items=[*DATASETS, precipitation]))
+    workflow = PIPELINE.spec.workflow.model_copy(
+        update={"arguments": {"dataset_id": "era5_precip_monthly", "geometries": {"from_features": "districts"}}}
+    )
+    reads_precipitation = PIPELINE.model_copy(update={"spec": PIPELINE.spec.model_copy(update={"workflow": workflow})})
+    monkeypatch.setattr(pipeline_store, "get_record", lambda pipeline_id: reads_precipitation)
+    monkeypatch.setattr(pipeline_store, "list_records", lambda: [reads_precipitation])
+
+    page = client.get("/pipelines/daily-temperature-to-dhis2", headers={"Accept": "text/html"}).text
+    diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
+
+    # The scheduled temperature template is read first; the precipitation box must not borrow its link.
+    assert 'href="/data-sources/era5_precip_monthly"' in diagram
+    assert 'href="/data-sources/era5_daily"' not in diagram
+    assert ">ERA5-Land Reanalysis<" in diagram
+
+
+def test_the_diagram_keeps_its_box_links_reachable_to_assistive_technology(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline_store, "get_record", lambda pipeline_id: PIPELINE)
+    page = client.get("/pipelines/daily-temperature-to-dhis2", headers={"Accept": "text/html"}).text
+    svg = page.split('<svg class="automation-graph"', 1)[1].split(">", 1)[0]
+
+    # role="img" would make the <a> elements inside presentational.
+    assert 'role="group"' in svg and 'role="img"' not in svg
+    assert 'aria-labelledby="automation-graph-title"' in svg
+
+
+def test_only_a_pipeline_that_reads_nothing_says_nothing_feeds_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = client.get("/pipelines", headers={"Accept": "text/html"}).text
+    assert "Nothing feeds this pipeline yet" not in page
+
+    workflow = PIPELINE.spec.workflow.model_copy(update={"arguments": {}})
+    reads_nothing = PIPELINE.model_copy(update={"spec": PIPELINE.spec.model_copy(update={"workflow": workflow})})
+    monkeypatch.setattr(pipeline_store, "list_records", lambda: [reads_nothing])
+
+    page = client.get("/pipelines", headers={"Accept": "text/html"}).text
+    assert "Nothing feeds this pipeline yet" in page
+    # Its workflow and destination are still drawn.
+    assert 'data-id="workflow:pipeline:daily-temperature-to-dhis2"' in page
+
+
+def test_an_unscheduled_dataset_upstream_of_a_trigger_keeps_its_data_source(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pipeline reads a derived dataset whose input nobody schedules: the chain still starts at its source."""
+    only_era5 = ScheduleListResponse(enabled=True, running=True, timezone="UTC", schedules=SCHEDULES[:1])
+    monkeypatch.setattr(scheduler_service, "get_scheduler_service", lambda: SimpleNamespace(status=lambda: only_era5))
+    workflow = PIPELINE.spec.workflow.model_copy(
+        update={"arguments": {"dataset_id": "chirps_anomaly", "geometries": {"from_features": "districts"}}}
+    )
+    reads_anomaly = PIPELINE.model_copy(update={"spec": PIPELINE.spec.model_copy(update={"workflow": workflow})})
+    monkeypatch.setattr(pipeline_store, "get_record", lambda pipeline_id: reads_anomaly)
+    monkeypatch.setattr(pipeline_store, "list_records", lambda: [reads_anomaly])
+
+    page = client.get("/pipelines/daily-temperature-to-dhis2", headers={"Accept": "text/html"}).text
+    diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
+
+    # chirps_monthly is read only by the trigger, and has no schedule: its source comes by origin, no clock.
+    assert (
+        'class="ag-edge ag-edge-origin" data-source="source:chirps_monthly" data-target="dataset:chirps_monthly"'
+        in diagram
+    )
+    # Nothing in this chain is scheduled, so no arrow carries a clock.
+    assert "Runs on its sync schedule" not in diagram
+    # Workflow outputs have no data source of their own, though their templates copy a source name.
+    assert 'data-id="source:chirps_anomaly"' not in diagram
+    assert 'data-id="source:chirps_normal"' not in diagram

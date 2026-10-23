@@ -8,15 +8,15 @@ Assembled from what OCS already records, so it needs no configuration of its own
 - a pipeline runs when its input dataset updates (or by hand) and delivers to a destination.
 
 The graph is configuration, not history: what is set up to run, with the latest run of each
-step as its status. ``GET /automation/graph`` returns it as JSON, and the Automation page draws
-the same graph as SVG.
+step as its status. ``GET /automation/graph`` returns it as JSON; the Pipelines pages draw each
+pipeline's part of it as SVG (``pipeline_focus``).
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal
 
@@ -210,8 +210,10 @@ def _schedule_text(schedule: Any) -> str:
 def _source_node(record: Any, dataset_id: str) -> GraphNode:
     label = getattr(record, "source", None) or getattr(record, "source_dataset_id", None) or dataset_id
     source_id = getattr(record, "source_dataset_id", None)
+    # Keyed on the template, not its display name: six ERA5-Land templates share the name
+    # "ERA5-Land Reanalysis", and one box for all of them would link to whichever came first.
     return GraphNode(
-        id=f"source:{label}",
+        id=f"source:{source_id or label}",
         kind="source",
         label=str(label),
         href=f"/data-sources/{source_id}" if source_id else None,
@@ -307,8 +309,13 @@ def assemble_graph(
     pipelines: Sequence[Any],
     destination_titles: Mapping[str, str] | None = None,
     workflow_titles: Mapping[str, str] | None = None,
+    ingested: Collection[str] = (),
 ) -> AutomationGraph:
-    """Build the graph from already-read inputs. ``trigger_jobs`` holds each trigger's latest job."""
+    """Build the graph from already-read inputs.
+
+    ``trigger_jobs`` holds each trigger's latest job. ``ingested`` names the datasets fetched
+    from a data source, as opposed to produced by a workflow: only those get a data source box.
+    """
     b = _Builder()
     destination_titles = destination_titles or {}
     workflow_titles = workflow_titles or {}
@@ -377,19 +384,8 @@ def assemble_graph(
         dataset_ids, collection_ids = _pipeline_inputs(record, datasets)
         drive: EdgeKind = "updates" if spec.delivery.policy == "on_update" else "input"
         for dataset_id in dataset_ids:
-            dataset_node = b.node(_dataset_node(dataset_id, datasets))
-            record = datasets.get(dataset_id)
-            produced_by_workflow = any(
-                edge.target == dataset_node and edge.source.startswith("workflow:") for edge in b.edges
-            )
-            has_source = record is not None and bool(
-                getattr(record, "source", None) or getattr(record, "source_dataset_id", None)
-            )
-            if has_source and not produced_by_workflow:
-                source = b.node(_source_node(record, dataset_id))
-                b.edge(source, dataset_node, "origin")
             b.edge(
-                dataset_node,
+                b.node(_dataset_node(dataset_id, datasets)),
                 workflow_node,
                 drive,
                 "on update" if drive == "updates" else "by hand",
@@ -413,13 +409,34 @@ def assemble_graph(
         )
         b.edge(workflow_node, destination, "delivers")
 
+    _add_provenance(b, datasets, ingested)
     return b.graph()
+
+
+def _add_provenance(b: _Builder, datasets: Mapping[str, Any], ingested: Collection[str]) -> None:
+    """Give every ingested dataset in the graph its data source, wherever the graph reaches it.
+
+    Decided once, after every step is in: a dataset only a trigger reads needs its origin as much
+    as one a pipeline reads. A scheduled dataset already has its source, through the edge that
+    carries the schedule; any other gets a plain ``origin`` edge, so the clock stays on scheduled
+    datasets only. A dataset a workflow produces has no data source of its own.
+    """
+    produced = {edge.target for edge in b.edges if edge.source.startswith("workflow:")}
+    sourced = {edge.target for edge in b.edges if edge.source.startswith("source:")}
+    for node in list(b.nodes.values()):
+        if node.kind != "dataset" or node.ref is None or node.id in produced or node.id in sourced:
+            continue
+        record = datasets.get(node.ref)
+        if record is None or node.ref not in ingested:
+            continue
+        b.edge(b.node(_source_node(record, node.ref)), node.id, "origin")
 
 
 def build_graph() -> AutomationGraph:
     """Read the instance's schedules, triggers, pipelines and datasets, and assemble the graph."""
+    datasets = _read_datasets()
     return assemble_graph(
-        datasets=_read_datasets(),
+        datasets=datasets,
         feature_names=_read_feature_names(),
         schedules=_read_schedules(),
         triggers=_read_triggers(),
@@ -427,7 +444,29 @@ def build_graph() -> AutomationGraph:
         pipelines=_read_pipelines(),
         destination_titles=_read_destination_titles(),
         workflow_titles=_read_workflow_titles(),
+        ingested=_read_ingested(datasets),
     )
+
+
+def _read_ingested(datasets: Mapping[str, Any]) -> set[str]:
+    """The datasets whose data source template fetches them, rather than a workflow producing them.
+
+    A workflow's output gets an auto-generated template that copies ``source`` from its input's,
+    so the name alone cannot tell the two apart; the registry's ``is_ingestable`` rule can.
+    """
+    try:
+        from open_climate_service.data_registry.services import datasets as registry
+
+        templates = {template["id"]: template for template in registry.list_datasets()}
+        ingested: set[str] = set()
+        for dataset_id, record in datasets.items():
+            template = templates.get(getattr(record, "source_dataset_id", None) or dataset_id)
+            if template is not None and registry.is_ingestable(template):
+                ingested.add(dataset_id)
+        return ingested
+    except Exception:
+        _log.exception("Data source templates could not be read for the automation graph")
+        return set()
 
 
 def _read_destination_titles() -> dict[str, str]:
@@ -518,41 +557,6 @@ def _read_pipelines() -> list[Any]:
     except Exception:
         _log.exception("Pipelines could not be read for the automation graph")
         return []
-
-
-def focus(graph: AutomationGraph, node_id: str) -> AutomationGraph:
-    """The part of *graph* one step belongs to: everything it comes from and everything it feeds.
-
-    The same set the Overview lights up on hover, so a pipeline's page shows its own chain and
-    nothing beside it. Empty when the step is not in the graph.
-    """
-    if not any(node.id == node_id for node in graph.nodes):
-        return AutomationGraph()
-    up: dict[str, list[str]] = defaultdict(list)
-    down: dict[str, list[str]] = defaultdict(list)
-    for edge in graph.edges:
-        up[edge.target].append(edge.source)
-        down[edge.source].append(edge.target)
-
-    def reach(links: Mapping[str, list[str]]) -> set[str]:
-        seen, queue = {node_id}, [node_id]
-        while queue:
-            for nxt in links.get(queue.pop(), []):
-                if nxt not in seen:
-                    seen.add(nxt)
-                    queue.append(nxt)
-        return seen
-
-    before, after = reach(up), reach(down)
-    keep = before | after
-    return AutomationGraph(
-        nodes=[node for node in graph.nodes if node.id in keep],
-        edges=[
-            edge
-            for edge in graph.edges
-            if (edge.source in before and edge.target in before) or (edge.source in after and edge.target in after)
-        ],
-    )
 
 
 def pipeline_focus(graph: AutomationGraph, pipeline_id: str) -> AutomationGraph:
@@ -773,7 +777,7 @@ def render_svg(
 
     parts: list[str] = [
         f'<svg class="automation-graph" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
-        f'role="img" aria-labelledby="automation-graph-title{suffix}">',
+        f'role="group" aria-labelledby="automation-graph-title{suffix}">',
         f'<title id="automation-graph-title{suffix}">How data moves through this pipeline</title>',
         "<defs>",
         *(
