@@ -423,12 +423,13 @@ extents:
 
 ### CF metadata
 
-Stamped onto the stored variable at ingest so the GeoZarr store is
+Stamped onto the stored variable, the template's `variable`, at ingest so the GeoZarr store is
 CF-compliant on disk and CF-aware tools (xclim climate indices, cf-xarray, QGIS) work
 without per-process glue. These fields take effect when the store is written, so changing
 them requires re-ingesting the dataset. The template's `name` and `description` are stamped
 too, as the variable's `long_name` and `description`, replacing what a source or a process
-such as an xclim indicator left there:
+such as an xclim indicator left there. Any other variable in the store, such as a quality flag,
+keeps its own attributes:
 
 | Field           | Required | Description                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

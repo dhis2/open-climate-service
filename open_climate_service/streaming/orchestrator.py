@@ -278,7 +278,7 @@ async def run_streaming_ingest(
                 if spec is None:
                     spec = _grid_spec_from_dataset(ds, time_dim=time_dim, x_dim=x_dim, y_dim=y_dim, crs=prepared.crs)
                 _strip_cf_encoding(ds, period_type, time_dim=spec.time_dim)
-                apply_cf_metadata(ds, cf_attrs, overwrite=True)
+                apply_cf_metadata(ds, cf_attrs, variable=(dataset or {}).get("variable"), overwrite=True)
                 try:
                     spatial_shape = (int(ds.sizes[spec.y_dim]), int(ds.sizes[spec.x_dim]))
                 except KeyError as exc:
@@ -481,7 +481,9 @@ def run_static_ingest_sync(
             for name, fill in fills.items():
                 if fill is not None:
                     ds[name].encoding["_FillValue"] = fill
-            apply_cf_metadata(ds, cf_attrs_from_template(dataset), overwrite=True)
+            apply_cf_metadata(
+                ds, cf_attrs_from_template(dataset), variable=(dataset or {}).get("variable"), overwrite=True
+            )
             _check_cancelled()
             session = open_or_create_repo(store_path).writable_session("main")
             ds.to_zarr(session.store, mode="w", zarr_format=3)

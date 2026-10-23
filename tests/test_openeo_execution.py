@@ -1729,6 +1729,50 @@ def test_persist_result_replaces_a_process_s_labels_with_the_template_s(
         written.close()
 
 
+def test_persist_result_stamps_the_template_on_the_primary_variable_only(
+    job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An auxiliary variable in a result keeps its own labels and standard name."""
+    from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
+
+    def _template(dataset_id: str) -> dict[str, Any]:
+        return {
+            "id": dataset_id,
+            "name": "Heat-stress days, WBGT max above 30 degrees C",
+            "description": "Days in each month whose daily maximum WBGT exceeds 30 degrees C.",
+            "units": "d",
+            "standard_name": None,
+        }
+
+    result = _small_dataset()
+    result["precip"].attrs.update({"units": "d", "long_name": "The number of days with maximum temperature"})
+    result["wbgt_max"] = result["precip"].copy(deep=True)
+    result["wbgt_max"].attrs = {
+        "units": "degC",
+        "standard_name": "air_temperature",
+        "long_name": "Daily maximum WBGT",
+    }
+    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _template)
+    monkeypatch.setattr(
+        "open_climate_service.ingestions.services.register_artifact_record",
+        lambda record, publish: record,
+    )
+
+    envelope = SaveResultEnvelope(result, "Zarr", {"dataset_id": "heat_days", "variable": "precip", "publish": False})
+    job_service._persist_result("job-primary", envelope)
+
+    written = open_icechunk_dataset(str(tmp_path / "heat_days.icechunk"))
+    try:
+        assert written["precip"].attrs["long_name"] == "Heat-stress days, WBGT max above 30 degrees C"
+        auxiliary = written["wbgt_max"].attrs
+        assert auxiliary["long_name"] == "Daily maximum WBGT"
+        assert auxiliary["standard_name"] == "air_temperature"
+        assert auxiliary["units"] == "degC"
+    finally:
+        written.close()
+
+
 def test_persist_result_does_not_publish_when_publish_false(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
