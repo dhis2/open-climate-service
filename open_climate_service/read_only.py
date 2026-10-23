@@ -38,7 +38,10 @@ from open_climate_service.shared.urls import route_path
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # Mutating paths that remain open. Matched exactly (after stripping a trailing slash).
-_ALLOWED_WRITE_PATHS = frozenset({"/result"})
+# `/mcp` because MCP sends every message, a read as much as anything else, as a POST. It is no
+# bypass: its tools reach the rest of the API in-process, through this middleware, so a tool
+# can do no more on a read-only instance than an outside client can (CLIM-851).
+_ALLOWED_WRITE_PATHS = frozenset({"/result", "/mcp"})
 
 # Path trees closed to every method, including GET: the ingest and sync streams, batch
 # jobs, and operator export delivery. Delivery exposes server-held credentials
