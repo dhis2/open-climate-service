@@ -29,8 +29,9 @@ class CachedTimeSeriesZarr:
     use xarray directly for large-range or lazy Dask workflows.
 
     On a cache miss, the helper starts the window at the request's first time
-    step and extends it through the next source time-chunk boundary, unless
-    limited sooner by ``max_cache_bytes``. If source chunk metadata is
+    step and extends it through the next ``chunks_per_read`` source time-chunk
+    boundaries (default 1; raise it for archives with short time chunks), unless
+    limited sooner by ``max_cache_bytes`` or the end of the archive. If source chunk metadata is
     unavailable, it warns and uses the byte limit as the only prefetch bound.
     The cache is reused when it already contains the full request, and
     replaced otherwise.
@@ -52,14 +53,18 @@ class CachedTimeSeriesZarr:
         time_dim: str,
         opener: Callable[[str], xr.Dataset],
         max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES,
+        chunks_per_read: int = 1,
     ) -> None:
         if max_cache_bytes <= 0:
             raise ValueError("max_cache_bytes must be greater than zero")
+        if chunks_per_read < 1:
+            raise ValueError("chunks_per_read must be at least one")
         self.url = url
         self.variable = variable
         self._time_dim = time_dim
         self._opener = opener
         self._max_cache_bytes = max_cache_bytes
+        self._chunks_per_read = chunks_per_read
         self._dataset: xr.Dataset | None = None
         self._bytes_per_time_step: int | None = None
         self._max_cache_steps: int | None = None
@@ -139,9 +144,9 @@ class CachedTimeSeriesZarr:
                 # Time chunk metadata is unavailable, so limit the cache to the max cache size
                 cache_end = max_cache_end
             else:
-                # Set the cache end to the next source time-chunk boundary, but not beyond the max cache size
+                # Set the cache end to the chunks_per_read-th source time-chunk boundary, but not beyond the max cache size
                 next_chunk_end = (
-                    (last + self._time_chunk_steps - 1) // self._time_chunk_steps
+                    (last + self._time_chunk_steps - 1) // self._time_chunk_steps + self._chunks_per_read - 1
                 ) * self._time_chunk_steps
                 cache_end = min(max_cache_end, max(last, next_chunk_end))
             cache_steps = cache_end - cache_start

@@ -36,6 +36,7 @@ class ERA5LandEDHDailyPlugin(BaseDatasetPlugin):
         zarr_url: str = _EDH_DAILY_URL,
         unit_transform: str | None = None,
         max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES,
+        chunks_per_read: int = 5,
         **kwargs: Any,
     ) -> None:
         if unit_transform and unit_transform not in _UNIT_TRANSFORMS:
@@ -50,6 +51,8 @@ class ERA5LandEDHDailyPlugin(BaseDatasetPlugin):
             time_dim=_EDH_TIME_DIM,
             opener=_open_edh_zarr,
             max_cache_bytes=max_cache_bytes,
+            # EDH time chunks hold only 75 days, so read several chunks per cache refresh.
+            chunks_per_read=chunks_per_read,
         )
         self._cached_cutoff: date | None = None
 
