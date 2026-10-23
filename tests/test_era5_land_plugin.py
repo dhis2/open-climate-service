@@ -56,7 +56,9 @@ def test_cds_daily_temperature_is_the_mean_of_the_utc_day_in_celsius(monkeypatch
 def test_cds_daily_precipitation_sums_the_hours_in_mm(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _cds_store("tp", np.full(48, 0.001))  # 1 mm every hour
     monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
-    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(variable="tp", temporal_aggregation="sum", unit_transform="metres_to_mm")
+    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(
+        variable="tp", temporal_aggregation="sum", unit_transform="metres_to_mm"
+    )
 
     day = plugin.fetch_period("2020-01-01", _CDS_BBOX)
 
@@ -109,7 +111,9 @@ def test_edh_monthly_temperature_is_the_mean_of_daily_means(monkeypatch: pytest.
 def test_edh_monthly_precipitation_is_a_mean_daily_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _edh_store("tp", "2020-01-31", np.full(31, 0.002))  # 2 mm every day
     monkeypatch.setattr(era5_land_edh, "_open_edh_zarr", lambda _url: store)
-    plugin = ERA5LandEDHMonthlyFromDailyPlugin(variable="tp", temporal_aggregation="mean", unit_transform="metres_to_mm")
+    plugin = ERA5LandEDHMonthlyFromDailyPlugin(
+        variable="tp", temporal_aggregation="mean", unit_transform="metres_to_mm"
+    )
 
     month = plugin.fetch_period("2020-01", _EDH_BBOX)
 

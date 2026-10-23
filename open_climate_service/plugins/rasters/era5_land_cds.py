@@ -77,13 +77,14 @@ class ERA5LandCDSZarrHourlyPlugin(BaseDatasetPlugin):
         source_url = zarr_url or _CDS_ZARR_STORES.get(variable)
         if not source_url:
             raise ValueError(
-                f"Unsupported ERA5-Land ARCO variable {variable!r}; specify its CDS geo-chunked Zarr URL with 'zarr_url'"
+                f"Unsupported ERA5-Land ARCO variable {variable!r}; "
+                "specify its CDS geo-chunked Zarr URL with 'zarr_url'"
             )
-        
+
         if unit_transform:
             if unit_transform not in _UNIT_TRANSFORMS.keys():
                 raise ValueError(f"Unknown unit_transform {unit_transform!r}; expected one of {list(_UNIT_TRANSFORMS)}")
-        
+
         self.variable = variable
         self.unit_transform = unit_transform
 
@@ -128,7 +129,7 @@ class ERA5LandCDSZarrHourlyPlugin(BaseDatasetPlugin):
         ds = ds.rio.write_crs("EPSG:4326")
         ds = normalize_period(ds, variable=self.variable, bbox=list(bbox), time_dim=_CDS_TIME_DIM)
         ds = normalize_y_direction(ds)
-        if self.unit_transform in (None, "", "none"):
+        if not self.unit_transform or self.unit_transform == "none":
             return ds
         transform = _UNIT_TRANSFORMS[self.unit_transform]
         return transform(ds, {"variable": self.variable})
@@ -179,11 +180,12 @@ class ERA5LandCDSZarrDailyFromHourlyPlugin(ERA5LandCDSZarrHourlyPlugin):
 def _open_cds_zarr(url: str) -> xr.Dataset:
     """Open a CDS ARCO store using the configured CDS API token."""
     token = _get_cdsapi_key()
-    return xr.open_zarr(
+    ds: xr.Dataset = xr.open_zarr(
         url,
         consolidated=True,
         storage_options={"headers": {"Authorization": f"Bearer {token}"}},
     )
+    return ds
 
 
 def _get_cdsapi_key() -> str:

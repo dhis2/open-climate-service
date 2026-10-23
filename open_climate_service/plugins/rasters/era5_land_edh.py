@@ -81,7 +81,7 @@ class ERA5LandEDHDailyPlugin(BaseDatasetPlugin):
         ds = ds.rio.write_crs("EPSG:4326")
         ds = normalize_period(ds, variable=self.variable, bbox=list(bbox), time_dim=_EDH_TIME_DIM)
         ds = normalize_y_direction(ds)
-        if self.unit_transform in (None, "", "none"):
+        if not self.unit_transform or self.unit_transform == "none":
             return ds
         transform = _UNIT_TRANSFORMS[self.unit_transform]
         return transform(ds, {"variable": self.variable})
@@ -131,4 +131,5 @@ class ERA5LandEDHMonthlyFromDailyPlugin(ERA5LandEDHDailyPlugin):
 
 def _open_edh_zarr(url: str) -> xr.Dataset:
     """Open an Earth Data Hub store, authenticating with ~/netrc file."""
-    return xr.open_zarr(url, storage_options={"client_kwargs": {"trust_env": True}})
+    ds: xr.Dataset = xr.open_zarr(url, storage_options={"client_kwargs": {"trust_env": True}})
+    return ds

@@ -144,7 +144,7 @@ class CachedTimeSeriesZarr:
                 # Time chunk metadata is unavailable, so limit the cache to the max cache size
                 cache_end = max_cache_end
             else:
-                # Set the cache end to the chunks_per_read-th source time-chunk boundary, but not beyond the max cache size
+                # End the cache at the chunks_per_read-th source time-chunk boundary, within the max cache size
                 next_chunk_end = (
                     (last + self._time_chunk_steps - 1) // self._time_chunk_steps + self._chunks_per_read - 1
                 ) * self._time_chunk_steps
