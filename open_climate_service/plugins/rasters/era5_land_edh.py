@@ -18,8 +18,7 @@ from open_climate_service.shared.zarr import DEFAULT_MAX_CACHE_BYTES, CachedTime
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
 
-_EDH_DAILY_URL = "https://api.earthdatahub.destine.eu/era5/era5-land-daily-utc-v1.zarr"
-_EDH_API_KEY_ENV = "EDH_API_KEY"
+_EDH_DAILY_URL = "https://data.earthdatahub.destine.eu/era5/era5-land-daily-utc-v1.zarr"
 _EDH_TIME_DIM = "valid_time"
 _UNIT_TRANSFORMS = {
     "kelvin_to_celsius": kelvin_to_celsius,
@@ -130,8 +129,4 @@ class ERA5LandEDHMonthlyFromDailyPlugin(ERA5LandEDHDailyPlugin):
 
 def _open_edh_zarr(url: str) -> xr.Dataset:
     """Open an Earth Data Hub store, authenticating with ``EDH_API_KEY`` or else netrc."""
-    token = os.environ.get(_EDH_API_KEY_ENV)
-    if token:
-        parts = urlparse(url)
-        url = urlunparse(parts._replace(netloc=f"edh:{token}@{parts.netloc}"))
     return xr.open_zarr(url, storage_options={"client_kwargs": {"trust_env": True}})
