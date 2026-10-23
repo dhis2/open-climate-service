@@ -254,17 +254,19 @@ Responsibilities are split: the plugin knows the source; the orchestrator owns r
 Multiple YAML templates can reference the same plugin class and differentiate via `ingestion.params`. This is the intended pattern for sources that expose multiple variables:
 
 ```yaml
-# era5land_temperature_hourly.yaml
+# era5_land_cds.yaml: era5land_temperature_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
   params:
     variable: t2m
+    temporal_aggregation: mean
 
-# era5land_precipitation_hourly.yaml
+# era5_land_cds.yaml: era5land_precipitation_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
   params:
     variable: tp
+    temporal_aggregation: sum
 ```
 
 ### Named openEO process (`@process`)

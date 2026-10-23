@@ -207,17 +207,19 @@ question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* i
 Multiple templates can share the same plugin class and differ only in `params`:
 
 ```yaml
-- id: era5land_temperature_hourly
+- id: era5land_temperature_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandHourlySingleBandPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
     params:
-      variable: 2m_temperature
+      variable: t2m
+      temporal_aggregation: mean
 
-- id: era5land_precipitation_hourly
+- id: era5land_precipitation_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipitationPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
     params:
-      variable: total_precipitation
+      variable: tp
+      temporal_aggregation: sum
 ```
 
 ### Static datasets without a time axis
