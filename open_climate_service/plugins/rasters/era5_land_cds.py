@@ -1,4 +1,4 @@
-"""Daily ERA5-Land ingestion from the CDS geo-chunked ARCO Zarr archive."""
+"""Daily ERA5-Land ingestion from the Climate Data Store."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ _UNIT_TRANSFORMS = {
 }
 
 
-class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
+class ERA5LandCDSZarrHourlyPlugin(BaseDatasetPlugin):
     """Read one variable from a CDS geo-chunked ERA5-Land ARCO Zarr store."""
 
     max_concurrency = 1
@@ -144,7 +144,7 @@ class ERA5LandZarrHourlyPlugin(BaseDatasetPlugin):
         return self._cached_cutoff
 
 
-class ERA5LandZarrDailyFromHourlyPlugin(ERA5LandZarrHourlyPlugin):
+class ERA5LandCDSZarrDailyFromHourlyPlugin(ERA5LandCDSZarrHourlyPlugin):
     """Aggregate hourly ERA5-Land ARCO values into UTC calendar-day outputs."""
 
     commit_batch_size = 30

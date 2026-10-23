@@ -1,0 +1,81 @@
+- id: era5land_temperature_monthly
+  name: 2m temperature (ERA5-Land)
+  short_name: 2m temperature
+  description: >-
+    Monthly mean air temperature 2 m above the ground at 9 km worldwide, aggregated from the
+    Earth Data Hub daily archive. Months run in UTC.
+  standard_name: air_temperature
+  variable: t2m
+  period_type: monthly
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01"
+      resolution: P1M
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_edh.ERA5LandEDHMonthlyFromDailyPlugin
+    params:
+      variable: t2m
+      temporal_aggregation: mean
+      unit_transform: kelvin_to_celsius
+  units: degC
+  cell_methods: "time: mean"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land-daily
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: rdbu_r
+    range: [-30.0, 30.0]
+
+- id: era5land_precipitation_monthly
+  name: Precipitation rate (ERA5-Land)
+  short_name: Precipitation
+  description: >-
+    Monthly rainfall at 9 km worldwide, stored as a mean daily rate rather than a monthly total,
+    aggregated from the Earth Data Hub daily archive. Months run in UTC.
+  standard_name: lwe_precipitation_rate
+  variable: tp
+  period_type: monthly
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01"
+      resolution: P1M
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_edh.ERA5LandEDHMonthlyFromDailyPlugin
+    params:
+      variable: tp
+      temporal_aggregation: mean
+      unit_transform: metres_to_mm
+  # Mean daily precipitation rate (a flux), not the calendar-month total: this is the
+  # dimensionally-correct input xclim drought indices (SPI/SPEI) consume directly.
+  # Monthly total is a trivial rate * days_in_month derivation downstream.
+  units: mm/d
+  cell_methods: "time: mean"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land-daily
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: blues
+    range: [0.0, 20.0]
+    nodata: 0.0
