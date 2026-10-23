@@ -1,6 +1,7 @@
 """Public contract for export renderers and optional delivery."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -54,6 +55,16 @@ class SettingsFormField:
     help_text: str | None = None
     widget: str | None = None
     option_labels: dict[str, str] | None = None
+    lookup: str | None = None
+
+
+@dataclass(frozen=True)
+class LookupOption:
+    """One choice a destination offers for a lookup field: the stored value and how it reads."""
+
+    value: str
+    label: str
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -71,6 +82,10 @@ class PipelineSettingsForm:
 
     Presentation is deliberately data, not HTML. Properties omitted from ``sections`` are
     appended safely, so adding a schema property cannot make it impossible to configure.
+
+    A string field with ``widget="lookup"`` and a ``lookup`` name is chosen from the
+    destination: the form searches it through ``BaseExportPlugin.lookup_options`` and shows
+    stored values by the labels ``BaseExportPlugin.lookup_labels`` resolves.
     """
 
     title: str
@@ -187,6 +202,24 @@ class BaseExportPlugin(ABC):
         """
         return None
 
+    def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
+        """Search the destination for the choices of a lookup field, as the form types.
+
+        ``lookup`` is the name a ``SettingsFormField`` declared; ``settings`` are the form's
+        current values, incomplete and unvalidated, so the plugin reads from them only what the
+        search needs, such as the connection. May contact the destination. Raise ValueError
+        naming what is missing or what the destination answered.
+        """
+        raise NotImplementedError(f"Export plugin '{self.id}' has no lookup '{lookup}'")
+
+    def lookup_labels(self, lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
+        """How stored lookup values read, by value; a value the destination does not know is left out.
+
+        Called when a pipeline is validated, so the labels are kept with the validation result
+        and pages never wait for the destination. May contact the destination; raise on failure.
+        """
+        return {}
+
     def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
         """Compile destination settings into this plugin's export definition, without ``id`` or ``plugin``.
 
@@ -204,8 +237,23 @@ class BaseExportPlugin(ABC):
         """
         return []
 
-    def preview(self, content: bytes, limit: int = 5) -> list[dict[str, Any]]:
-        """A few rendered records for a dry-run summary; empty when the payload has no row shape."""
+    def preview(
+        self,
+        content: bytes,
+        settings: dict[str, Any],
+        context: DestinationContext,
+        labels: Mapping[str, Mapping[str, str]] | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """A few rendered records for a dry-run summary; empty when the payload has no row shape.
+
+        A cell is a scalar, or ``{"value": ..., "label": ...}`` when the plugin can say how an
+        identifier reads: the page shows the label with the value beside it. ``labels`` are the
+        names ``lookup_labels`` resolved at the last validation, by setting path and value, so
+        the plugin need not ask the destination again for those. Names the plugin has at hand,
+        such as a bound feature collection's, cost nothing; the destination may be asked for the
+        rest, with its failure tolerated.
+        """
         return []
 
     @abstractmethod

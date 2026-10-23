@@ -218,9 +218,11 @@ destination by overriding these optional hooks of `BaseExportPlugin`:
 |---|---|
 | `destination_settings_schema()` | JSON Schema of the settings; drives the pipeline form. Returning `None` (the default) means "not a destination". |
 | `pipeline_settings_form()` | Optional structured presentation metadata for the plugin's pipeline settings: display title and description, sections, field order, labels, help text and widget hints. Returning `None` keeps schema-derived defaults. |
+| `lookup_options(lookup, settings, query)` | The choices the destination offers for a `lookup` field as the form types, from the settings entered so far. May contact the destination; raise `ValueError` naming what is missing. |
+| `lookup_labels(lookup, settings, values)` | How stored lookup values read at the destination, by value. Called at validation; the labels are kept with the result so pages never wait for the destination. |
 | `export_definition(settings, context)` | Compile the settings into an export definition (mapping plus `dataset`/`connection` references), resolved like a configured named export. Pure; raise `ValueError` for bad settings. |
 | `check_destination(settings, context)` | Destination-side checks run on save, re-check and going live, returned as `DestinationCheck`s. May contact the destination. |
-| `preview(content, limit)` | A few rendered records for the dry-run summary. |
+| `preview(content, settings, context, labels, limit)` | A few rendered records for the dry-run summary. A cell may be `{"value", "label"}` so an identifier shows by name. `labels` are the names `lookup_labels` resolved at the last validation, so the destination need not be asked again: the DHIS2 plugin names data elements from them, asks DHIS2 only for any missing, and names organisation units from the bound feature collection's id and name columns. |
 | `target_binding(references)` | Credential-free identity of the target the export's references name. Recorded in each saved export's manifest and compared before delivery, so a moved target is refused. Default: the `connection` reference as a named instance connection, `{connection_id, url_sha256}`. |
 | `delivery_target(binding)` | What `send` receives for that binding, for both a delivery and a pipeline dry run. Default: the named connection's id. |
 | `redelivery_safe` | `True` when sending the same payload twice leaves the destination as sending it once (an upsert). Only then may an operator send a pipeline delivery again after an unconfirmed outcome. DHIS2 sets it. |
@@ -269,7 +271,7 @@ def pipeline_settings_form(self):
 
 Top-level field names refer to properties in the settings schema. A dotted name such as
 `series.data_element` customises a column of an array-of-objects field. Supported widget hints are
-`text`, `select`, `checkbox`, `textarea`, `json` and `rows`. A hint is used only
+`text`, `select`, `checkbox`, `textarea`, `json`, `rows` and `lookup`. A hint is used only
 when it is compatible with the property's schema shape; unknown or incompatible hints fall
 back to the safe schema-derived control. Schema properties omitted from the declared sections
 are appended under **Additional settings**, so presentation metadata cannot hide a new setting.
@@ -280,6 +282,35 @@ Choices remain part of the schema's `enum`. A plugin can derive that enum from i
 configuration each time `destination_settings_schema()` is called, as the built-in DHIS2
 plugin does for named connections. The schema and form hooks must not contact the destination.
 Use `option_labels` on `SettingsFormField` when enum values need friendlier labels.
+
+### Choose a setting from the destination
+
+A string setting whose values live at the destination, such as a DHIS2 data element, is declared
+with `widget="lookup"` and a `lookup` name of the plugin's choosing:
+
+```python
+SettingsFormField(
+    name="series.data_element",
+    label="Data element",
+    widget="lookup",
+    lookup="data_elements",
+)
+```
+
+The form then searches the destination as the operator types, through
+`lookup_options(lookup, settings, query)`. `settings` are the form's values so far, read the
+same way a save reads them but neither complete nor validated, so the plugin takes from them
+only what the search needs: the built-in DHIS2 plugin reads the connection, and the data set
+when one is chosen, to narrow the data elements to that set. Each `LookupOption` carries the
+`value` that is stored, the `label` the operator sees and an optional `detail` such as a period
+or value type. The value stays typeable by hand, and without JavaScript the field is a plain
+text input, so a pasted id keeps working.
+
+When a pipeline is validated the core calls `lookup_labels(lookup, settings, values)` for every
+lookup field with a stored value and keeps the answer on the validation result, by field path
+(`data_set`, `series.data_element`) and value. The pipeline page and the edit form show those
+labels beside the stored values and never contact the destination to render. A lookup that
+fails to resolve is logged and left out; it is never a check.
 
 Destination settings are persisted in pipeline records and returned by the API. They must not
 contain passwords, tokens or other credentials. Store credentials through the instance's

@@ -7,6 +7,8 @@ export plugin hooks, so the pipeline core never names DHIS2, its UIDs or its per
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +19,7 @@ from open_climate_service import config as api_config
 from open_climate_service.exports.base import (
     DestinationCheck,
     DestinationContext,
+    LookupOption,
     PipelineDataset,
     PipelineSettingsForm,
     SettingsFormField,
@@ -24,6 +27,8 @@ from open_climate_service.exports.base import (
 )
 from open_climate_service.shared.features import is_dhis2_uid
 from open_climate_service.shared.time import normalise_export_period
+
+logger = logging.getLogger(__name__)
 
 _DHIS2_PERIOD_TYPE = {
     "daily": "Daily",
@@ -33,6 +38,12 @@ _DHIS2_PERIOD_TYPE = {
     "yearly": "Yearly",
 }
 _POLYGON_TYPES = {"Polygon", "MultiPolygon"}
+# Lookup name -> DHIS2 metadata resource, for the form's search and the labels of stored UIDs.
+_LOOKUPS = {"data_sets": "dataSets", "data_elements": "dataElements"}
+_LOOKUP_PAGE = 20
+_LABEL_CHUNK = 50
+# The settings path of each series' data element: its form field, and where validation keeps its labels.
+_DATA_ELEMENT_LABELS = "series.data_element"
 
 
 class Dhis2Series(BaseModel):
@@ -122,7 +133,12 @@ def pipeline_settings_form() -> PipelineSettingsForm:
             SettingsFormField(
                 name="data_set",
                 label="Data set",
-                help_text="Optional DHIS2 data set UID, checked for period type and assignment.",
+                help_text=(
+                    "Optional. Search the connected DHIS2 by name or UID; the data set is checked for period "
+                    "type and assignment, and narrows the data element search."
+                ),
+                widget="lookup",
+                lookup="data_sets",
             ),
             SettingsFormField(
                 name="series",
@@ -131,12 +147,85 @@ def pipeline_settings_form() -> PipelineSettingsForm:
                 widget="rows",
             ),
             SettingsFormField(
-                name="series.data_element",
+                name=_DATA_ELEMENT_LABELS,
                 label="Data element",
-                help_text="DHIS2 data element UID that receives the values.",
+                help_text="The aggregate data element that receives the values; search by name or UID.",
+                widget="lookup",
+                lookup="data_elements",
             ),
         ),
     )
+
+
+def lookup_options(lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
+    """Search the connected DHIS2 for data sets or aggregate data elements, by name, code or UID.
+
+    Reads only the connection, and the data set when one is chosen, from the form's values:
+    elements are then narrowed to that data set, so the mapping cannot name one it will not accept.
+    """
+    resource = _LOOKUPS.get(lookup)
+    if resource is None:
+        raise ValueError(f"DHIS2 has no lookup '{lookup}'")
+    filters = [f"identifiable:token:{query.strip()}"] if query.strip() else []
+    fields = "id,displayName,periodType"
+    if lookup == "data_elements":
+        fields = "id,displayName,valueType"
+        filters.append("domainType:eq:AGGREGATE")
+        data_set = settings.get("data_set")
+        if is_dhis2_uid(data_set):
+            filters.append(f"dataSetElements.dataSet.id:eq:{data_set}")
+    params: dict[str, Any] = {"fields": fields, "order": "displayName:asc", "pageSize": _LOOKUP_PAGE, "page": 1}
+    if filters:
+        params["filter"] = filters
+    with closing(_lookup_client(settings)) as client:
+        answer = client.get(f"/api/{resource}", params=params)
+    options: list[LookupOption] = []
+    for item in answer.get(resource, []):
+        if not isinstance(item, dict) or not is_dhis2_uid(item.get("id")):
+            continue
+        detail = item.get("periodType") if lookup == "data_sets" else item.get("valueType")
+        options.append(
+            LookupOption(
+                value=item["id"],
+                label=str(item.get("displayName") or item["id"]),
+                detail=str(detail).replace("_", " ").lower() if detail else "",
+            )
+        )
+    return options
+
+
+def lookup_labels(lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
+    """The display names of stored data set or data element UIDs; unknown UIDs are left out."""
+    resource = _LOOKUPS.get(lookup)
+    if resource is None:
+        raise ValueError(f"DHIS2 has no lookup '{lookup}'")
+    uids = [value for value in values if is_dhis2_uid(value)]
+    labels: dict[str, str] = {}
+    if not uids:
+        return labels
+    with closing(_lookup_client(settings)) as client:
+        for start in range(0, len(uids), _LABEL_CHUNK):
+            chunk = ",".join(uids[start : start + _LABEL_CHUNK])
+            answer = client.get(
+                f"/api/{resource}",
+                params={"fields": "id,displayName", "filter": f"id:in:[{chunk}]", "paging": "false"},
+            )
+            for item in answer.get(resource, []):
+                if isinstance(item, dict) and is_dhis2_uid(item.get("id")) and item.get("displayName"):
+                    labels[item["id"]] = str(item["displayName"])
+    return labels
+
+
+def _lookup_client(settings: dict[str, Any]) -> Any:
+    """A client for the connection the form names, or a ValueError saying what to choose first."""
+    from open_climate_service.exports.dhis2 import get_connection
+
+    connection = settings.get("connection")
+    if not isinstance(connection, str) or not connection:
+        raise ValueError("choose a DHIS2 connection first")
+    if connection not in connections():
+        raise ValueError(f"'{connection}' is not a configured DHIS2 connection")
+    return get_connection(connection)
 
 
 def parse_settings(settings: dict[str, Any]) -> Dhis2DestinationSettings:
@@ -360,10 +449,89 @@ def _check_dhis2_metadata(
     )
 
 
-def preview(content: bytes, limit: int = 5) -> list[dict[str, Any]]:
-    """The first data values of a rendered dataValueSet."""
+def preview(
+    content: bytes,
+    settings: dict[str, Any],
+    context: DestinationContext,
+    labels: Mapping[str, Mapping[str, str]] | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """A sample of a rendered dataValueSet, organisation units and data elements by name.
+
+    The payload runs period by period within each organisation unit, in the feature collection's
+    order. The sample instead takes the first value of each unit, units by name as DHIS2 lists
+    them, before a second value of any, so a reader sees the extent of the delivery rather than
+    one unit's months. Organisation unit names come from the bound feature collection, which
+    stores what DHIS2 sent with the geometry. Data element names come from ``labels``, as the
+    last validation resolved them; DHIS2 is asked only for any it did not, and a name is left
+    out when it cannot answer.
+    """
     try:
-        values = json.loads(content).get("dataValues", [])
+        values = [value for value in json.loads(content).get("dataValues", []) if isinstance(value, dict)]
     except (ValueError, AttributeError):
         return []
-    return [value for value in values[:limit] if isinstance(value, dict)]
+    if not values:
+        return []
+    org_units: dict[str, str] = {}
+    for collection_id in context.feature_collections:
+        org_units.update(feature_names(collection_id))
+    rows = _spread_over_org_units(values, limit, org_units)
+    known = (labels or {}).get(_DATA_ELEMENT_LABELS, {})
+    uids = sorted({row["dataElement"] for row in rows if is_dhis2_uid(row.get("dataElement"))})
+    elements = {uid: known[uid] for uid in uids if uid in known}
+    missing = [uid for uid in uids if uid not in elements]
+    if missing:
+        try:
+            elements.update(lookup_labels("data_elements", settings, missing))
+        except Exception as exc:  # the connection, its token, or DHIS2 itself
+            logger.warning("Could not resolve data element names for the dry-run sample: %s", exc)
+
+    names_by_key = {"orgUnit": org_units, "dataElement": elements}
+
+    def cell(key: str, value: Any) -> Any:
+        names = names_by_key.get(key, {})
+        return {"value": value, "label": names[value]} if isinstance(value, str) and value in names else value
+
+    return [{key: cell(key, value) for key, value in row.items()} for row in rows]
+
+
+def _spread_over_org_units(values: list[dict[str, Any]], limit: int, names: dict[str, str]) -> list[dict[str, Any]]:
+    """Up to ``limit`` values: each organisation unit's first value, units by name, then the rest in payload order."""
+    first_by_unit: dict[Any, int] = {}
+    for index, value in enumerate(values):
+        first_by_unit.setdefault(value.get("orgUnit"), index)
+
+    def by_name(item: tuple[Any, int]) -> str:
+        unit = item[0]
+        return (names.get(unit) if isinstance(unit, str) else None) or str(unit)
+
+    chosen = [index for _, index in sorted(first_by_unit.items(), key=lambda item: by_name(item).casefold())][:limit]
+    taken = set(chosen)
+    chosen.extend(index for index in range(len(values)) if index not in taken)
+    return [values[index] for index in chosen[:limit]]
+
+
+def feature_names(collection_id: str) -> dict[str, str]:
+    """Each stored feature's display name by its id; empty when the collection cannot be read.
+
+    Reads only the id and name columns, never the geometry, which a large hierarchy makes heavy.
+    """
+    from open_climate_service.features import services as feature_services
+    from open_climate_service.features import store as feature_store
+
+    try:
+        record = feature_services.registered_collections().get(collection_id)
+        if record is None or record.features is None:
+            raise ValueError(f"'{collection_id}' is not a registered feature collection")
+        id_property = record.features.id_property
+        rows = feature_store.read_feature_columns(record, [id_property, "displayName", "name"])
+    except Exception as exc:  # not registered, or its store unreadable: the sample then shows ids
+        logger.warning("Could not read feature names from '%s': %s", collection_id, exc)
+        return {}
+    names: dict[str, str] = {}
+    for row in rows:
+        identifier = row.get(id_property)
+        name = row.get("displayName") or row.get("name")
+        if isinstance(identifier, str) and isinstance(name, str) and name:
+            names[identifier] = name
+    return names

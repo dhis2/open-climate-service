@@ -20,12 +20,14 @@
     <div class="layout">
       {{ nav }}
 
-      <main id="content">
+      <main id="content"{% if tab == 'list' and pipelines %} class="automation-wide"{% endif %}>
+        {{ automation_tabs }}
+
         <div class="page-title">
           <h2 id="pipelines-title" tabindex="-1">Pipelines</h2>
           <span class="chip">{{ pipelines | length }} configured</span>
         </div>
-        <p class="lead">A pipeline runs one reusable workflow over its bound inputs and delivers the result to a destination: validated first, dry-run, then live.</p>
+        <p class="lead">A pipeline shows the complete journey from source data, through workflows and derived datasets, to a destination.</p>
 
         <nav class="page-tabs" aria-label="Pipeline views">
           <a href="{{ mount }}/pipelines" {% if tab == 'list' %}aria-current="page"{% endif %}>Configured pipelines</a>
@@ -35,6 +37,24 @@
 
         {% if tab == 'list' %}
         {% if pipelines %}
+        <div class="pipeline-views" data-list data-views="pipelines">
+          <div class="toolbar">
+            <div class="view-switch" role="group" aria-label="Layout">
+              <button type="button" data-view-button="diagrams" aria-pressed="true">Diagrams</button>
+              <button type="button" data-view-button="list" aria-pressed="false">List</button>
+            </div>
+          </div>
+          <div data-view-target>
+          <div class="pipeline-diagrams">
+            {{ legend }}
+            {% for p in pipelines %}
+            <section class="pipeline-diagram" aria-labelledby="diagram-{{ p.id }}">
+              <h3 id="diagram-{{ p.id }}"><a href="{{ mount }}/pipelines/{{ p.id }}">{{ p.title }}</a> <span class="chip">{{ p.mode | replace('_', ' ') }}</span></h3>
+              {% if not p.fed %}<p class="note">Nothing feeds this pipeline yet: its workflow reads no dataset or feature collection.</p>{% endif %}
+              {% if p.diagram %}<div class="panel automation-canvas">{{ p.diagram }}</div>{% endif %}
+            </section>
+            {% endfor %}
+          </div>
         <div class="panel table-wrap pipeline-table">
           <table>
             <thead>
@@ -55,6 +75,12 @@
             </tbody>
           </table>
         </div>
+          </div>
+        </div>
+        {% include "_automation_graph_script.html" %}
+        <script>
+{{ list_script | safe }}
+        </script>
         {% else %}
         <div class="panel empty-state">
           <h3>No pipelines yet</h3>
@@ -103,7 +129,7 @@
             </div>
           </form>
 
-          <form method="post" action="{{ mount }}/pipelines{% if editing %}/{{ editing }}{% endif %}" class="pipeline-form">
+          <form method="post" action="{{ mount }}/pipelines{% if editing %}/{{ editing }}{% endif %}" class="pipeline-form" data-lookup-url="{{ mount }}/pipelines/lookups/{{ destination.id }}">
             <input type="hidden" name="workflow" value="{{ workflow.id }}" />
             <input type="hidden" name="destination" value="{{ destination.id }}" />
             {% if editing %}<input type="hidden" name="revision" value="{{ revision or '' }}" />{% endif %}
@@ -190,6 +216,10 @@
                       {% elif c.widget == 'checkbox' %}
                       <input type="hidden" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}.__present" value="true" />
                       <input type="checkbox" id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="true" {% if row['values'].get(c.name) %}checked{% endif %} />
+                      {% elif c.widget == 'lookup' %}
+                      <div class="lookup">
+                        <input type="text" id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="{{ row['values'].get(c.name) if row['values'].get(c.name) is not none else '' }}" data-lookup="{{ c.lookup }}" data-label="{{ row['labels'].get(c.name, '') }}" placeholder="Search by name or paste an id" />
+                      </div>
                       {% else %}
                       <input type="{{ 'number' if c.kind in ['integer', 'number'] else 'text' }}" {% if c.kind == 'number' %}step="any"{% endif %} id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="{{ row['values'].get(c.name) if row['values'].get(c.name) is not none else '' }}" />
                       {% endif %}
@@ -214,6 +244,10 @@
                   <input type="checkbox" id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="true" {% if f.value == 'true' %}checked{% endif %} />
                   {% elif f.widget in ['json', 'textarea'] %}
                   <textarea id="dest-{{ f.name }}" name="dest.{{ f.name }}" rows="3" class="mono" placeholder="JSON">{{ f.value }}</textarea>
+                  {% elif f.widget == 'lookup' %}
+                  <div class="lookup">
+                    <input type="text" id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="{{ f.value }}" data-lookup="{{ f.lookup }}" data-label="{{ f.label }}" {% if f.required %}required{% endif %} placeholder="Search by name or paste an id" />
+                  </div>
                   {% else %}
                   <input type="{{ 'number' if f.kind in ['integer', 'number'] else 'text' }}" {% if f.kind == 'number' %}step="any"{% endif %} id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="{{ f.value }}" {% if f.required %}required{% endif %} />
                   {% endif %}
@@ -247,6 +281,9 @@
               {% if editing %}<a class="button-link" href="{{ mount }}/pipelines/{{ editing }}">Cancel</a>{% endif %}
             </div>
           </form>
+          <script>
+{{ lookup_script | safe }}
+          </script>
           {% endif %}
         </section>
         {% endif %}

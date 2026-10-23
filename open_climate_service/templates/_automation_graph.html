@@ -1,0 +1,7 @@
+{# The automation diagram with its legend, and the hover script that lights up a box's chain.
+   Included by a pipeline's page; expects `diagram` and `legend`. #}
+        {{ legend }}
+        <div class="panel automation-canvas">
+          {{ diagram }}
+        </div>
+        {% include "_automation_graph_script.html" %}

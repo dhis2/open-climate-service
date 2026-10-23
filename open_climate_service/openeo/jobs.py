@@ -1727,9 +1727,10 @@ def _write_managed_zarr(
     # Stamp CF attributes (units / standard_name / cell_methods) from the template so the
     # published store is CF-compliant on disk (#280). The template is authoritative for the
     # fields it declares, so overwrite any placeholder/generic value left on the variable.
+    # Only on the primary variable: the template describes that one.
     cf_attrs = cf_attrs_from_template(template)
     _reject_incompatible_template_units(ds, variable, cf_attrs)
-    apply_cf_metadata(ds, cf_attrs, overwrite=True)
+    apply_cf_metadata(ds, cf_attrs, variable=variable, overwrite=True)
 
     coverage = _derive_coverage(ds, x_dim, y_dim, t_dim, crs)
     period_type: str | None = _derive_period_type(ds, options, source_template, t_dim)

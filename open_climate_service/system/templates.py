@@ -6,7 +6,7 @@ import json
 import logging
 import math
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from textwrap import dedent
@@ -39,6 +39,26 @@ def _template_source(name: str) -> str:
 
 
 _env = jinja2.Environment(loader=jinja2.FunctionLoader(_template_source), autoescape=True)
+
+
+def _when(value: Any) -> str:
+    """An ISO 8601 timestamp, or a datetime, as ``YYYY-MM-DD HH:MM UTC``; anything else as it came."""
+    if value is None or value == "":
+        return ""
+    moment = value
+    if isinstance(value, str):
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            return value
+    if not isinstance(moment, datetime):
+        return str(value)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(UTC)
+    return moment.strftime("%Y-%m-%d %H:%M UTC")
+
+
+_env.filters["when"] = _when
 
 _cache: dict[str, jinja2.Template] = {}
 
@@ -153,9 +173,8 @@ _NAV_ITEMS = (
     ("overview", "Overview", "/"),
     ("datasets", "Datasets", "/datasets"),
     ("data-sources", "Data sources", "/data-sources"),
+    ("automation", "Pipelines", "/pipelines"),
     ("workflows", "Workflows", "/workflows"),
-    ("schedules", "Schedules", "/schedules"),
-    ("pipelines", "Pipelines", "/pipelines"),
     ("processes", "Processes", "/processes"),
     ("map", "Map viewer", "/map"),
     ("api", "API", "/api"),
@@ -187,6 +206,24 @@ def page_nav(mount: str, current: str) -> Markup:
         for key, label, path in _NAV_ITEMS
     )
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
+
+
+# The pages under the Pipelines entry; the first is where it opens.
+_AUTOMATION_TABS = (
+    ("pipelines", "Pipelines", "/pipelines"),
+    ("schedules", "Schedules", "/schedules"),
+)
+
+
+def automation_tabs(mount: str, current: str) -> Markup:
+    """The tabs shared by the Pipelines and Schedules pages, with *current* marked."""
+    links = Markup("").join(
+        Markup('<a href="{}{}"{}>{}</a>').format(
+            mount, path, Markup(' aria-current="page"') if key == current else "", label
+        )
+        for key, label, path in _AUTOMATION_TABS
+    )
+    return Markup('<nav class="page-tabs automation-tabs" aria-label="Pipelines and schedules">{}</nav>').format(links)
 
 
 def _licence_label(template: dict[str, Any]) -> str | None:
@@ -499,7 +536,12 @@ def render_dataset_page(
             from open_climate_service.scheduler.service import get_scheduler_service
 
             status = get_scheduler_service().status()
-            scheduler_status = {"enabled": status.enabled, "running": status.running, "timezone": status.timezone}
+            scheduler_status = {
+                "enabled": status.enabled,
+                "running": status.running,
+                "clock": status.clock is not None,
+                "timezone": status.timezone,
+            }
             scheduler_reload_error = status.reload_error
             matching = next((row for row in status.schedules if row.dataset_id == record.dataset_id), None)
             schedule = matching.model_dump(mode="json") if matching is not None else None
@@ -565,7 +607,8 @@ def render_schedules_page(status: Any, mount: str, *, change_warning: str | None
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "schedules"),
+        nav=page_nav(mount, "automation"),
+        automation_tabs=automation_tabs(mount, "schedules"),
         read_only=api_config.is_read_only(),
         status=status,
         schedules=rows,
@@ -581,7 +624,7 @@ def render_schedule_delete_page(dataset_id: str, mount: str) -> str:
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "schedules"),
+        nav=page_nav(mount, "automation"),
         dataset_id=dataset_id,
     )
 
@@ -1437,6 +1480,7 @@ _API_GROUP_NOTES = {
     "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
     "Extent": "The area this instance covers.",
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
+    "Automation": "How schedules, workflow triggers and pipelines connect, with each step's latest status.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "Pipelines": "Run a reusable workflow over bound inputs and deliver its result: save, dry-run, run, pause.",
     "System": "Health, version and the landing page's JSON form.",
@@ -1930,9 +1974,14 @@ def render_pipelines_page(
     editing: str | None = None,
     revision: int | None = None,
     selection: dict[str, Any] | None = None,
+    labels: dict[str, dict[str, str]] | None = None,
     read_only: bool = False,
 ) -> str:
-    """Render the pipeline listing, the creation tab, or the same tab prefilled for editing."""
+    """Render the pipeline listing, the creation tab, or the same tab prefilled for editing.
+
+    ``labels`` are how the destination's lookup values read, as the last validation resolved
+    them; the form shows them beside the stored values and searches the destination for new ones.
+    """
     from open_climate_service.pipelines import forms
     from open_climate_service.pipelines.service import approved
 
@@ -1956,6 +2005,9 @@ def render_pipelines_page(
                 "last_run": record.runs[0] if record.runs else None,
             }
         )
+    if tab == "list":
+        for row, (diagram, fed) in zip(rows, _pipeline_diagrams(rows, mount), strict=True):
+            row["diagram"], row["fed"] = diagram, fed
     draft = draft or {}
     selection = selection or {}
     arguments = dict((draft.get("workflow") or {}).get("arguments") or {})
@@ -1967,6 +2019,7 @@ def render_pipelines_page(
             value = prefill
         parameter_fields.append({**field, "value": value})
     settings = dict((draft.get("destination") or {}).get("settings") or {})
+    labels = labels or {}
     settings_form: dict[str, Any] = selection.get("settings_form") or {
         "title": "",
         "description": "",
@@ -1980,7 +2033,20 @@ def render_pipelines_page(
             field = cast(dict[str, Any], raw_field)
             entry = {**field, "value": forms.setting_value(settings, field)}
             if field["kind"] == "rows":
-                entry["rows"] = forms.setting_rows(settings, field)
+                entry["rows"] = [
+                    {
+                        **row,
+                        "labels": {
+                            column["name"]: labels.get(f"{field['name']}.{column['name']}", {}).get(
+                                str(row["values"].get(column["name"])), ""
+                            )
+                            for column in field["columns"]
+                        },
+                    }
+                    for row in forms.setting_rows(settings, field)
+                ]
+            else:
+                entry["label"] = labels.get(field["name"], {}).get(entry["value"], "")
             rendered_fields.append(entry)
         rendered_sections.append({**section, "fields": rendered_fields})
     settings_form = {**settings_form, "sections": rendered_sections}
@@ -1990,9 +2056,13 @@ def render_pipelines_page(
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "pipelines"),
+        nav=page_nav(mount, "automation"),
+        automation_tabs=automation_tabs(mount, "pipelines"),
         tab=tab,
         pipelines=rows,
+        legend=_automation_legend(),
+        list_script=_read_asset("ocs_list.js"),
+        lookup_script=_read_asset("ocs_lookup.js"),
         workflows=choices.get("workflows", []),
         destinations=choices.get("destinations", []),
         datasets=choices.get("datasets", []),
@@ -2010,6 +2080,60 @@ def render_pipelines_page(
     )
 
 
+def _automation_legend() -> Markup:
+    from open_climate_service.automation.graph import render_legend
+
+    return render_legend()
+
+
+def _pipeline_diagram(pipeline_id: str, workflow_id: str, mount: str) -> Markup:
+    """This pipeline's chain from the automation graph, drawn as an automation diagram.
+
+    The pipeline's own box links to the workflow it runs, not back to this page.
+    """
+    try:
+        from open_climate_service.automation.graph import build_graph, pipeline_focus, render_svg
+
+        node_id = f"workflow:pipeline:{pipeline_id}"
+        return render_svg(
+            pipeline_focus(build_graph(), pipeline_id),
+            mount,
+            current=node_id,
+            current_href=f"/workflows/{workflow_id}",
+        )
+    except Exception:
+        _log.exception("The automation diagram could not be drawn for pipeline '%s'", pipeline_id)
+        return Markup("")
+
+
+def _pipeline_diagrams(rows: list[dict[str, Any]], mount: str) -> list[tuple[Markup, bool]]:
+    """Each listed pipeline's chain, drawn from one read of the automation graph.
+
+    With each drawing, whether the pipeline reads any dataset or feature collection: one that
+    reads none still has its workflow and destination to draw, but nothing feeds it.
+    """
+    try:
+        from open_climate_service.automation.graph import build_graph, pipeline_focus, render_svg
+
+        graph = build_graph()
+        drawn: list[tuple[Markup, bool]] = []
+        for row in rows:
+            chain = pipeline_focus(graph, row["id"])
+            fed = any(node.kind in ("dataset", "features") for node in chain.nodes)
+            svg = render_svg(
+                chain,
+                mount,
+                current=f"workflow:pipeline:{row['id']}",
+                current_href=f"/workflows/{row['workflow']}",
+                key=row["id"],
+            )
+            drawn.append((svg, fed))
+        return drawn
+    except Exception:
+        _log.exception("The pipeline diagrams could not be drawn")
+        return [(Markup(""), True) for _ in rows]
+
+
 def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) -> str:
     """Render one pipeline: its workflow binding, destination, validation, dry run, delivery and runs."""
     from open_climate_service.pipelines.service import approved, destination_plugins
@@ -2017,11 +2141,13 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
     spec = record.spec
     validation = record.validation
     destination_title = spec.destination.plugin
+    settings_items: list[dict[str, Any]] = []
     plugin = destination_plugins().get(spec.destination.plugin)
     if plugin is not None:
         presentation = plugin.pipeline_settings_form()
         if presentation is not None:
             destination_title = presentation.title
+        settings_items = _settings_items(plugin, spec.destination.settings, validation.labels if validation else {})
     datasets = {d.dataset_id: d for d in _load_datasets()}
     coverages = [
         datasets[dataset_id].extent.temporal
@@ -2035,19 +2161,23 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         {"name": name, "value": value if isinstance(value, str) else json.dumps(value)}
         for name, value in spec.workflow.arguments.items()
     ]
+    diagram = _pipeline_diagram(spec.id, spec.workflow.id, mount)
     return get_template("pipeline_page.html").render(
         version=app_version,
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
-        nav=page_nav(mount, "pipelines"),
+        nav=page_nav(mount, "automation"),
+        diagram=diagram,
+        legend=_automation_legend(),
         title=spec.name or spec.id,
         spec=spec,
         destination_title=destination_title,
         revision=record.revision,
         arguments=arguments,
         settings=json.dumps(spec.destination.settings, indent=2),
+        settings_items=settings_items,
         export=json.dumps(validation.export, indent=2) if validation and validation.export else None,
         created_at=record.created_at,
         automation_since=record.automation_since,
@@ -2068,6 +2198,37 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         range_end=range_end,
         read_only=api_config.is_read_only(),
     )
+
+
+def _settings_items(plugin: Any, settings: dict[str, Any], labels: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    """The destination settings as the form names them, each lookup value with the label it resolved to."""
+    from open_climate_service.pipelines import forms
+    from open_climate_service.pipelines.service import settings_fields
+
+    def cell(field: dict[str, Any], value: Any, path: str) -> dict[str, Any]:
+        text = json.dumps(value) if isinstance(value, (dict, list)) else "" if value is None else str(value)
+        return {"title": field["title"], "value": text, "label": labels.get(path, {}).get(text, "")}
+
+    items: list[dict[str, Any]] = []
+    for field in settings_fields(plugin):
+        if field["kind"] == "rows":
+            rows = [row for row in forms.setting_rows(settings, field) if row["existing"]]
+            items.append(
+                {
+                    "title": field["title"],
+                    "rows": [
+                        [
+                            cell(column, row["values"].get(column["name"]), f"{field['name']}.{column['name']}")
+                            for column in field["columns"]
+                            if row["values"].get(column["name"]) is not None
+                        ]
+                        for row in rows
+                    ],
+                }
+            )
+        elif settings.get(field["name"]) is not None:
+            items.append({**cell(field, settings.get(field["name"]), field["name"]), "rows": None})
+    return items
 
 
 def _pipeline_skipped_kept() -> int:

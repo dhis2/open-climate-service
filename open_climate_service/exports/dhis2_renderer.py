@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import math
 import re
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
@@ -14,6 +15,7 @@ from open_climate_service.exports.base import (
     DeliveryContext,
     DestinationCheck,
     DestinationContext,
+    LookupOption,
     PipelineSettingsForm,
     RenderedExport,
 )
@@ -85,10 +87,27 @@ class Dhis2ExportPlugin(BaseExportPlugin):
 
         return dhis2_destination.check_destination(settings, context)
 
-    def preview(self, content: bytes, limit: int = 5) -> list[dict[str, Any]]:
+    def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
         from open_climate_service.exports import dhis2_destination
 
-        return dhis2_destination.preview(content, limit)
+        return dhis2_destination.lookup_options(lookup, settings, query)
+
+    def lookup_labels(self, lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
+        from open_climate_service.exports import dhis2_destination
+
+        return dhis2_destination.lookup_labels(lookup, settings, values)
+
+    def preview(
+        self,
+        content: bytes,
+        settings: dict[str, Any],
+        context: DestinationContext,
+        labels: Mapping[str, Mapping[str, str]] | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        from open_climate_service.exports import dhis2_destination
+
+        return dhis2_destination.preview(content, settings, context, labels, limit)
 
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
         allowed = {

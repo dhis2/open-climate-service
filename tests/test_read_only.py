@@ -49,6 +49,7 @@ _MUTATING_ROUTES = [
     ("POST", "/pipelines/{pipeline_id}/runs/{run_id}/redeliver"),
     ("POST", "/pipelines/{pipeline_id}/runs/{run_id}/acknowledge"),
     ("POST", "/pipelines/{pipeline_id}/mode/{mode}"),
+    ("POST", "/pipelines/lookups/{plugin_id}/{lookup}"),
     ("PUT", "/process_graphs/{process_graph_id}"),
     ("DELETE", "/process_graphs/{process_graph_id}"),
     ("POST", "/sync/{dataset_id}"),

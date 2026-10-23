@@ -82,7 +82,7 @@ def _default_widget(field: dict[str, Any]) -> str:
     return "text"
 
 
-def _widget(field: dict[str, Any], hint: str | None) -> str:
+def _widget(field: dict[str, Any], hint: str | None, lookup: str | None) -> str:
     """Use a hint only when it is safe for the schema shape; otherwise use its default."""
     compatible = {
         "select": bool(field["enum"]),
@@ -91,6 +91,7 @@ def _widget(field: dict[str, Any], hint: str | None) -> str:
         "json": field["kind"] == "json",
         "rows": field["kind"] == "rows",
         "text": field["kind"] in {"string", "integer", "number"},
+        "lookup": field["kind"] == "string" and not field["enum"] and bool(lookup),
     }
     return hint if hint is not None and compatible.get(hint, False) else _default_widget(field)
 
@@ -100,9 +101,11 @@ def _apply_presentation(field: dict[str, Any], metadata: dict[str, Any] | None) 
     label = metadata.get("label")
     help_text = metadata.get("help_text")
     option_labels = metadata.get("option_labels") or {}
+    lookup = metadata.get("lookup")
     field["title"] = label if label is not None else field["title"]
     field["description"] = help_text if help_text is not None else field["description"]
-    field["widget"] = _widget(field, metadata.get("widget"))
+    field["widget"] = _widget(field, metadata.get("widget"), lookup)
+    field["lookup"] = lookup if field["widget"] == "lookup" else None
     field["options"] = [
         {"value": option, "label": option_labels.get(str(option), str(option))} for option in field["enum"]
     ]
@@ -266,6 +269,30 @@ def read_settings(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[st
         except ValueError as exc:
             raise ValueError(f"destination setting '{name}': {exc}") from None
     return settings
+
+
+def lookup_values(settings: dict[str, Any], fields: list[dict[str, Any]]) -> list[tuple[str, str, list[str]]]:
+    """Every lookup field with a stored value: its path, its lookup name and the distinct values.
+
+    A top-level field's path is its name; a row column's is ``<rows>.<column>``. These are the
+    keys the labels resolved for a pipeline are stored under.
+    """
+    found: list[tuple[str, str, list[str]]] = []
+    for field in fields:
+        if field["kind"] == "rows":
+            stored = settings.get(field["name"])
+            rows = [row for row in stored if isinstance(row, dict)] if isinstance(stored, list) else []
+            for column in field["columns"]:
+                if column.get("widget") != "lookup":
+                    continue
+                values = [row[column["name"]] for row in rows if isinstance(row.get(column["name"]), str)]
+                if values:
+                    found.append((f"{field['name']}.{column['name']}", column["lookup"], sorted(set(values))))
+        elif field.get("widget") == "lookup":
+            value = settings.get(field["name"])
+            if isinstance(value, str) and value:
+                found.append((field["name"], field["lookup"], [value]))
+    return found
 
 
 def argument_value(arguments: dict[str, Any], field: dict[str, Any]) -> str:

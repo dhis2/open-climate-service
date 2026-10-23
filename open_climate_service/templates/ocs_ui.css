@@ -643,6 +643,11 @@ button:disabled {
 .page-title h2 {
   margin: 0;
 }
+.pipeline-edit-action {
+  margin-left: auto;
+  align-self: center;
+  white-space: nowrap;
+}
 /* Under the title, because when a dataset starts and ends is the first thing a reader checks. */
 .page-coverage {
   display: flex;
@@ -1083,6 +1088,118 @@ button.primary:disabled {
 .repeatable-field > .hint {
   margin-top: var(--spacers-dp4);
 }
+/* A lookup field: a text input the script turns into a search over the destination. Without the
+   script it is the plain input it started as, and the stored id is typed by hand. */
+.lookup {
+  position: relative;
+}
+.lookup-results {
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  z-index: 20;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--colors-white);
+  border: 1px solid var(--colors-grey500);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.lookup-results[hidden] {
+  display: none;
+}
+.lookup-results li {
+  padding: var(--spacers-dp8);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lookup-results li + li {
+  border-top: 1px solid var(--colors-grey200);
+}
+.lookup-results li[aria-selected="true"],
+.lookup-results li:hover {
+  background: var(--colors-grey100);
+}
+.lookup-results li > small {
+  color: var(--colors-grey700);
+}
+.lookup-results .lookup-status {
+  cursor: default;
+  color: var(--colors-grey700);
+}
+.lookup-results .lookup-error {
+  cursor: default;
+  color: var(--colors-red600);
+}
+/* A panel that folds: its header carries the verdict, so a green one can stay closed and a red
+   one opens by itself. Native details, so it works without the script and keeps its anchor. */
+.panel-fold {
+  padding: 0;
+}
+.panel-fold > .fold-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacers-dp8);
+  padding: var(--spacers-dp12) var(--spacers-dp16);
+  cursor: pointer;
+  list-style: none;
+  border-left: 4px solid var(--colors-grey500);
+  border-radius: var(--radius);
+}
+.panel-fold > .fold-summary::-webkit-details-marker {
+  display: none;
+}
+.panel-fold > .fold-summary > h3 {
+  margin: 0;
+}
+.panel-fold[open] > .fold-summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.fold-marker {
+  width: 8px;
+  height: 8px;
+  margin-inline-end: var(--spacers-dp4);
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+.panel-fold[open] > .fold-summary > .fold-marker {
+  transform: rotate(45deg);
+}
+.fold-pass {
+  border-left-color: var(--colors-green800);
+  background: var(--colors-green100);
+}
+.fold-fail {
+  border-left-color: var(--colors-red600);
+  background: var(--colors-red050);
+}
+.panel-fold > .fold-body {
+  padding: var(--spacers-dp16);
+  border-top: 1px solid var(--colors-grey300);
+}
+.settings-rows li + li {
+  margin-top: var(--spacers-dp4);
+}
+.settings-cell + .settings-cell {
+  margin-inline-start: var(--spacers-dp12);
+}
+.settings-json {
+  margin-top: var(--spacers-dp8);
+}
+.settings-json > summary {
+  cursor: pointer;
+  font-size: var(--font-size-small);
+  color: var(--colors-grey700);
+}
 .pipeline-form .form-grid,
 .record-form .form-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1353,3 +1470,214 @@ button.danger:hover:not(:disabled) {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Automation section: the tabs shared by its pages, and the Overview diagram (inline SVG). */
+.automation-tabs {
+  margin-bottom: var(--spacers-dp16);
+}
+.automation-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacers-dp8) var(--spacers-dp16);
+  font-size: var(--font-size-small);
+  color: var(--colors-grey700);
+  margin-bottom: var(--spacers-dp8);
+}
+.ag-key {
+  display: inline-block;
+  width: 22px;
+  margin-right: 6px;
+  vertical-align: middle;
+  border-top: 2px solid var(--colors-grey500);
+}
+.ag-key-input {
+  border-top-style: dashed;
+}
+/* Provenance, not execution: dotted and muted, so it never reads as a step that runs. */
+.ag-key-origin {
+  border-top-style: dotted;
+  border-top-color: var(--colors-grey400);
+}
+.ag-key-delivers {
+  border-top-color: var(--colors-teal800);
+}
+.automation-canvas {
+  overflow-x: auto;
+  width: 100%;
+  margin-bottom: var(--spacers-dp16);
+}
+/* Every pipeline card has the same page measure. Longer chains keep their natural SVG width and
+   scroll inside the card instead of making one pipeline wider than the others. */
+main.automation-wide {
+  max-width: 1080px;
+}
+/* The Pipelines page: one diagram per pipeline, or the table. Without JavaScript both show. */
+.pipeline-views .view-diagrams .pipeline-table,
+.pipeline-views .view-list .pipeline-diagrams {
+  display: none;
+}
+.pipeline-diagram h3 {
+  margin: var(--spacers-dp16) 0 var(--spacers-dp8);
+  font-size: 1rem;
+}
+.pipeline-diagram {
+  width: 100%;
+}
+.pipeline-diagram .automation-canvas {
+  margin-bottom: var(--spacers-dp8);
+}
+.automation-graph {
+  display: block;
+  font-family: var(--theme-fonts);
+}
+.ag-column {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  fill: var(--colors-grey600);
+  font-weight: var(--font-weight-medium);
+}
+.ag-edge {
+  fill: none;
+  stroke: var(--colors-grey500);
+  stroke-width: 1.6;
+}
+.ag-edge-input {
+  stroke-dasharray: 5 4;
+}
+.ag-edge-origin {
+  stroke: var(--colors-grey400);
+  stroke-dasharray: 1 4;
+  stroke-linecap: round;
+}
+.ag-edge-delivers {
+  stroke: var(--colors-teal800);
+}
+.ag-arrow {
+  fill: var(--colors-grey500);
+}
+.ag-arrow-delivers {
+  fill: var(--colors-teal800);
+}
+.ag-arrow-origin {
+  fill: var(--colors-grey400);
+}
+.ag-edge-text text {
+  font-size: 10px;
+  fill: var(--colors-grey700);
+  paint-order: stroke;
+  stroke: var(--colors-white);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.ag-icon {
+  fill: var(--colors-white);
+  stroke: var(--colors-grey700);
+  stroke-width: 0.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ag-icon .ag-icon-solid {
+  fill: var(--colors-grey700);
+  stroke: none;
+}
+.ag-key-icon {
+  display: inline-block;
+  vertical-align: -3px;
+  margin-right: 4px;
+}
+.ag-arrow-lit {
+  fill: var(--colors-blue600);
+}
+/* Hover highlight: what a box comes from and what it feeds, the rest dimmed. */
+.ag-node text,
+.ag-status,
+.ag-edge,
+.ag-edge-text {
+  transition: opacity 0.15s;
+}
+/* Dim a box's contents, not the box: an opaque fill keeps a lit edge passing behind it hidden. */
+.ag-focus .ag-node:not(.ag-lit) text,
+.ag-focus .ag-node:not(.ag-lit) .ag-status,
+.ag-focus .ag-edge:not(.ag-lit),
+.ag-focus .ag-edge-text:not(.ag-lit) {
+  opacity: 0.25;
+}
+.ag-focus .ag-edge-text.ag-lit text {
+  fill: var(--colors-blue800);
+}
+.ag-focus .ag-edge-text.ag-lit .ag-icon {
+  stroke: var(--colors-blue800);
+}
+.ag-focus .ag-edge-text.ag-lit .ag-icon-solid {
+  fill: var(--colors-blue800);
+}
+.ag-focus .ag-node:not(.ag-lit) > rect {
+  stroke: var(--colors-grey300);
+}
+.ag-focus .ag-edge.ag-lit {
+  stroke: var(--colors-blue600);
+  stroke-width: 2.2;
+}
+.ag-focus .ag-edge-delivers.ag-lit {
+  stroke: var(--colors-teal800);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-node text,
+  .ag-status,
+  .ag-edge {
+    transition: none;
+  }
+}
+.ag-node rect {
+  fill: var(--colors-white);
+  stroke: var(--colors-grey400);
+}
+.ag-node-source rect {
+  fill: var(--colors-grey100);
+}
+.ag-node-features rect {
+  stroke-dasharray: 4 3;
+}
+.ag-node-workflow rect {
+  fill: var(--colors-blue050);
+  stroke: var(--colors-blue600);
+}
+.ag-current > rect {
+  stroke-width: 2.5;
+}
+.ag-node-destination rect {
+  fill: var(--colors-teal100);
+  stroke: var(--colors-teal800);
+}
+a:hover .ag-node rect,
+a:focus-visible .ag-node rect {
+  stroke: var(--colors-blue800);
+  stroke-width: 2;
+}
+.ag-label {
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  fill: var(--colors-grey900);
+}
+.ag-meta {
+  font-size: 11px;
+  fill: var(--colors-grey700);
+}
+.ag-status text {
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+}
+.ag-status rect {
+  stroke: none;
+}
+.ag-ok rect { fill: var(--colors-green100); }
+.ag-ok text { fill: var(--colors-green800); }
+.ag-idle rect, .ag-waiting rect, .ag-running rect { fill: var(--colors-grey200); }
+.ag-idle text, .ag-waiting text, .ag-running text { fill: var(--colors-grey800); }
+.ag-paused rect, .ag-dry_run rect { fill: var(--colors-yellow100); }
+.ag-paused text, .ag-dry_run text { fill: var(--colors-yellow900); }
+.ag-failed rect { fill: var(--colors-red050); }
+.ag-failed text { fill: var(--colors-red800); }
+.ag-chip-ok { background: var(--colors-green100); color: var(--colors-green800); }
+.ag-chip-paused, .ag-chip-dry_run { background: var(--colors-yellow100); color: var(--colors-yellow900); }
+.ag-chip-failed { background: var(--colors-red050); color: var(--colors-red800); }

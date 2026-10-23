@@ -310,7 +310,15 @@ then add `plugins/vectors/districts.yaml`:
 
 ```yaml
 - id: districts
-  name: Districts (DHIS2)
+  name: Districts (DHIS2 level 2)
+  description: >-
+    The districts of the national HMIS hierarchy, fetched with their boundaries from DHIS2.
+    Each feature's id is the organisation unit UID, so values aggregated to a district go
+    back to DHIS2 as its orgUnit.
+  providers:
+    - name: National HMIS (DHIS2)
+      url: https://hmis.example.org/dhis
+      roles: [producer, host]
   id_property: id
   provider: dhis2
   params:
@@ -320,7 +328,8 @@ then add `plugins/vectors/districts.yaml`:
 
 `level` and `parent` select the organisation units as DHIS2's own queries do: `level: 2` for every
 unit at level 2, `parent: <UID>` for the units under one parent, or both. With neither, DHIS2
-returns level 1.
+returns level 1. `description` and the first `providers` entry are what the Datasets page shows
+under the collection's name; both are optional.
 
 **3. Fetch it** with **Fetch** on the template's page, or `POST /features/districts/refresh` (add
 `Prefer: respond-async` to run it as a background job). Fetch again when the hierarchy changes in

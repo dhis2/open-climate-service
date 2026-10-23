@@ -23,9 +23,30 @@ def test_cf_attrs_from_template_extracts_cf_fields() -> None:
         "units": "mm",
         "standard_name": "lwe_thickness_of_precipitation_amount",
         "cell_methods": "time: sum",
+        "long_name": "x",
     }
     assert cf_attrs_from_template(None) == {}
     assert cf_attrs_from_template({"units": ""}) == {"units": ""}  # dimensionless kept
+
+
+def test_the_template_names_and_describes_the_variable() -> None:
+    template = {"name": "Heat-stress days", "description": "Days above\n  30 degrees C.\n"}
+    assert cf_attrs_from_template(template) == {
+        "long_name": "Heat-stress days",
+        "description": "Days above 30 degrees C.",
+    }
+
+
+def test_a_null_standard_name_removes_one_left_on_the_variable() -> None:
+    attrs = cf_attrs_from_template({"standard_name": None})
+    da = xr.DataArray([1.0], dims=["t"], attrs={"standard_name": "air_temperature", "units": "d"})
+
+    apply_cf_metadata(da, attrs)
+    assert da.attrs["standard_name"] == "air_temperature"  # only an overwrite removes it
+
+    apply_cf_metadata(da, attrs, overwrite=True)
+    assert "standard_name" not in da.attrs
+    assert da.attrs["units"] == "d"
 
 
 def test_apply_cf_metadata_sets_and_preserves() -> None:

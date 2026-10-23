@@ -1709,6 +1709,59 @@ def test_persist_result_stamps_cf_attrs_from_template(
         written.close()
 
 
+def test_persist_result_replaces_a_process_s_labels_with_the_template_s(
+    job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An xclim indicator computed from WBGT describes itself as air temperature; the template wins.
+
+    Only on the selected variable: another variable in the result keeps its own attributes.
+    """
+    from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
+
+    def _template(dataset_id: str) -> dict[str, Any]:
+        return {
+            "id": dataset_id,
+            "name": "Heat-stress days, WBGT max above 30 degrees C",
+            "description": "Days in each month whose daily maximum WBGT exceeds 30 degrees C.",
+            "units": "d",
+            "standard_name": None,
+        }
+
+    result = _small_dataset()
+    result["precip"].attrs.update(
+        {
+            "units": "d",
+            "standard_name": "number_of_days_with_air_temperature_above_threshold",
+            "long_name": "The number of days with maximum temperature above 30 degc",
+            "description": "Monthly number of days where daily maximum temperature exceeds 30 degc.",
+        }
+    )
+    result["wbgt_max"] = result["precip"].copy(deep=True)
+    result["wbgt_max"].attrs = {"units": "degC", "standard_name": "air_temperature", "long_name": "Daily maximum WBGT"}
+    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _template)
+    monkeypatch.setattr(
+        "open_climate_service.ingestions.services.register_artifact_record",
+        lambda record, publish: record,
+    )
+
+    options = {"dataset_id": "heat_days", "variable": "precip", "publish": False}
+    job_service._persist_result("job-labels", SaveResultEnvelope(result, "Zarr", options))
+
+    written = open_icechunk_dataset(str(tmp_path / "heat_days.icechunk"))
+    try:
+        attrs = written["precip"].attrs
+        assert attrs["long_name"] == "Heat-stress days, WBGT max above 30 degrees C"
+        assert attrs["description"] == "Days in each month whose daily maximum WBGT exceeds 30 degrees C."
+        assert "standard_name" not in attrs
+        assert attrs["units"] == "d"
+        assert written["wbgt_max"].attrs["long_name"] == "Daily maximum WBGT"
+        assert written["wbgt_max"].attrs["standard_name"] == "air_temperature"
+        assert written["wbgt_max"].attrs["units"] == "degC"
+    finally:
+        written.close()
+
+
 def test_persist_result_does_not_publish_when_publish_false(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

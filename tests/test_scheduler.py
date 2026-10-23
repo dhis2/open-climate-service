@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -11,10 +12,18 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from open_climate_service.jobs.models import JobRecord, JobStatus
+from open_climate_service.scheduler import service as scheduler_service
 from open_climate_service.scheduler.config import DatasetSyncSchedule, SchedulerConfig
 from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult, _dataset_is_materialized, enqueue_sync
+from open_climate_service.scheduler.results import ClockBeat, SharedResults, SharedResultsStore
 from open_climate_service.scheduler.service import SchedulerService
 from open_climate_service.scheduler.store import StoredSchedule
+
+
+@pytest.fixture(autouse=True)
+def _own_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Each test gets its own data directory, so no test reads another's check results or heartbeat."""
+    monkeypatch.setattr(scheduler_service.api_config, "get_data_root", lambda: tmp_path / "data")
 
 
 def _schedule(**updates: object) -> DatasetSyncSchedule:
@@ -355,7 +364,169 @@ def test_schedules_endpoint_is_read_only_status(client: TestClient) -> None:
     assert response.json() == {
         "enabled": False,
         "running": False,
+        "clock": None,
         "timezone": "UTC",
         "reload_error": None,
         "schedules": [],
     }
+
+
+# --- results shared through the data directory (CLIM-1490) ---------------------------------------
+
+
+def _submitted() -> CheckResult:
+    return CheckResult(
+        schedule_id=_schedule().schedule_id,
+        dataset_id=_schedule().dataset_id,
+        outcome=CheckOutcome.SUBMITTED,
+        message="submitted",
+        job_id="job-123",
+    )
+
+
+def _clock_process(monkeypatch: pytest.MonkeyPatch, store: SharedResultsStore) -> SchedulerService:
+    """The process that runs the clock, with APScheduler itself replaced."""
+    scheduler = MagicMock()
+    scheduler.get_jobs.return_value = []
+    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    service = SchedulerService(
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
+        dispatcher=lambda _: _submitted(),
+        template_loader=lambda _: _template(),
+        results=store,
+    )
+    service.start()
+    return service
+
+
+def _other_process(store: SharedResultsStore) -> SchedulerService:
+    """A process on the same data directory whose configuration leaves the clock off."""
+    return SchedulerService(
+        config_loader=lambda: SchedulerConfig(enabled=False),
+        store_loader=lambda: [_stored_schedule()],
+        template_loader=lambda _: _template(),
+        results=store,
+    )
+
+
+def test_another_process_reports_the_check_the_clock_ran(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = SharedResultsStore(tmp_path / "shared" / "schedule_results.json")
+    clock = _clock_process(monkeypatch, store)
+    clock.check_now(_schedule())
+    monkeypatch.setattr(scheduler_service, "_service", _other_process(store))
+
+    body = client.get("/schedules", headers={"Accept": "application/json"}).json()
+
+    assert body["enabled"] is False and body["running"] is False
+    assert body["clock"]["here"] is False
+    (row,) = body["schedules"]
+    assert row["last_outcome"] == "submitted"
+    assert row["last_job_id"] == "job-123"
+    # Computed from the cron "0 6 * * *" in UTC, since the clock that will fire it runs elsewhere.
+    next_check = datetime.fromisoformat(row["next_check"])
+    assert (next_check.hour, next_check.minute) == (6, 0)
+    assert timedelta(0) < next_check - datetime.now(timezone.utc) <= timedelta(days=1)
+    page = client.get("/schedules", headers={"Accept": "text/html"}).text
+    assert "Scheduler running in another process" in page
+    assert "Automatic checks are off" not in page
+    clock.shutdown()
+
+
+def test_the_clock_process_still_reports_its_last_check_after_a_restart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = SharedResultsStore(tmp_path / "schedule_results.json")
+    before = _clock_process(monkeypatch, store)
+    before.check_now(_schedule())
+    before.shutdown()
+
+    after = _clock_process(monkeypatch, store)
+
+    (row,) = after.status().schedules
+    assert row.last_outcome == CheckOutcome.SUBMITTED
+    assert row.last_job_id == "job-123"
+    after.shutdown()
+
+
+def test_without_a_live_clock_nothing_reports_a_next_check(tmp_path: Path) -> None:
+    store = SharedResultsStore(tmp_path / "schedule_results.json")
+    reader = _other_process(store)
+
+    assert reader.status().clock is None
+    assert reader.status().schedules[0].next_check is None
+
+    # A clock that stopped reporting longer ago than it beats is not trusted to fire.
+    stale = ClockBeat(pid=1, host="worker", beat_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(SharedResults(clock=stale).model_dump_json(), encoding="utf-8")
+
+    assert reader.status().clock is None
+    assert reader.status().schedules[0].next_check is None
+
+
+def test_a_stopped_clock_clears_its_heartbeat(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = SharedResultsStore(tmp_path / "schedule_results.json")
+    clock = _clock_process(monkeypatch, store)
+    assert store.read().clock is not None
+
+    clock.shutdown()
+
+    assert store.read().clock is None
+    assert _other_process(store).status().clock is None
+
+
+def test_a_read_only_process_never_writes_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: True)
+    store = SharedResultsStore(tmp_path / "schedule_results.json")
+    service = SchedulerService(
+        config_loader=lambda: SchedulerConfig(enabled=True),
+        store_loader=lambda: [_stored_schedule()],
+        dispatcher=lambda _: _submitted(),
+        template_loader=lambda _: _template(),
+        results=store,
+    )
+    service.start()
+    service.check_now(_schedule())
+
+    assert not store.path.exists()
+
+
+def test_an_unreadable_results_file_reports_no_checks_instead_of_failing(tmp_path: Path) -> None:
+    store = SharedResultsStore(tmp_path / "schedule_results.json")
+    store.path.write_text("not json", encoding="utf-8")
+
+    (row,) = _other_process(store).status().schedules
+
+    assert row.last_check is None
+
+
+def test_another_process_reads_the_cron_in_the_clocks_timezone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The worker runs in Kathmandu time, the public instance in UTC: the next check is the worker's."""
+    from zoneinfo import ZoneInfo
+
+    store = SharedResultsStore(tmp_path / "schedule_results.json")
+    scheduler = MagicMock()
+    scheduler.get_jobs.return_value = []
+    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    clock = SchedulerService(
+        config_loader=lambda: SchedulerConfig(enabled=True, timezone="Asia/Kathmandu"),
+        store_loader=lambda: [_stored_schedule()],
+        template_loader=lambda _: _template(),
+        results=store,
+    )
+    clock.start()
+
+    status = _other_process(store).status()
+
+    assert status.timezone == "Asia/Kathmandu"
+    (row,) = status.schedules
+    assert row.timezone == "Asia/Kathmandu"
+    assert row.next_check is not None
+    local = row.next_check.astimezone(ZoneInfo("Asia/Kathmandu"))
+    assert (local.hour, local.minute) == (6, 0), "the cron '0 6 * * *' fires at 06:00 where the clock runs"
+    clock.shutdown()

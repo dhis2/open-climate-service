@@ -21,10 +21,12 @@
       {{ nav }}
 
       <main id="content">
+        {{ automation_tabs }}
+
         <div class="page-title">
           <h2 id="schedules-title" tabindex="-1">Schedules</h2>
           <span class="chip">{{ schedules | length }} schedule{{ 's' if schedules | length != 1 }}</span>
-          <span class="chip {{ 'chip-published' if status.running else 'chip-unpublished' }}">{{ 'Scheduler running' if status.running else ('Scheduler off' if not status.enabled else 'Scheduler not running') }}</span>
+          <span class="chip {{ 'chip-published' if status.clock else 'chip-unpublished' }}">{{ 'Scheduler running' if status.running else ('Scheduler running in another process' if status.clock else ('Scheduler off' if not status.enabled else 'Scheduler not running')) }}</span>
         </div>
         <p class="lead">Everything on this instance's clock. A sync schedule submits a job at each check time; the job finds and ingests new source data, if any. Set one up or edit it from the dataset's own page.</p>
 
@@ -33,7 +35,9 @@
         {% elif status.reload_error %}
         <div class="notice error" role="alert">The last reload failed: {{ status.reload_error }}.</div>
         {% endif %}
-        {% if not status.enabled %}
+        {% if status.clock and not status.clock.here %}
+        <div class="notice">The clock runs in another OCS process on this data directory (last reported {{ status.clock.beat_at.strftime('%Y-%m-%d %H:%M UTC') }}). Checks below are the ones it ran.</div>
+        {% elif not status.enabled %}
         <div class="notice">Automatic checks are off. To turn them on, set <span class="mono">enabled: true</span> under <span class="mono">scheduler:</span> in <span class="mono">climate-service.yaml</span>, then restart OCS. Schedules can still be saved in the meantime.</div>
         {% endif %}
 
@@ -52,11 +56,12 @@
                 <td>
                   {% if not s.enabled %}<span class="chip chip-unpublished">Paused</span>
                   {% elif s.registered %}<span class="chip chip-published">Scheduled</span>
+                  {% elif s.next_check %}<span class="chip chip-published">Scheduled in another process</span>
                   {% elif s.last_outcome == 'error' %}<span class="chip chip-unpublished">Cannot run</span><br /><small>{{ s.last_message }}</small>
                   {% else %}<span class="chip">Not running</span>{% endif %}
                 </td>
                 <td>{{ s.next_check or '' }}</td>
-                <td>{% if s.last_check %}{{ s.last_check }}<br /><small>{{ s.last_outcome }}{% if s.last_job_id %}, <a href="{{ mount }}/jobs/{{ s.last_job_id }}">view job</a>{% endif %}</small>{% else %}<span class="note">No checks yet</span>{% endif %}</td>
+                <td>{% if s.last_check %}{{ s.last_check }}<br /><small>{{ s.last_outcome }}{% if s.last_job_id %}, <a href="{{ mount }}/ingestions/jobs/{{ s.last_job_id }}">view job</a>{% endif %}</small>{% else %}<span class="note">No checks yet</span>{% endif %}</td>
                 {% if not read_only %}
                 <td>
                   <div class="form-actions">
@@ -82,7 +87,7 @@
           <a class="button-link primary empty-state-action" href="{{ mount }}/datasets">Datasets</a>
         </div>
         {% endif %}
-        <p class="note">Last check details reset when OCS restarts. Submitted sync jobs remain available under Jobs. Times use {{ status.timezone }}.</p>
+        <p class="note">Last checks are kept in the data directory, so they survive a restart and show on every OCS process that shares it. Times use {{ status.timezone }}.</p>
 
         {% include "_schedule_delete_dialog.html" %}
       </main>

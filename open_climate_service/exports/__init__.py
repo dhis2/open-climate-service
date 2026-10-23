@@ -3,6 +3,7 @@
 from open_climate_service.exports.base import (
     BaseExportPlugin,
     DeliveryContext,
+    LookupOption,
     PipelineSettingsForm,
     RenderedExport,
     SettingsFormField,
@@ -13,6 +14,7 @@ from open_climate_service.exports.report import ExportOutcome, ExportReport, mer
 __all__ = [
     "BaseExportPlugin",
     "DeliveryContext",
+    "LookupOption",
     "PipelineSettingsForm",
     "SettingsFormField",
     "SettingsFormSection",

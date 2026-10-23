@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -113,6 +114,7 @@ def _render_page(
     draft: dict[str, Any] | None = None,
     editing: str | None = None,
     revision: int | None = None,
+    labels: dict[str, dict[str, str]] | None = None,
     status_code: int | None = None,
 ) -> HTMLResponse:
     from open_climate_service.system.templates import render_pipelines_page
@@ -140,6 +142,7 @@ def _render_page(
             editing=editing,
             revision=revision,
             selection=_form_selection(choices, workflow_id, plugin_id) if tab == "create" else {},
+            labels=labels,
             read_only=api_config.is_read_only(),
         ),
         status_code=status_code or (400 if error else 200),
@@ -172,6 +175,35 @@ def pipelines(request: Request) -> Response:
     if wants_json(request):
         return JSONResponse({"kind": "PipelineList", "items": [_public(record) for record in store.list_records()]})
     return _render_page(request, "list")
+
+
+@router.post("/lookups/{plugin_id}/{lookup}", include_in_schema=False)
+async def lookup_options(request: Request, plugin_id: str, lookup: str) -> JSONResponse:
+    """The choices a destination offers for one of its lookup fields, for the pipeline form as it types.
+
+    Takes the form as it stands plus ``q``, so the search follows the connection and the other
+    settings chosen so far; the plugin reads from them what it needs.
+    """
+    _require_writable()
+    plugin = service.destination_plugins().get(plugin_id)
+    if plugin is None:
+        raise HTTPException(status_code=404, detail=f"'{plugin_id}' is not a pipeline destination plugin")
+    form = await request.form()
+    field = {key: str(value) for key, value in form.items() if isinstance(value, str)}
+    query = field.pop("q", "")
+    try:
+        settings = forms.read_settings(field, service.settings_fields(plugin))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        options = await run_in_threadpool(plugin.lookup_options, lookup, settings, query)
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # the destination, its connection, or its token
+        raise HTTPException(status_code=502, detail=f"the destination could not be searched: {exc}") from exc
+    return JSONResponse({"options": [asdict(option) for option in options]})
 
 
 @router.get("/new", response_class=HTMLResponse, include_in_schema=False)
@@ -226,7 +258,12 @@ def edit_pipeline(request: Request, pipeline_id: str) -> HTMLResponse:
     """The create form, prefilled with a stored pipeline."""
     record = _record_or_404(pipeline_id)
     return _render_page(
-        request, "create", draft=record.spec.model_dump(mode="json"), editing=pipeline_id, revision=record.revision
+        request,
+        "create",
+        draft=record.spec.model_dump(mode="json"),
+        editing=pipeline_id,
+        revision=record.revision,
+        labels=record.validation.labels if record.validation else None,
     )
 
 

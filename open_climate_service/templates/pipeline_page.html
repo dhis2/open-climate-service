@@ -20,15 +20,16 @@
     <div class="layout">
       {{ nav }}
 
-      <main id="content">
+      <main id="content"{% if diagram %} class="automation-wide"{% endif %}>
         <p class="breadcrumb"><a href="{{ mount }}/pipelines">Pipelines</a> / {{ spec.id }}</p>
         <div class="page-title">
           <h2 tabindex="-1">{{ title }}</h2>
-          <span class="chip">{{ spec.delivery.mode | replace('_', ' ') }}</span>
-          {% if validation %}<span class="chip {{ 'chip-published' if validation.valid else 'chip-unpublished' }}">{{ 'valid' if validation.valid else 'invalid' }}</span>{% endif %}
-          {% if dry_run %}<span class="chip {{ 'chip-published' if dry_run_passed else 'chip-unpublished' }}">dry run {{ 'passed' if dry_run_passed else 'failed' }}</span>{% endif %}
-          {% if not read_only %}<a class="button-link" href="{{ mount }}/pipelines/{{ spec.id }}/edit">Edit</a>{% endif %}
+          {% if not read_only %}<a class="button-link primary pipeline-edit-action" href="{{ mount }}/pipelines/{{ spec.id }}/edit">Edit pipeline</a>{% endif %}
         </div>
+
+        {% if diagram %}
+        {% include "_automation_graph.html" %}
+        {% endif %}
 
         <ol class="pipeline-flow" aria-label="Pipeline flow">
           <li><span class="flow-label">Workflow</span><strong>{{ spec.workflow.id }}</strong></li>
@@ -38,30 +39,67 @@
         </ol>
 
         <div class="stack pipeline-detail">
-          <section class="panel" aria-labelledby="about-title">
-            <h3 id="about-title">Pipeline</h3>
+          <details class="panel panel-fold" id="about">
+            <summary class="fold-summary fold-none">
+              <span class="fold-marker" aria-hidden="true"></span>
+              <h3 id="about-title">Definition</h3>
+              <span class="note">{{ spec.workflow.id }} to {{ destination_title }}, revision {{ revision }}, created {{ created_at | when }}</span>
+            </summary>
+            <div class="fold-body">
             <dl class="facts">
               <dt>Workflow</dt><dd><a href="{{ mount }}/workflows/{{ spec.workflow.id }}">{{ spec.workflow.id }}</a></dd>
               {% for a in arguments %}
               <dt>{{ a.name }}</dt><dd class="mono">{{ a.value }}</dd>
               {% endfor %}
               <dt>Source kept current</dt><dd>{{ source_schedule }}</dd>
-              <dt>Runs</dt><dd>{{ 'after each update of a source dataset, over the updated interval' if spec.delivery.policy == 'on_update' else 'only when run by hand' }}{% if automation_since %}; updates since {{ automation_since }}{% endif %}</dd>
+              <dt>Runs</dt><dd>{{ 'after each update of a source dataset, over the updated interval' if spec.delivery.policy == 'on_update' else 'only when run by hand' }}{% if automation_since %}; updates since {{ automation_since | when }}{% endif %}</dd>
               <dt>Destination</dt><dd>{{ destination_title }}</dd>
               <dt>Revision</dt><dd>{{ revision }}</dd>
-              <dt>Created</dt><dd>{{ created_at }}</dd>
+              <dt>Created</dt><dd>{{ created_at | when }}</dd>
             </dl>
             <h4>Destination settings</h4>
+            {% if settings_items %}
+            <dl class="facts settings-facts">
+              {% for item in settings_items %}
+              <dt>{{ item.title }}</dt>
+              <dd>
+                {% if item.rows is not none %}
+                {% if item.rows %}
+                <ul class="plain-list settings-rows">
+                  {% for row in item.rows %}
+                  <li>{% for cell in row %}<span class="settings-cell"><span class="note">{{ cell.title }}</span> {% if cell.label %}{{ cell.label }} <span class="mono note">{{ cell.value }}</span>{% else %}<span class="mono">{{ cell.value }}</span>{% endif %}</span>{% endfor %}</li>
+                  {% endfor %}
+                </ul>
+                {% else %}<span class="note">none</span>{% endif %}
+                {% elif item.label %}{{ item.label }} <span class="mono note">{{ item.value }}</span>
+                {% else %}<span class="mono">{{ item.value }}</span>{% endif %}
+              </dd>
+              {% endfor %}
+            </dl>
+            <p class="note">Names were read from the destination at the last validation; the ids are what the pipeline stores.</p>
+            <details class="settings-json">
+              <summary>Settings as JSON</summary>
+              <pre class="config-code"><code>{{ settings }}</code></pre>
+            </details>
+            {% else %}
             <pre class="config-code"><code>{{ settings }}</code></pre>
+            {% endif %}
             {% if export %}
             <h4>Export definition</h4>
             <p class="note">Compiled by the destination plugin at the last validation. Runs save, and deliveries send, through this export, named after the pipeline.</p>
             <pre class="config-code"><code>{{ export }}</code></pre>
             {% endif %}
-          </section>
+            </div>
+          </details>
 
-          <section class="panel" id="validation" aria-labelledby="validation-title">
-            <h3 id="validation-title">Validation</h3>
+          {% set validation_state = 'fail' if validation and not validation.valid else ('pass' if validation else 'none') %}
+          <details class="panel panel-fold" id="validation" {% if validation_state != 'pass' %}open{% endif %}>
+            <summary class="fold-summary fold-{{ validation_state }}">
+              <span class="fold-marker" aria-hidden="true"></span>
+              <h3 id="validation-title">Validation</h3>
+              {% if validation %}<span class="chip {{ 'chip-published' if validation.valid else 'chip-unpublished' }}">{{ 'valid' if validation.valid else 'invalid' }}</span><span class="note">{% if validation.valid %}every check passed{% else %}{{ validation.checks | selectattr('status', 'equalto', 'fail') | list | length }} check(s) failed{% endif %}, {{ validation.checked_at | when }}</span>{% else %}<span class="chip">not checked</span>{% endif %}
+            </summary>
+            <div class="fold-body">
             <p class="note">Checked when the pipeline was saved. The workflow, its inputs and the destination can all change afterwards, so re-check before relying on an old result. Going live always re-checks.</p>
             {% if validation %}
             <ul class="plain-list validation-list">
@@ -69,18 +107,28 @@
               <li class="validation-check validation-{{ c.status }}"><span class="chip {{ 'chip-published' if c.status == 'pass' else ('chip-unpublished' if c.status == 'fail' else '') }}">{{ c.status }}</span><span><strong class="mono">{{ c.id }}</strong><small>{{ c.message }}</small></span></li>
               {% endfor %}
             </ul>
-            <p class="note">Checked {{ validation.checked_at }}.</p>
+            <p class="note">Checked {{ validation.checked_at | when }}.</p>
             {% endif %}
             {% if not read_only %}
             <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/validate" class="form-actions">
               <button type="submit">Re-check</button>
             </form>
             {% endif %}
-          </section>
+            </div>
+          </details>
 
-          <section class="panel" id="dry-run" aria-labelledby="dry-run-title">
-            <h3 id="dry-run-title">Dry run</h3>
-            <p class="note">Runs the workflow over the range below, renders the result through the destination and, where the destination supports it, submits it as a dry run: validated there, stored nowhere. A passed dry run approves these exact bindings for live delivery; changing the workflow, its arguments or the destination needs a new one.</p>
+          {% set dry_run_state = 'none' if not dry_run else ('pass' if approved else 'fail') %}
+          <details class="panel panel-fold" id="dry-run" {% if dry_run_state != 'pass' %}open{% endif %}>
+            <summary class="fold-summary fold-{{ dry_run_state }}">
+              <span class="fold-marker" aria-hidden="true"></span>
+              <h3 id="dry-run-title">Dry run</h3>
+              {% if not dry_run %}<span class="chip">not run</span>
+              {% elif approved %}<span class="chip chip-published">passed</span><span class="note">approves the current bindings, {{ dry_run.ran_at | when }}</span>
+              {% elif dry_run_passed %}<span class="chip chip-unpublished">stale</span><span class="note">passed for earlier bindings; dry-run again</span>
+              {% else %}<span class="chip chip-unpublished">failed</span><span class="note">{{ dry_run.error or 'the destination did not accept it' }}</span>{% endif %}
+            </summary>
+            <div class="fold-body">
+            <p class="note">Runs the pipeline over the range below without storing anything at the destination: its workflow is executed, the result rendered through the destination and, where the destination supports it, submitted as a dry run, validated there and stored nowhere. A passed dry run approves these exact bindings for live delivery; changing the workflow, its arguments or the destination needs a new one.</p>
             {% if dry_run %}
             {% if dry_run.error %}
             <div class="notice error" role="alert">{{ dry_run.error }}</div>
@@ -109,16 +157,17 @@
             </div>
             {% endif %}
             {% if dry_run.sample %}
+            <p class="note">A sample of {{ dry_run.sample | length }} of the {{ dry_run.values }} values, as the destination picked them; the whole payload was {% if dry_run.report %}submitted{% else %}rendered{% endif %}.</p>
             {% set columns = dry_run.sample[0].keys() | list %}
             <div class="table-wrap">
               <table>
                 <thead><tr>{% for k in columns %}<th>{{ k }}</th>{% endfor %}</tr></thead>
-                <tbody>{% for v in dry_run.sample %}<tr>{% for k in columns %}<td class="mono">{{ v[k] }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+                <tbody>{% for v in dry_run.sample %}<tr>{% for k in columns %}{% set cell = v[k] %}<td>{% if cell is mapping %}<span title="{{ cell.value }}">{{ cell.label }}</span>{% else %}<span class="mono">{{ cell }}</span>{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
               </table>
             </div>
             {% endif %}
             {% endif %}
-            <p class="note">Ran {{ dry_run.ran_at }}.</p>
+            <p class="note">Ran {{ dry_run.ran_at | when }}.</p>
             {% endif %}
             {% if not read_only %}
             <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/dry-run" class="form-grid">
@@ -136,7 +185,8 @@
               </div>
             </form>
             {% endif %}
-          </section>
+            </div>
+          </details>
 
           <section class="panel" id="delivery" aria-labelledby="delivery-title">
             <h3 id="delivery-title">Delivery</h3>
@@ -164,7 +214,7 @@
 
           <section class="panel" id="runs" aria-labelledby="runs-title">
             <h3 id="runs-title">Runs</h3>
-            <p class="note">Every run, by hand or after an update, invokes the workflow over an explicit interval as a batch job, saves through the pipeline's export, and delivers when the job finishes. A live run needs the pipeline to be live.</p>
+            <p class="note">Every run of the pipeline, by hand or after an update, executes its workflow over an explicit interval as a batch job, saves the result through the pipeline's export, and delivers it when the job finishes. A live run needs the pipeline to be live.</p>
             {% if runs %}
             <div class="table-wrap">
               <table>
@@ -172,7 +222,7 @@
                 <tbody>
                   {% for r in runs %}
                   <tr>
-                    <td>{{ r.submitted_at }}</td>
+                    <td>{{ r.submitted_at | when }}</td>
                     <td>{{ r.trigger | replace('_', ' ') }}{% if r.source.dataset_id %} <span class="note">{{ r.source.dataset_id }}</span>{% endif %}</td>
                     <td>{{ r.start }} to {{ r.end }}</td>
                     <td><span class="chip">{{ r.mode | replace('_', ' ') }}</span></td>
@@ -208,11 +258,11 @@
             {% if skipped %}
             <h4>Updates not run</h4>
             <p class="note">Dataset updates this pipeline did not run, and why. None is run later by itself; to cover one, run its interval once. This is a bounded list of the most recent {{ skipped_kept }}, not an audit trail.</p>
-            {% if skipped_discarded %}<div class="notice" role="status">{{ skipped_discarded }} older entr{{ 'y was' if skipped_discarded == 1 else 'ies were' }} discarded from this list, the newest for an update at {{ skipped_discarded_through }}. The updates themselves remain in the job history.</div>{% endif %}
+            {% if skipped_discarded %}<div class="notice" role="status">{{ skipped_discarded }} older entr{{ 'y was' if skipped_discarded == 1 else 'ies were' }} discarded from this list, the newest for an update at {{ skipped_discarded_through | when }}. The updates themselves remain in the job history.</div>{% endif %}
             <div class="table-wrap">
               <table>
                 <thead><tr><th>Update</th><th>Dataset</th><th>Interval</th><th>Reason</th></tr></thead>
-                <tbody>{% for u in skipped %}<tr><td>{{ u.time }}</td><td>{{ u.dataset_id or '' }}</td><td>{% if u.start %}{{ u.start }} to {{ u.end }}{% endif %}</td><td>{{ u.reason }}</td></tr>{% endfor %}</tbody>
+                <tbody>{% for u in skipped %}<tr><td>{{ u.time | when }}</td><td>{{ u.dataset_id or '' }}</td><td>{% if u.start %}{{ u.start }} to {{ u.end }}{% endif %}</td><td>{{ u.reason }}</td></tr>{% endfor %}</tbody>
               </table>
             </div>
             {% endif %}
@@ -242,14 +292,20 @@
           </section>
 
           {% if not read_only %}
-          <section class="panel" id="delete" aria-labelledby="delete-title">
-            <h3 id="delete-title">Delete</h3>
+          <details class="panel panel-fold" id="delete">
+            <summary class="fold-summary fold-none">
+              <span class="fold-marker" aria-hidden="true"></span>
+              <h3 id="delete-title">Delete</h3>
+              <span class="note">removes this pipeline from OCS</span>
+            </summary>
+            <div class="fold-body">
             <p class="note">Removes this pipeline and its run history from OCS. Jobs, results and deliveries already made are kept.</p>
             <form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/delete" class="form-actions">
               <label><input type="checkbox" name="confirm" value="yes" required /> I understand</label>
               <button type="submit">Delete pipeline</button>
             </form>
-          </section>
+            </div>
+          </details>
           {% endif %}
         </div>
       </main>

@@ -117,6 +117,13 @@ class ValidationResult(BaseModel):
     export: dict[str, Any] | None = Field(
         default=None, description="The named-export definition compiled from the destination, when it compiled."
     )
+    labels: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description=(
+            "How the destination's lookup settings read, by field path then value, as resolved at this check; "
+            "pages show these so they never wait for the destination."
+        ),
+    )
     checks: list[Check]
 
 
