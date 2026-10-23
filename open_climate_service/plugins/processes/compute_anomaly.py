@@ -158,8 +158,11 @@ def _align_units(normal: xr.DataArray, observed: xr.DataArray) -> xr.DataArray:
     if not observed_units or not normal_units or observed_units == normal_units:
         return normal
 
+    from open_climate_service.shared.import_lock import IMPORT_LOCK
+
     try:
-        from xclim.core.units import convert_units_to, units2pint
+        with IMPORT_LOCK:  # see shared/import_lock (CLIM-1549)
+            from xclim.core.units import convert_units_to, units2pint
     except ImportError:  # pragma: no cover - client-only install
         return normal
 

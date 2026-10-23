@@ -20,12 +20,14 @@
     <div class="layout">
       {{ nav }}
 
-      <main id="content">
+      <main id="content"{% if tab == 'list' and pipelines %} class="automation-wide"{% endif %}>
+        {{ automation_tabs }}
+
         <div class="page-title">
           <h2 id="pipelines-title" tabindex="-1">Pipelines</h2>
           <span class="chip">{{ pipelines | length }} configured</span>
         </div>
-        <p class="lead">A pipeline runs one reusable workflow over its bound inputs and delivers the result to a destination: validated first, dry-run, then live.</p>
+        <p class="lead">A pipeline shows the complete journey from source data, through workflows and derived datasets, to a destination.</p>
 
         <nav class="page-tabs" aria-label="Pipeline views">
           <a href="{{ mount }}/pipelines" {% if tab == 'list' %}aria-current="page"{% endif %}>Configured pipelines</a>
@@ -35,6 +37,24 @@
 
         {% if tab == 'list' %}
         {% if pipelines %}
+        <div class="pipeline-views" data-list data-views="pipelines">
+          <div class="toolbar">
+            <div class="view-switch" role="group" aria-label="Layout">
+              <button type="button" data-view-button="diagrams" aria-pressed="true">Diagrams</button>
+              <button type="button" data-view-button="list" aria-pressed="false">List</button>
+            </div>
+          </div>
+          <div data-view-target>
+          <div class="pipeline-diagrams">
+            {{ legend }}
+            {% for p in pipelines %}
+            <section class="pipeline-diagram" aria-labelledby="diagram-{{ p.id }}">
+              <h3 id="diagram-{{ p.id }}"><a href="{{ mount }}/pipelines/{{ p.id }}">{{ p.title }}</a> <span class="chip">{{ p.mode | replace('_', ' ') }}</span></h3>
+              {% if not p.fed %}<p class="note">Nothing feeds this pipeline yet: its workflow reads no dataset or feature collection.</p>{% endif %}
+              {% if p.diagram %}<div class="panel automation-canvas">{{ p.diagram }}</div>{% endif %}
+            </section>
+            {% endfor %}
+          </div>
         <div class="panel table-wrap pipeline-table">
           <table>
             <thead>
@@ -55,6 +75,12 @@
             </tbody>
           </table>
         </div>
+          </div>
+        </div>
+        {% include "_automation_graph_script.html" %}
+        <script>
+{{ list_script | safe }}
+        </script>
         {% else %}
         <div class="panel empty-state">
           <h3>No pipelines yet</h3>
@@ -91,15 +117,19 @@
               </select>
             </div>
             <div class="field">
-              <label for="p-destination-plugin">Destination</label>
+              <label for="p-destination-plugin">Output</label>
               <select id="p-destination-plugin" name="destination">
-                {% for d in destinations %}<option value="{{ d.id }}" {% if destination and destination.id == d.id %}selected{% endif %}>{{ d.id }} ({{ d.format }})</option>{% endfor %}
+                {% for d in destinations %}<option value="{{ d.id }}" {% if destination and destination.id == d.id %}selected{% endif %}>{{ d.settings_form.title if d.settings_form else d.id }} ({{ d.format }})</option>{% endfor %}
               </select>
             </div>
-            <div class="form-actions"><button type="submit">Use these</button><span class="note">Changing the workflow or destination reloads their fields.</span></div>
+            <div class="field pipeline-select-action">
+              <span class="field-label-spacer" aria-hidden="true">&nbsp;</span>
+              <button type="submit">Use these</button>
+              <span class="hint">Changing the workflow or destination reloads their fields.</span>
+            </div>
           </form>
 
-          <form method="post" action="{{ mount }}/pipelines{% if editing %}/{{ editing }}{% endif %}" class="pipeline-form">
+          <form method="post" action="{{ mount }}/pipelines{% if editing %}/{{ editing }}{% endif %}" class="pipeline-form" data-lookup-url="{{ mount }}/pipelines/lookups/{{ destination.id }}">
             <input type="hidden" name="workflow" value="{{ workflow.id }}" />
             <input type="hidden" name="destination" value="{{ destination.id }}" />
             {% if editing %}<input type="hidden" name="revision" value="{{ revision or '' }}" />{% endif %}
@@ -154,43 +184,80 @@
               </div>
             </fieldset>
 
-            <fieldset class="form-section">
-              <legend><span>3</span> Configure the {{ destination.id }} destination</legend>
-              <div class="form-grid">
-                {% for f in settings_fields %}
+            <fieldset class="form-section destination-form-section">
+              <legend><span>3</span> Configure {{ settings_form.title }}</legend>
+              {% if settings_form.description %}<p class="hint">{{ settings_form.description }}</p>{% endif %}
+              {% for section in settings_form.sections %}
+              <section class="plugin-settings-section">
+                {% if section.title or section.description %}
+                <div class="plugin-settings-header">
+                  {% if section.title %}<h4>{{ section.title }}</h4>{% endif %}
+                  {% if section.description %}<p class="hint">{{ section.description }}</p>{% endif %}
+                </div>
+                {% endif %}
+                <div class="form-grid plugin-settings-grid">
+                {% for f in section.fields %}
                 {% if f.kind == 'rows' %}
-                <div class="field field-wide">
+                <div class="field field-wide repeatable-field">
                   <strong>{{ f.title }}</strong>
+                  <div class="repeatable-rows">
                   {% for row in f.rows %}
                   {% set i = loop.index0 %}
-                  <div class="form-grid">
+                  <div class="form-grid repeatable-row">
+                    {% if row['existing'] %}<input type="hidden" name="dest.{{ f.name }}.{{ i }}.__present" value="true" />{% endif %}
                     {% for c in f.columns %}
                     <div class="field">
                       <label for="dest-{{ f.name }}-{{ i }}-{{ c.name }}">{{ c.title }}{% if not c.required %} <span class="note">optional</span>{% endif %}</label>
-                      <input type="text" id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="{{ row.get(c.name) or '' }}" />
+                      {% if c.widget == 'select' %}
+                      <select id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}">
+                        <option value="">{{ '(select)' if c.required else '(not set)' }}</option>
+                        {% for option in c.options %}<option value="{{ option.value }}" {% if row['values'].get(c.name) | string == option.value | string %}selected{% endif %}>{{ option.label }}</option>{% endfor %}
+                      </select>
+                      {% elif c.widget == 'checkbox' %}
+                      <input type="hidden" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}.__present" value="true" />
+                      <input type="checkbox" id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="true" {% if row['values'].get(c.name) %}checked{% endif %} />
+                      {% elif c.widget == 'lookup' %}
+                      <div class="lookup">
+                        <input type="text" id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="{{ row['values'].get(c.name) if row['values'].get(c.name) is not none else '' }}" data-lookup="{{ c.lookup }}" data-label="{{ row['labels'].get(c.name, '') }}" placeholder="Search by name or paste an id" />
+                      </div>
+                      {% else %}
+                      <input type="{{ 'number' if c.kind in ['integer', 'number'] else 'text' }}" {% if c.kind == 'number' %}step="any"{% endif %} id="dest-{{ f.name }}-{{ i }}-{{ c.name }}" name="dest.{{ f.name }}.{{ i }}.{{ c.name }}" value="{{ row['values'].get(c.name) if row['values'].get(c.name) is not none else '' }}" />
+                      {% endif %}
+                      {% if c.description %}<span class="hint">{{ c.description }}</span>{% endif %}
                     </div>
                     {% endfor %}
                   </div>
                   {% endfor %}
-                  <span class="hint">{{ f.description }} Fill the empty row to add one; save to get another.</span>
+                  </div>
+                  {% if f.description %}<span class="hint">{{ f.description }}</span>{% endif %}
                 </div>
                 {% else %}
-                <div class="field {% if f.kind == 'json' %}field-wide{% endif %}">
+                <div class="field {% if f.widget in ['json', 'textarea'] %}field-wide{% endif %}">
                   <label for="dest-{{ f.name }}">{{ f.title }}{% if not f.required %} <span class="note">optional</span>{% endif %}</label>
-                  {% if f.enum %}
+                  {% if f.widget == 'select' %}
                   <select id="dest-{{ f.name }}" name="dest.{{ f.name }}" {% if f.required %}required{% endif %}>
-                    {% for option in f.enum %}<option value="{{ option }}" {% if f.value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}
+                    {% if not f.required %}<option value="">(not set)</option>{% endif %}
+                    {% for option in f.options %}<option value="{{ option.value }}" {% if f.value == option.value | string %}selected{% endif %}>{{ option.label }}</option>{% endfor %}
                   </select>
-                  {% elif f.kind == 'json' %}
+                  {% elif f.widget == 'checkbox' %}
+                  <input type="hidden" name="dest.{{ f.name }}.__present" value="true" />
+                  <input type="checkbox" id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="true" {% if f.value == 'true' %}checked{% endif %} />
+                  {% elif f.widget in ['json', 'textarea'] %}
                   <textarea id="dest-{{ f.name }}" name="dest.{{ f.name }}" rows="3" class="mono" placeholder="JSON">{{ f.value }}</textarea>
+                  {% elif f.widget == 'lookup' %}
+                  <div class="lookup">
+                    <input type="text" id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="{{ f.value }}" data-lookup="{{ f.lookup }}" data-label="{{ f.label }}" {% if f.required %}required{% endif %} placeholder="Search by name or paste an id" />
+                  </div>
                   {% else %}
-                  <input type="text" id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="{{ f.value }}" {% if f.required %}required{% endif %} />
+                  <input type="{{ 'number' if f.kind in ['integer', 'number'] else 'text' }}" {% if f.kind == 'number' %}step="any"{% endif %} id="dest-{{ f.name }}" name="dest.{{ f.name }}" value="{{ f.value }}" {% if f.required %}required{% endif %} />
                   {% endif %}
                   {% if f.description %}<span class="hint">{{ f.description }}</span>{% endif %}
                 </div>
                 {% endif %}
                 {% endfor %}
-              </div>
+                </div>
+              </section>
+              {% endfor %}
             </fieldset>
 
             <fieldset class="form-section">
@@ -214,6 +281,9 @@
               {% if editing %}<a class="button-link" href="{{ mount }}/pipelines/{{ editing }}">Cancel</a>{% endif %}
             </div>
           </form>
+          <script>
+{{ lookup_script | safe }}
+          </script>
           {% endif %}
         </section>
         {% endif %}

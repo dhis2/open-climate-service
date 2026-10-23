@@ -13,6 +13,7 @@ from typing import Any
 from open_climate_service import config as api_config
 from open_climate_service.openeo import earthkit_processes, xclim_processes
 from open_climate_service.process import get_process_metadata
+from open_climate_service.shared.import_lock import IMPORT_LOCK
 
 logger = logging.getLogger(__name__)
 
@@ -27,28 +28,30 @@ def load_plugin_processes() -> list[tuple[str, Any]]:
     4. Installed plugin packages — ``<package>/processes/`` (entry-point plugins, #118)
     5. Instance plugins — ``plugins_dir/processes/`` (override everything)
     """
-    found: dict[str, Any] = {}
-    for func in xclim_processes.scan():
-        meta = get_process_metadata(func)
-        if meta:
-            found[meta["id"]] = func
-    for func in earthkit_processes.scan():
-        meta = get_process_metadata(func)
-        if meta:
-            found[meta["id"]] = func
-    for func in _scan_builtin_processes():
-        meta = get_process_metadata(func)
-        if meta:
-            found[meta["id"]] = func
-    for func in _scan_plugin_package_processes():
-        meta = get_process_metadata(func)
-        if meta:
-            found[meta["id"]] = func
-    for func in _scan_instance_processes():
-        meta = get_process_metadata(func)
-        if meta:
-            found[meta["id"]] = func
-    return list(found.items())
+    # Plugin modules import xclim at module level; see shared/import_lock (CLIM-1549).
+    with IMPORT_LOCK:
+        found: dict[str, Any] = {}
+        for func in xclim_processes.scan():
+            meta = get_process_metadata(func)
+            if meta:
+                found[meta["id"]] = func
+        for func in earthkit_processes.scan():
+            meta = get_process_metadata(func)
+            if meta:
+                found[meta["id"]] = func
+        for func in _scan_builtin_processes():
+            meta = get_process_metadata(func)
+            if meta:
+                found[meta["id"]] = func
+        for func in _scan_plugin_package_processes():
+            meta = get_process_metadata(func)
+            if meta:
+                found[meta["id"]] = func
+        for func in _scan_instance_processes():
+            meta = get_process_metadata(func)
+            if meta:
+                found[meta["id"]] = func
+        return list(found.items())
 
 
 def to_openeo_descriptor(func: Any) -> dict[str, Any]:

@@ -69,10 +69,14 @@
     var views = root.getAttribute("data-views");
     var target = root.querySelector("[data-view-target]");
     var viewButtons = Array.prototype.slice.call(root.querySelectorAll("[data-view-button]"));
+    var viewNames = viewButtons.map(function (button) {
+      return button.getAttribute("data-view-button");
+    });
     function setView(view) {
       if (!target) return;
-      target.classList.toggle("view-tiles", view !== "list");
-      target.classList.toggle("view-list", view === "list");
+      viewNames.forEach(function (name) {
+        target.classList.toggle("view-" + name, name === view);
+      });
       viewButtons.forEach(function (button) {
         button.setAttribute("aria-pressed", String(button.getAttribute("data-view-button") === view));
       });
@@ -82,7 +86,7 @@
       try {
         stored = window.localStorage.getItem("ocs.view." + views);
       } catch (e) {}
-      setView(stored === "list" ? "list" : "tiles");
+      setView(viewNames.indexOf(stored) !== -1 ? stored : viewNames[0]);
       viewButtons.forEach(function (button) {
         button.addEventListener("click", function () {
           var view = button.getAttribute("data-view-button");

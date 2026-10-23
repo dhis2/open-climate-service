@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     import geopandas as gpd
     import xarray as xr
+
+logger = logging.getLogger(__name__)
 
 _Cube = TypeVar("_Cube", "xr.Dataset", "xr.DataArray")
 
@@ -167,15 +170,39 @@ def single_raster(data: Any) -> xr.DataArray:
     return raster
 
 
-def features_in_crs(geometries: Any, crs: Any) -> gpd.GeoDataFrame:
-    """The features of a `geometries` argument, indexed by feature id, reprojected to *crs*.
+def features_on_raster(geometries: Any, raster: xr.DataArray) -> gpd.GeoDataFrame:
+    """The features of a `geometries` argument, indexed by feature id, in *raster*'s CRS.
 
-    See :func:`geometries_to_frame` for what is accepted. Features without a CRS are WGS 84.
+    See :func:`geometries_to_frame` for what is accepted. The geometries are reprojected, never
+    the raster, which would resample it. Features without a CRS are WGS 84. When none of them
+    overlaps the raster, each still gets no value, as openEO's ``aggregate_spatial`` has it, and a
+    warning names both CRSes and bounds: that is what a wrong CRS looks like, and what features
+    from another area than the raster's look like too.
     """
+    from shapely.geometry import box
+
+    from open_climate_service.data_manager.services.utils import get_x_y_dims
+
     frame = geometries_to_frame(geometries)
     if frame.crs is None:
         frame = frame.set_crs("EPSG:4326")
-    return frame.to_crs(crs)
+    projected = frame.to_crs(raster.rio.crs)
+    # rioxarray finds x/y and longitude/latitude axes, but not lon/lat.
+    x_dim, y_dim = get_x_y_dims(raster)
+    bounds = raster.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim).rio.bounds()
+    if len(projected) and not projected.intersects(box(*bounds)).any():
+        given = ", ".join(f"{value:g}" for value in frame.total_bounds)
+        covered = ", ".join(f"{value:g}" for value in bounds)
+        logger.warning(
+            "None of the %d geometries overlaps the raster, so none gets a value: the geometries span "
+            "(%s) in %s, the raster (%s) in %s",
+            len(frame),
+            given,
+            frame.crs,
+            covered,
+            raster.rio.crs,
+        )
+    return projected
 
 
 def vector_result(

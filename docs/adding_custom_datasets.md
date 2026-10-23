@@ -423,15 +423,18 @@ extents:
 
 ### CF metadata
 
-Stamped onto the stored variable at ingest so the GeoZarr store is
+Stamped onto the stored variable, the template's `variable`, at ingest so the GeoZarr store is
 CF-compliant on disk and CF-aware tools (xclim climate indices, cf-xarray, QGIS) work
 without per-process glue. These fields take effect when the store is written, so changing
-them requires re-ingesting the dataset:
+them requires re-ingesting the dataset. The template's `name` and `description` are stamped
+too, as the variable's `long_name` and `description`, replacing what a source or a process
+such as an xclim indicator left there. Any other variable in the store, such as a quality flag,
+keeps its own attributes:
 
 | Field           | Required | Description                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `units`         | No       | Physical units, as a **CF/udunits** string (e.g. `mm`, `mm/d`, `degC`, `kg m-2 s-1`). Validated at registration — a non-udunits value (e.g. `people`) is logged as a warning. Use `""` for a dimensionless quantity (e.g. a standardized index). For unit-aware processes (e.g. SPI) the unit must be _dimensionally_ correct — a precipitation **rate** is `mm/d`, not bare `mm`. |
-| `standard_name` | No       | CF [standard name](https://cfconventions.org/standard-names.html) (e.g. `air_temperature`, `lwe_thickness_of_precipitation_amount`).                                                                                                                                                                                                                                               |
+| `standard_name` | No       | CF [standard name](https://cfconventions.org/standard-names.html) (e.g. `air_temperature`, `lwe_thickness_of_precipitation_amount`). Set it to `null` when the variable has none, so one a source or process left is removed: CF has no standard name for many derived quantities, and xclim, for one, labels a count of hot days `number_of_days_with_air_temperature_above_threshold` whatever it was counted from. |
 | `cell_methods`  | No       | CF cell methods describing the temporal aggregation (e.g. `time: mean`, `time: sum`).                                                                                                                                                                                                                                                                                              |
 
 ### Display

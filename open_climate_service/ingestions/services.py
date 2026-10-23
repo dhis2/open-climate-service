@@ -2856,7 +2856,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         period_type=_dataset_period_type(latest, source_dataset),
         units=_as_optional_str(source_dataset.get("units")),
         resolution=_as_optional_str(source_dataset.get("resolution")),
-        source=_as_optional_str(source_dataset.get("source")),
+        source=_template_source(source_dataset),
         source_url=_as_optional_str(source_dataset.get("source_url")),
         license=_licence_for(source_dataset).stac_license,
         license_url=_licence_for(source_dataset).url,
@@ -3001,6 +3001,25 @@ def _licence_for(source_dataset: dict[str, Any]) -> "DatasetLicence":
     from open_climate_service.shared.licences import parse_licence
 
     return parse_licence(source_dataset.get("license"))
+
+
+def _template_source(template: Mapping[str, Any]) -> str | None:
+    """The short name of where a dataset comes from, for the listing and its tiles.
+
+    A raster template says it in ``source``; a feature template declares structured
+    ``providers`` instead, so the first declared provider's name stands in for it.
+    """
+    source = _as_optional_str(template.get("source"))
+    if source is not None:
+        return source
+    providers = template.get("providers")
+    if isinstance(providers, list):
+        for provider in providers:
+            if isinstance(provider, dict):
+                name = _as_optional_str(provider.get("name"))
+                if name is not None:
+                    return name
+    return None
 
 
 def _as_optional_text(value: object) -> str | None:

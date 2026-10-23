@@ -1,0 +1,76 @@
+- id: esacci_landcover_class_yearly
+  name: Land cover class (ESA CCI / C3S, yearly)
+  short_name: Land cover class
+  description: >-
+    Land cover class of each 300 m cell, worldwide, updated yearly since 1992, in the 37 LCCS
+    classes of the ESA CCI / C3S maps. Needs a Copernicus CDS key, with the dataset's licence
+    accepted once in the browser.
+  variable: lccs_class
+  period_type: yearly
+  sync:
+    kind: release
+    version:
+      value: v2.1.1
+      authority: esa-cci-lc
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1992"
+      resolution: P1Y
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.esa_cci_lc.ESACCILandCoverClassPlugin
+    resampling: mode
+  classes:
+    - { value: 10, label: "Cropland, rainfed", color: "#ffff64" }
+    - { value: 11, label: "Herbaceous cover", color: "#ffff64" }
+    - { value: 12, label: "Tree or shrub cover", color: "#ffff00" }
+    - { value: 20, label: "Cropland, irrigated or post-flooding", color: "#aaf0f0" }
+    - { value: 30, label: "Mosaic cropland (>50%) / natural vegetation (tree, shrub, herbaceous cover) (<50%)", color: "#dcf064" }
+    - { value: 40, label: "Mosaic natural vegetation (tree, shrub, herbaceous cover) (>50%) / cropland (<50%)", color: "#c8c864" }
+    - { value: 50, label: "Tree cover, broadleaved, evergreen, closed to open (>15%)", color: "#006400" }
+    - { value: 60, label: "Tree cover, broadleaved, deciduous, closed to open (>15%)", color: "#00a000" }
+    - { value: 61, label: "Tree cover, broadleaved, deciduous, closed (>40%)", color: "#00a000" }
+    - { value: 62, label: "Tree cover, broadleaved, deciduous, open (15-40%)", color: "#aac800" }
+    - { value: 70, label: "Tree cover, needleleaved, evergreen, closed to open (>15%)", color: "#003c00" }
+    - { value: 71, label: "Tree cover, needleleaved, evergreen, closed (>40%)", color: "#003c00" }
+    - { value: 72, label: "Tree cover, needleleaved, evergreen, open (15-40%)", color: "#005000" }
+    - { value: 80, label: "Tree cover, needleleaved, deciduous, closed to open (>15%)", color: "#285000" }
+    - { value: 81, label: "Tree cover, needleleaved, deciduous, closed (>40%)", color: "#285000" }
+    - { value: 82, label: "Tree cover, needleleaved, deciduous, open (15-40%)", color: "#286400" }
+    - { value: 90, label: "Tree cover, mixed leaf type (broadleaved and needleleaved)", color: "#788200" }
+    - { value: 100, label: "Mosaic tree and shrub (>50%) / herbaceous cover (<50%)", color: "#8ca000" }
+    - { value: 110, label: "Mosaic herbaceous cover (>50%) / tree and shrub (<50%)", color: "#be9600" }
+    - { value: 120, label: "Shrubland", color: "#966400" }
+    - { value: 121, label: "Shrubland evergreen", color: "#784b00" }
+    - { value: 122, label: "Shrubland deciduous", color: "#966400" }
+    - { value: 130, label: "Grassland", color: "#ffb432" }
+    - { value: 140, label: "Lichens and mosses", color: "#ffdcd2" }
+    - { value: 150, label: "Sparse vegetation (tree, shrub, herbaceous cover) (<15%)", color: "#ffebaf" }
+    - { value: 151, label: "Sparse tree (<15%)", color: "#ffc864" }
+    - { value: 152, label: "Sparse shrub (<15%)", color: "#ffd278" }
+    - { value: 153, label: "Sparse herbaceous cover (<15%)", color: "#ffebaf" }
+    - { value: 160, label: "Tree cover, flooded, fresh or brackish water", color: "#00785a" }
+    - { value: 170, label: "Tree cover, flooded, saline water", color: "#009678" }
+    - { value: 180, label: "Shrub or herbaceous cover, flooded, fresh/saline/brackish water", color: "#00dc82" }
+    - { value: 190, label: "Urban areas", color: "#c31400" }
+    - { value: 200, label: "Bare areas", color: "#fff5d7" }
+    - { value: 201, label: "Consolidated bare areas", color: "#dcdcdc" }
+    - { value: 202, label: "Unconsolidated bare areas", color: "#fff5d7" }
+    - { value: 210, label: "Water bodies", color: "#0046c8" }
+    - { value: 220, label: "Permanent snow and ice", color: "#ffffff" }
+  units: "1"
+  resolution: 300 m x 300 m
+  source: ESA CCI / C3S land cover v2.0.7 and v2.1.1 (Copernicus Climate Data Store)
+  source_url: https://cds.climate.copernicus.eu/datasets/satellite-land-cover
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/satellite-land-cover/
+  providers:
+    - name: ESA Climate Change Initiative and Copernicus Climate Change Service (C3S)
+      url: https://climate.esa.int/en/projects/land-cover/
+    - name: Copernicus Climate Data Store
+      url: https://cds.climate.copernicus.eu/
+  display:
+    colormap: viridis
+    range: [10, 220]

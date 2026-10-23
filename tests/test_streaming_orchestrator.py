@@ -366,6 +366,57 @@ def test_orchestrator_stamps_cf_attrs_from_template(monkeypatch: pytest.MonkeyPa
         written.close()
 
 
+class _WithQualityPlugin(_FakePlugin):
+    """Emits the data variable and a quality flag that carries its own CF labels."""
+
+    async def fetch_period(self, period_id: str, bbox: list[float], **params: Any) -> xr.Dataset:
+        ds = await super().fetch_period(period_id, bbox, **params)
+        ds["quality"] = ds["precip"].copy(deep=True)
+        ds["quality"].attrs = {"long_name": "Retrieval quality", "standard_name": "status_flag"}
+        return ds
+
+
+def test_orchestrator_stamps_the_template_on_its_variable_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The template describes its `variable`; another variable in the store keeps its labels."""
+    store_path = tmp_path / "streaming-store.zarr"
+    repo = _FakeRepo(str(store_path))
+
+    monkeypatch.setattr(streaming_orchestrator, "open_or_create_repo", lambda path: repo)
+    monkeypatch.setattr(
+        streaming_orchestrator,
+        "read_committed_period_ids",
+        lambda path, period_type, time_dim="t": _read_committed_periods_from_zarr(path, period_type, time_dim=time_dim),
+    )
+    monkeypatch.setattr(streaming_orchestrator, "is_store_empty", lambda path: not path.exists())
+
+    run_streaming_ingest_sync(
+        plugin=_WithQualityPlugin(),
+        params={},
+        dataset={
+            "variable": "precip",
+            "name": "Precipitation rate",
+            "description": "Daily precipitation.",
+            "units": "mm/d",
+            "standard_name": None,
+        },
+        bbox=[0.0, 0.0, 1.0, 1.0],
+        start="2026-01-01",
+        end="2026-01-03",
+        store_path=store_path,
+        period_type="daily",
+    )
+
+    written = xr.open_zarr(store_path, consolidated=None)
+    try:
+        assert written["precip"].attrs.get("long_name") == "Precipitation rate"
+        quality = written["quality"].attrs
+        assert quality.get("long_name") == "Retrieval quality"
+        assert quality.get("standard_name") == "status_flag"
+        assert "units" not in quality
+    finally:
+        written.close()
+
+
 def test_orchestrator_refuses_destructive_first_write_when_existing_store_is_not_empty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

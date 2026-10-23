@@ -189,14 +189,14 @@ def _make_feature_aware_aggregate_spatial(original_fn: Any) -> Any:
         import numpy as np
 
         from open_climate_service.shared.provenance import record_features, spatial_aggregation_scope
-        from open_climate_service.shared.vectors import GEOMETRY_FIELD, features_in_crs, single_raster, vector_result
+        from open_climate_service.shared.vectors import GEOMETRY_FIELD, features_on_raster, single_raster, vector_result
 
         if context is not None:
             # Callback parameters come from `named_parameters`, as openEO's own reducers pass it.
             reducer = functools.partial(reducer, named_parameters={"context": context})
         record_features(geometries)
         raster = single_raster(data)
-        frame = features_in_crs(geometries, raster.rio.crs)
+        frame = features_on_raster(geometries, raster)
         with spatial_aggregation_scope():
             # The reducer runs in joblib workers, by default other processes, where the scope's
             # ContextVar is not set. One call here on a tiny array, the way xvec calls it, records
@@ -415,7 +415,18 @@ def _build_process_registry() -> Any:
     global _registry
     if _registry is not None:
         return _registry
+    from open_climate_service.shared.import_lock import IMPORT_LOCK
 
+    # Built once, by whichever thread comes first; another waits for it rather than importing
+    # the same libraries alongside it (CLIM-1549).
+    with IMPORT_LOCK:
+        if _registry is None:
+            _registry = _new_process_registry()
+    return _registry
+
+
+def _new_process_registry() -> Any:
+    """The base process registry, built from scratch; `_build_process_registry` keeps the one."""
     from openeo_pg_parser_networkx.process_registry import Process, ProcessRegistry
 
     # openeo-processes-dask eagerly imports its whole implementation stack (xvec, odc,
@@ -478,7 +489,6 @@ def _build_process_registry() -> Any:
     for process_id, func in load_plugin_processes():
         registry[process_id] = Process(spec=to_openeo_descriptor(func), implementation=func)
 
-    _registry = registry
     return registry
 
 

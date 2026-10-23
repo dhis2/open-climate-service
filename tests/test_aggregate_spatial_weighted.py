@@ -206,20 +206,27 @@ def test_aggregate_spatial_fully_outside():
     # uniform flat grid with only 1s
     da = _flat_grid(y_ascending=True)
 
-    # exactly 1x1 pixels aligned with pixels
-    geom = _box(-2, -2, -1, -1)
+    # one geometry over a cell, one outside the grid, both exactly 1x1 pixels aligned with pixels
+    geoms = [_box(0, 0, 1, 1), _box(-2, -2, -1, -1)]
 
-    # returns geometry even if outside
-    out = aggregate_spatial_weighted(da, geom, "sum")
-    assert out.sizes["geometry"] == 1
+    # returns the outside geometry too
+    out = aggregate_spatial_weighted(da, geoms, "sum")
+    assert out.sizes["geometry"] == 2
 
     # weighted sum for nomatch = 0
-    out = aggregate_spatial_weighted(da, geom, "sum")
-    assert float(out.isel(geometry=0).item()) == pytest.approx(0)
+    assert float(out.isel(geometry=1).item()) == pytest.approx(0)
 
     # weighted mean for nomatch = nan
-    out = aggregate_spatial_weighted(da, geom, "mean")
+    out = aggregate_spatial_weighted(da, geoms, "mean")
+    assert np.isnan(out.isel(geometry=1))
+
+
+def test_aggregate_spatial_nothing_inside_has_no_value_and_warns(caplog: pytest.LogCaptureFixture):
+    # A CRS mismatch looks like this, so it is logged; the result still follows openEO.
+    with caplog.at_level("WARNING", logger="open_climate_service.shared.vectors"):
+        out = aggregate_spatial_weighted(_flat_grid(y_ascending=True), _box(-2, -2, -1, -1), "mean")
     assert np.isnan(out.isel(geometry=0))
+    assert "None of the 1 geometries overlaps the raster" in caplog.text
 
 
 def test_aggregate_spatial_mixed_geometry_types():

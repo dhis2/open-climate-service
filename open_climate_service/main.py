@@ -13,6 +13,7 @@ from starlette.routing import Route
 
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from open_climate_service import config as api_config
+from open_climate_service.automation import routes as automation_routes
 from open_climate_service.automation.service import get_workflow_automation_service
 from open_climate_service.data_registry import routes as data_source_routes
 from open_climate_service.exports import routes as exports_routes
@@ -353,6 +354,7 @@ def create_app() -> FastAPI:
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
     _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])
     _app.include_router(pipeline_routes.router, prefix="/pipelines", tags=["Pipelines"])
+    _app.include_router(automation_routes.router, prefix="/automation", tags=["Automation"])
     # MCP streamable HTTP (CLIM-851): POST carries requests, GET and DELETE are part of the
     # transport. Answers 404 unless `mcp: true` in the instance config.
     _app.router.routes.append(

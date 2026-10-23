@@ -146,10 +146,19 @@ own write authentication.
 
 ## Inspect status
 
-`GET /schedules` reports whether the process-local clock is running and, for each schedule,
-its next check, latest enqueue outcome, message, and submitted native job ID. This status does
-not mirror the terminal job state; follow `last_job_id` through the native jobs API. Check state
-is volatile and resets when the process restarts; submitted jobs remain durable.
+`GET /schedules` reports, for each schedule, its next check, latest enqueue outcome, message,
+and submitted native job ID. This status does not mirror the terminal job state; follow
+`last_job_id` through the native jobs API.
+
+The process that runs the clock records each check's result, and a heartbeat every 30 seconds,
+in `<data_dir>/schedule_results.json`. Every process on the same data directory reports from
+that file, so a read-only public instance beside a writable worker shows the worker's checks,
+and the clock's own process still shows them after a restart. `enabled` and `running` describe
+the answering process; `clock` says whether a clock runs on the data directory, whether it is
+this process (`here`) and when it last reported (`beat_at`), and is `null` when none has
+reported in the last 90 seconds. Which host and process run it stays in the file. A process
+that does not run the clock computes the next check from the cron, in the timezone the clock
+reports, and only while a clock reports, since otherwise nothing fires.
 
 Every due check creates a native job, including checks that finish without finding new periods.
 Native job history is currently retained in `jobs.json`; retention and indexed active-job lookup

@@ -54,6 +54,10 @@ Before handing work back, fix and format only the files you changed (`uv run ruf
 - **Run the real path once.** Ingest a period or call the route on a local instance and read the output. Implausible values and leaked metadata show up there, not in unit tests.
 - **Size defaults for a laptop.** OCS normally runs on one. Concurrency, thread pools and memory-heavy work default low; servers raise them through settings.
 - **Build the simplest version first.** Add server-side machinery for speed or size only when the plain approach is too slow where OCS runs, and name the optimisation as a follow-up instead.
+- **Act on review findings that can happen.** Before adding code for a Copilot or reviewer finding, check that the stores and plugins OCS has can produce the case. Answer a hypothetical one in the thread instead.
+- **Extend a test before adding one.** A new case is often one more assertion, or one more variable, in the test beside it. A second test with copied setup doubles what a reader has to check.
+- **Explain once.** A decision is explained in the docs or in a docstring, not in both and again in a comment. A comment says why, never what the next line does.
+- **Read the diff before pushing.** When the tests and comments are several times longer than the code change, look for a test that could be merged and an explanation given twice.
 - **No backward compatibility yet.** Renames, schema changes and forced re-downloads on existing instances are fine; say so in one line of the PR.
 - **Suppress narrowly.** A `# type: ignore`, `# pyright: ignore` or `# noqa` names the specific code it silences. Lint rejects a blanket `# type: ignore` or `# noqa`; a blanket `# pyright: ignore` is not caught, so review for it. Fix the type rather than suppress it where you can.
 - **Wording.** "Data source" in the API and web interface; "dataset template" for the YAML files that describe one.
@@ -84,6 +88,16 @@ ingestion:
 ## Planned work
 
 Tracked in Jira, project [CLIM](https://dhis2.atlassian.net/jira/software/c/projects/CLIM/issues), component "Climate Service", grouped under one epic per area (data ingestion, processing and workflows, openEO, catalogue and metadata, GeoZarr and Icechunk storage, vector data, DHIS2 integration, and so on). GitHub issues are not used.
+
+When writing a Jira epic or issue, follow the [write-issue guide](https://github.com/dhis2-chap/claude-plugins/blob/main/plugins/write-issue/skills/write-issue/SKILL.md). Filing details for this repo:
+
+- Project `CLIM`, component `Climate Service`.
+- Parent: the area epic, named "OCS: <area>" (for example CLIM-802 "OCS: Processing and workflows").
+- Label: `ch-obj-open-climate-service` on every issue, as a placeholder until the OCS objectives are in Jira.
+- Sprint: the current sprint for work being done now; no sprint for work filed for later.
+- Assignee: none.
+
+To install the guide as a skill in Claude Code, Codex, Copilot or another agent: `npx skills add dhis2-chap/claude-plugins --skill write-issue`.
 
 ## Commit conventions
 

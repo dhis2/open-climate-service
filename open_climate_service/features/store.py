@@ -384,6 +384,23 @@ def read_feature_collection(
     return frame
 
 
+def read_feature_columns(record: ArtifactRecord, columns: Sequence[str]) -> list[dict[str, Any]]:
+    """Some attribute columns of a registered collection, one row per feature, without its geometry.
+
+    For a caller that needs names or codes, not shapes: only the named columns are read from the
+    file. A column the collection does not have is left out of every row.
+    """
+    import pyarrow.parquet as pq
+
+    path = _stored_path(record)
+    present = set(pq.read_schema(path).names)
+    wanted = [column for column in dict.fromkeys(columns) if column in present]
+    if not wanted:
+        return []
+    rows: list[dict[str, Any]] = pq.read_table(path, columns=wanted).to_pylist()
+    return rows
+
+
 def stored_geometry_types(record: ArtifactRecord) -> list[str]:
     """Return the geometry types a stored collection declares, read from its file footer."""
     return geoparquet.stored_geometry_types(

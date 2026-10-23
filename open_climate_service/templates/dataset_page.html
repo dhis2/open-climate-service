@@ -129,11 +129,11 @@
                 {% if stored_schedule and not stored_schedule.enabled %}
                 <p class="note">Checks on <span class="mono">{{ stored_schedule.cron }}</span> ({{ tz }}) are paused.</p>
                 {% elif stored_schedule %}
-                <p class="note">Checked on <span class="mono">{{ stored_schedule.cron }}</span> ({{ tz }}){% if stored_schedule.next_check %}, next {{ stored_schedule.next_check }}{% endif %}.{% if stored_schedule.last_check %} Last check {{ stored_schedule.last_check }}: {{ stored_schedule.last_outcome }}{% if stored_schedule.last_job_id %}, <a href="{{ mount }}/jobs/{{ stored_schedule.last_job_id }}">view job</a>{% endif %}.{% endif %}</p>
+                <p class="note">Checked on <span class="mono">{{ stored_schedule.cron }}</span> ({{ tz }}){% if stored_schedule.next_check %}, next {{ stored_schedule.next_check }}{% endif %}.{% if stored_schedule.last_check %} Last check {{ stored_schedule.last_check }}: {{ stored_schedule.last_outcome }}{% if stored_schedule.last_job_id %}, <a href="{{ mount }}/ingestions/jobs/{{ stored_schedule.last_job_id }}">view job</a>{% endif %}.{% endif %}</p>
                 {% else %}
                 <p class="note">Not synced on a schedule. Set one up to check the source for new data automatically.</p>
                 {% endif %}
-                {% if scheduler_status and not scheduler_status.enabled %}
+                {% if scheduler_status and not scheduler_status.enabled and not scheduler_status.clock %}
                 <p class="hint">The scheduler is off on this instance, so no schedule fires until an operator enables it in <span class="mono">climate-service.yaml</span> and restarts OCS.</p>
                 {% endif %}
 

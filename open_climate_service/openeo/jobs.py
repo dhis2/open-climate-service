@@ -1727,11 +1727,12 @@ def _write_managed_zarr(
     # Stamp CF attributes (units / standard_name / cell_methods) from the template so the
     # published store is CF-compliant on disk (#280). The template is authoritative for the
     # fields it declares, so overwrite any placeholder/generic value left on the variable.
+    # Only on the primary variable: the template describes that one.
     cf_attrs = cf_attrs_from_template(template)
     _reject_incompatible_template_units(ds, variable, cf_attrs)
-    apply_cf_metadata(ds, cf_attrs, overwrite=True)
+    apply_cf_metadata(ds, cf_attrs, variable=variable, overwrite=True)
 
-    coverage = _derive_coverage(ds, x_dim, y_dim, t_dim)
+    coverage = _derive_coverage(ds, x_dim, y_dim, t_dim, crs)
     period_type: str | None = _derive_period_type(ds, options, source_template, t_dim)
     store_path = downloader.DOWNLOAD_DIR / f"{dataset_id}.icechunk"
     store_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2010,8 +2011,11 @@ def _reject_incompatible_template_units(ds: Any, variable: str, cf_attrs: dict[s
     declared = declared.strip()
     if declared == produced:
         return
+    from open_climate_service.shared.import_lock import IMPORT_LOCK
+
     try:
-        from xclim.core.units import units2pint
+        with IMPORT_LOCK:  # see shared/import_lock (CLIM-1549)
+            from xclim.core.units import units2pint
     except ImportError:
         return  # client-only install; validate_units() makes the same allowance
     try:
@@ -2178,8 +2182,8 @@ def _humanize_identifier(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[_-]+", " ", value)).strip().title()
 
 
-def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None) -> Any:
-    """Derive ArtifactCoverage from an xr.Dataset's coordinates."""
+def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None, native_crs: str) -> Any:
+    """Derive ArtifactCoverage from an xr.Dataset's coordinates, which are in *native_crs*."""
     import numpy as np
     import pyproj
 
@@ -2195,7 +2199,6 @@ def _derive_coverage(ds: Any, x_dim: str, y_dim: str, t_dim: str | None) -> Any:
     ymax = float(ds[y_dim].max())
     spatial = CoverageSpatial(xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
-    native_crs: str = ds.attrs.get("proj:code", "EPSG:4326")
     spatial_wgs84: Any = None
     if native_crs not in ("EPSG:4326", "CRS84", "OGC:CRS84"):
         try:

@@ -1007,6 +1007,30 @@ def test_a_stale_raster_template_cannot_lend_a_feature_collection_a_period(
     assert dataset.period_type is None
 
 
+def test_a_feature_collection_lists_its_template_description_and_first_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A vector template has no ``source``; its first declared provider names where it came from."""
+    monkeypatch.setattr(services, "_load_records", lambda: [_feature_artifact()])
+    monkeypatch.setattr(services.registry_datasets, "get_dataset", lambda _: None)
+    monkeypatch.setattr(
+        services.feature_templates,
+        "get_feature_template",
+        lambda dataset_id: {
+            "id": "districts",
+            "name": "Districts",
+            "id_property": "id",
+            "description": "  Level 2 organisation units of the national HMIS, with boundaries.\n",
+            "providers": [{"roles": ["host"]}, {"name": "Sierra Leone HMIS (DHIS2)", "roles": ["producer"]}],
+        },
+    )
+
+    dataset = services.list_datasets().items[0]
+
+    assert dataset.description == "Level 2 organisation units of the national HMIS, with boundaries."
+    assert dataset.source == "Sierra Leone HMIS (DHIS2)"
+
+
 def test_a_raster_with_no_declared_period_type_still_reports_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     """The nullable change was for feature collections; it must not alter a raster response."""
     raster = _raster_artifact()

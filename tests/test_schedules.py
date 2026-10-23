@@ -859,3 +859,52 @@ def test_status_rows_name_their_kind(client: TestClient) -> None:
 def test_stored_schedule_timestamps_are_timezone_aware(instance: None) -> None:
     saved = store.save_schedule(_stored("era5"), create=True)
     assert saved.created_at.tzinfo is not None and saved.created_at <= datetime.now(timezone.utc)
+
+
+def test_pages_show_the_checks_of_a_clock_in_another_process(
+    dataset_pages: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process without the clock reports what the clock's process ran (CLIM-1490)."""
+    from open_climate_service.jobs.models import JobRecord, JobStatus
+    from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult
+    from open_climate_service.scheduler.results import SharedResultsStore
+
+    client = dataset_pages
+    store.save_schedule(_stored("era5"), create=True)
+    shared = SharedResultsStore()
+    shared.beat("UTC")
+    shared.record(
+        CheckResult(
+            schedule_id="dataset-sync:era5",
+            dataset_id="era5",
+            outcome=CheckOutcome.SUBMITTED,
+            message="submitted",
+            job_id="job-9",
+        )
+    )
+
+    body = client.get("/schedules", headers={"Accept": "application/json"}).json()
+    # Whether, where and when, but not which host or process.
+    assert set(body["clock"]) == {"here", "beat_at"} and body["clock"]["here"] is False
+
+    page = client.get("/schedules", headers={"Accept": BROWSER}).text
+    assert "Scheduled in another process" in page and "Not running" not in page
+    assert "reset when OCS restarts" not in page
+    assert 'href="/ingestions/jobs/job-9"' in page
+    dataset_page = client.get("/datasets/era5", headers={"Accept": BROWSER}).text
+    assert 'href="/ingestions/jobs/job-9"' in dataset_page
+    assert "scheduler is off" not in dataset_page
+
+    # The link reaches the native job that a scheduled sync submits.
+    job = JobRecord(
+        job_id="job-9",
+        process_id="scheduled-sync",
+        status=JobStatus.ACCEPTED,
+        created_at=datetime.now(timezone.utc),
+        request={"dataset_id": "era5"},
+    )
+    monkeypatch.setattr(
+        "open_climate_service.jobs.store.get_job_record", lambda job_id: job if job_id == "job-9" else None
+    )
+    followed = client.get("/ingestions/jobs/job-9")
+    assert followed.status_code == 200 and followed.json()["jobID"] == "job-9"

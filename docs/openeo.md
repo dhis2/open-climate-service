@@ -247,6 +247,8 @@ extending an already stacked named-predictor group.
 
 An `aggregate_spatial_weighted` result keeps the geometry it was aggregated over, so `GEOJSON` and `PARQUET` output carries the real shapes — mappable in QGIS or geopandas without joining back to a boundary file — alongside each feature's id in `feature_id`. The weighted reducer uses the relative overlap between each raster cell and each feature, which is important for irregular polygons and partial coverage. `CSV` and the tabular exports drop the shapes and keep `feature_id`, which the DHIS2 and CHAP exports use for location. `ZARR` and `NETCDF` store the shapes as CF geometry, which xvec's `decode_cf` reads back. Asking for `GEOJSON` or `PARQUET` for a cube with no usable geometry is a `400` error rather than a silent fallback to another format. `GEOJSON` output is always WGS 84, as RFC 7946 requires, so a projected cube is reprojected on the way out; `PARQUET` records the CRS in the file and keeps the native coordinates.
 
+The spatial aggregations work in the raster's CRS: the geometries are reprojected onto the raster, never the raster onto the geometries, so a UTM or Web Mercator store gives the same values per feature as a WGS 84 one. A geometry outside the raster gets no value, as the openEO `aggregate_spatial` process has it. When none of them overlaps the raster, the server also logs a warning naming both CRSes and bounding boxes, which is how a wrong CRS shows up.
+
 ```bash
 # Monthly precipitation totals as NetCDF
 curl -X POST http://127.0.0.1:9000/result \

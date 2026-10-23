@@ -384,7 +384,8 @@ def test_weighted_reprojects_wgs84_features_onto_a_projected_raster() -> None:
 
 
 def test_weighted_takes_a_raster_on_lon_lat_axes() -> None:
-    raster = _grid().t2m.rename({"x": "lon", "y": "lat"}).rio.set_spatial_dims(x_dim="lon", y_dim="lat")
+    """rioxarray does not recognise `lon`/`lat` on its own, so no spatial dims are declared here."""
+    raster = _grid().t2m.rename({"x": "lon", "y": "lat"})
 
     result = aggregate_spatial_weighted(raster, _districts(), "mean")
 

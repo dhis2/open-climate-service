@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import jsonschema
+
 from open_climate_service import config as api_config
 from open_climate_service.exports.base import BaseExportPlugin, DestinationContext, PipelineDataset
 from open_climate_service.exports.manifest import plugin_identity
@@ -79,6 +81,17 @@ def destination_context(spec: PipelineSpec, bound: BoundWorkflow) -> Destination
 def compile_export(spec: PipelineSpec, bound: BoundWorkflow) -> dict[str, Any]:
     """The named-export definition the destination plugin compiles from its settings."""
     plugin = destination_plugin(spec)
+    schema = plugin.destination_settings_schema()
+    if schema is None:
+        raise ValueError(f"export plugin '{plugin.id}' no longer declares the pipeline destination capability")
+    try:
+        jsonschema.validate(instance=spec.destination.settings, schema=schema)
+    except jsonschema.SchemaError as exc:
+        message = f"export plugin '{plugin.id}' has an invalid destination settings schema: {exc.message}"
+        raise ValueError(message) from None
+    except jsonschema.ValidationError as exc:
+        location = ".".join(str(part) for part in exc.absolute_path)
+        raise ValueError(f"destination setting {location + ': ' if location else ''}{exc.message}") from None
     definition = plugin.export_definition(spec.destination.settings, destination_context(spec, bound))
     return {**definition, "id": spec.id, "plugin": plugin.id}
 
@@ -166,7 +179,12 @@ def choices() -> dict[str, Any]:
         for record in list_feature_collections().items
     ]
     destinations = [
-        {"id": plugin_id, "format": plugin.format, "schema": plugin.destination_settings_schema()}
+        {
+            "id": plugin_id,
+            "format": plugin.format,
+            "schema": plugin.destination_settings_schema(),
+            "settings_form": plugin.pipeline_settings_form(),
+        }
         for plugin_id, plugin in sorted(destination_plugins().items())
     ]
     return {"workflows": workflows, "datasets": datasets, "collections": collections, "destinations": destinations}
@@ -183,6 +201,7 @@ def validate_pipeline(record: PipelineRecord) -> ValidationResult:
     checks: list[Check] = []
     bound: BoundWorkflow | None = None
     export: dict[str, Any] | None = None
+    labels: dict[str, dict[str, str]] = {}
 
     try:
         bound = workflow_binding.bind(spec.workflow)
@@ -221,6 +240,7 @@ def validate_pipeline(record: PipelineRecord) -> ValidationResult:
             context = destination_context(spec, bound)
             for check in plugin.check_destination(spec.destination.settings, context):
                 checks.append(Check(id=check.id, status=check.status, message=check.message))
+            labels = settings_labels(plugin, spec.destination.settings)
         checks.append(_check_schedule(bound))
 
     checks.append(_check_configuration(spec))
@@ -232,8 +252,36 @@ def validate_pipeline(record: PipelineRecord) -> ValidationResult:
         checked_at=utc_now().isoformat(),
         bindings=digest,
         export=export,
+        labels=labels,
         checks=checks,
     )
+
+
+def settings_fields(plugin: BaseExportPlugin) -> list[dict[str, Any]]:
+    """The plugin's settings as form fields: the one reading of its schema and presentation."""
+    from open_climate_service.pipelines import forms
+
+    return forms.settings_fields(plugin.destination_settings_schema(), plugin.pipeline_settings_form())
+
+
+def settings_labels(plugin: BaseExportPlugin, settings: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """How the lookup settings read at the destination, by field path then value.
+
+    A lookup the destination cannot answer is left out, and logged: the labels are a courtesy
+    for the pages, never a check, and the value stays usable by itself.
+    """
+    from open_climate_service.pipelines import forms
+
+    labels: dict[str, dict[str, str]] = {}
+    for path, lookup, values in forms.lookup_values(settings, settings_fields(plugin)):
+        try:
+            resolved = plugin.lookup_labels(lookup, settings, values)
+        except Exception as exc:  # the destination, its connection, or the plugin
+            logger.warning("Could not resolve '%s' labels for plugin '%s': %s", lookup, plugin.id, exc)
+            continue
+        if resolved:
+            labels[path] = {value: resolved[value] for value in values if value in resolved}
+    return labels
 
 
 def _check_inputs(bound: BoundWorkflow, *, on_update: bool) -> Check:
@@ -288,27 +336,42 @@ def _check_configuration(spec: PipelineSpec) -> Check:
 
 
 def _check_schedule(bound: BoundWorkflow) -> Check:
-    """Report how the source datasets are kept current. The pipeline owns no sync clock of its own."""
-    raw = api_config.get_config().get("scheduler", {})
-    entries = raw.get("dataset_sync", []) if isinstance(raw, dict) else []
-    enabled = isinstance(raw, dict) and raw.get("enabled") is True
+    """Report how the source datasets are kept current. The pipeline owns no sync clock of its own.
+
+    Schedules live in the operator's JSON store, one per dataset; the instance switch that lets
+    the clock run stays in ``climate-service.yaml`` and is read the way the scheduler reads it,
+    so the two agree on what "enabled" means. A paused entry is reported, not counted.
+    """
+    from open_climate_service.scheduler import store as schedule_store
+    from open_climate_service.scheduler.config import get_scheduler_config
+
     if not bound.dataset_ids:
         return Check(id="schedule", status="skip", message="the workflow reads no managed dataset")
+    try:
+        enabled = get_scheduler_config().enabled
+    except ValueError as exc:
+        return Check(id="schedule", status="skip", message=f"the scheduler configuration is invalid: {exc}")
+    try:
+        stored = {item.dataset_id: item for item in schedule_store.list_schedules()}
+    except schedule_store.ScheduleStoreUnreadable as exc:
+        return Check(id="schedule", status="skip", message=f"the schedule store cannot be read: {exc}")
     parts: list[str] = []
     status: str = "pass"
     for dataset_id in bound.dataset_ids:
-        existing = [item for item in entries if isinstance(item, dict) and item.get("dataset_id") == dataset_id]
-        if not existing:
+        existing = stored.get(dataset_id)
+        if existing is None:
             status = "skip"
             parts.append(f"'{dataset_id}' has no sync schedule; it updates only after a manual sync")
+        elif not existing.enabled:
+            status = "skip"
+            parts.append(f"'{dataset_id}' has a sync schedule ({existing.cron!r}), but it is paused")
         elif not enabled:
             status = "skip"
             parts.append(
-                f"'{dataset_id}' has a sync schedule ({existing[0].get('cron', '?')!r}), but the instance scheduler "
-                "is disabled"
+                f"'{dataset_id}' has a sync schedule ({existing.cron!r}), but the instance scheduler is disabled"
             )
         else:
-            parts.append(f"'{dataset_id}' is synced on schedule {existing[0].get('cron', '?')!r}")
+            parts.append(f"'{dataset_id}' is synced on schedule {existing.cron!r}")
     return Check(id="schedule", status="pass" if status == "pass" else "skip", message="; ".join(parts))
 
 
@@ -380,7 +443,12 @@ def dry_run_pipeline(record: PipelineRecord, start: str, end: str) -> DryRunResu
         bindings=digest,
         values=rendered.record_count,
         periods=sorted(set(rendered.periods or ())),
-        sample=plugin.preview(rendered.content),
+        sample=plugin.preview(
+            rendered.content,
+            spec.destination.settings,
+            destination_context(spec, bound),
+            record.validation.labels if record.validation else None,
+        ),
         report=report,
         rendered_only=report is None,
     )

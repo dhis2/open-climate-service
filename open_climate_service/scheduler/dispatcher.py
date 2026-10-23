@@ -32,7 +32,7 @@ class CheckOutcome(StrEnum):
 
 
 class CheckResult(BaseModel):
-    """Operational result retained by the process-local scheduler."""
+    """Operational result of one check, shared through the data directory (``scheduler.results``)."""
 
     schedule_id: str
     dataset_id: str
