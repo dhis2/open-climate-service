@@ -26,7 +26,7 @@
   cell_methods: "time: mean"
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
-  source_url: https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land-daily
+  source_url: https://earthdatahub.destine.eu/collections/era5/datasets/era5-land-daily
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -68,7 +68,7 @@
   cell_methods: "time: mean"
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
-  source_url: https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land-daily
+  source_url: https://earthdatahub.destine.eu/collections/era5/datasets/era5-land-daily
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/

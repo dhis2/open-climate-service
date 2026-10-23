@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from typing import Any, cast
 
 import numpy as np
+import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
 from earthkit.transforms.temporal import monthly_reduce
 
