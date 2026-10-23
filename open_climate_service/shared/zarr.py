@@ -99,9 +99,9 @@ class CachedTimeSeriesZarr:
                     "cache prefetch will be limited only by max_cache_bytes"
                 )
 
-            # Prepare the dataset and compute various cache size estimates
-            dataset = prepare(source) if prepare else source
-            self._dataset = dataset[[self.variable]]
+            # Prepare only the selected variable and compute various cache size estimates
+            source = source[[self.variable]]
+            self._dataset = prepare(source) if prepare else source
             time_steps = self._dataset.sizes[self._time_dim]
             self._bytes_per_time_step = max(1, self._dataset[self.variable].nbytes // time_steps)
             self._max_cache_steps = max(1, self._max_cache_bytes // self._bytes_per_time_step)
