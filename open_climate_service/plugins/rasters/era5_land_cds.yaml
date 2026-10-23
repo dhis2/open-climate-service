@@ -119,8 +119,8 @@
   name: Precipitation rate (ERA5-Land)
   short_name: Precipitation
   description: >-
-    Daily total precipitation at 9 km worldwide, aggregated from the hourly, de-accumulated CDS
-    geo-chunked ARCO archive. Days run in UTC.
+    Daily total precipitation at 9 km worldwide, represented as a daily rate, aggregated from the
+    hourly, de-accumulated CDS geo-chunked ARCO archive. Days run in UTC.
   standard_name: lwe_precipitation_rate
   variable: tp
   period_type: daily
@@ -142,7 +142,7 @@
   # The hourly ARCO precipitation variable is already de-accumulated; the daily sum is
   # represented as a mean daily rate because each stored period is exactly one day.
   units: mm/d
-  cell_methods: "time: sum"
+  cell_methods: "time: mean"
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis
   source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data
