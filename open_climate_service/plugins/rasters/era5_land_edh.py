@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import date, timedelta
 from typing import Any, cast
-from urllib.parse import urlparse, urlunparse
 
 import numpy as np
 import xarray as xr
@@ -128,5 +126,5 @@ class ERA5LandEDHMonthlyFromDailyPlugin(ERA5LandEDHDailyPlugin):
 
 
 def _open_edh_zarr(url: str) -> xr.Dataset:
-    """Open an Earth Data Hub store, authenticating with ``EDH_API_KEY`` or else netrc."""
+    """Open an Earth Data Hub store, authenticating with ~/netrc file."""
     return xr.open_zarr(url, storage_options={"client_kwargs": {"trust_env": True}})

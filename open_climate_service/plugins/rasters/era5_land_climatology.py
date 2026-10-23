@@ -25,7 +25,7 @@ from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, m
 
 logger = logging.getLogger(__name__)
 
-_EDH_DAILY_URL = "https://api.earthdatahub.destine.eu/era5/era5-land-daily-utc-v1.zarr"
+_EDH_DAILY_URL = "https://data.earthdatahub.destine.eu/era5/era5-land-daily-utc-v1.zarr"
 _EDH_API_KEY_ENV = "EDH_API_KEY"
 _EDH_UNKNOWN_TTL_SECONDS = 300.0
 _edh_is_v3_cache: dict[str, bool] = {}
