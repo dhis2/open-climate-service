@@ -29,6 +29,7 @@ from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult,
 from open_climate_service.scheduler.results import SharedResults, SharedResultsStore
 from open_climate_service.scheduler.schemas import ClockStatus, ScheduleListResponse, ScheduleStatus
 from open_climate_service.scheduler.store import StoredSchedule, list_schedules, store_stamp
+from open_climate_service.shared import forecast
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,14 @@ def validate_schedule_target(template: dict[str, Any] | None, dataset_id: str) -
     """
     if template is None:
         raise ValueError(f"Scheduled dataset {dataset_id!r} has no registered data source")
-    if registry_datasets.is_future_facing(template):
+    # A forecast stored per run gains each new run as an append. One stored by the date it
+    # predicts would keep the values already stored for those dates on every sync, so a
+    # schedule would leave it stale while it looks current (CLIM-869).
+    if registry_datasets.is_future_facing(template) and not forecast.stores_runs(template):
         raise ValueError(
-            f"Scheduled dataset {dataset_id!r} is future-facing; forecast refresh requires "
-            "overlapping-window rematerialization and is not supported yet"
+            f"Dataset {dataset_id!r} cannot be synced on a schedule yet: it is a forecast stored by "
+            "the date it predicts, and a sync keeps the values already stored for those dates. To "
+            "refresh it, ingest it again from its data source page with Overwrite checked."
         )
     sync = template.get("sync")
     if not isinstance(sync, dict) or sync.get("kind") == "static":

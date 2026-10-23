@@ -548,6 +548,15 @@ def render_dataset_page(
             stored_schedule = schedule
         except Exception:
             _log.exception("The schedule for dataset '%s' could not be read", record.dataset_id)
+    # A dataset the clock would refuse gets the reason instead of a form that cannot be saved.
+    schedule_unavailable: str | None = None
+    if record.item_type != "feature" and template is not None and stored_schedule is None:
+        from open_climate_service.scheduler.service import validate_schedule_target
+
+        try:
+            validate_schedule_target(template, record.dataset_id)
+        except ValueError as exc:
+            schedule_unavailable = str(exc)
     return get_template("dataset_page.html").render(
         schedule=schedule,
         stored_schedule=stored_schedule,
@@ -555,6 +564,7 @@ def render_dataset_page(
         scheduler_reload_error=scheduler_reload_error,
         schedule_error=schedule_error,
         schedule_draft=schedule_draft,
+        schedule_unavailable=schedule_unavailable,
         schedule_form=form_values(
             str((schedule_draft or stored_schedule or {}).get("cron") or "") or None,
             str(record.period_type or ""),
