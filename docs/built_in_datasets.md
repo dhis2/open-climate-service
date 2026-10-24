@@ -142,17 +142,20 @@ the declared release; new catalogue years can be ingested when requested.
 
 | Property               | Value                                                                                                |
 | ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Dataset ID**         | `copdem30_elevation_static`                                                                          |
+| **Dataset ID**         | `copdem30_elevation_static`, `copdem90_elevation_static`                                             |
 | **Variable**           | `elevation`                                                                                          |
 | **Units**              | meters                                                                                               |
 | **Period**             | None: no time axis                                                                                   |
 | **Spatial coverage**   | Global                                                                                               |
-| **Spatial resolution** | ~30 m                                                                                                |
-| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
+| **Spatial resolution** | ~30 m ([GLO-30](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)), ~90 m ([GLO-90](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-90)) |
+| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem)                   |
 
-Copernicus DEM Global 30m, recording elevation height above sea level. 
+Copernicus DEM Global, recording elevation height above sea level, at 30 m or 90 m. Both data
+sources use the same plugin, with `product: GLO-30` or `product: GLO-90` in `ingestion.params`.
+The 90 m product holds a ninth of the pixels, so it ingests faster and stores smaller for a
+country-sized extent; use the 30 m product where local detail matters.
 
-The dataset is static: it has no time axis, so it is ingested whole and shown without a time slider.
+The datasets are static: they have no time axis, so each is ingested whole and shown without a time slider.
 
 It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account. Add your key to `~/.netrc`
 as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.destine.eu`:
