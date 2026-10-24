@@ -735,7 +735,7 @@ def test_the_collection_advertises_the_thumbnail_as_a_stac_role(client: TestClie
     needed and a STAC client picks the image up unaided."""
     _write_a_thumbnail()
 
-    payload = client.get("/stac/collections/thumb_dataset").json()
+    payload = client.get("/stac/thumb_dataset/collection.json").json()
 
     asset = payload["assets"]["thumbnail"]
     assert asset["roles"] == ["thumbnail"]
@@ -748,7 +748,7 @@ def test_the_collection_advertises_the_thumbnail_as_a_stac_role(client: TestClie
 def test_the_collection_omits_the_thumbnail_when_there_is_none(client: TestClient, _published: None) -> None:
     """Advertising an asset a client then 404s on is worse than advertising none, and absence
     is normal: thumbnails are not backfilled, so a store never rewritten never gains one."""
-    payload = client.get("/stac/collections/thumb_dataset").json()
+    payload = client.get("/stac/thumb_dataset/collection.json").json()
 
     assert "thumbnail" not in payload["assets"]
     assert "zarr" in payload["assets"]

@@ -258,7 +258,7 @@ def test_a_published_collection_carries_its_classes_in_stac(
     monkeypatch.setattr(stac_services, "_zarr_asset_metadata", lambda _: {})
     monkeypatch.setattr(stac_services, "_zarr_open_kwargs", lambda _: {})
 
-    doc = client.get("/stac/collections/heat_levels").json()
+    doc = client.get("/stac/heat_levels/collection.json").json()
 
     if "classes" in template:
         classes = doc["assets"]["zarr"]["classification:classes"]

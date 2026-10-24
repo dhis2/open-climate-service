@@ -151,7 +151,7 @@ def test_a_coarser_level_lists_only_its_own_arrays(live_server: str) -> None:
 @pytest.mark.usefixtures("published")
 def test_the_stac_asset_opens_at_the_data(live_server: str) -> None:
     """A client following the catalogue — href plus `xarray:open_kwargs` — gets the variable."""
-    collection = httpx.get(f"{live_server}/stac/collections/{DATASET_ID}", timeout=60).json()
+    collection = httpx.get(f"{live_server}/stac/{DATASET_ID}/collection.json", timeout=60).json()
     asset = collection["assets"]["zarr"]
 
     assert asset["type"] == "application/vnd.zarr; version=3; profile=multiscales"

@@ -56,22 +56,22 @@ def _make_response(
 
 
 def test_id_from_href_extracts_last_path_segment() -> None:
-    assert _id_from_href("http://localhost/stac/collections/chirps3_daily_rwa") == "chirps3_daily_rwa"
+    assert _id_from_href("http://localhost/stac/chirps3_daily_rwa/collection.json") == "chirps3_daily_rwa"
 
 
 def test_id_from_href_ignores_query_and_fragment() -> None:
-    assert _id_from_href("http://localhost/stac/collections/ds?foo=bar#section") == "ds"
+    assert _id_from_href("http://localhost/stac/ds/collection.json?foo=bar#section") == "ds"
 
 
 def test_id_from_href_strips_trailing_slash() -> None:
-    assert _id_from_href("http://localhost/stac/collections/ds/") == "ds"
+    assert _id_from_href("http://localhost/stac/ds/collection.json/") == "ds"
 
 
 # ── module-level list_datasets ─────────────────────────────────────────────────
 
 
 def test_list_datasets_returns_child_links() -> None:
-    catalog = _make_catalog(["http://localhost/stac/collections/chirps3_precipitation_daily_rwa"])
+    catalog = _make_catalog(["http://localhost/stac/chirps3_precipitation_daily_rwa/collection.json"])
     with patch("open_climate_service.client.httpx.get", return_value=_make_response(catalog)) as mock_get:
         result = list_datasets("http://localhost")
 
@@ -141,7 +141,7 @@ def test_open_dataset_uses_default_base_url() -> None:
         with patch("xarray.open_zarr", return_value=MagicMock()):
             open_dataset("any_dataset")
 
-    mock_get.assert_called_once_with(f"{_FALLBACK_BASE_URL}/stac/collections/any_dataset", timeout=30)
+    mock_get.assert_called_once_with(f"{_FALLBACK_BASE_URL}/stac/any_dataset/collection.json", timeout=30)
 
 
 def test_open_dataset_uses_env_var_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,7 +153,7 @@ def test_open_dataset_uses_env_var_base_url(monkeypatch: pytest.MonkeyPatch) -> 
         with patch("xarray.open_zarr", return_value=MagicMock()):
             open_dataset("any_dataset")
 
-    mock_get.assert_called_once_with("http://env-host:4321/stac/collections/any_dataset", timeout=30)
+    mock_get.assert_called_once_with("http://env-host:4321/stac/any_dataset/collection.json", timeout=30)
 
 
 # ── lazy xarray import ─────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ def _make_service(base_url: str = "http://localhost") -> tuple[ClimateService, M
 
 
 def test_datasets_uses_persistent_http_session() -> None:
-    catalog = _make_catalog(["http://localhost/stac/collections/chirps3_precipitation_daily_rwa"])
+    catalog = _make_catalog(["http://localhost/stac/chirps3_precipitation_daily_rwa/collection.json"])
     service, mock_http = _make_service()
     mock_http.get.return_value = _make_response(catalog)
 
@@ -214,7 +214,7 @@ def test_open_dataset_uses_persistent_http_session(tmp_path: Path) -> None:
     finally:
         result.close()
 
-    mock_http.get.assert_called_once_with("http://localhost/stac/collections/chirps3_precipitation_daily_rwa")
+    mock_http.get.assert_called_once_with("http://localhost/stac/chirps3_precipitation_daily_rwa/collection.json")
 
 
 def test_processes_returns_process_list() -> None:
@@ -299,7 +299,7 @@ def test_accepts_custom_timeout() -> None:
 
 def test_strips_trailing_slash() -> None:
     service, mock_http = _make_service("http://localhost/")
-    mock_http.get.return_value = _make_response(_make_catalog(["http://localhost/stac/collections/ds"]))
+    mock_http.get.return_value = _make_response(_make_catalog(["http://localhost/stac/ds/collection.json"]))
     service.datasets()
     mock_http.get.assert_called_once_with("http://localhost/stac/catalog.json")
 

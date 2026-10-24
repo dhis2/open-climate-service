@@ -120,7 +120,7 @@ def test_a_failed_tile_build_does_not_fail_the_refresh(
     assert not [p for p in _isolated.iterdir() if p.name.endswith(".writing")]
     # Nothing advertises or serves an archive that is not there.
     assert client.get("/features/districts/data.pmtiles").status_code == 404
-    collection = client.get("/stac/collections/districts").json()
+    collection = client.get("/stac/districts/collection.json").json()
     assert "tiles" not in collection["assets"] and "style" not in collection["assets"]
     assert "data" in collection["assets"]
     assert not [link for link in collection["links"] if link["rel"] == "pmtiles"]
@@ -131,7 +131,7 @@ def test_the_archive_is_served_by_range_and_advertised_in_stac(client: TestClien
     record = _refresh()
     archive = tiles.archive_path(Path(str(record.path)))
 
-    asset = client.get("/stac/collections/districts").json()["assets"]["tiles"]
+    asset = client.get("/stac/districts/collection.json").json()["assets"]["tiles"]
     assert asset["href"] == "http://testserver/features/districts/data.pmtiles"
     assert asset["type"] == tiles.PMTILES_MEDIA_TYPE
 
@@ -150,7 +150,7 @@ def test_the_archive_is_linked_for_web_map_clients(client: TestClient) -> None:
     """The web-map-links `pmtiles` link names the archive and the layer to show."""
     _refresh()
 
-    collection = client.get("/stac/collections/districts").json()
+    collection = client.get("/stac/districts/collection.json").json()
 
     (link,) = [link for link in collection["links"] if link["rel"] == "pmtiles"]
     assert link["href"] == "http://testserver/features/districts/data.pmtiles"
@@ -169,7 +169,7 @@ def test_the_style_draws_the_tiles_with_the_collections_attribution(
         features={"type": "FeatureCollection", "features": [_box("W", "Western", -13.3, 8.0, -12.5, 8.8)]},
     )
 
-    asset = client.get("/stac/collections/districts").json()["assets"]["style"]
+    asset = client.get("/stac/districts/collection.json").json()["assets"]["style"]
     assert asset["href"] == "http://testserver/features/districts/styles/default.json"
     assert asset["type"] == tiles.STYLE_MEDIA_TYPE and asset["roles"] == ["style"]
 

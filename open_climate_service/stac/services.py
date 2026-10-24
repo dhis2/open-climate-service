@@ -47,6 +47,14 @@ from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group
 CATALOG_DESCRIPTION = "Published datasets: rasters as GeoZarr stores and vector datasets as GeoParquet"
 STAC_VERSION = "1.1.0"
 MARKDOWN_MEDIA_TYPE = "text/markdown"
+CATALOG_PATH = "/stac/catalog.json"
+
+
+def collection_path(dataset_id: str) -> str:
+    """Where a collection's STAC document is served: `collection.json` in its own directory."""
+    return f"/stac/{path_segment(dataset_id)}/collection.json"
+
+
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
 PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
@@ -124,18 +132,19 @@ def _get_catalog_id() -> str:
 def build_catalog(request: Request) -> dict[str, object]:
     """Build the STAC catalog document."""
     self_href = self_url(request)
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    catalog_href = absolute_url(request, CATALOG_PATH)
     links = [
         {"rel": "self", "href": self_href, "type": "application/json"},
         {"rel": "root", "href": catalog_href, "type": "application/json"},
-        {"rel": "describedby", "href": absolute_url(request, "/stac/README.md"), "type": MARKDOWN_MEDIA_TYPE},
-        {"rel": "agents", "href": absolute_url(request, "/stac/AGENTS.md"), "type": MARKDOWN_MEDIA_TYPE},
+        # Relative, as Portolan requires of these two, so they resolve beside the document.
+        {"rel": "describedby", "href": "./README.md", "type": MARKDOWN_MEDIA_TYPE},
+        {"rel": "agents", "href": "./AGENTS.md", "type": MARKDOWN_MEDIA_TYPE},
     ]
     for dataset_id, artifact in _eligible_artifacts_by_dataset().items():
         links.append(
             {
                 "rel": "child",
-                "href": absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"),
+                "href": absolute_url(request, collection_path(dataset_id)),
                 "title": artifact.dataset_name,
                 "type": "application/json",
             }
@@ -181,8 +190,8 @@ def build_collection_for_artifact(dataset_id: str, artifact: ArtifactRecord, req
 def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
     """Build the STAC collection for a Zarr- or Icechunk-backed datacube."""
     source_dataset = registry_datasets.get_dataset(artifact.dataset_id) or {}
-    collection_href = absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}")
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    collection_href = absolute_url(request, collection_path(dataset_id))
+    catalog_href = absolute_url(request, CATALOG_PATH)
     dataset_href = absolute_url(request, f"/datasets/{path_segment(dataset_id)}")
     zarr_href = absolute_url(request, f"/zarr/{path_segment(dataset_id)}")
     # Only when the file is actually there: a collection that advertises a thumbnail a client
@@ -504,11 +513,11 @@ def _add_feature_collection_links(
     names that one collection, so a `{version}` in `source_stac` is filled with the release this
     collection was read from, and the link is left out when there is no version to fill it.
     """
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    catalog_href = absolute_url(request, CATALOG_PATH)
     collection.clear_links()
     # Through `set_self_href`, not `add_link`: pystac emits the self link from that attribute,
     # and a rel="self" link added by hand is dropped by `to_dict`. STAC Browser navigates by it.
-    collection.set_self_href(absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"))
+    collection.set_self_href(absolute_url(request, collection_path(dataset_id)))
     collection.add_link(pystac.Link(rel="root", target=catalog_href, media_type="application/json"))
     collection.add_link(pystac.Link(rel="parent", target=catalog_href, media_type="application/json"))
     collection.add_link(
@@ -546,7 +555,7 @@ def _add_feature_collection_links(
         collection.add_link(
             pystac.Link(
                 rel=rel,
-                target=absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}/{name}"),
+                target=f"./{name}",
                 media_type=MARKDOWN_MEDIA_TYPE,
                 title=title,
             )

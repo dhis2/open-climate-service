@@ -68,7 +68,7 @@ def build_capabilities(base_url: str) -> OpenEOCapabilities:
         },
         {
             "rel": "related",
-            "href": f"{base_url}/stac",
+            "href": f"{base_url}/stac/catalog.json",
             "type": "application/json",
             "title": "STAC catalog",
         },

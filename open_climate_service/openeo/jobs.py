@@ -2319,7 +2319,7 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
             artifact = _ingestion_services.latest_published_raster_artifacts_by_dataset().get(dataset_id)
             if artifact is not None:
                 assets["stac"] = {
-                    "href": f"/stac/collections/{dataset_id}",
+                    "href": f"/stac/{dataset_id}/collection.json",
                     "type": "application/json",
                     "title": "STAC collection",
                     "roles": ["metadata"],

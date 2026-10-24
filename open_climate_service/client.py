@@ -59,8 +59,9 @@ def _default_base_url() -> str:
 
 
 def _id_from_href(href: str) -> str:
-    """Extract the dataset id from a STAC child href by reading the last URL path segment."""
-    return urlparse(href).path.rstrip("/").rsplit("/", 1)[-1]
+    """Extract the dataset id from a STAC child href: the directory holding `collection.json`."""
+    segments = urlparse(href).path.rstrip("/").split("/")
+    return segments[-2] if segments[-1] == "collection.json" and len(segments) > 1 else segments[-1]
 
 
 def _child_links(catalog: Any, source: str) -> list[dict]:
@@ -199,7 +200,7 @@ class ClimateService:
         Fetches the STAC collection for ``dataset_id``, reads the Zarr asset metadata,
         and returns the opened (lazy) dataset. Requires the ``xarray`` extra.
         """
-        response = self._http.get(f"{self.base_url}/stac/collections/{dataset_id}")
+        response = self._http.get(f"{self.base_url}/stac/{dataset_id}/collection.json")
         _raise_for_status(response)
         href, open_kwargs = _zarr_asset(response.json(), dataset_id, self.base_url)
         return _open_zarr(href, open_kwargs)
@@ -271,7 +272,7 @@ def open_dataset(dataset_id: str, *, base_url: str | None = None) -> xr.Dataset:
     ``http://127.0.0.1:9000``.
     """
     url = (base_url or _default_base_url()).rstrip("/")
-    response = httpx.get(f"{url}/stac/collections/{dataset_id}", timeout=_DEFAULT_TIMEOUT)
+    response = httpx.get(f"{url}/stac/{dataset_id}/collection.json", timeout=_DEFAULT_TIMEOUT)
     _raise_for_status(response)
     href, open_kwargs = _zarr_asset(response.json(), dataset_id, url)
     return _open_zarr(href, open_kwargs)
