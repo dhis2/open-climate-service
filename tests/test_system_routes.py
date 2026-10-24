@@ -405,6 +405,14 @@ def test_the_map_viewer_draws_each_class_in_its_own_colour(client: TestClient) -
     assert "if (classes.length) updateClassLegend(classes, colors);" in body
 
 
+def test_the_map_viewer_draws_the_colours_the_server_resolved(client: TestClient) -> None:
+    """chroma-js knows fewer colormaps than matplotlib, so a name it lacked silently drew viridis."""
+    body = client.get("/map").text
+
+    assert "Object.values(renders.colormap)" in body
+    assert "colormap_name" not in body
+
+
 def test_a_selection_made_while_tiles_load_still_runs(client: TestClient) -> None:
     """`isStyleLoaded()` is false while basemap tiles load, long after `load` fired once."""
     body = client.get("/map").text

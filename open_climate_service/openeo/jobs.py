@@ -2085,7 +2085,7 @@ def _derive_display_config(
     source_display = source_template.get("display") if isinstance(source_template, dict) else None
     display: dict[str, Any] = {}
 
-    if isinstance(explicit.get("colormap"), str):
+    if isinstance(explicit.get("colormap"), str | list):
         display["colormap"] = explicit["colormap"]
     if isinstance(explicit.get("range"), list) and len(explicit["range"]) == 2:
         display["range"] = [float(explicit["range"][0]), float(explicit["range"][1])]
@@ -2109,7 +2109,7 @@ def _derive_display_config(
             colormap = source_display.get("colormap")
             value_range = source_display.get("range")
             nodata = source_display.get("nodata")
-            if "colormap" not in display and isinstance(colormap, str):
+            if "colormap" not in display and isinstance(colormap, str | list):
                 display["colormap"] = colormap
             if "range" not in display and isinstance(value_range, list) and len(value_range) == 2:
                 display["range"] = [float(value_range[0]), float(value_range[1])]

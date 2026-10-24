@@ -441,12 +441,35 @@ keeps its own attributes:
 
 The following parameters control how the datasets are displayed visually and in text:
 
-| Field              | Required | Description                                              |
-| ------------------ | -------- | -------------------------------------------------------- |
-| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)   |
-| `display.colormap` | No       | Colormap name for map rendering (e.g. `blues`, `rdbu_r`) |
-| `display.range`    | No       | `[min, max]` display range for the colormap              |
-| `display.nodata`   | No       | No-data / fill value                                     |
+| Field              | Required | Description                                                                                                                         |
+| ------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                              |
+| `display.colormap` | No       | A [matplotlib colormap](https://matplotlib.org/stable/gallery/color/colormap_reference.html) name, or a list of colours (see below) |
+| `display.range`    | No       | `[min, max]` display range for the colormap                                                                                         |
+| `display.nodata`   | No       | No-data / fill value                                                                                                                |
+
+A colormap name is matched case-insensitively, and `_r` reverses it (`blues`, `rdbu_r`, `terrain`).
+Where no named colormap fits, list two or more colours, spread evenly from the low end of
+`display.range` to the high end:
+
+```yaml
+display:
+  colormap: ["#1a9850", "#fee08b", "#a6611a", "#ffffff"]
+  range: [0, 4500]
+```
+
+The server resolves the colormap once, with matplotlib, and the thumbnail, the landing-page ramp
+and the map viewer all draw from that result. The STAC collection publishes it in its `renders`
+block as a `colormap` of 256 colours keyed `0`-`255`, where `0` is the low end of `rescale` and
+`255` the high end, and adds `colormap_name` when the template gives a name. The map viewer reads
+only the colours, so it needs no colormap library and draws what the thumbnail shows. An unknown
+name or an invalid list falls back to `viridis`.
+
+The STAC lists 256 colours rather than only the few you declared, because map tools that
+follow the STAC render convention (titiler, for one) need the full set to draw a smooth ramp.
+Given only a few, they colour only the pixels that hit those exact values and leave the rest
+blank. Nothing changes in how the colormap looks: matplotlib itself draws every colormap from
+256 colours, so a named colormap appears in the map viewer exactly as it does in matplotlib.
 
 ### Categorical datasets
 
