@@ -275,17 +275,23 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             "roles": ["data"],
             "xarray:open_kwargs": {"zarr_format": 3, "consolidated": False, **data_group},
         }
-    # A categorical dataset's classes, on both data assets, so a client can label and colour the
-    # codes rather than read them as a continuous scale (CLIM-895).
+    data_asset_fields: dict[str, Any] = {}
+    # A categorical dataset's classes, so a client can label and colour the codes rather than
+    # read them as a continuous scale (CLIM-895).
     classification = classification_from_template(source_dataset)
     if classification is not None:
-        classes = stac_classes(classification)
-        for key in ("zarr", "icechunk"):
-            if key in collection_payload["assets"]:
-                collection_payload["assets"][key]["classification:classes"] = classes
+        data_asset_fields["classification:classes"] = stac_classes(classification)
         collection_payload["stac_extensions"] = sorted(
             {*collection_payload.get("stac_extensions", []), STAC_CLASSIFICATION_EXTENSION}
         )
+    # The measured statistics of the primary variable (CLIM-1439). `statistics` is STAC 1.1
+    # common metadata on an asset, so no extension is declared for it.
+    statistics = artifact.statistics.model_dump(exclude_none=True) if artifact.statistics is not None else {}
+    if statistics:
+        data_asset_fields["statistics"] = statistics
+    for key in ("zarr", "icechunk"):
+        if key in collection_payload["assets"]:
+            collection_payload["assets"][key].update(data_asset_fields)
     collection_payload["license"] = template.license
     providers = _build_providers(source_dataset)
     if providers:

@@ -17,6 +17,7 @@ from open_climate_service.ingestions.schemas import (
     ArtifactPublication,
     ArtifactRecord,
     ArtifactRequestScope,
+    ArtifactStatistics,
     CoverageSpatial,
     CoverageTemporal,
     PublicationStatus,
@@ -382,7 +383,9 @@ def test_collection_sets_hourly_step_to_pt1h(client: TestClient, monkeypatch: py
 
 
 def test_collection_uses_root_href_for_icechunk_store(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    artifact = _artifact(artifact_id="a1", format=ArtifactFormat.ICECHUNK, path="/tmp/chirps3.icechunk")
+    artifact = _artifact(artifact_id="a1", format=ArtifactFormat.ICECHUNK, path="/tmp/chirps3.icechunk").model_copy(
+        update={"statistics": ArtifactStatistics(minimum=0.0, maximum=49.2)}
+    )
     monkeypatch.setattr(
         ingestion_services,
         "list_artifacts",
@@ -413,6 +416,8 @@ def test_collection_uses_root_href_for_icechunk_store(client: TestClient, monkey
     assert payload["assets"]["zarr"]["href"].endswith("/zarr/chirps3_precipitation_daily")
     assert payload["assets"]["zarr"]["xarray:open_kwargs"] == {"consolidated": True}
     assert payload["assets"]["zarr"]["zarr:zarr_format"] == 3
+    for key in ("zarr", "icechunk"):
+        assert payload["assets"][key]["statistics"] == {"minimum": 0.0, "maximum": 49.2}
 
 
 def test_collection_returns_404_for_unknown_dataset(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
