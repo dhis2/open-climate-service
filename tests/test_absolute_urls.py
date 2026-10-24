@@ -177,7 +177,7 @@ def test_the_stac_self_link_uses_the_configured_scheme(https_client: TestClient)
     configured base — so one link in the document disagreed with the rest."""
     links = {link["rel"]: link["href"] for link in https_client.get("/stac").json()["links"]}
 
-    assert links["self"] == f"{_CONFIGURED}/stac"
+    assert links["self"] == f"{_CONFIGURED}/stac/catalog.json"
     assert links["root"] == f"{_CONFIGURED}/stac/catalog.json"
 
 
@@ -273,7 +273,8 @@ def test_an_origin_only_base_url_composes_with_the_asgi_prefix(mounted_client: T
     """
     payload = mounted_client.get("/stac").json()
     for link in payload["links"]:
-        assert link["href"].startswith(f"{_CONFIGURED}/ocs/"), link
+        # `describedby` and `agents` are relative, so they resolve under any base.
+        assert link["href"].startswith((f"{_CONFIGURED}/ocs/", "./")), link
 
     well_known = mounted_client.get("/.well-known/openeo").json()
     assert all(v["url"].startswith(f"{_CONFIGURED}/ocs") for v in well_known["versions"]), well_known
@@ -352,7 +353,7 @@ def test_the_app_reads_the_root_path_itself(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert 'action="/ocs/manage/ingest"' in client.get(_SOURCE_PAGE).text
     self_href = next(link["href"] for link in client.get("/stac").json()["links"] if link["rel"] == "self")
-    assert self_href == "http://testserver/ocs/stac"
+    assert self_href == "http://testserver/ocs/stac/catalog.json"
 
 
 @pytest.mark.parametrize("root_path", ["/ocs", "/ocs/"])
@@ -400,7 +401,7 @@ def test_the_self_link_keeps_the_prefix_of_an_embedding_mount(monkeypatch: pytes
     outer = Starlette(routes=[Mount("/ocs", app=inner)])
     payload = TestClient(outer).get("/ocs/stac").json()
     self_href = next(link["href"] for link in payload["links"] if link["rel"] == "self")
-    assert self_href == "http://testserver/ocs/stac"
+    assert self_href == "http://testserver/ocs/stac/catalog.json"
 
 
 def test_stripping_a_prefix_respects_segment_boundaries() -> None:
@@ -433,7 +434,7 @@ def test_the_self_link_does_not_double_a_configured_path_under_an_embedding_moun
     outer = Starlette(routes=[Mount("/ocs", app=inner)])
     payload = TestClient(outer).get("/ocs/stac").json()
     self_href = next(link["href"] for link in payload["links"] if link["rel"] == "self")
-    assert self_href == "https://public.example/ocs/stac"
+    assert self_href == "https://public.example/ocs/stac/catalog.json"
 
 
 def test_every_link_of_one_document_agrees_under_an_embedding_mount(
@@ -455,7 +456,7 @@ def test_every_link_of_one_document_agrees_under_an_embedding_mount(
     payload = TestClient(outer).get("/ocs/stac").json()
 
     for link in payload["links"]:
-        assert link["href"].startswith("http://testserver/ocs/"), link
+        assert link["href"].startswith(("http://testserver/ocs/", "./")), link
 
 
 def test_a_host_named_like_the_prefix_does_not_lose_it(monkeypatch: pytest.MonkeyPatch) -> None:

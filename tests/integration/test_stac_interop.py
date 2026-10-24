@@ -50,7 +50,7 @@ def test_openeo_can_load_stac_collection() -> None:
             collection_href = child_links[0].get("href")
             assert isinstance(collection_href, str)
         else:
-            suffix = f"/stac/collections/{dataset_id}"
+            suffix = f"/stac/{dataset_id}/collection.json"
             collection_href = next(
                 (
                     link.get("href")
