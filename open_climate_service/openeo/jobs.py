@@ -2778,6 +2778,8 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
     for, so it shows the front of the cube they computed, where a catalogue thumbnail of a
     published store instead shows the step nearest today.
     """
+    from open_climate_service.ingestions.schemas import ArtifactStatistics
+    from open_climate_service.shared.display import display_range
     from open_climate_service.shared.thumbnails import render_png
 
     var = list(ds.data_vars)[0]
@@ -2786,24 +2788,29 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
         arr = arr.isel({arr.dims[0]: 0})
 
     # Render settings from the published collection, via the dataset registry.
-    colormap: str | None = None
-    clim: tuple[float, float] | None = None
+    display: dict[str, Any] = {}
     try:
         from open_climate_service.data_registry.services import datasets as reg
 
         for _ds_meta in reg.list_datasets():
-            display = _ds_meta.get("display", {})
             ds_var = _ds_meta.get("variable", "")
             if ds_var == var or _ds_meta.get("id", "").endswith(var):
-                colormap = display.get("colormap", colormap)
-                rng = display.get("range")
-                if isinstance(rng, list) and len(rng) == 2:
-                    clim = (float(rng[0]), float(rng[1]))
+                display = _ds_meta.get("display") or {}
                 break
     except Exception:
         pass
+    # The result is not a stored artifact, so the slice itself stands in for its statistics.
+    sliced = ArtifactStatistics(minimum=float(arr.min()), maximum=float(arr.max()))
+    colormap = display.get("colormap")
 
-    return str(render_png(arr, results_dir / "result.png", colormap=colormap, clim=clim))
+    return str(
+        render_png(
+            arr,
+            results_dir / "result.png",
+            colormap=colormap if isinstance(colormap, str) else None,
+            clim=display_range(display, sliced),
+        )
+    )
 
 
 def _derive_job_title(process: dict[str, Any]) -> str | None:

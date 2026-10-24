@@ -30,7 +30,6 @@ from open_climate_service.shared import thumbnails
 from open_climate_service.shared.thumbnails import (
     THUMBNAIL_LONG_SIDE_PIXELS,
     decimate,
-    declared_midpoint,
     render_png,
     representative_slice,
     resolve_colormap,
@@ -481,27 +480,6 @@ def test_the_stretch_resists_a_single_outlier() -> None:
     assert (low, high) != (float(field.min()), float(field.max()))
 
 
-@pytest.mark.parametrize(
-    "declared,midpoint",
-    [
-        ([-5.0, 5.0], 0.0),  # temperature anomaly
-        ([-30.0, 30.0], 0.0),  # temperature in Celsius, where zero is freezing
-        ([-3, 3], 0.0),  # SPI
-        ([0.0, 20.0], None),  # precipitation
-        ([0, 4000], None),  # elevation, which pairs Spectral_r with a one-sided range
-        ([-0.1, 1.0], None),  # NDVI: negative, but not symmetric
-        ([-1.0, 1.5], None),
-        (None, None),
-        ("nonsense", None),
-    ],
-)
-def test_only_a_zero_symmetric_declared_range_names_a_midpoint(declared: Any, midpoint: float | None) -> None:
-    """The signal for "this quantity diverges about zero" is the declared range, not the
-    colormap: `copernicus_dem_elevation` uses the diverging Spectral_r over [0, 4000] and must
-    not be centred, and across the shipped templates the split by range is exact."""
-    assert declared_midpoint(declared) == midpoint
-
-
 def test_a_diverging_scale_keeps_zero_at_its_midpoint(tmp_path: Path) -> None:
     """Blue means below normal. Stretched to its own extremes, an anomaly slice that happens
     to be entirely positive would still render half blue and invert that meaning."""
@@ -526,14 +504,14 @@ def test_a_sequential_scale_is_not_centred(tmp_path: Path) -> None:
 
 
 def test_an_anomaly_store_renders_centred_on_zero(tmp_path: Path) -> None:
-    """Through the entry point, since the midpoint has to be read off the template's declared
-    range and reach the render — the wiring is the part that can silently not happen."""
+    """Through the entry point, since the midpoint has to be read off the template's
+    `display.midpoint` and reach the render — the wiring is the part that can silently not happen."""
     anomaly = xr.Dataset(
         {"precip": (("y", "x"), np.array([[0.5, 1.0], [2.0, 4.0]], dtype="float32"))},
         coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
     )
     store = _store(tmp_path, anomaly, t_dim=None)
-    diverging = {**DATASET, "display": {"colormap": "rdbu_r", "range": [-5.0, 5.0]}}
+    diverging = {**DATASET, "display": {"colormap": "rdbu_r", "midpoint": 0.0}}
 
     written = write_dataset_thumbnail(store, diverging, now=GENERATED_AT)
 

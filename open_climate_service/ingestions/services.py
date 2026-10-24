@@ -2863,6 +2863,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         license=_licence_for(source_dataset).stac_license,
         license_url=_licence_for(source_dataset).url,
         extent=latest.coverage,
+        statistics=latest.statistics,
         last_updated=latest.created_at,
         links=_dataset_links(dataset_id, latest, published=_latest_published(artifacts)),
         publication=DatasetPublication(

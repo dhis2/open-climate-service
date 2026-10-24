@@ -142,13 +142,16 @@ def test_the_form_is_offered_only_where_ingesting_can_work(
 
 
 def test_an_ingested_source_links_to_its_dataset() -> None:
-    context = _source_context(_ingestable("chirps_monthly"), datasets=[_record("chirps_monthly")])
+    measured = _record("chirps_monthly", statistics={"minimum": 0.0, "maximum": 49.20000076293945})
+    context = _source_context(_ingestable("chirps_monthly"), datasets=[measured])
 
     assert context["ingested"] == {
         "id": "chirps_monthly",
         "coverage": "2020-01 – 2026-07",
         "status": "published",
     }
+    # The template declares no range, so the page shows the one measured from the dataset.
+    assert ("Display range", "0 – 49.2", None) in context["status_facts"]
 
 
 def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:

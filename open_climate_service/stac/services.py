@@ -31,6 +31,7 @@ from open_climate_service.shared.classes import (
     stac_classes,
 )
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
+from open_climate_service.shared.display import display_range
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.licences import DatasetLicence, parse_licence
 from open_climate_service.shared.thumbnails import thumbnail_path
@@ -1317,17 +1318,17 @@ def _open_published_store(artifact: ArtifactRecord) -> xr.Dataset:
 
 def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> dict[str, Any] | None:
     display = source_dataset.get("display")
-    if not isinstance(display, dict):
+    display = display if isinstance(display, dict) else {}
+    value_range = display_range(display, artifact.statistics)
+    if value_range is None:
         return None
     colormap_name = display.get("colormap")
-    value_range = display.get("range")
-    if not isinstance(colormap_name, str) or not isinstance(value_range, list) or len(value_range) != 2:
-        return None
     render: dict[str, Any] = {
         "title": artifact.dataset_name,
         "assets": ["zarr"],
-        "rescale": [[float(value_range[0]), float(value_range[1])]],
-        "colormap_name": colormap_name,
+        "rescale": [list(value_range)],
+        # The map viewer's own default, so the hint and an absent hint draw the same colours.
+        "colormap_name": colormap_name if isinstance(colormap_name, str) else "viridis",
         "open_climate_service:variable": artifact.variable,
     }
     nodata = display.get("nodata")
