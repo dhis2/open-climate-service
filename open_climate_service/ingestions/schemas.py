@@ -468,11 +468,12 @@ class ArtifactStatistics(BaseModel):
     """Measured statistics of an artifact's primary variable, named as STAC `raster:bands` names them.
 
     Facts about the stored values, never a display decision: how a range is drawn from them is
-    the template's choice, so changing it takes no re-sync.
+    the template's choice, so changing it takes no re-sync. Every field is optional, as in STAC,
+    so a statistic added later is None on records measured before it rather than a migration.
     """
 
-    minimum: float
-    maximum: float
+    minimum: float | None = None
+    maximum: float | None = None
 
 
 class ArtifactRecord(BaseModel):
