@@ -514,6 +514,14 @@ class ArtifactRecord(BaseModel):
             "sizes were recorded, which count as nothing towards the stored total until re-ingested."
         ),
     )
+    statistics: ArtifactStatistics | None = Field(
+        default=None,
+        description=(
+            "Statistics of `variable` over the whole store, measured once at the end of the "
+            "ingest, sync or publish that wrote it. None for a feature collection, for a store "
+            "with no finite value, and on records written before statistics were measured."
+        ),
+    )
     variables: list[str] = Field(default_factory=list)
     request_scope: ArtifactRequestScope
     coverage: ArtifactCoverage
@@ -558,6 +566,8 @@ class ArtifactRecord(BaseModel):
                 raise ValueError("a geoparquet artifact has properties rather than a measured variable")
             if self.variables:
                 raise ValueError("a geoparquet artifact has properties rather than data variables")
+            if self.statistics is not None:
+                raise ValueError("a geoparquet artifact has no measured variable to carry statistics of")
             if self.period_type is not None:
                 # Not a statement about time-varying collections: CLIM-1095 gives an observed
                 # collection a time column or a version, neither of which is a raster period.

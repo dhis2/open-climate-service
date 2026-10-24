@@ -67,6 +67,7 @@ from open_climate_service.shared.compute import get_job_slots, max_concurrent_jo
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.netcdf import write_netcdf
 from open_climate_service.shared.persistence import execution_lease
+from open_climate_service.shared.statistics import measure_statistics
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
@@ -1481,6 +1482,14 @@ def publication_event_id(job_id: str, artifact_id: str, snapshot_id: str) -> str
     return f"{job_id}:publication:{artifact_id}:{snapshot_id}"
 
 
+def _measured_after_commit(store_path: Path, variable: str | None) -> dict[str, Any]:
+    """The record fields measured from the committed store, which a publish may have merged into."""
+    return {
+        "size_bytes": stored_bytes(store_path),
+        "statistics": measure_statistics(store_path, variable) if variable is not None else None,
+    }
+
+
 def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobRecord:
     """Register a committed managed dataset and record its outcome and update event together.
 
@@ -1506,7 +1515,7 @@ def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobReco
         update={"output_snapshot_id": snapshot_id}
     )
     record = planned.model_copy(
-        update={"size_bytes": stored_bytes(Path(publication.store_path)), "provenance": provenance}
+        update={**_measured_after_commit(Path(publication.store_path), planned.variable), "provenance": provenance}
     )
     stored = ingestion_services.register_artifact_record(
         record, publish=publication.publish_requested, replace_store=True
@@ -1827,7 +1836,7 @@ def _write_managed_zarr(
         if job_id is not None:
             complete_managed_publication(job_id, snapshot_id)
         else:
-            update: dict[str, Any] = {"size_bytes": stored_bytes(store_path)}
+            update = _measured_after_commit(store_path, variable)
             if record.provenance is not None:
                 update["provenance"] = record.provenance.model_copy(update={"output_snapshot_id": snapshot_id})
             record = record.model_copy(update=update)

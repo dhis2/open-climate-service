@@ -1,4 +1,4 @@
-"""Stored sizes: recorded when a store is written, read (never measured) by the overview page.
+"""Stored sizes and statistics: recorded when a store is written, read (never measured) by pages.
 
 The overview used to walk every file of every store on a page load. On an instance with
 hundreds of thousands of chunk files, during a heavy job, that took the page from seconds to
@@ -23,6 +23,7 @@ from open_climate_service import config as api_config
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.features import services as feature_services
 from open_climate_service.ingestions import services as ingestion_services
+from open_climate_service.ingestions.schemas import ArtifactStatistics
 from open_climate_service.shared import storage_size
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.system import templates as landing
@@ -83,9 +84,10 @@ def test_a_feature_refresh_records_the_size_of_the_file_it_wrote() -> None:
 
     assert record.path is not None
     assert record.size_bytes == stored_bytes(record.path) > 0
+    assert record.statistics is None
 
 
-def test_a_streaming_ingest_records_the_size_of_the_published_store(
+def test_a_streaming_ingest_records_the_size_and_statistics_of_the_published_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Driven through `create_artifact`, as the thumbnail tests are, so the wiring is covered."""
@@ -98,7 +100,7 @@ def test_a_streaming_ingest_records_the_size_of_the_published_store(
         "ingestion": {"plugin": "example.Plugin", "params": {}},
     }
     cube = xr.Dataset(
-        {"precip": (("t", "y", "x"), np.ones((3, 2, 2), dtype="float32"))},
+        {"precip": (("t", "y", "x"), np.arange(12, dtype="float32").reshape(3, 2, 2))},
         coords={"t": pd.date_range("2026-01-01", periods=3, freq="D"), "y": [1.5, 0.5], "x": [10.5, 11.5]},
     )
 
@@ -145,9 +147,10 @@ def test_a_streaming_ingest_records_the_size_of_the_published_store(
 
     assert len(recorded) == 1
     assert recorded[0].size_bytes == stored_bytes(store_path) > 0
+    assert recorded[0].statistics == ArtifactStatistics(minimum=0.0, maximum=11.0)
 
 
-def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
+def test_an_openeo_publish_records_the_size_and_statistics_of_the_store_it_wrote(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from open_climate_service.data_registry.services import datasets as registry
@@ -160,7 +163,7 @@ def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
     monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path / "rasters")
     (tmp_path / "rasters").mkdir()
     cube = xr.Dataset(
-        {"tp": (("t", "y", "x"), np.full((3, 2, 2), 2.0, dtype="float32"), {"units": "mm/d"})},
+        {"tp": (("t", "y", "x"), np.arange(12, dtype="float32").reshape(3, 2, 2) - 4.0, {"units": "mm/d"})},
         coords={"t": pd.date_range("2026-01-01", periods=3, freq="D"), "y": [1.0, 0.0], "x": [0.0, 1.0]},
     ).rio.write_crs("EPSG:4326")
 
@@ -169,6 +172,7 @@ def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
     records = [r for r in ingestion_services._load_records() if r.dataset_id == "published_sized"]
     assert len(records) == 1 and records[0].path is not None
     assert records[0].size_bytes == stored_bytes(records[0].path) > 0
+    assert records[0].statistics == ArtifactStatistics(minimum=-4.0, maximum=7.0)
 
 
 def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(

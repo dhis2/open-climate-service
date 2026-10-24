@@ -62,6 +62,7 @@ from open_climate_service.publications.services import managed_dataset_id_for, p
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
 from open_climate_service.shared.raster_contract import TIME_ALIASES
+from open_climate_service.shared.statistics import measure_statistics
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import (
@@ -1476,8 +1477,9 @@ def _create_streaming_artifact(
             format=ArtifactFormat.ICECHUNK,
             path=str(store_path.resolve()),
             asset_paths=[str(store_path.resolve())],
-            # After the swap, like the thumbnail: the size of the store that is published.
+            # After the swap, like the thumbnail: the size and statistics of the store that is published.
             size_bytes=stored_bytes(store_path),
+            statistics=measure_statistics(store_path, str(dataset["variable"])),
             variables=[str(dataset["variable"])],
             request_scope=request_scope,
             coverage=coverage,
