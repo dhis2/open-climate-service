@@ -464,6 +464,17 @@ class ArtifactProvenance(BaseModel):
     )
 
 
+class ArtifactStatistics(BaseModel):
+    """Measured statistics of an artifact's primary variable, named as STAC `raster:bands` names them.
+
+    Facts about the stored values, never a display decision: how a range is drawn from them is
+    the template's choice, so changing it takes no re-sync.
+    """
+
+    minimum: float
+    maximum: float
+
+
 class ArtifactRecord(BaseModel):
     """Stored artifact metadata."""
 
