@@ -79,7 +79,7 @@ def resolve_colormap(spec: object) -> Any:
         try:
             colors = to_rgba_array(list(spec))
         except ValueError:
-            colors = []
+            return colormaps[_DEFAULT_COLORMAP]
         if len(colors) < 2:
             return colormaps[_DEFAULT_COLORMAP]
         return LinearSegmentedColormap.from_list("custom", colors)
