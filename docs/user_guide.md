@@ -16,7 +16,7 @@ Each entry in `links` with `"rel": "child"` points to one dataset collection. Us
 
 ```bash
 # Replace {dataset_id} with any id from the catalog above, e.g. chirps3_precipitation_daily
-curl -s http://127.0.0.1:9000/stac/collections/{dataset_id} | jq
+curl -s http://127.0.0.1:9000/stac/{dataset_id}/collection.json | jq
 ```
 
 The `assets.zarr` field contains everything needed to open the dataset:

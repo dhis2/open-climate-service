@@ -142,7 +142,7 @@ def test_policy_allows_public_reads(path: str) -> None:
 def test_policy_allows_data_endpoints() -> None:
     assert not is_blocked("GET", "/zarr/some_dataset/zarr.json")
     assert not is_blocked("GET", "/icechunk/some_dataset/refs/branch.main/ref.json")
-    assert not is_blocked("GET", "/stac/collections/some_dataset")
+    assert not is_blocked("GET", "/stac/some_dataset/collection.json")
 
 
 def test_policy_never_blocks_cors_preflight() -> None:

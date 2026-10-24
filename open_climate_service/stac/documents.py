@@ -33,7 +33,7 @@ def catalog_readme(request: Request) -> str:
         "",
     ]
     for dataset_id, artifact in services._eligible_artifacts_by_dataset().items():
-        href = absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}")
+        href = absolute_url(request, services.collection_path(dataset_id))
         kind = "vector" if artifact.format == ArtifactFormat.GEOPARQUET else "raster"
         lines.append(f"- [{artifact.dataset_name}]({href}) ({kind})")
     return "\n".join(lines) + "\n"
@@ -41,7 +41,7 @@ def catalog_readme(request: Request) -> str:
 
 def catalog_agents(request: Request) -> str:
     """How an agent reads this catalog."""
-    catalog = absolute_url(request, "/stac/catalog.json")
+    catalog = absolute_url(request, services.CATALOG_PATH)
     return "\n".join(
         [
             f"# Reading the {_instance_name()} catalog",
@@ -138,7 +138,7 @@ def collection_agents(dataset_id: str, request: Request) -> str:
             f"copy, with the bounds in {units}.",
             "",
             f"The licence, providers and extent are in the STAC collection: "
-            f"{absolute_url(request, f'/stac/collections/{path_segment(dataset_id)}')}",
+            f"{absolute_url(request, services.collection_path(dataset_id))}",
             "",
         ]
     )

@@ -2958,7 +2958,7 @@ def _dataset_links(
     """Build the access links for a dataset, each keyed on the artifact its route resolves.
 
     Two different artifacts answer here, which is why `published` is separate from `latest`.
-    Every published-data route — `/zarr`, `/stac/collections`, `/features` — resolves the latest
+    Every published-data route — `/zarr`, `/stac`, `/features` — resolves the latest
     *published* artifact, so an ingest with `publish: false` over an already-published dataset
     leaves those routes serving the earlier record. Keying the links on `latest` instead made
     `/datasets` withhold links to collections STAC was still advertising: the newest artifact was
@@ -2975,7 +2975,7 @@ def _dataset_links(
     # catalogue link the catalogue itself does not serve, nor withholds one it does.
     if published is not None and published.format in CATALOGUED_FORMATS:
         links.append(
-            DatasetAccessLink(href=f"/stac/collections/{_segment(dataset_id)}", rel="stac", title="STAC collection")
+            DatasetAccessLink(href=f"/stac/{_segment(dataset_id)}/collection.json", rel="stac", title="STAC collection")
         )
     if published is not None and published.format == ArtifactFormat.GEOPARQUET:
         links.append(

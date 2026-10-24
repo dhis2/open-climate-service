@@ -233,7 +233,7 @@ def _validate_feature_template(template: object, *, source: str) -> None:
     if not isinstance(template_id, str) or not template_id:
         raise ValueError(f"{source} contains a feature template with a missing or invalid id")
     # The id becomes a path segment in every link this collection gets --
-    # `/features/{id}`, `/features/{id}/data.parquet`, `/stac/collections/{id}` -- so an id
+    # `/features/{id}`, `/features/{id}/data.parquet`, `/stac/{id}/collection.json` -- so an id
     # outside this shape publishes links that do not resolve. Same rule, same reason, as a
     # raster template id (`_validate_dataset_template`) and a stored collection id
     # (`store.validate_collection_id`); checked here too so the error names the template file

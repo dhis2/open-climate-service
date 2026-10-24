@@ -413,7 +413,7 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
     if not isinstance(dataset_id, str) or not dataset_id:
         raise ValueError(f"{source} contains a dataset template with a missing or invalid id")
     # The id becomes a path segment in every catalogue link this dataset gets —
-    # `/stac/collections/{id}`, `/zarr/{id}`, `/datasets/{id}` — so an id outside this shape
+    # `/stac/{id}/collection.json`, `/zarr/{id}`, `/datasets/{id}` — so an id outside this shape
     # publishes links that do not resolve. A `/` is the unfixable case: ASGI decodes the path
     # before routing, so escaping it does not help and no single-segment route matches.
     # Rejected at registration, where a template author sees it, rather than discovered later

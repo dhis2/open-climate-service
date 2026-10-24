@@ -156,7 +156,7 @@ Artifact (internal record)
 Managed dataset (public API)
     ├── /datasets/{id}         — native metadata
     ├── /zarr/{id}             — raw zarr store access
-    └── /stac/collections/{id} — STAC discovery
+    └── /stac/{id}/collection.json — STAC discovery
 ```
 
 The plugin owns source probing, period enumeration, and fetching one period as an `xarray.Dataset`. The framework owns job callbacks, artifact persistence, publication metadata, and all public API integration. Plugins do not need to know about Zarr conventions or STAC.

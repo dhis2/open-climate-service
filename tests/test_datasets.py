@@ -163,7 +163,7 @@ def test_list_datasets_groups_artifacts_by_managed_dataset_id(monkeypatch: pytes
     assert dataset.extent.temporal.end == "2026-01-11"
     assert dataset.publication.status == PublicationStatus.PUBLISHED
     assert any(link.href == f"/zarr/{dataset.dataset_id}" for link in dataset.links)
-    assert any(link.href == f"/stac/collections/{dataset.dataset_id}" for link in dataset.links)
+    assert any(link.href == f"/stac/{dataset.dataset_id}/collection.json" for link in dataset.links)
 
 
 def test_dataset_links_include_stac_for_published_icechunk() -> None:
@@ -171,7 +171,9 @@ def test_dataset_links_include_stac_for_published_icechunk() -> None:
         "chirps3_precipitation_daily", _artifact(artifact_id="a1"), published=_artifact(artifact_id="a1")
     )
 
-    assert any(link.rel == "stac" and link.href == "/stac/collections/chirps3_precipitation_daily" for link in links)
+    assert any(
+        link.rel == "stac" and link.href == "/stac/chirps3_precipitation_daily/collection.json" for link in links
+    )
 
 
 def test_dataset_links_omit_catalogue_links_for_unpublished_or_netcdf() -> None:
