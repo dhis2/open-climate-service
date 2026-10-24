@@ -23,5 +23,5 @@
     - name: Copernicus
       url: https://www.copernicus.eu/
   display:
-    colormap: viridis
+    colormap: ["#1a7a3c", "#8fbf5a", "#f2e6a0", "#b08a5a", "#7a5a48", "#ffffff"]
     range: [0, 4500]
