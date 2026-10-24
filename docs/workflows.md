@@ -163,7 +163,7 @@ The `output_dataset_id` must have a **dataset template** registered on the insta
   units: people
   display:
     colormap: RdBu
-    range: [-50.0, 50.0]
+    midpoint: 0
 ```
 
 ### Example
@@ -245,14 +245,14 @@ The `output_dataset_id` needs a **static dataset template** (`sync: {kind: stati
 | `temporal_extent` | Observed range `[start, end]` |
 | `method` | `absolute` (observed − normal, default) or `relative` (percent of normal — for ratio-scale variables like precipitation only, **not** temperature) |
 
-The `output_dataset_id` needs a static template like the normals above (auto-registered if missing). Use a diverging colormap centred on zero, running the way the variable is read: `RdBu` for precipitation, where wet is blue and dry is red, and `rdbu_r` for temperature, where warm is red. Pair a **daily** observed dataset with a day-of-year normal, or a **monthly** observed dataset with a month normal — `compute_anomaly` aligns on the matching axis automatically.
+The `output_dataset_id` needs a static template like the normals above (auto-registered if missing). Use a diverging colormap centred on zero (`display.midpoint: 0`), running the way the variable is read: `RdBu` for precipitation, where wet is blue and dry is red, and `rdbu_r` for temperature, where warm is red. Pair a **daily** observed dataset with a day-of-year normal, or a **monthly** observed dataset with a month normal — `compute_anomaly` aligns on the matching axis automatically.
 
 The two methods publish **different units**, so a pre-registered template belongs to one of them:
 
-| `method` | Published units | Suitable range |
-|---|---|---|
-| `absolute` | the observed variable's unit (e.g. `mm/d`) | precipitation `[-20, 20]` daily, `[-10, 10]` monthly — a monthly mean rate averages the extremes away |
-| `relative` | `%` | `[-100, 100]` |
+| `method` | Published units |
+|---|---|
+| `absolute` | the observed variable's unit (e.g. `mm/d`) |
+| `relative` | `%` |
 
 An auto-registered template takes its units from the computed result, so it is correct either way. A pre-registered one is authoritative, and publishing a relative anomaly into a template declaring `mm/d` is **refused** rather than relabelled — otherwise 20 % of normal would be stored as 20 mm of rain per day, which is plausible enough that nothing downstream could catch it. The shipped templates come in both forms: `*_anomaly_1991_2020` declares the observed unit for `absolute`, and `*_relative_anomaly_1991_2020` declares `%` for `relative`. Target the one matching the `method` you pass — precipitation only, since a relative anomaly is refused for temperature.
 

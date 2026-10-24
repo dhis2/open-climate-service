@@ -73,4 +73,3 @@
       url: https://cds.climate.copernicus.eu/
   display:
     colormap: viridis
-    range: [10, 220]

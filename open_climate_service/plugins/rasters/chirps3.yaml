@@ -32,7 +32,6 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
-    range: [0.0, 20.0]
     nodata: -9999.0
 
 # A separate dataset from the final one, not an extension of it: preliminary values are replaced
@@ -74,7 +73,6 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
-    range: [0.0, 20.0]
     nodata: -9999.0
 
 - id: chirps3_precipitation_monthly
@@ -118,7 +116,6 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
-    range: [0.0, 20.0]
     nodata: -9999.0
 
 # ---------------------------------------------------------------------------
@@ -149,7 +146,6 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
-    range: [0.0, 20.0]
     nodata: -9999.0
 
 - id: chirps3_precipitation_monthly_normal_1991_2020
@@ -171,7 +167,6 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: blues
-    range: [0.0, 20.0]
     nodata: -9999.0
 
 # Anomaly output template for the `climate_anomaly` workflow (observed − normal, by
@@ -198,7 +193,7 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
-    range: [-100.0, 100.0]
+    midpoint: 0
     nodata: -9999.0
 
 - id: chirps3_precipitation_daily_anomaly_1991_2020
@@ -220,7 +215,7 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
-    range: [-20.0, 20.0]
+    midpoint: 0
     nodata: -9999.0
 
 - id: chirps3_precipitation_monthly_anomaly_1991_2020
@@ -242,10 +237,7 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
-    # Tighter than the daily ±20: a monthly mean rate averages the extremes away, so a measured
-    # Sierra Leone monsoon anomaly sits near ±2.5 mm/d and ±20 renders as blank white. The
-    # ERA5-Land monthly template carries the same range for the same reason.
-    range: [-10.0, 10.0]
+    midpoint: 0
     nodata: -9999.0
 
 - id: chirps3_precipitation_monthly_relative_anomaly_1991_2020
@@ -267,5 +259,5 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
-    range: [-100.0, 100.0]
+    midpoint: 0
     nodata: -9999.0
