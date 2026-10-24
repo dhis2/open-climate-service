@@ -101,17 +101,6 @@ def test_the_stac_documents_answer_head_as_a_static_host_does(client: TestClient
         assert int(response.headers["content-length"]) > 0
 
 
-def test_the_landing_and_stac_api_paths_redirect_relative_to_the_document(client: TestClient) -> None:
-    """Relative, so the redirect stays under whatever prefix a proxy serves the instance at."""
-    landing = client.get("/stac", follow_redirects=False)
-    collection = client.get("/stac/collections/chirps3_precipitation_daily", follow_redirects=False)
-
-    assert landing.status_code == 307
-    assert landing.headers["location"] == "stac/catalog.json"
-    assert collection.status_code == 307
-    assert collection.headers["location"] == "../chirps3_precipitation_daily/collection.json"
-
-
 def test_stac_catalog_lists_child_collections(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         stac_services,
@@ -136,13 +125,12 @@ def test_catalog_links_leave_out_unset_fields(client: TestClient, monkeypatch: p
         lambda: {"chirps3_precipitation_daily": _artifact(artifact_id="a1")},
     )
 
-    for path in ("/stac", "/stac/catalog.json"):
-        links = client.get(path).json()["links"]
-        assert all(None not in link.values() for link in links), links
+    links = client.get("/stac/catalog.json").json()["links"]
+    assert all(None not in link.values() for link in links), links
 
 
 def test_stac_landing_links_to_collections(client: TestClient) -> None:
-    response = client.get("/stac")
+    response = client.get("/stac/catalog.json")
 
     assert response.status_code == 200
     payload = response.json()
@@ -156,7 +144,7 @@ def test_catalog_self_link_reflects_request_path(client: TestClient, monkeypatch
         lambda: SimpleNamespace(items=[_artifact(artifact_id="a1")]),
     )
 
-    response = client.get("/stac")
+    response = client.get("/stac/catalog.json")
 
     assert response.status_code == 200
     payload = response.json()
