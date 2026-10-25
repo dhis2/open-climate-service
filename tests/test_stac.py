@@ -416,8 +416,6 @@ def test_collection_uses_root_href_for_icechunk_store(client: TestClient, monkey
     assert payload["assets"]["zarr"]["href"].endswith("/zarr/chirps3_precipitation_daily")
     assert payload["assets"]["zarr"]["xarray:open_kwargs"] == {"consolidated": True}
     assert payload["assets"]["zarr"]["zarr:zarr_format"] == 3
-    for key in ("zarr", "icechunk"):
-        assert payload["assets"][key]["statistics"] == {"minimum": 0.0, "maximum": 49.2}
     # The template declares no display, so the map viewer is told the measured range.
     assert payload["renders"]["default"]["rescale"] == [[0.0, 49.2]]
     assert payload["renders"]["default"]["colormap_name"] == "viridis"

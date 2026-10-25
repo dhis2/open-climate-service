@@ -449,9 +449,9 @@ The following parameters control how the datasets are displayed visually and in 
 | `display.midpoint` | No       | Value the colormap is centred on, with the range made symmetric about it. Set `0` for a diverging quantity such as an anomaly or a change, so the neutral colour stays on "no difference".              |
 | `display.nodata`   | No       | No-data / fill value                                                                                                                                                                                 |
 
-The measured minimum and maximum are published as `statistics` on the dataset's STAC data assets and
-on `GET /datasets/{id}`. A dataset synced before they were measured has none until its next sync,
-and a static one until it is ingested again.
+The measured minimum and maximum are published as `statistics` on `GET /datasets/{id}`. A dataset
+synced before they were measured has none until its next sync, and a static one until it is
+ingested again.
 
 ### Categorical datasets
 
