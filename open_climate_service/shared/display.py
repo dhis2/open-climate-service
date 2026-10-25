@@ -1,10 +1,11 @@
 """The value range a dataset is coloured over (CLIM-1439).
 
-A template's `display.range` wins where it is declared. Otherwise the range is the dataset's
-measured minimum and maximum, so a template no longer has to guess values that suit every
-country and every period. `display.midpoint` then centres either range on a value, so a
+A template's `display.range` wins where it is declared, as written. Otherwise the range is the
+dataset's measured minimum and maximum, so a template no longer has to guess values that suit
+every country and every period. `display.midpoint` centres a measured range on a value, so a
 diverging colormap keeps its neutral colour on the neutral value: zero for an anomaly, where
-blue has to mean below normal.
+blue has to mean below normal. A declared range is not centred: its ends are the author's
+choice, and one who wants it centred declares it symmetric.
 
 Decided here once, for the map viewer's STAC render hints, the dataset and data source pages,
 and openEO PNG output.
@@ -44,14 +45,16 @@ def display_range(
         if isinstance(declared, list | tuple) and len(declared) == 2
         else (None, None)
     )
+    measured = False
     if (low is None or high is None) and statistics is not None:
         low, high = _number(statistics.minimum), _number(statistics.maximum)
+        measured = True
     if low is None or high is None:
         return None
     if high <= low:
         low, high = low - 0.5, low + 0.5
     midpoint = display_midpoint(display)
-    if midpoint is not None:
+    if measured and midpoint is not None:
         half = max(abs(low - midpoint), abs(high - midpoint))
         low, high = midpoint - half, midpoint + half
     return low, high
