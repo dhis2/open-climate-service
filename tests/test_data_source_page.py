@@ -142,7 +142,7 @@ def test_the_form_is_offered_only_where_ingesting_can_work(
 
 
 def test_an_ingested_source_links_to_its_dataset() -> None:
-    measured = _record("chirps_monthly", statistics={"minimum": 0.0, "maximum": 49.20000076293945})
+    measured = _record("chirps_monthly", statistics={"min": 0.0, "max": 49.20000076293945})
     context = _source_context(_ingestable("chirps_monthly"), datasets=[measured])
 
     assert context["ingested"] == {

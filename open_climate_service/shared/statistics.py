@@ -48,4 +48,4 @@ def measure_statistics(store_path: str | Path, variable: str) -> ArtifactStatist
         return None
     if not (math.isfinite(low) and math.isfinite(high)):
         return None
-    return ArtifactStatistics(minimum=low, maximum=high)
+    return ArtifactStatistics(min=low, max=high)

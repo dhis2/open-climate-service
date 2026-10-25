@@ -2772,7 +2772,7 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
     except Exception:
         pass
     # The result is not a stored artifact, so the slice itself stands in for its statistics.
-    sliced = ArtifactStatistics(minimum=float(arr.min()), maximum=float(arr.max()))
+    sliced = ArtifactStatistics(min=float(arr.min()), max=float(arr.max()))
     colormap = display.get("colormap")
 
     return str(

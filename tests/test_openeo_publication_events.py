@@ -504,7 +504,7 @@ def test_a_crash_right_after_the_commit_completes_the_publication_on_restart(
     [artifact] = _artifacts()
     assert artifact.provenance is not None and artifact.provenance.output_snapshot_id == committed
     # Measured from the committed store: the job's in-memory result did not survive the crash.
-    assert artifact.statistics == ArtifactStatistics(minimum=5.0, maximum=5.0)
+    assert artifact.statistics == ArtifactStatistics(min=5.0, max=5.0)
     assert event.data["output_snapshot_id"] == committed
     assert received == [event]
 

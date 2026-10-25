@@ -47,7 +47,7 @@ def display_range(
     )
     measured = False
     if (low is None or high is None) and statistics is not None:
-        low, high = _number(statistics.minimum), _number(statistics.maximum)
+        low, high = _number(statistics.min), _number(statistics.max)
         measured = True
     if low is None or high is None:
         return None

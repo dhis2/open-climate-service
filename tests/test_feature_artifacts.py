@@ -246,7 +246,7 @@ def _record_fields(**overrides: Any) -> dict[str, Any]:
                 "format": ArtifactFormat.GEOPARQUET,
                 "variable": None,
                 "variables": [],
-                "statistics": {"minimum": 0.0, "maximum": 1.0},
+                "statistics": {"min": 0.0, "max": 1.0},
                 "features": _FEATURE_DETAIL_FIELDS,
             },
             "no measured variable to carry statistics",

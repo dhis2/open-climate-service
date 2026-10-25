@@ -413,7 +413,7 @@ def test_the_dataset_page_offers_the_map_viewer_for_both_and_a_colour_scale_only
 
     With no template range, a raster's range is the one measured from the dataset."""
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
-    statistics = {"statistics": {"minimum": -4.0, "maximum": 6.5}} if raster else {}
+    statistics = {"statistics": {"min": -4.0, "max": 6.5}} if raster else {}
 
     html = landing.render_dataset_page(_record(itemType=item_type, **statistics), "/ocs")
 

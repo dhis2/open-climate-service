@@ -147,7 +147,7 @@ def test_a_streaming_ingest_records_the_size_and_statistics_of_the_published_sto
 
     assert len(recorded) == 1
     assert recorded[0].size_bytes == stored_bytes(store_path) > 0
-    assert recorded[0].statistics == ArtifactStatistics(minimum=0.0, maximum=11.0)
+    assert recorded[0].statistics == ArtifactStatistics(min=0.0, max=11.0)
 
 
 def test_an_openeo_publish_records_the_size_and_statistics_of_the_store_it_wrote(
@@ -172,7 +172,7 @@ def test_an_openeo_publish_records_the_size_and_statistics_of_the_store_it_wrote
     records = [r for r in ingestion_services._load_records() if r.dataset_id == "published_sized"]
     assert len(records) == 1 and records[0].path is not None
     assert records[0].size_bytes == stored_bytes(records[0].path) > 0
-    assert records[0].statistics == ArtifactStatistics(minimum=-4.0, maximum=7.0)
+    assert records[0].statistics == ArtifactStatistics(min=-4.0, max=7.0)
 
 
 def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
@@ -251,8 +251,13 @@ def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
     assert max(after, key=lambda r: r.created_at).size_bytes == stored_bytes(store_path)
 
 
-def _published_without_statistics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """A real openEO-published store whose record lost its statistics, as one written before them."""
+def _published_without_statistics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleared: ArtifactStatistics | None = None
+) -> Any:
+    """A real openEO-published store whose record lost its statistics, as one written before them.
+
+    *cleared* is what the record is left holding: None, or an object missing a statistic, as a
+    record measured before a statistic was added loads."""
     from open_climate_service.data_registry.services import datasets as registry
     from open_climate_service.openeo import jobs
 
@@ -270,23 +275,24 @@ def _published_without_statistics(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     def clear(records: list[Any]) -> None:
         for index, stored in enumerate(records):
-            records[index] = stored.model_copy(update={"statistics": None})
+            records[index] = stored.model_copy(update={"statistics": cleared})
 
     ingestion_services._mutate_records(clear)
     return next(r for r in ingestion_services._load_records() if r.dataset_id == "backfilled")
 
 
+@pytest.mark.parametrize("cleared", [None, ArtifactStatistics(min=-4.0)], ids=["none", "missing-one"])
 def test_the_startup_backfill_measures_stores_that_have_no_statistics(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleared: ArtifactStatistics | None
 ) -> None:
     """So the declared template ranges can later go without datasets rendering unmeasured."""
-    record = _published_without_statistics(tmp_path, monkeypatch)
+    record = _published_without_statistics(tmp_path, monkeypatch, cleared)
     feature = _refresh_collection()
 
     assert ingestion_services.measure_missing_statistics() == 1
 
     stored = {r.artifact_id: r for r in ingestion_services._load_records()}
-    assert stored[record.artifact_id].statistics == ArtifactStatistics(minimum=-4.0, maximum=7.0)
+    assert stored[record.artifact_id].statistics == ArtifactStatistics(min=-4.0, max=7.0)
     assert stored[feature.artifact_id].statistics is None  # a feature collection measures nothing
     assert ingestion_services.measure_missing_statistics() == 0  # nothing left to measure
 
@@ -295,7 +301,7 @@ def test_the_backfill_keeps_statistics_a_sync_recorded_while_it_measured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = _published_without_statistics(tmp_path, monkeypatch)
-    synced = ArtifactStatistics(minimum=-4.0, maximum=99.0)
+    synced = ArtifactStatistics(min=-4.0, max=99.0)
 
     def measure_while_a_sync_lands(store_path: object, variable: str) -> ArtifactStatistics:
         def sync(records: list[Any]) -> None:
@@ -303,7 +309,7 @@ def test_the_backfill_keeps_statistics_a_sync_recorded_while_it_measured(
                 records[index] = stored.model_copy(update={"statistics": synced})
 
         ingestion_services._mutate_records(sync)
-        return ArtifactStatistics(minimum=-4.0, maximum=7.0)
+        return ArtifactStatistics(min=-4.0, max=7.0)
 
     monkeypatch.setattr(ingestion_services, "measure_statistics", measure_while_a_sync_lands)
 

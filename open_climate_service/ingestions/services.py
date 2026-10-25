@@ -2572,12 +2572,13 @@ def _refresh_recorded_size(store_path: Path) -> None:
 
 
 def measure_missing_statistics(should_stop: Callable[[], bool] = lambda: False) -> int:
-    """Measure each Icechunk store whose newest record has no statistics; return how many were filled.
+    """Measure each Icechunk store whose newest record lacks a statistic; return how many were filled.
 
     Run in the background at startup, so a dataset written before statistics were measured, or
     whose measurement failed, gets them without waiting for its next sync, and a static one
     without being ingested again. Kept rather than run once: it is also how a statistic a later
-    release adds reaches existing datasets, and with nothing missing it only reads the records.
+    release adds reaches existing datasets, since a record measured before it holds None for it,
+    and with nothing missing it only reads the records.
 
     One store at a time, each holding a job slot, so it waits behind running ingests instead of
     adding to them. Only the newest record of a store is measured, as only it is read. Written
@@ -2593,7 +2594,7 @@ def measure_missing_statistics(should_stop: Callable[[], bool] = lambda: False) 
     slots = get_job_slots()
     filled = 0
     for record in newest.values():
-        if record.format != ArtifactFormat.ICECHUNK or record.statistics is not None or record.variable is None:
+        if record.format != ArtifactFormat.ICECHUNK or _fully_measured(record.statistics) or record.variable is None:
             continue
         if record.path is None or not Path(record.path).exists():
             continue
@@ -2608,13 +2609,18 @@ def measure_missing_statistics(should_stop: Callable[[], bool] = lambda: False) 
     return filled
 
 
+def _fully_measured(statistics: ArtifactStatistics | None) -> bool:
+    """Whether *statistics* holds every statistic this release measures."""
+    return statistics is not None and all(value is not None for value in statistics.model_dump().values())
+
+
 def _fill_statistics(measured: ArtifactRecord, statistics: ArtifactStatistics) -> bool:
-    """Record *statistics* on *measured* if it is still stored unchanged and still has none."""
+    """Record *statistics* on *measured* if it is still stored unchanged and still lacks one."""
 
     def fill(records: list[ArtifactRecord]) -> bool:
         for index, current in enumerate(records):
             if current.artifact_id == measured.artifact_id and current.created_at == measured.created_at:
-                if current.statistics is not None:
+                if _fully_measured(current.statistics):
                     return False
                 records[index] = current.model_copy(update={"statistics": statistics})
                 return True

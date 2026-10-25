@@ -42,11 +42,9 @@ def _pyramid() -> xr.Dataset:
 @pytest.mark.parametrize(
     ("ds", "variable", "t_dim", "expected"),
     [
-        pytest.param(_daily(), "precip", "t", ArtifactStatistics(minimum=-4.0, maximum=6.5), id="across-periods"),
-        pytest.param(
-            _daily().isel(t=0, drop=True), "precip", None, ArtifactStatistics(minimum=1.0, maximum=3.0), id="static"
-        ),
-        pytest.param(_pyramid(), "elevation", None, ArtifactStatistics(minimum=0.0, maximum=100.0), id="pyramid"),
+        pytest.param(_daily(), "precip", "t", ArtifactStatistics(min=-4.0, max=6.5), id="across-periods"),
+        pytest.param(_daily().isel(t=0, drop=True), "precip", None, ArtifactStatistics(min=1.0, max=3.0), id="static"),
+        pytest.param(_pyramid(), "elevation", None, ArtifactStatistics(min=0.0, max=100.0), id="pyramid"),
         pytest.param(_daily() * np.nan, "precip", "t", None, id="all-missing"),
         pytest.param(_daily(), "temperature", "t", None, id="absent-variable"),
     ],

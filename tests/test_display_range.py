@@ -13,7 +13,7 @@ import pytest
 from open_climate_service.ingestions.schemas import ArtifactStatistics
 from open_climate_service.shared.display import display_range
 
-MEASURED = ArtifactStatistics(minimum=-4.0, maximum=6.5)
+MEASURED = ArtifactStatistics(min=-4.0, max=6.5)
 
 
 @pytest.mark.parametrize(
@@ -26,8 +26,8 @@ MEASURED = ArtifactStatistics(minimum=-4.0, maximum=6.5)
         pytest.param({"midpoint": 0}, MEASURED, (-6.5, 6.5), id="midpoint-centres-the-measured"),
         pytest.param({"range": [-1, 3], "midpoint": 0}, MEASURED, (-1.0, 3.0), id="declared-is-kept-as-written"),
         pytest.param({"midpoint": True}, MEASURED, (-4.0, 6.5), id="a-boolean-is-no-midpoint"),
-        pytest.param({}, ArtifactStatistics(minimum=2.0, maximum=2.0), (1.5, 2.5), id="constant-is-widened"),
-        pytest.param({}, ArtifactStatistics(minimum=0.0), None, id="half-measured"),
+        pytest.param({}, ArtifactStatistics(min=2.0, max=2.0), (1.5, 2.5), id="constant-is-widened"),
+        pytest.param({}, ArtifactStatistics(min=0.0), None, id="half-measured"),
         pytest.param(None, None, None, id="nothing-to-go-on"),
     ],
 )

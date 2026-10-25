@@ -384,7 +384,7 @@ def test_collection_sets_hourly_step_to_pt1h(client: TestClient, monkeypatch: py
 
 def test_collection_uses_root_href_for_icechunk_store(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     artifact = _artifact(artifact_id="a1", format=ArtifactFormat.ICECHUNK, path="/tmp/chirps3.icechunk").model_copy(
-        update={"statistics": ArtifactStatistics(minimum=0.0, maximum=49.2)}
+        update={"statistics": ArtifactStatistics(min=0.0, max=49.2)}
     )
     monkeypatch.setattr(
         ingestion_services,
