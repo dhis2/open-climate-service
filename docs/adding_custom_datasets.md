@@ -449,9 +449,8 @@ The following parameters control how the datasets are displayed visually and in 
 | `display.midpoint` | No       | Value a measured range is centred on, made symmetric about it; a declared range is used as written. Set `0` for a diverging quantity such as an anomaly or a change.                                    |
 | `display.nodata`   | No       | No-data / fill value                                                                                                                                                                                 |
 
-The measured minimum and maximum are published as `statistics` on `GET /datasets/{id}`. A dataset
-synced before they were measured has none until its next sync, and a static one until it is
-ingested again.
+The minimum and maximum are measured at the end of every sync. A dataset written before they were
+measured gets them in the background the next time the service starts.
 
 ### Categorical datasets
 

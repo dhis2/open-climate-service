@@ -693,10 +693,6 @@ class DatasetRecord(BaseModel):
     )
     license_url: str | None = Field(default=None, description="URL of the licence text, when known.")
     extent: ArtifactCoverage = Field(description="Current covered spatial and temporal extent of the dataset.")
-    statistics: ArtifactStatistics | None = Field(
-        default=None,
-        description="Measured statistics of the primary variable across the dataset. None for a feature collection.",
-    )
     last_updated: datetime = Field(
         description="Timestamp when Open Climate Service last materialized or updated the dataset."
     )

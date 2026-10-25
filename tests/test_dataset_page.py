@@ -411,16 +411,15 @@ def test_the_dataset_page_offers_the_map_viewer_for_both_and_a_colour_scale_only
 ) -> None:
     """The map viewer draws rasters and vectors, but a feature collection has no colour scale.
 
-    With no template range, a raster's range is the one measured from the dataset."""
+    With no template range, a raster's range is measured from the dataset, and the page says so."""
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
-    statistics = {"statistics": {"min": -4.0, "max": 6.5}} if raster else {}
 
-    html = landing.render_dataset_page(_record(itemType=item_type, **statistics), "/ocs")
+    html = landing.render_dataset_page(_record(itemType=item_type), "/ocs")
 
     assert "Open in map viewer" in html
     assert ('class="ramp-bar"' in html) is raster
     assert ("--ramp: linear-gradient" in html) is raster
-    assert ("-4 – 6.5" in _visible_text(html)) is raster
+    assert ("Measured min – max" in _visible_text(html)) is raster
 
 
 def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:
