@@ -36,6 +36,7 @@ from open_climate_service.ingestions.schemas import (
     ArtifactPublication,
     ArtifactRecord,
     ArtifactRequestScope,
+    ArtifactStatistics,
     ArtifactVersion,
     CoverageSpatial,
     CoverageTemporal,
@@ -59,6 +60,7 @@ from open_climate_service.ingestions.schemas import (
 )
 from open_climate_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
 from open_climate_service.publications.services import managed_dataset_id_for, publish_artifact
+from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
 from open_climate_service.shared.raster_contract import TIME_ALIASES
@@ -2567,6 +2569,58 @@ def _refresh_recorded_size(store_path: Path) -> None:
         _mutate_records(update)
     except Exception:
         logger.warning("Could not refresh the recorded size of '%s'", store_path, exc_info=True)
+
+
+def measure_missing_statistics(should_stop: Callable[[], bool] = lambda: False) -> int:
+    """Measure each Icechunk store whose newest record has no statistics; return how many were filled.
+
+    Run in the background at startup, so a dataset written before statistics were measured, or
+    whose measurement failed, gets them without waiting for its next sync, and a static one
+    without being ingested again. Kept rather than run once: it is also how a statistic a later
+    release adds reaches existing datasets, and with nothing missing it only reads the records.
+
+    One store at a time, each holding a job slot, so it waits behind running ingests instead of
+    adding to them. Only the newest record of a store is measured, as only it is read. Written
+    only if that record is unchanged, so statistics a sync recorded meanwhile are kept. A store
+    with no finite value measures as None and is tried again at the next start.
+    """
+    newest: dict[str, ArtifactRecord] = {}
+    for record in _load_records():
+        if record.path is None:
+            continue
+        if record.path not in newest or record.created_at > newest[record.path].created_at:
+            newest[record.path] = record
+    slots = get_job_slots()
+    filled = 0
+    for record in newest.values():
+        if record.format != ArtifactFormat.ICECHUNK or record.statistics is not None or record.variable is None:
+            continue
+        if record.path is None or not Path(record.path).exists():
+            continue
+        if not slots.acquire(should_stop):
+            break
+        try:
+            statistics = measure_statistics(record.path, record.variable)
+        finally:
+            slots.release()
+        if statistics is not None and _fill_statistics(record, statistics):
+            filled += 1
+    return filled
+
+
+def _fill_statistics(measured: ArtifactRecord, statistics: ArtifactStatistics) -> bool:
+    """Record *statistics* on *measured* if it is still stored unchanged and still has none."""
+
+    def fill(records: list[ArtifactRecord]) -> bool:
+        for index, current in enumerate(records):
+            if current.artifact_id == measured.artifact_id and current.created_at == measured.created_at:
+                if current.statistics is not None:
+                    return False
+                records[index] = current.model_copy(update={"statistics": statistics})
+                return True
+        return False
+
+    return _mutate_records(fill)
 
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:

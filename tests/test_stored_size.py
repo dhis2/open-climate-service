@@ -251,6 +251,67 @@ def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
     assert max(after, key=lambda r: r.created_at).size_bytes == stored_bytes(store_path)
 
 
+def _published_without_statistics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A real openEO-published store whose record lost its statistics, as one written before them."""
+    from open_climate_service.data_registry.services import datasets as registry
+    from open_climate_service.openeo import jobs
+
+    configs = tmp_path / "plugins" / "rasters"
+    configs.mkdir(parents=True)
+    monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
+    registry.reset_template_caches()
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path / "rasters")
+    (tmp_path / "rasters").mkdir()
+    cube = xr.Dataset(
+        {"tp": (("t", "y", "x"), np.arange(12, dtype="float32").reshape(3, 2, 2) - 4.0, {"units": "mm/d"})},
+        coords={"t": pd.date_range("2026-01-01", periods=3, freq="D"), "y": [1.0, 0.0], "x": [0.0, 1.0]},
+    ).rio.write_crs("EPSG:4326")
+    jobs._write_managed_zarr(cube, {"dataset_id": "backfilled", "variable": "tp"})
+
+    def clear(records: list[Any]) -> None:
+        for index, stored in enumerate(records):
+            records[index] = stored.model_copy(update={"statistics": None})
+
+    ingestion_services._mutate_records(clear)
+    return next(r for r in ingestion_services._load_records() if r.dataset_id == "backfilled")
+
+
+def test_the_startup_backfill_measures_stores_that_have_no_statistics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """So the declared template ranges can later go without datasets rendering unmeasured."""
+    record = _published_without_statistics(tmp_path, monkeypatch)
+    feature = _refresh_collection()
+
+    assert ingestion_services.measure_missing_statistics() == 1
+
+    stored = {r.artifact_id: r for r in ingestion_services._load_records()}
+    assert stored[record.artifact_id].statistics == ArtifactStatistics(minimum=-4.0, maximum=7.0)
+    assert stored[feature.artifact_id].statistics is None  # a feature collection measures nothing
+    assert ingestion_services.measure_missing_statistics() == 0  # nothing left to measure
+
+
+def test_the_backfill_keeps_statistics_a_sync_recorded_while_it_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _published_without_statistics(tmp_path, monkeypatch)
+    synced = ArtifactStatistics(minimum=-4.0, maximum=99.0)
+
+    def measure_while_a_sync_lands(store_path: object, variable: str) -> ArtifactStatistics:
+        def sync(records: list[Any]) -> None:
+            for index, stored in enumerate(records):
+                records[index] = stored.model_copy(update={"statistics": synced})
+
+        ingestion_services._mutate_records(sync)
+        return ArtifactStatistics(minimum=-4.0, maximum=7.0)
+
+    monkeypatch.setattr(ingestion_services, "measure_statistics", measure_while_a_sync_lands)
+
+    assert ingestion_services.measure_missing_statistics() == 0
+    [stored] = [r for r in ingestion_services._load_records() if r.artifact_id == record.artifact_id]
+    assert stored.statistics == synced
+
+
 # --- read by the overview page ---------------------------------------------------------------
 
 
