@@ -33,6 +33,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
+    range: [-30.0, 30.0]
 
 - id: era5land_precipitation_daily
   name: Precipitation rate (ERA5-Land)
@@ -71,6 +72,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
+    range: [0.0, 20.0]
     nodata: 0.0
 
 - id: era5land_temperature_monthly
@@ -107,6 +109,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
+    range: [-30.0, 30.0]
 
 - id: era5land_precipitation_monthly
   name: Precipitation rate (ERA5-Land)
@@ -145,6 +148,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
+    range: [0.0, 20.0]
     nodata: 0.0
 
 - id: era5land_temperature_daily_from_hourly
@@ -181,6 +185,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
+    range: [-30.0, 30.0]
 
 - id: era5land_precipitation_daily_from_hourly
   name: Precipitation rate (ERA5-Land, local time)
@@ -217,6 +222,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
+    range: [0.0, 20.0]
     nodata: 0.0
 
 - id: era5land_temperature_daily_normal_1991_2020
@@ -252,6 +258,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
+    range: [-30.0, 30.0]
 
 - id: era5land_precipitation_daily_normal_1991_2020
   name: Total precipitation daily normal (ERA5-Land, 1991–2020)
@@ -286,6 +293,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
+    range: [0.0, 20.0]
 
 # ---------------------------------------------------------------------------
 # Monthly climate-normal output templates for the `climate_normal` openEO workflow
@@ -319,6 +327,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
+    range: [-30.0, 30.0]
 
 - id: era5land_precipitation_monthly_normal_1991_2020
   name: Mean daily precipitation monthly normal (ERA5-Land, 1991–2020)
@@ -343,6 +352,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
+    range: [0.0, 20.0]
 
 # ---------------------------------------------------------------------------
 # Anomaly output templates for the `climate_anomaly` openEO workflow
@@ -374,6 +384,7 @@
   display:
     colormap: rdbu_r
     midpoint: 0
+    range: [-15.0, 15.0]
 
 - id: era5land_precipitation_daily_relative_anomaly_1991_2020
   name: Precipitation daily relative anomaly (ERA5-Land, vs 1991–2020 normal)
@@ -397,6 +408,7 @@
   display:
     colormap: RdBu
     midpoint: 0
+    range: [-100.0, 100.0]
 
 - id: era5land_precipitation_daily_anomaly_1991_2020
   name: Precipitation daily anomaly (ERA5-Land, vs 1991–2020 normal)
@@ -420,6 +432,7 @@
   display:
     colormap: RdBu
     midpoint: 0
+    range: [-20.0, 20.0]
 
 # ---------------------------------------------------------------------------
 # Monthly anomaly output templates for the `climate_anomaly` workflow: pair a monthly
@@ -449,6 +462,7 @@
   display:
     colormap: rdbu_r
     midpoint: 0
+    range: [-3.0, 3.0]
 
 - id: era5land_precipitation_monthly_anomaly_1991_2020
   name: Precipitation monthly anomaly (ERA5-Land, vs 1991–2020 normal)
@@ -472,6 +486,7 @@
   display:
     colormap: RdBu
     midpoint: 0
+    range: [-10.0, 10.0]
 
 - id: era5land_precipitation_monthly_relative_anomaly_1991_2020
   name: Precipitation monthly relative anomaly (ERA5-Land, vs 1991–2020 normal)
@@ -495,3 +510,4 @@
   display:
     colormap: RdBu
     midpoint: 0
+    range: [-100.0, 100.0]

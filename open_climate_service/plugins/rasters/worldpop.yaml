@@ -44,6 +44,7 @@
       url: https://hub.worldpop.org/
   display:
     colormap: reds
+    range: [0.5, 100.0]
 
 - id: worldpop_population_change
   name: Population change (WorldPop Global2)
@@ -66,3 +67,4 @@
   display:
     colormap: RdBu
     midpoint: 0
+    range: [-50.0, 50.0]

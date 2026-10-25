@@ -163,6 +163,7 @@ The `output_dataset_id` must have a **dataset template** registered on the insta
   units: people
   display:
     colormap: RdBu
+    range: [-50.0, 50.0]
     midpoint: 0
 ```
 
@@ -249,10 +250,10 @@ The `output_dataset_id` needs a static template like the normals above (auto-reg
 
 The two methods publish **different units**, so a pre-registered template belongs to one of them:
 
-| `method` | Published units |
-|---|---|
-| `absolute` | the observed variable's unit (e.g. `mm/d`) |
-| `relative` | `%` |
+| `method` | Published units | Suitable range |
+|---|---|---|
+| `absolute` | the observed variable's unit (e.g. `mm/d`) | precipitation `[-20, 20]` daily, `[-10, 10]` monthly — a monthly mean rate averages the extremes away |
+| `relative` | `%` | `[-100, 100]` |
 
 An auto-registered template takes its units from the computed result, so it is correct either way. A pre-registered one is authoritative, and publishing a relative anomaly into a template declaring `mm/d` is **refused** rather than relabelled — otherwise 20 % of normal would be stored as 20 mm of rain per day, which is plausible enough that nothing downstream could catch it. The shipped templates come in both forms: `*_anomaly_1991_2020` declares the observed unit for `absolute`, and `*_relative_anomaly_1991_2020` declares `%` for `relative`. Target the one matching the `method` you pass — precipitation only, since a relative anomaly is refused for temperature.
 
