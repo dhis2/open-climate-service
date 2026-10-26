@@ -445,12 +445,13 @@ The following parameters control how the datasets are displayed visually and in 
 | ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                                                                                               |
 | `display.colormap` | No       | Colormap name for map rendering (e.g. `blues`, `rdbu_r`). Defaults to `viridis`.                                                                                                                     |
-| `display.range`    | No       | `[min, max]` the colormap spans. Leave it out to use the minimum and maximum measured from the ingested dataset at each sync, which suit the instance's extent and period rather than a guess.        |
-| `display.midpoint` | No       | Value a measured range is centred on, made symmetric about it; a declared range is used as written. Set `0` for a diverging quantity such as an anomaly or a change.                                    |
+| `display.range`    | No       | The two values the colormap spans, each a number or a measured statistic: `[0, 20]`, `[p2, p98]`, `[0, p98]`. Defaults to `[p2, p98]`, which suits the instance's extent and period and ignores rare extremes. |
+| `display.midpoint` | No       | Value used to center a colormap when the range is computed from the data; a range of two numbers is used as written. Set `0` for a diverging quantity such as an anomaly or a change.                |
 | `display.nodata`   | No       | No-data / fill value                                                                                                                                                                                 |
 
-The minimum and maximum are measured at the end of every sync. A dataset written before they were
-measured gets them in the background the next time the service starts.
+The statistics a range can name are `min`, `max`, `mean`, and the percentiles `p2`, `p5`, `p25`,
+`p50`, `p75`, `p95` and `p98`, all measured at the end of every sync. A dataset written before a
+statistic was measured gets it in the background the next time the service starts.
 
 ### Categorical datasets
 

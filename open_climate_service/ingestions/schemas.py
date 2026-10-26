@@ -474,6 +474,14 @@ class ArtifactStatistics(BaseModel):
 
     min: float | None = None
     max: float | None = None
+    mean: float | None = None
+    p2: float | None = None
+    p5: float | None = None
+    p25: float | None = None
+    p50: float | None = None
+    p75: float | None = None
+    p95: float | None = None
+    p98: float | None = None
 
 
 class ArtifactRecord(BaseModel):

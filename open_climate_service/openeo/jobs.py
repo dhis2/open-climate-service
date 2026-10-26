@@ -64,11 +64,11 @@ from open_climate_service.shared.cancellation import (
 )
 from open_climate_service.shared.cf import is_temperature_like
 from open_climate_service.shared.compute import get_job_slots, max_concurrent_jobs
-from open_climate_service.shared.display import display_midpoint, display_range
+from open_climate_service.shared.display import display_midpoint, display_range, range_spec
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.netcdf import write_netcdf
 from open_climate_service.shared.persistence import execution_lease
-from open_climate_service.shared.statistics import measure_statistics
+from open_climate_service.shared.statistics import measure_statistics, statistics_of
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
@@ -2104,8 +2104,8 @@ def _derive_display_config(
 
     if isinstance(explicit.get("colormap"), str):
         display["colormap"] = explicit["colormap"]
-    if isinstance(explicit.get("range"), list) and len(explicit["range"]) == 2:
-        display["range"] = [float(explicit["range"][0]), float(explicit["range"][1])]
+    if (declared := range_spec(explicit.get("range"))) is not None:
+        display["range"] = list(declared)
     if (midpoint := display_midpoint(explicit)) is not None:
         display["midpoint"] = midpoint
     if explicit.get("nodata") is not None:
@@ -2751,7 +2751,6 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
     for, so it shows the front of the cube they computed, where a catalogue thumbnail of a
     published store instead shows the step nearest today.
     """
-    from open_climate_service.ingestions.schemas import ArtifactStatistics
     from open_climate_service.shared.thumbnails import render_png
 
     var = list(ds.data_vars)[0]
@@ -2772,7 +2771,7 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
     except Exception:
         pass
     # The result is not a stored artifact, so the slice itself stands in for its statistics.
-    sliced = ArtifactStatistics(min=float(arr.min()), max=float(arr.max()))
+    sliced = statistics_of(arr.values)
     colormap = display.get("colormap")
 
     return str(

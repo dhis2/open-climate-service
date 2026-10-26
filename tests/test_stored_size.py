@@ -52,6 +52,11 @@ def _refresh_collection(collection_id: str = "districts") -> ingestion_services.
     )
 
 
+def _min_max(statistics: ArtifactStatistics | None) -> tuple[float | None, float | None] | None:
+    """The exact part of the statistics; the percentiles are tested in test_artifact_statistics."""
+    return (statistics.min, statistics.max) if statistics is not None else None
+
+
 def _no_walking(*_args: object, **_kwargs: object) -> int:
     raise AssertionError("a store was measured while rendering a page")
 
@@ -147,7 +152,7 @@ def test_a_streaming_ingest_records_the_size_and_statistics_of_the_published_sto
 
     assert len(recorded) == 1
     assert recorded[0].size_bytes == stored_bytes(store_path) > 0
-    assert recorded[0].statistics == ArtifactStatistics(min=0.0, max=11.0)
+    assert _min_max(recorded[0].statistics) == (0.0, 11.0)
 
 
 def test_an_openeo_publish_records_the_size_and_statistics_of_the_store_it_wrote(
@@ -172,7 +177,7 @@ def test_an_openeo_publish_records_the_size_and_statistics_of_the_store_it_wrote
     records = [r for r in ingestion_services._load_records() if r.dataset_id == "published_sized"]
     assert len(records) == 1 and records[0].path is not None
     assert records[0].size_bytes == stored_bytes(records[0].path) > 0
-    assert records[0].statistics == ArtifactStatistics(min=-4.0, max=7.0)
+    assert _min_max(records[0].statistics) == (-4.0, 7.0)
 
 
 def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
@@ -292,7 +297,7 @@ def test_the_startup_backfill_measures_stores_that_have_no_statistics(
     assert ingestion_services.measure_missing_statistics() == 1
 
     stored = {r.artifact_id: r for r in ingestion_services._load_records()}
-    assert stored[record.artifact_id].statistics == ArtifactStatistics(min=-4.0, max=7.0)
+    assert _min_max(stored[record.artifact_id].statistics) == (-4.0, 7.0)
     assert stored[feature.artifact_id].statistics is None  # a feature collection measures nothing
     assert ingestion_services.measure_missing_statistics() == 0  # nothing left to measure
 
@@ -301,7 +306,7 @@ def test_the_backfill_keeps_statistics_a_sync_recorded_while_it_measured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = _published_without_statistics(tmp_path, monkeypatch)
-    synced = ArtifactStatistics(min=-4.0, max=99.0)
+    synced = ArtifactStatistics(**dict.fromkeys(ArtifactStatistics.model_fields, 99.0))
 
     def measure_while_a_sync_lands(store_path: object, variable: str) -> ArtifactStatistics:
         def sync(records: list[Any]) -> None:

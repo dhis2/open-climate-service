@@ -21,7 +21,7 @@ from fastapi import HTTPException
 
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import ArtifactStatistics, PublicationStatus
+from open_climate_service.ingestions.schemas import PublicationStatus
 from open_climate_service.jobs import store as native_store
 from open_climate_service.jobs.events import persisted_events, read_event_log
 from open_climate_service.jobs.models import JobEvent
@@ -504,7 +504,7 @@ def test_a_crash_right_after_the_commit_completes_the_publication_on_restart(
     [artifact] = _artifacts()
     assert artifact.provenance is not None and artifact.provenance.output_snapshot_id == committed
     # Measured from the committed store: the job's in-memory result did not survive the crash.
-    assert artifact.statistics == ArtifactStatistics(min=5.0, max=5.0)
+    assert artifact.statistics is not None and (artifact.statistics.min, artifact.statistics.max) == (5.0, 5.0)
     assert event.data["output_snapshot_id"] == committed
     assert received == [event]
 

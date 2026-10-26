@@ -419,7 +419,7 @@ def test_the_dataset_page_offers_the_map_viewer_for_both_and_a_colour_scale_only
     assert "Open in map viewer" in html
     assert ('class="ramp-bar"' in html) is raster
     assert ("--ramp: linear-gradient" in html) is raster
-    assert ("Measured min – max" in _visible_text(html)) is raster
+    assert ("p2 – p98 (measured)" in _visible_text(html)) is raster
 
 
 def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:

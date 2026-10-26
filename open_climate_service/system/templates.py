@@ -22,7 +22,7 @@ from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
 from open_climate_service.scheduler.presets import form_values, schedule_description, suggested_frequency
 from open_climate_service.shared.classes import class_colors, classification_from_template
-from open_climate_service.shared.display import display_midpoint, display_range
+from open_climate_service.shared.display import DEFAULT_RANGE, display_midpoint, range_spec
 from open_climate_service.shared.time import datetime_to_period_string, has_calendar_periods
 
 from .schemas import Link, RootResponse
@@ -254,16 +254,17 @@ def _colormap_ramp(name: str | None) -> str:
 
 
 def _range_label(display: dict[str, Any]) -> str:
-    """The declared range as `0 – 20`, or how the range is measured when none is declared.
+    """The range as its template states it: `0 – 20`, or `0 – p98 (measured)` with a statistic.
 
     The rule rather than today's values: those come from the dataset's statistics, which the
     map viewer reads, and would go stale on a page describing the data source.
     """
-    declared = display_range(display, None)
-    if declared is not None:
-        return f"{declared[0]:g} – {declared[1]:g}"
+    spec = range_spec(display.get("range")) or DEFAULT_RANGE
+    label = " – ".join(end if isinstance(end, str) else f"{end:g}" for end in spec)
+    if not any(isinstance(end, str) for end in spec):
+        return label
     midpoint = display_midpoint(display)
-    return "Measured min – max" + (f", centred on {midpoint:g}" if midpoint is not None else "")
+    return f"{label} (measured" + (f", centred on {midpoint:g})" if midpoint is not None else ")")
 
 
 def _coverage_label(start: object, end: object, period_type: object = None) -> str:

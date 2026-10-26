@@ -149,8 +149,21 @@ def test_an_ingested_source_links_to_its_dataset() -> None:
         "coverage": "2020-01 – 2026-07",
         "status": "published",
     }
-    # The template declares no range, so the page says how it is measured.
-    assert ("Display range", "Measured min – max", None) in context["status_facts"]
+
+
+@pytest.mark.parametrize(
+    ("display", "label"),
+    [
+        ({"range": [0, 20]}, "0 – 20"),
+        ({}, "p2 – p98 (measured)"),
+        ({"range": [0, "p98"], "midpoint": 0}, "0 – p98 (measured, centred on 0)"),
+    ],
+)
+def test_the_display_range_is_shown_as_the_template_states_it(display: dict[str, Any], label: str) -> None:
+    """The rule, not today's values, which come from the dataset and would go stale here."""
+    context = _source_context(_ingestable("chirps_monthly", display=display))
+
+    assert ("Display range", label, None) in context["status_facts"]
 
 
 def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import dask.array as da
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
 from open_climate_service.data_manager.services import downloader
-from open_climate_service.ingestions.schemas import ArtifactStatistics
-from open_climate_service.shared.statistics import measure_statistics
+from open_climate_service.shared.statistics import measure_statistics, statistics_of
 
 
 def _store(tmp_path: Path, ds: xr.Dataset, *, t_dim: str | None) -> Path:
@@ -42,17 +42,39 @@ def _pyramid() -> xr.Dataset:
 @pytest.mark.parametrize(
     ("ds", "variable", "t_dim", "expected"),
     [
-        pytest.param(_daily(), "precip", "t", ArtifactStatistics(min=-4.0, max=6.5), id="across-periods"),
-        pytest.param(_daily().isel(t=0, drop=True), "precip", None, ArtifactStatistics(min=1.0, max=3.0), id="static"),
-        pytest.param(_pyramid(), "elevation", None, ArtifactStatistics(min=0.0, max=100.0), id="pyramid"),
+        pytest.param(_daily(), "precip", "t", (-4.0, 6.5, 15.0 / 9), id="across-periods"),
+        pytest.param(_daily().isel(t=0, drop=True), "precip", None, (1.0, 3.0, 2.0), id="static"),
+        pytest.param(_pyramid(), "elevation", None, (0.0, 100.0, 100.0 / 1100**2), id="pyramid"),
         pytest.param(_daily() * np.nan, "precip", "t", None, id="all-missing"),
         pytest.param(_daily(), "temperature", "t", None, id="absent-variable"),
     ],
 )
 def test_statistics_are_measured_over_the_whole_stored_variable(
-    tmp_path: Path, ds: xr.Dataset, variable: str, t_dim: str | None, expected: ArtifactStatistics | None
+    tmp_path: Path, ds: xr.Dataset, variable: str, t_dim: str | None, expected: tuple[float, float, float] | None
 ) -> None:
-    assert measure_statistics(_store(tmp_path, ds, t_dim=t_dim), variable) == expected
+    """The minimum, maximum and mean, which are exact; the percentiles are tested below."""
+    measured = measure_statistics(_store(tmp_path, ds, t_dim=t_dim), variable)
+
+    if expected is None:
+        assert measured is None
+    else:
+        assert measured is not None
+        assert (measured.min, measured.max, measured.mean) == pytest.approx(expected)
+
+
+def test_percentiles_stay_close_across_chunks_that_differ() -> None:
+    """Rural chunks of a few people a cell beside a city chunk with a long tail: the case where
+    merging per-chunk percentiles goes wrong. Merged from the seven alone, these are off by 1 to
+    95 people; from the dense grid, by under 0.01."""
+    rng = np.random.default_rng(0)
+    values = np.concatenate([rng.uniform(0.0, 5.0, 900_000), rng.lognormal(3.0, 1.0, 100_000)])
+    values[::50] = np.nan
+
+    measured = statistics_of(da.from_array(values, chunks=100_000))
+
+    assert measured is not None
+    for name in ("p2", "p5", "p25", "p50", "p75", "p95", "p98"):
+        assert getattr(measured, name) == pytest.approx(np.nanpercentile(values, float(name[1:])), abs=0.01), name
 
 
 def test_an_unreadable_store_does_not_fail_the_ingest(tmp_path: Path) -> None:
