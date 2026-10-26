@@ -33,7 +33,7 @@ from open_climate_service.shared.classes import (
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.licences import DatasetLicence, parse_licence
-from open_climate_service.shared.thumbnails import thumbnail_path
+from open_climate_service.shared.thumbnails import colormap_stops, thumbnail_path
 from open_climate_service.shared.time import (
     Cadence,
     parse_period_string_to_datetime,
@@ -1313,17 +1313,21 @@ def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> 
     display = source_dataset.get("display")
     if not isinstance(display, dict):
         return None
-    colormap_name = display.get("colormap")
+    colormap = display.get("colormap")
     value_range = display.get("range")
-    if not isinstance(colormap_name, str) or not isinstance(value_range, list) or len(value_range) != 2:
+    if not isinstance(value_range, list) or len(value_range) != 2:
         return None
+    # The colours themselves, keyed 0-255 across `rescale` as the render extension and titiler
+    # read a custom colormap, so a client needs no colormap library that knows the name.
     render: dict[str, Any] = {
         "title": artifact.dataset_name,
         "assets": ["zarr"],
         "rescale": [[float(value_range[0]), float(value_range[1])]],
-        "colormap_name": colormap_name,
+        "colormap": {str(i): color for i, color in enumerate(colormap_stops(colormap))},
         "open_climate_service:variable": artifact.variable,
     }
+    if isinstance(colormap, str):
+        render["colormap_name"] = colormap
     nodata = display.get("nodata")
     if nodata is not None:
         render["nodata"] = float(nodata)

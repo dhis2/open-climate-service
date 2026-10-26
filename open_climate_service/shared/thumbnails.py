@@ -54,24 +54,36 @@ def thumbnail_path(dataset_id: str) -> Path:
     return thumbnails_dir() / f"{dataset_id}.png"
 
 
-def resolve_colormap(name: str | None) -> Any:
+def resolve_colormap(spec: object) -> Any:
     """A matplotlib colormap for a template's ``display.colormap``, or the default.
 
-    Template colormap names are written for the map viewer, which resolves them through
-    chroma-js — ColorBrewer/D3 names, matched **case-insensitively**, with matplotlib's
-    ``_r`` reversed suffix. matplotlib is case-*sensitive*, so passing those names straight
-    to it raises: of the 27 built-in templates, only the 9 declaring ``RdBu`` would render,
-    while ``blues`` (9), ``rdbu_r`` (7) and ``reds`` (2) all fail. Matching the viewer's
-    case-insensitive rule is what makes one declared colormap mean the same thing in the
-    viewer and in the image.
+    This is the one place a declared colormap is resolved: the thumbnail, the landing-page
+    ramp and the colour stops the STAC ``renders`` block hands the map viewer all come from
+    here, so they cannot disagree.
 
-    An unresolvable name falls back to the default rather than raising. A thumbnail in the
+    ``spec`` is a matplotlib colormap name, matched **case-insensitively** with the ``_r``
+    reversed suffix, or a list of two or more colours spread evenly from the low end of the
+    display range to the high end. Case-insensitive because the templates were first written
+    for chroma-js, which matches that way: ``blues``, ``rdbu_r`` and ``reds`` all raise when
+    passed to matplotlib as written.
+
+    An unresolvable spec falls back to the default rather than raising. A thumbnail in the
     wrong colours is worth more than no thumbnail, and this must never be able to fail a
     render on its own.
     """
     from matplotlib import colormaps
+    from matplotlib.colors import LinearSegmentedColormap, to_rgba_array
 
-    requested = (name or "").strip()
+    if isinstance(spec, list | tuple):
+        # Parsed here because `from_list` defers it to the first lookup, past this fallback.
+        try:
+            colors = to_rgba_array(list(spec))
+        except ValueError:
+            return colormaps[_DEFAULT_COLORMAP]
+        if len(colors) < 2:
+            return colormaps[_DEFAULT_COLORMAP]
+        return LinearSegmentedColormap.from_list("custom", colors)
+    requested = spec.strip() if isinstance(spec, str) else ""
     if requested:
         try:
             return colormaps[requested]
@@ -81,6 +93,14 @@ def resolve_colormap(name: str | None) -> Any:
         if matched is not None:
             return colormaps[matched]
     return colormaps[_DEFAULT_COLORMAP]
+
+
+def colormap_stops(spec: object, count: int = 256) -> list[str]:
+    """*count* hex colours evenly sampled from :func:`resolve_colormap`, low end first."""
+    from matplotlib.colors import to_hex
+
+    colormap = resolve_colormap(spec)
+    return [to_hex(colormap(i / (count - 1))) for i in range(count)]
 
 
 def representative_index(values: Any, *, now: datetime | None = None) -> int:
@@ -151,7 +171,7 @@ def render_png(
     arr: Any,
     path: str | Path,
     *,
-    colormap: str | None = None,
+    colormap: object = None,
     clim: tuple[float, float] | None = None,
     long_side: int | None = None,
     classes: list[tuple[int, str]] | None = None,

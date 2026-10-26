@@ -163,7 +163,18 @@ def test_catalog_excludes_unpublished_and_netcdf(client: TestClient, monkeypatch
     assert [link for link in payload["links"] if link["rel"] == "child"] == []
 
 
-def test_collection_uses_xstac_and_adds_expected_fields(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("colormap", "first", "last"),
+    [
+        # A matplotlib name chroma-js does not know: the viewer drew viridis for it while the
+        # thumbnail drew terrain, until the server resolved the colours for both.
+        ("terrain", "#333399", "#ffffff"),
+        (["#0a5", "#ffffff", "#aa6655"], "#00aa55", "#aa6655"),
+    ],
+)
+def test_collection_uses_xstac_and_adds_expected_fields(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, colormap: object, first: str, last: str
+) -> None:
     monkeypatch.setattr(
         ingestion_services,
         "list_artifacts",
@@ -177,6 +188,7 @@ def test_collection_uses_xstac_and_adds_expected_fields(client: TestClient, monk
             "units": "mm",
             "source": "CHIRPS v3",
             "extents": {"temporal": {"resolution": "P1D"}},
+            "display": {"colormap": colormap, "range": [0, 4500]},
         },
     )
     monkeypatch.setattr(
@@ -257,6 +269,12 @@ def test_collection_uses_xstac_and_adds_expected_fields(client: TestClient, monk
     assert "https://stac-extensions.github.io/projection/v2.0.0/schema.json" in payload["stac_extensions"]
     # Declared because cf: fields were emitted.
     assert "https://stac-extensions.github.io/cf/v1.0.0/schema.json" in payload["stac_extensions"]
+    render = payload["renders"]["default"]
+    assert render["rescale"] == [[0.0, 4500.0]]
+    assert list(render["colormap"]) == [str(i) for i in range(256)]
+    assert (render["colormap"]["0"], render["colormap"]["255"]) == (first, last)
+    # Only a name is passed on as a name; a list of colours has none to give.
+    assert render.get("colormap_name") == (colormap if isinstance(colormap, str) else None)
 
 
 def test_stac_collection_compatibility_route_builds_collection(
