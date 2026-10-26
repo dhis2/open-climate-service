@@ -382,9 +382,19 @@ def test_collection_sets_hourly_step_to_pt1h(client: TestClient, monkeypatch: py
     assert payload["cube:dimensions"]["t"]["step"] == "PT1H"
 
 
-def test_collection_uses_root_href_for_icechunk_store(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("statistics", "rescale"),
+    [(ArtifactStatistics(min=0.0, max=49.2), [[0.0, 49.2]]), (None, None)],
+    ids=["measured", "not-yet-measured"],
+)
+def test_collection_uses_root_href_for_icechunk_store(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    statistics: ArtifactStatistics | None,
+    rescale: list[list[float]] | None,
+) -> None:
     artifact = _artifact(artifact_id="a1", format=ArtifactFormat.ICECHUNK, path="/tmp/chirps3.icechunk").model_copy(
-        update={"statistics": ArtifactStatistics(min=0.0, max=49.2)}
+        update={"statistics": statistics}
     )
     monkeypatch.setattr(
         ingestion_services,
@@ -394,7 +404,12 @@ def test_collection_uses_root_href_for_icechunk_store(client: TestClient, monkey
     monkeypatch.setattr(
         stac_services.registry_datasets,
         "get_dataset",
-        lambda _: {"period_type": "daily", "source": "CHIRPS v3", "ingestion": {}},
+        lambda _: {
+            "period_type": "daily",
+            "source": "CHIRPS v3",
+            "ingestion": {},
+            "display": {"colormap": "blues", "nodata": -9999.0},
+        },
     )
     monkeypatch.setattr(
         stac_services,
@@ -416,9 +431,15 @@ def test_collection_uses_root_href_for_icechunk_store(client: TestClient, monkey
     assert payload["assets"]["zarr"]["href"].endswith("/zarr/chirps3_precipitation_daily")
     assert payload["assets"]["zarr"]["xarray:open_kwargs"] == {"consolidated": True}
     assert payload["assets"]["zarr"]["zarr:zarr_format"] == 3
-    # The template declares no display, so the map viewer is told the measured range.
-    assert payload["renders"]["default"]["rescale"] == [[0.0, 49.2]]
-    assert payload["renders"]["default"]["colormap_name"] == "viridis"
+    # The template declares no range, so the map viewer is told the measured one, and before
+    # it is measured still gets every hint that does not need it.
+    render = payload["renders"]["default"]
+    assert render.get("rescale") == rescale
+    assert (render["colormap_name"], render["nodata"], render["open_climate_service:variable"]) == (
+        "blues",
+        -9999.0,
+        "precip",
+    )
 
 
 def test_collection_returns_404_for_unknown_dataset(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -216,11 +216,8 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     collection_payload["stac_version"] = STAC_VERSION
     collection_payload["description"] = template.description
     collection_payload["title"] = template.title
-    renders = _build_renders(artifact, source_dataset)
-    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION}
-    if renders is not None:
-        collection_payload["renders"] = renders
-        extensions.add(RENDER_EXTENSION)
+    collection_payload["renders"] = _build_renders(artifact, source_dataset)
+    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION, RENDER_EXTENSION}
     existing_extensions = collection_payload.get("stac_extensions", [])
     if isinstance(existing_extensions, list):
         collection_payload["stac_extensions"] = sorted({*existing_extensions, *extensions})
@@ -1310,21 +1307,21 @@ def _open_published_store(artifact: ArtifactRecord) -> xr.Dataset:
     return open_zarr_dataset(_artifact_store_path(artifact))
 
 
-def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> dict[str, Any] | None:
+def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> dict[str, Any]:
     display = source_dataset.get("display")
     display = display if isinstance(display, dict) else {}
-    value_range = display_range(display, artifact.statistics)
-    if value_range is None:
-        return None
     colormap_name = display.get("colormap")
     render: dict[str, Any] = {
         "title": artifact.dataset_name,
         "assets": ["zarr"],
-        "rescale": [list(value_range)],
-        # The map viewer's own default, so the hint and an absent hint draw the same colours.
         "colormap_name": colormap_name if isinstance(colormap_name, str) else "viridis",
         "open_climate_service:variable": artifact.variable,
     }
+    # The one hint that needs data, so the only one left out without it: until a range is
+    # declared or measured, the colormap, nodata and variable still hold.
+    value_range = display_range(display, artifact.statistics)
+    if value_range is not None:
+        render["rescale"] = [list(value_range)]
     nodata = display.get("nodata")
     if nodata is not None:
         render["nodata"] = float(nodata)
