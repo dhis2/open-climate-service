@@ -22,6 +22,7 @@ from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
 from open_climate_service.scheduler.presets import form_values, schedule_description, suggested_frequency
 from open_climate_service.shared.classes import class_colors, classification_from_template
+from open_climate_service.shared.display import display_midpoint, display_range
 from open_climate_service.shared.time import datetime_to_period_string, has_calendar_periods
 
 from .schemas import Link, RootResponse
@@ -252,6 +253,19 @@ def _colormap_ramp(name: str | None) -> str:
     return f"linear-gradient(90deg, {stops})"
 
 
+def _range_label(display: dict[str, Any]) -> str:
+    """The declared range as `0 – 20`, or how the range is measured when none is declared.
+
+    The rule rather than today's values: those come from the dataset's statistics, which the
+    map viewer reads, and would go stale on a page describing the data source.
+    """
+    declared = display_range(display, None)
+    if declared is not None:
+        return f"{declared[0]:g} – {declared[1]:g}"
+    midpoint = display_midpoint(display)
+    return "Measured min – max" + (f", centred on {midpoint:g}" if midpoint is not None else "")
+
+
 def _coverage_label(start: object, end: object, period_type: object = None) -> str:
     """A coverage range in the dataset's own periods.
 
@@ -380,12 +394,7 @@ def _dataset_page_context(
         if isinstance(version, dict) and version.get("value")
         else (str(version) if version else "")
     )
-    display_range = display.get("range")
-    range_label = (
-        f"{display_range[0]} – {display_range[1]}"
-        if isinstance(display_range, list | tuple) and len(display_range) == 2
-        else ""
-    )
+    range_label = "" if vector else _range_label(display)
     classes = _class_legend(template)
 
     if template and vector:
@@ -737,7 +746,7 @@ def _data_source_page_context(
         (dataset for dataset in datasets if (dataset.source_dataset_id or dataset.dataset_id) == template["id"]),
         None,
     )
-    display_range = display.get("range")
+    range_label = _range_label(display)
 
     about: list[Fact] = [
         ("Identifier", str(template["id"]), None),
@@ -772,13 +781,7 @@ def _data_source_page_context(
         ),
         # Above the scale it describes, as on the dataset page: the range is what makes the
         # colours mean anything, so it reads before the name of the ramp rather than after.
-        (
-            "Display range",
-            f"{display_range[0]} – {display_range[1]}"
-            if isinstance(display_range, list | tuple) and len(display_range) == 2 and not classes
-            else "",
-            None,
-        ),
+        ("Display range", "" if classes else range_label, None),
         ("Colour scale", "" if classes else str(display.get("colormap") or ""), None),
     ]
 

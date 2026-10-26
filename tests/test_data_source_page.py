@@ -149,6 +149,8 @@ def test_an_ingested_source_links_to_its_dataset() -> None:
         "coverage": "2020-01 – 2026-07",
         "status": "published",
     }
+    # The template declares no range, so the page says how it is measured.
+    assert ("Display range", "Measured min – max", None) in context["status_facts"]
 
 
 def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:

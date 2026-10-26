@@ -64,9 +64,11 @@ from open_climate_service.shared.cancellation import (
 )
 from open_climate_service.shared.cf import is_temperature_like
 from open_climate_service.shared.compute import get_job_slots, max_concurrent_jobs
+from open_climate_service.shared.display import display_midpoint, display_range
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.netcdf import write_netcdf
 from open_climate_service.shared.persistence import execution_lease
+from open_climate_service.shared.statistics import measure_statistics
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
@@ -1481,6 +1483,14 @@ def publication_event_id(job_id: str, artifact_id: str, snapshot_id: str) -> str
     return f"{job_id}:publication:{artifact_id}:{snapshot_id}"
 
 
+def _measured_after_commit(store_path: Path, variable: str | None) -> dict[str, Any]:
+    """The record fields measured from the committed store, which a publish may have merged into."""
+    return {
+        "size_bytes": stored_bytes(store_path),
+        "statistics": measure_statistics(store_path, variable) if variable is not None else None,
+    }
+
+
 def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobRecord:
     """Register a committed managed dataset and record its outcome and update event together.
 
@@ -1506,7 +1516,7 @@ def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobReco
         update={"output_snapshot_id": snapshot_id}
     )
     record = planned.model_copy(
-        update={"size_bytes": stored_bytes(Path(publication.store_path)), "provenance": provenance}
+        update={**_measured_after_commit(Path(publication.store_path), planned.variable), "provenance": provenance}
     )
     stored = ingestion_services.register_artifact_record(
         record, publish=publication.publish_requested, replace_store=True
@@ -1827,7 +1837,7 @@ def _write_managed_zarr(
         if job_id is not None:
             complete_managed_publication(job_id, snapshot_id)
         else:
-            update: dict[str, Any] = {"size_bytes": stored_bytes(store_path)}
+            update = _measured_after_commit(store_path, variable)
             if record.provenance is not None:
                 update["provenance"] = record.provenance.model_copy(update={"output_snapshot_id": snapshot_id})
             record = record.model_copy(update=update)
@@ -2080,7 +2090,14 @@ def _derive_display_config(
     source_template: dict[str, Any] | None,
     output_kind: str | None,
 ) -> dict[str, Any]:
-    """Return display metadata for an auto-derived template."""
+    """Return display metadata for an auto-derived template.
+
+    No range unless the job declares one: the published dataset's measured statistics give it
+    one, and they follow every later publish into the store, where a range written here would
+    stay as the first result's. Nor is the source's range inherited, since a derived quantity
+    (a monthly total of daily rainfall) seldom spans its source's values; its colormap,
+    midpoint and nodata still describe how the values are read, so those are.
+    """
     explicit = _explicit_display_overrides(options)
     source_display = source_template.get("display") if isinstance(source_template, dict) else None
     display: dict[str, Any] = {}
@@ -2089,6 +2106,8 @@ def _derive_display_config(
         display["colormap"] = explicit["colormap"]
     if isinstance(explicit.get("range"), list) and len(explicit["range"]) == 2:
         display["range"] = [float(explicit["range"][0]), float(explicit["range"][1])]
+    if (midpoint := display_midpoint(explicit)) is not None:
+        display["midpoint"] = midpoint
     if explicit.get("nodata") is not None:
         display["nodata"] = float(explicit["nodata"])
 
@@ -2098,27 +2117,18 @@ def _derive_display_config(
         # while wet is blue for precipitation. `RdBu` runs low→red/high→blue; `rdbu_r` reverses it.
         variable_da = ds[variable] if variable in getattr(ds, "data_vars", {}) else None
         display.setdefault("colormap", "rdbu_r" if is_temperature_like(variable_da, ds) else "RdBu")
-        if "range" not in display:
-            data_min, data_max = _data_range(ds, variable)
-            bound = max(abs(data_min), abs(data_max))
-            if bound == 0:
-                bound = 1.0
-            display["range"] = [-bound, bound]
+        display.setdefault("midpoint", 0.0)
     else:
         if isinstance(source_display, dict):
             colormap = source_display.get("colormap")
-            value_range = source_display.get("range")
             nodata = source_display.get("nodata")
             if "colormap" not in display and isinstance(colormap, str):
                 display["colormap"] = colormap
-            if "range" not in display and isinstance(value_range, list) and len(value_range) == 2:
-                display["range"] = [float(value_range[0]), float(value_range[1])]
+            if "midpoint" not in display and (midpoint := display_midpoint(source_display)) is not None:
+                display["midpoint"] = midpoint
             if "nodata" not in display and nodata is not None:
                 display["nodata"] = float(nodata)
         display.setdefault("colormap", "viridis")
-        if "range" not in display:
-            data_min, data_max = _data_range(ds, variable)
-            display["range"] = _normalize_range(data_min, data_max)
 
     return display
 
@@ -2129,38 +2139,10 @@ def _explicit_display_overrides(options: dict[str, Any]) -> dict[str, Any]:
     nested = options.get("display")
     if isinstance(nested, dict):
         display.update(nested)
-    for key in ("colormap", "range", "nodata"):
+    for key in ("colormap", "range", "midpoint", "nodata"):
         if key in options:
             display[key] = options[key]
     return display
-
-
-def _data_range(ds: Any, variable: str) -> tuple[float, float]:
-    """Return finite min/max for one variable, falling back to (0, 1)."""
-    import numpy as np
-
-    array = ds[variable].astype("float64")
-    min_value = array.min(skipna=True)
-    max_value = array.max(skipna=True)
-    if hasattr(min_value, "compute"):
-        min_value = min_value.compute()
-    if hasattr(max_value, "compute"):
-        max_value = max_value.compute()
-    low = float(np.asarray(min_value.values))
-    high = float(np.asarray(max_value.values))
-    if not np.isfinite(low) or not np.isfinite(high):
-        return 0.0, 1.0
-    return low, high
-
-
-def _normalize_range(data_min: float, data_max: float) -> list[float]:
-    """Return a non-degenerate display range."""
-    if data_min == data_max:
-        if data_min == 0:
-            return [0.0, 1.0]
-        pad = abs(data_min) * 0.1 or 1.0
-        return [data_min - pad, data_max + pad]
-    return [data_min, data_max]
 
 
 def _derived_output_kind(dataset_id: str, variable: str) -> str | None:
@@ -2769,6 +2751,7 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
     for, so it shows the front of the cube they computed, where a catalogue thumbnail of a
     published store instead shows the step nearest today.
     """
+    from open_climate_service.ingestions.schemas import ArtifactStatistics
     from open_climate_service.shared.thumbnails import render_png
 
     var = list(ds.data_vars)[0]
@@ -2777,24 +2760,29 @@ def _write_png(ds: Any, results_dir: Any) -> str | None:
         arr = arr.isel({arr.dims[0]: 0})
 
     # Render settings from the published collection, via the dataset registry.
-    colormap: str | None = None
-    clim: tuple[float, float] | None = None
+    display: dict[str, Any] = {}
     try:
         from open_climate_service.data_registry.services import datasets as reg
 
         for _ds_meta in reg.list_datasets():
-            display = _ds_meta.get("display", {})
             ds_var = _ds_meta.get("variable", "")
             if ds_var == var or _ds_meta.get("id", "").endswith(var):
-                colormap = display.get("colormap", colormap)
-                rng = display.get("range")
-                if isinstance(rng, list) and len(rng) == 2:
-                    clim = (float(rng[0]), float(rng[1]))
+                display = _ds_meta.get("display") or {}
                 break
     except Exception:
         pass
+    # The result is not a stored artifact, so the slice itself stands in for its statistics.
+    sliced = ArtifactStatistics(min=float(arr.min()), max=float(arr.max()))
+    colormap = display.get("colormap")
 
-    return str(render_png(arr, results_dir / "result.png", colormap=colormap, clim=clim))
+    return str(
+        render_png(
+            arr,
+            results_dir / "result.png",
+            colormap=colormap if isinstance(colormap, str) else None,
+            clim=display_range(display, sliced),
+        )
+    )
 
 
 def _derive_job_title(process: dict[str, Any]) -> str | None:

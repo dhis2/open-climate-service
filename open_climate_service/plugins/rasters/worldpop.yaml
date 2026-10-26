@@ -66,4 +66,5 @@
       url: https://hub.worldpop.org/
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-50.0, 50.0]
