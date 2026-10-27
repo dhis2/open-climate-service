@@ -126,6 +126,25 @@ Mean daily precipitation for the calendar month, averaged from the Earth Data Hu
 
 ---
 
+## Humidity datasets
+
+### Daily dewpoint (from hourly)
+
+| Property | Value |
+| --- | --- |
+| **Dataset ID** | `era5land_dewpoint_daily` |
+| **Variable** | `d2m` |
+| **Units** | °C |
+| **Period** | Daily |
+| **Coverage** | Global, 1950–present |
+| **Resolution** | ~9 km |
+| **Source** | [CDS ERA5-Land analysis-ready data](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data) |
+| **Lag** | ~5 days |
+
+Daily mean 2 m dewpoint temperature, averaged from the 24 hourly values of the **UTC calendar day**. Dewpoint is the temperature at which water vapor will start condensing as dew.
+
+---
+
 ## Choosing the right dataset
 
 | Use case | Recommended dataset |
