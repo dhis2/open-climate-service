@@ -287,7 +287,7 @@ When the job finishes, the normal/anomaly dataset appears under `/datasets` and 
 
 `relative_humidity_from_daily_dewpoint` estimates daily relative humidity from a daily mean temperature dataset and a daily mean dewpoint dataset, using earthkit-meteo's `relative_humidity_from_dewpoint`, and publishes it as a new managed dataset in `%`.
 
-Relative humidity from daily means is an estimate. Saturation vapour pressure is exponential in temperature, so it runs slightly below the daily mean of hourly relative humidity, most where days are hot and nights cool. Against ERA5-Land's hourly-based `era5land_relative_humidity_daily`, on single days in Niamey, Nairobi and around Lake Victoria, it was within about 0.1 to 1.6 percentage points. Use the workflow where only daily inputs exist; where hourly inputs exist, prefer an hourly-based dataset.
+Relative humidity from daily means is an estimate. Saturation vapour pressure is exponential in temperature, so it runs below the daily mean of hourly relative humidity, most where days are hot and nights cool. Against ERA5-Land's hourly-based `era5land_relative_humidity_daily`, it was about 2 to 5 percentage points low on average over a month in places with a large diurnal temperature range, and up to 10 to 20 points low on single days, which matters for threshold-based uses. Use the workflow where only daily inputs exist; where hourly inputs exist, prefer an hourly-based dataset.
 
 ### Parameters
 

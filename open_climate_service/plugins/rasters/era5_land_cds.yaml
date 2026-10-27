@@ -240,9 +240,9 @@
   short_name: Relative humidity (estimated)
   description: >-
     Daily relative humidity 2 m above the ground at 9 km worldwide, estimated from the daily
-    mean temperature and daily mean dewpoint rather than from hourly values. It runs slightly
-    below the hourly-based era5land_relative_humidity_daily, most where days are hot and nights
-    cool. Days run in UTC.
+    mean temperature and daily mean dewpoint rather than from hourly values. It runs below the
+    hourly-based era5land_relative_humidity_daily, typically by 2 to 5 percentage points where
+    days are hot and nights cool, and by more on single days. Days run in UTC.
   standard_name: relative_humidity
   variable: rh
   period_type: daily
