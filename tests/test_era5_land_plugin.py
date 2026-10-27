@@ -5,7 +5,10 @@ import pytest
 import xarray as xr
 
 from open_climate_service.plugins.rasters import era5_land_cds, era5_land_edh
-from open_climate_service.plugins.rasters.era5_land_cds import ERA5LandCDSZarrDailyFromHourlyPlugin
+from open_climate_service.plugins.rasters.era5_land_cds import (
+    ERA5LandCDSZarrDailyRelHumPlugin,
+    ERA5LandCDSZarrDailyFromHourlyPlugin,
+)
 from open_climate_service.plugins.rasters.era5_land_edh import ERA5LandEDHMonthlyFromDailyPlugin
 
 _CDS_BBOX = [28.0, -3.0, 29.5, -1.5]
@@ -86,6 +89,40 @@ def test_cds_rejects_an_unknown_aggregation() -> None:
 def test_cds_rejects_an_unknown_unit_transform() -> None:
     with pytest.raises(ValueError, match="unit_transform"):
         ERA5LandCDSZarrDailyFromHourlyPlugin(variable="t2m", temporal_aggregation="mean", unit_transform="fahrenheit")
+
+
+def _cds_humidity_store(temperature: np.ndarray, dewpoint: np.ndarray) -> xr.Dataset:
+    """The ARCO ``sfc-2m-temperature`` group, which holds both 2 m temperature and dewpoint."""
+    return xr.merge([_cds_store("t2m", temperature), _cds_store("d2m", dewpoint)])
+
+
+def test_cds_daily_relative_humidity_averages_hourly_values_not_daily_means(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A constant 15 degC dewpoint under a diurnal swing of 15..35 degC: RH runs from 100 %
+    # at night to about 30 % in the afternoon.
+    hours = np.arange(48)
+    temperature = 298.15 + 10.0 * np.sin(2 * np.pi * (hours - 9) / 24)
+    dewpoint = np.full(48, 288.15)
+    store = _cds_humidity_store(temperature, dewpoint)
+    monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
+    mean_plugin = ERA5LandCDSZarrDailyRelHumPlugin(temporal_aggregation="mean")
+    max_plugin = ERA5LandCDSZarrDailyRelHumPlugin(temporal_aggregation="max")
+
+    day = mean_plugin.fetch_period("2020-01-02", _CDS_BBOX)
+    day_max = max_plugin.fetch_period("2020-01-02", _CDS_BBOX)
+
+    assert dict(day.sizes) == {"t": 1, "y": 2, "x": 2}
+    assert day.t.values[0] == np.datetime64("2020-01-02", "ns")
+    assert day.rh.attrs == {"units": "%"}
+    assert float(day_max.rh.max()) == pytest.approx(100.0, abs=0.01)
+    # RH of the daily means would be 53.8 %.
+    assert float(day.rh.mean()) == pytest.approx(59.41, abs=0.01)
+
+
+def test_cds_daily_relative_humidity_rejects_a_sum() -> None:
+    with pytest.raises(ValueError, match="temporal_aggregation"):
+        ERA5LandCDSZarrDailyRelHumPlugin(temporal_aggregation="sum")
 
 
 # --- EDH: daily to monthly ---------------------------------------------------------------

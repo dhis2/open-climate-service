@@ -12,6 +12,7 @@ import numpy as np
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
 from earthkit.transforms.temporal import daily_reduce
+from xclim.indices import relative_humidity
 
 from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import (
@@ -168,6 +169,62 @@ class ERA5LandCDSZarrDailyFromHourlyPlugin(ERA5LandCDSZarrHourlyPlugin):
     def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
         start = np.datetime64(period_id, "D").astype("datetime64[ns]")
         hourly = self._fetch_time_range(start, start + np.timedelta64(1, "D"), bbox)
+        daily = daily_reduce(
+            hourly,
+            how=self.temporal_aggregation,
+            time_shift={"hours": 0},
+            remove_partial_periods=False,
+        )
+        return cast(xr.Dataset, daily)
+
+
+class ERA5LandCDSZarrDailyRelHumPlugin(BaseDatasetPlugin):
+    """Daily relative humidity from hourly ERA5-Land 2 m temperature and dewpoint.
+
+    RH is computed for each hour before the daily reduction: saturation vapour pressure is
+    exponential in temperature, so RH from daily mean temperature and dewpoint underestimates
+    the daily mean of hourly RH, most where the diurnal temperature range is large.
+    """
+
+    max_concurrency = 1
+    commit_batch_size = 30
+
+    def __init__(
+        self,
+        *,
+        temporal_aggregation: str,
+        max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES,
+        **kwargs: Any,
+    ) -> None:
+        if temporal_aggregation not in {"mean", "min", "max"}:
+            raise ValueError(
+                f"temporal_aggregation must be one of 'mean', 'min', or 'max'; got {temporal_aggregation!r}"
+            )
+        self.temporal_aggregation = temporal_aggregation
+        # Both inputs stay in Kelvin; the two caches share the configured budget.
+        self._temperature = ERA5LandCDSZarrHourlyPlugin(variable="t2m", max_cache_bytes=max_cache_bytes // 2)
+        self._dewpoint = ERA5LandCDSZarrHourlyPlugin(variable="d2m", max_cache_bytes=max_cache_bytes // 2)
+
+    async def periods(self, start: str, end: str) -> list[str]:
+        cutoff = await asyncio.to_thread(self._temperature._fetch_cutoff)
+        return daily_period_ids(start=start, end=end, cutoff=cutoff)
+
+    def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
+        start = np.datetime64(period_id, "D").astype("datetime64[ns]")
+        end = start + np.timedelta64(1, "D")
+        temperature = self._temperature._fetch_time_range(start, end, bbox)["t2m"]
+        dewpoint = self._dewpoint._fetch_time_range(start, end, bbox)["d2m"]
+        # ERA5 defines its dewpoint over water. xclim's "ecmwf" method is the IFS saturation
+        # formula, and without an ice threshold it stays over water too.
+        hourly_rh = relative_humidity(
+            tas=temperature.assign_attrs(units="K"),
+            tdps=dewpoint.assign_attrs(units="K"),
+            method="ecmwf",
+            invalid_values="clip",
+        )
+        # Replace xclim's attrs, which include a pint-specific ``units_metadata``.
+        hourly_rh.attrs = {"units": "%"}
+        hourly = xr.Dataset({"rh": hourly_rh.rename("rh")})
         daily = daily_reduce(
             hourly,
             how=self.temporal_aggregation,
