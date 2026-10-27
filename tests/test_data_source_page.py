@@ -155,15 +155,23 @@ def test_an_ingested_source_links_to_its_dataset() -> None:
     ("display", "label"),
     [
         ({"range": [0, 20]}, "0 – 20"),
-        ({}, "p2 – p98 (measured)"),
-        ({"range": [0, "p98"], "midpoint": 0}, "0 – p98 (measured, centred on 0)"),
+        ({}, "p2 – p98"),
+        ({"range": [0, "p98"], "midpoint": 0}, "0 – p98 (centred on 0)"),
     ],
 )
 def test_the_display_range_is_shown_as_the_template_states_it(display: dict[str, Any], label: str) -> None:
     """The rule, not today's values, which come from the dataset and would go stale here."""
-    context = _source_context(_ingestable("chirps_monthly", display=display))
+    html = landing.render_data_source_page(_ingestable("chirps_monthly", display=display), "")
 
-    assert ("Display range", label, None) in context["status_facts"]
+    assert f"Display range {label}" in " ".join(_visible_text(html).split())
+    # A statistic says what it means on hover; a number needs no explaining.
+    assert ('<abbr title="98th percentile">p98</abbr>' in html) is ("p98" in label)
+
+
+def test_every_statistic_a_range_can_name_has_hover_text() -> None:
+    from open_climate_service.ingestions.schemas import ArtifactStatistics
+
+    assert set(landing.STATISTIC_TITLES) == set(ArtifactStatistics.model_fields)
 
 
 def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:

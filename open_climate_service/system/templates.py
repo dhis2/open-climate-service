@@ -253,18 +253,42 @@ def _colormap_ramp(name: str | None) -> str:
     return f"linear-gradient(90deg, {stops})"
 
 
+# What each statistic name means, shown on hover. One entry per field of
+# `ArtifactStatistics`; a test makes sure a name is covered both places.
+STATISTIC_TITLES = {
+    "min": "Minimum",
+    "max": "Maximum",
+    "mean": "Mean",
+    "p2": "2nd percentile",
+    "p5": "5th percentile",
+    "p25": "25th percentile",
+    "p50": "Median (50th percentile)",
+    "p75": "75th percentile",
+    "p95": "95th percentile",
+    "p98": "98th percentile",
+}
+
+
+def _range_end(end: Any) -> str:
+    """A number as written, or a statistic name with what it means on hover."""
+    if not isinstance(end, str):
+        return f"{end:g}"
+    return Markup('<abbr title="{}">{}</abbr>').format(STATISTIC_TITLES[end], end)
+
+
 def _range_label(display: dict[str, Any]) -> str:
-    """The range as its template states it: `0 – 20`, or `0 – p98 (measured)` with a statistic.
+    """The range as its template states it: `0 – 20`, `p2 – p98`, or `0 – p98 (centred on 0)`.
 
     The rule rather than today's values: those come from the dataset's statistics, which the
     map viewer reads, and would go stale on a page describing the data source.
     """
     spec = range_spec(display.get("range")) or DEFAULT_RANGE
-    label = " – ".join(end if isinstance(end, str) else f"{end:g}" for end in spec)
-    if not any(isinstance(end, str) for end in spec):
-        return label
+    label = Markup(" – ").join(_range_end(end) for end in spec)
+    # Only a range with a measured end is centred; two numbers are used as written.
     midpoint = display_midpoint(display)
-    return f"{label} (measured" + (f", centred on {midpoint:g})" if midpoint is not None else ")")
+    if midpoint is None or not any(isinstance(end, str) for end in spec):
+        return label
+    return label + Markup(" (centred on {})").format(f"{midpoint:g}")
 
 
 def _coverage_label(start: object, end: object, period_type: object = None) -> str:
