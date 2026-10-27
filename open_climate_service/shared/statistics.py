@@ -58,13 +58,13 @@ def measure_statistics(store_path: str | Path, variable: str) -> ArtifactStatist
 
 def statistics_of(values: Any) -> ArtifactStatistics | None:
     """The statistics of a dask or numpy array's finite values, or None if it has none."""
-    import dask
     import dask.array as da
+    from dask.base import compute
 
     array = da.asarray(values)
     flat = array.ravel()
     try:
-        sampled, low, high, mean = dask.compute(
+        sampled, low, high, mean = compute(
             da.percentile(flat[~da.isnan(flat)], _PERCENTILE_SAMPLE_AT),
             da.nanmin(array),
             da.nanmax(array),

@@ -70,7 +70,7 @@ def test_percentiles_stay_close_across_chunks_that_differ() -> None:
     values = np.concatenate([rng.uniform(0.0, 5.0, 900_000), rng.lognormal(3.0, 1.0, 100_000)])
     values[::50] = np.nan
 
-    measured = statistics_of(da.from_array(values, chunks=100_000))
+    measured = statistics_of(da.concatenate([da.from_array(chunk) for chunk in np.split(values, 10)]))
 
     assert measured is not None
     for name in ("p2", "p5", "p25", "p50", "p75", "p95", "p98"):

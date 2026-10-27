@@ -66,8 +66,7 @@ def display_midpoint(display: Mapping[str, Any] | None) -> float | None:
 def display_range(
     display: Mapping[str, Any] | None, statistics: ArtifactStatistics | None
 ) -> tuple[float, float] | None:
-    """The `(low, high)` range to colour over, or None when it needs statistics that haven't
-    been written yet.
+    """The `(low, high)` range to colour over, or None when its statistics aren't written yet.
 
     A constant field is widened by half a unit either side, so a colour scale never spans zero
     width; it renders as one flat colour, which is what a constant field looks like.
