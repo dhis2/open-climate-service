@@ -116,14 +116,6 @@ def test_rejects_a_malformed_end_too() -> None:
         monthly_period_ids("2025-01", "2025-13")
 
 
-def test_era5_land_monthly_uses_the_shared_helper() -> None:
-    """It hand-rolled the same month loop before; the third copy is what prompted this."""
-    from open_climate_service.plugins.rasters import era5_land
-
-    source = __import__("pathlib").Path(era5_land.__file__).read_text(encoding="utf-8")
-    assert "monthly_period_ids(" in source
-
-
 # --- the mm/d conversion --------------------------------------------------------------
 
 

@@ -1,0 +1,158 @@
+- id: era5land_temperature_daily
+  name: 2m temperature (ERA5-Land)
+  short_name: 2m temperature
+  description: >-
+    Daily mean air temperature 2 m above the ground at 9 km worldwide, aggregated from the hourly
+    CDS geo-chunked ARCO archive. Days run in UTC.
+  standard_name: air_temperature
+  variable: t2m
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01-02"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    params:
+      variable: t2m
+      temporal_aggregation: mean
+      unit_transform: kelvin_to_celsius
+  units: degC
+  cell_methods: "time: mean"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: rdbu_r
+    range: [-30.0, 30.0]
+
+- id: era5land_temperature_daily_min
+  name: 2m temperature daily minimum (ERA5-Land)
+  short_name: Minimum 2m temperature
+  description: >-
+    Daily minimum air temperature 2 m above the ground at 9 km worldwide, aggregated from the
+    hourly CDS geo-chunked ARCO archive. Days run in UTC.
+  standard_name: air_temperature
+  variable: t2m
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01-02"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    params:
+      variable: t2m
+      temporal_aggregation: min
+      unit_transform: kelvin_to_celsius
+  units: degC
+  cell_methods: "time: minimum"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: rdbu_r
+    range: [-30.0, 30.0]
+
+- id: era5land_temperature_daily_max
+  name: 2m temperature daily maximum (ERA5-Land)
+  short_name: Maximum 2m temperature
+  description: >-
+    Daily maximum air temperature 2 m above the ground at 9 km worldwide, aggregated from the
+    hourly CDS geo-chunked ARCO archive. Days run in UTC.
+  standard_name: air_temperature
+  variable: t2m
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01-02"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    params:
+      variable: t2m
+      temporal_aggregation: max
+      unit_transform: kelvin_to_celsius
+  units: degC
+  cell_methods: "time: maximum"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: rdbu_r
+    range: [-30.0, 30.0]
+
+- id: era5land_precipitation_daily
+  name: Precipitation rate (ERA5-Land)
+  short_name: Precipitation
+  description: >-
+    Daily total precipitation at 9 km worldwide, represented as a daily rate, aggregated from the
+    hourly, de-accumulated CDS geo-chunked ARCO archive. Days run in UTC.
+  standard_name: lwe_precipitation_rate
+  variable: tp
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01-02"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    params:
+      variable: tp
+      temporal_aggregation: sum
+      unit_transform: metres_to_mm
+  # The hourly ARCO precipitation variable is already de-accumulated; the daily sum is
+  # represented as a mean daily rate because each stored period is exactly one day.
+  units: mm/d
+  cell_methods: "time: mean"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: blues
+    range: [0.0, 20.0]
+    nodata: 0.0
