@@ -493,6 +493,9 @@
       const legendScale = document.getElementById("legend-scale");
       const legendClasses = document.getElementById("legend-classes");
       const statusEl = document.getElementById("status");
+      // A measured range arrives as 36.84123456789 or 49.20000076293945; round down the digits
+      // and leave a declared 0 or 20 as written.
+      const formatLegendValue = new Intl.NumberFormat(undefined, { maximumSignificantDigits: 4 }).format;
 
       function updateLegend(cm, clim, units) {
         const stops = Array.from(
@@ -500,8 +503,8 @@
           (_, i) => cm[Math.round((i * (cm.length - 1)) / 31)]
         );
         legendBar.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
-        legendMin.textContent = clim[0];
-        legendMax.textContent = clim[1];
+        legendMin.textContent = formatLegendValue(clim[0]);
+        legendMax.textContent = formatLegendValue(clim[1]);
         legendUnits.textContent = units ? `(${units})` : "";
         legendScale.classList.remove("hidden");
         legendClasses.classList.add("hidden");
