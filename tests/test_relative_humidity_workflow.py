@@ -36,9 +36,7 @@ def _cube(celsius: float) -> xr.DataArray:
 
 def _overlay(cubes: dict[str, xr.DataArray]) -> Any:
     reg = _build_process_registry()
-    reg["load_collection"] = Process(
-        spec={}, implementation=lambda id=None, temporal_extent=None, **k: cubes[str(id)]
-    )
+    reg["load_collection"] = Process(spec={}, implementation=lambda id=None, temporal_extent=None, **k: cubes[str(id)])
     return _augment_with_workflows(reg)
 
 
