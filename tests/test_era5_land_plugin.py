@@ -6,8 +6,8 @@ import xarray as xr
 
 from open_climate_service.plugins.rasters import era5_land_cds, era5_land_edh
 from open_climate_service.plugins.rasters.era5_land_cds import (
-    ERA5LandCDSZarrDailyRelHumPlugin,
     ERA5LandCDSZarrDailyFromHourlyPlugin,
+    ERA5LandCDSZarrDailyRelHumPlugin,
 )
 from open_climate_service.plugins.rasters.era5_land_edh import ERA5LandEDHMonthlyFromDailyPlugin
 
