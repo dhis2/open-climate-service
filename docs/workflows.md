@@ -283,6 +283,46 @@ The observed and normal cubes must be on the **same grid** — same cell count, 
 
 When the job finishes, the normal/anomaly dataset appears under `/datasets` and on the map viewer.
 
+## Relative humidity from daily dewpoint
+
+`relative_humidity_from_daily_dewpoint` estimates daily relative humidity from a daily mean temperature dataset and a daily mean dewpoint dataset, using earthkit-meteo's `relative_humidity_from_dewpoint`, and publishes it as a new managed dataset in `%`.
+
+Relative humidity from daily means is an estimate. Saturation vapour pressure is exponential in temperature, so it runs below the daily mean of hourly relative humidity, most where days are hot and nights cool. Against ERA5-Land's hourly-based `era5land_relative_humidity_daily`, it was about 2 to 5 percentage points low on average over a month in places with a large diurnal temperature range, and up to 10 to 20 points low on single days, which matters for threshold-based uses. Use the workflow where only daily inputs exist; where hourly inputs exist, prefer an hourly-based dataset.
+
+### Parameters
+
+| Name | Description |
+|---|---|
+| `temperature_dataset_id` | Published daily mean temperature, e.g. `era5land_temperature_daily` |
+| `dewpoint_dataset_id` | Published daily mean dewpoint, e.g. `era5land_dewpoint_daily` |
+| `output_dataset_id` | Id of the relative humidity dataset to publish, e.g. `era5land_relative_humidity_daily_estimated` (auto-registered if missing) |
+| `variable` | Variable/band name of the published dataset, e.g. `rh` |
+| `temporal_extent` | Range `[start, end]` |
+
+Both inputs must be on the same grid and time axis, and their data sources must declare temperature units: they are converted to Kelvin from the declared units, and an input without units is refused. For ERA5-Land, Open Climate Service ships the static template `era5land_relative_humidity_daily_estimated`; any other `output_dataset_id` is auto-registered, taking `%` from the result and the rest of its metadata from the dewpoint dataset. Re-run the workflow over the new range after the inputs sync to keep it current.
+
+### Example
+
+```json
+{
+  "process": {
+    "process_graph": {
+      "rh": {
+        "process_id": "relative_humidity_from_daily_dewpoint",
+        "arguments": {
+          "temperature_dataset_id": "era5land_temperature_daily",
+          "dewpoint_dataset_id": "era5land_dewpoint_daily",
+          "output_dataset_id": "era5land_relative_humidity_daily_estimated",
+          "variable": "rh",
+          "temporal_extent": ["2024-01-01", "2024-12-31"]
+        },
+        "result": true
+      }
+    }
+  }
+}
+```
+
 ---
 
 ## Aggregating dekads to months or weeks

@@ -115,6 +115,45 @@
     colormap: rdbu_r
     range: [-30.0, 30.0]
 
+- id: era5land_dewpoint_daily
+  name: 2m dewpoint temperature (ERA5-Land)
+  short_name: 2m dewpoint
+  description: >-
+    Daily mean dewpoint temperature 2 m above the ground at 9 km worldwide, aggregated from the
+    hourly CDS geo-chunked ARCO archive. Days run in UTC.
+  standard_name: dew_point_temperature
+  variable: d2m
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01-02"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    params:
+      variable: d2m
+      temporal_aggregation: mean
+      unit_transform: kelvin_to_celsius
+  units: degC
+  cell_methods: "time: mean"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: rdbu_r
+    range: [-30.0, 30.0]
+
 - id: era5land_precipitation_daily
   name: Precipitation rate (ERA5-Land)
   short_name: Precipitation
@@ -156,3 +195,69 @@
     colormap: blues
     range: [0.0, 20.0]
     nodata: 0.0
+
+- id: era5land_relative_humidity_daily
+  name: 2m relative humidity (ERA5-Land)
+  short_name: Relative humidity
+  description: >-
+    Daily mean relative humidity 2 m above the ground at 9 km worldwide. Computed for each hour
+    from the hourly 2 m temperature and dewpoint in the CDS geo-chunked ARCO archive, then
+    averaged over the day, which avoids the dry bias of computing it from daily means. Days run
+    in UTC.
+  standard_name: relative_humidity
+  variable: rh
+  period_type: daily
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -90, 180, 90]
+    temporal:
+      begin: "1950-01-02"
+      resolution: P1D
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyRelHumPlugin
+    params:
+      temporal_aggregation: mean
+  units: "%"
+  cell_methods: "time: mean"
+  resolution: 9 km x 9 km
+  source: ERA5-Land Reanalysis
+  source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: Purples
+    range: [0.0, 100.0]
+
+- id: era5land_relative_humidity_daily_estimated
+  name: 2m relative humidity, estimated from daily means (ERA5-Land)
+  short_name: Relative humidity (estimated)
+  description: >-
+    Daily relative humidity 2 m above the ground at 9 km worldwide, estimated from the daily
+    mean temperature and daily mean dewpoint rather than from hourly values. It runs below the
+    hourly-based era5land_relative_humidity_daily, typically by 2 to 5 percentage points where
+    days are hot and nights cool, and by more on single days. Days run in UTC.
+  standard_name: relative_humidity
+  variable: rh
+  period_type: daily
+  sync:
+    kind: static
+  units: "%"
+  resolution: 9 km x 9 km
+  source: Derived (relative_humidity_from_daily_dewpoint workflow)
+  produced_by: relative_humidity_from_daily_dewpoint
+  license:
+    name: Licence to Use Copernicus Products
+    url: https://apps.ecmwf.int/datasets/licences/copernicus/
+  providers:
+    - name: Copernicus Climate Change Service (C3S)
+      url: https://climate.copernicus.eu/
+  display:
+    colormap: Purples
+    range: [0.0, 100.0]
