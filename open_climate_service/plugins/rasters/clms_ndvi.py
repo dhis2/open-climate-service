@@ -14,7 +14,7 @@ Raw values 0-250 are NDVI, scaled with the file's own scale and offset (``0.004 
 from __future__ import annotations
 
 import asyncio
-import time
+from threading import Lock
 from typing import Any
 
 import httpx
@@ -25,9 +25,8 @@ from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
 _STAC_SEARCH = "https://stac.dataspace.copernicus.eu/v1/search"
 _COLLECTION = "clms_ndvi_global_300m_10daily_v3_cog"
-_SEARCH_RETRIES = 5
 _MAX_VALID = 250
-_S3_ENV = {
+_S3_ENV: dict[str, Any] = {
     "AWS_S3_ENDPOINT": "eodata.dataspace.copernicus.eu",
     "AWS_PROFILE": "cdse",
     "AWS_VIRTUAL_HOSTING": "FALSE",
@@ -40,18 +39,22 @@ _NO_KEYS = (
 )
 
 
-def _search(**params: Any) -> list[dict[str, Any]]:
-    # The catalogue answers a burst of more than about four searches with a 429, which
-    # parallel period fetches reach; it says how long to wait.
-    query = {"collections": _COLLECTION, **params}
-    response = httpx.get(_STAC_SEARCH, params=query, timeout=60)
-    for _ in range(_SEARCH_RETRIES):
-        if response.status_code != 429:
+def _search_stac_items(*, all_pages: bool = True, **params: Any) -> list[dict[str, Any]]:
+    """Return the collection's STAC items matching ``params``, from every page unless ``all_pages`` is false."""
+    items: list[dict[str, Any]] = []
+    url: str | None = _STAC_SEARCH
+    query: dict[str, Any] | None = {"collections": _COLLECTION, **params}
+    while url:
+        response = httpx.get(url, params=query, timeout=60)
+        response.raise_for_status()
+        page = response.json()
+        items.extend(page["features"])
+        if not all_pages:
             break
-        time.sleep(float(response.headers.get("Retry-After", 2)))
-        response = httpx.get(_STAC_SEARCH, params=query, timeout=60)
-    response.raise_for_status()
-    return response.json()["features"]
+        # The next link carries the query itself.
+        url = next((link["href"] for link in page.get("links", []) if link["rel"] == "next"), None)
+        query = None
+    return items
 
 
 class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
@@ -60,9 +63,15 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
     max_concurrency = 4
     commit_batch_size = 36
 
+    def __init__(self, **params: Any) -> None:
+        super().__init__(**params)
+        self._stac_items_lock = Lock()
+        self._stac_items_bbox: tuple[float, ...] | None = None
+        self._stac_items: list[dict[str, Any]] = []
+
     async def periods(self, start: str, end: str) -> list[str]:
         """Return the dekads in ``[start, end]``, clamped to the newest published one."""
-        latest = await asyncio.to_thread(_search, sortby="-datetime", limit=1)
+        latest = await asyncio.to_thread(_search_stac_items, all_pages=False, sortby="-datetime", limit=1)
         if not latest:
             return []
         return dekad_period_ids(start, end, cutoff=latest[0]["properties"]["start_datetime"][:10])
@@ -73,10 +82,15 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
         import rioxarray
         from rasterio.errors import RasterioIOError
 
-        items = _search(datetime=f"{period_id}T00:00:00Z/{period_id}T23:59:59Z", limit=1)
+        items = [item for item in self._fetch_stac_items(bbox) if item["properties"]["start_datetime"][:10] == period_id]
         if not items:
-            raise RuntimeError(f"No CLMS NDVI composite found for the dekad starting {period_id}")
-        path = "/vsis3/" + items[0]["assets"]["ndvi"]["href"].removeprefix("s3://")
+            raise RuntimeError(f"No CLMS NDVI composite published for the dekad starting {period_id}")
+        if len(items) > 1:
+            raise RuntimeError(
+                f"{len(items)} CLMS NDVI items cover the extent for the dekad starting {period_id}; "
+                "this plugin reads one global raster per dekad and does not mosaic tiles"
+            )
+        path = items[0]["assets"]["ndvi"]["href"]
 
         # The read is lazy until load, so the whole of it has to happen inside the S3 environment.
         try:
@@ -98,3 +112,23 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
         ndvi = ndvi.astype("float32").reset_coords(drop=True)
         ndvi.attrs = {"units": "1", "long_name": "NDVI"}
         return ndvi.to_dataset(name="ndvi").rio.write_crs(raw.rio.crs)
+
+    def _fetch_stac_items(self, bbox: list[float]) -> list[dict[str, Any]]:
+        """Return every STAC item intersecting ``bbox``, from one search cached for the plugin's lifetime.
+
+        Trimmed to the fields read here: about 460 items and 430 kB for the whole collection,
+        against 5 MB for full items. A search per dekad would instead have
+        parallel fetches reach the catalogue's limit of four concurrent connections. Parallel
+        fetches arrive here together on the first period, and one of them searches.
+        """
+        with self._stac_items_lock:
+            # fetch and cache the stac items only if the bbox is new or has changed
+            if self._stac_items_bbox != tuple(bbox):
+                self._stac_items = _search_stac_items(
+                    bbox=",".join(map(str, bbox)),
+                    limit=1000,
+                    fields="id,properties.start_datetime,assets.ndvi.href",
+                )
+                self._stac_items_bbox = tuple(bbox)
+            # return the cached stac items for the current bbox
+            return self._stac_items
