@@ -25,7 +25,7 @@ from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
 _STAC_SEARCH = "https://stac.dataspace.copernicus.eu/v1/search"
 _COLLECTION = "clms_ndvi_global_300m_10daily_v3_cog"
-_MAX_VALID = 250
+_NO_DATA = range(251, 256)
 _S3_ENV: dict[str, Any] = {
     "AWS_S3_ENDPOINT": "eodata.dataspace.copernicus.eu",
     "AWS_PROFILE": "cdse",
@@ -33,10 +33,6 @@ _S3_ENV: dict[str, Any] = {
     "AWS_HTTPS": "YES",
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
 }
-_NO_KEYS = (
-    "Create free CDSE S3 keys at https://eodata-s3keysmanager.dataspace.copernicus.eu and add them "
-    "to a [cdse] profile in ~/.aws/credentials."
-)
 
 
 def _search_stac_items(**params: Any) -> list[dict[str, Any]]:
@@ -98,11 +94,15 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
         except RasterioIOError as exc:
             message = str(exc)
             if any(hint in message for hint in ("403", "AccessDenied", "InvalidAccessKeyId", "AWS_SECRET_ACCESS_KEY")):
-                raise PermissionError(f"CDSE S3 refused {path}. {_NO_KEYS}") from exc
+                raise PermissionError(
+                    f"CDSE S3 refused {path}. Create free CDSE S3 keys at "
+                    "https://eodata-s3keysmanager.dataspace.copernicus.eu and add them to a [cdse] profile "
+                    "in ~/.aws/credentials."
+                ) from exc
             raise
 
         raw = ds["ndvi"]
-        ndvi = raw.where(raw <= _MAX_VALID) * raw.attrs["scale_factor"] + raw.attrs["add_offset"]
+        ndvi = raw.where(~raw.isin(_NO_DATA)) * raw.attrs["scale_factor"] + raw.attrs["add_offset"]
         # The file's attributes (fill value, scale, valid range) describe the raw bytes, and its
         # grid mapping coordinate stops carrying the CRS once the arithmetic drops the encoding.
         ndvi = ndvi.astype("float32").reset_coords(drop=True)
