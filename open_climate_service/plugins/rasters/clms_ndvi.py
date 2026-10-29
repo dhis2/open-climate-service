@@ -117,12 +117,11 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
         return response.json()["features"][0]["properties"]["start_datetime"][:10]
 
     def _fetch_stac_items(self, bbox: list[float]) -> list[dict[str, Any]]:
-        """Return every STAC item intersecting ``bbox``, from one search cached for the plugin's lifetime.
+        """Return every STAC item intersecting ``bbox``, searched once and kept while the bbox is the same.
 
-        Trimmed to the fields read here: about 460 items and 430 kB for the whole collection,
-        against 5 MB for full items. A search per dekad would instead have
-        parallel fetches reach the catalogue's limit of four concurrent connections. Parallel
-        fetches arrive here together on the first period, and one of them searches.
+        Items are trimmed to the fields read here, which takes the whole collection from 5 MB to
+        about 430 kB. Parallel fetches arrive together on the first period; the lock lets one of
+        them search.
         """
         with self._stac_items_lock:
             # fetch and cache the stac items only if the bbox is new or has changed
