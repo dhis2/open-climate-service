@@ -54,7 +54,8 @@ def _search_stac_items(**params: Any) -> list[dict[str, Any]]:
 class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
     """Streaming plugin for dekadal NDVI from the CLMS global 300 m V3 product."""
 
-    max_concurrency = 4
+    # CDSE S3 reads were no faster with more than 2 at once, and free accounts get 4 connections.
+    max_concurrency = 2
     commit_batch_size = 36
 
     def __init__(self, **params: Any) -> None:
