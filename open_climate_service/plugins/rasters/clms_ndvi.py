@@ -39,8 +39,8 @@ _NO_KEYS = (
 )
 
 
-def _search_stac_items(*, all_pages: bool = True, **params: Any) -> list[dict[str, Any]]:
-    """Return the collection's STAC items matching ``params``, from every page unless ``all_pages`` is false."""
+def _search_stac_items(**params: Any) -> list[dict[str, Any]]:
+    """Return the collection's STAC items matching ``params``, from every page."""
     items: list[dict[str, Any]] = []
     url: str | None = _STAC_SEARCH
     query: dict[str, Any] | None = {"collections": _COLLECTION, **params}
@@ -49,8 +49,6 @@ def _search_stac_items(*, all_pages: bool = True, **params: Any) -> list[dict[st
         response.raise_for_status()
         page = response.json()
         items.extend(page["features"])
-        if not all_pages:
-            break
         # The next link carries the query itself.
         url = next((link["href"] for link in page.get("links", []) if link["rel"] == "next"), None)
         query = None
@@ -71,10 +69,8 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
 
     async def periods(self, start: str, end: str) -> list[str]:
         """Return the dekads in ``[start, end]``, clamped to the newest published one."""
-        latest = await asyncio.to_thread(_search_stac_items, all_pages=False, sortby="-datetime", limit=1)
-        if not latest:
-            return []
-        return dekad_period_ids(start, end, cutoff=latest[0]["properties"]["start_datetime"][:10])
+        cutoff = await asyncio.to_thread(self._fetch_cutoff)
+        return dekad_period_ids(start, end, cutoff=cutoff)
 
     def fetch_period(self, period_id: str, bbox: list[float], **_: Any) -> xr.Dataset:
         """Read one dekad inside ``bbox`` and return it as NDVI."""
@@ -112,6 +108,13 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
         ndvi = ndvi.astype("float32").reset_coords(drop=True)
         ndvi.attrs = {"units": "1", "long_name": "NDVI"}
         return ndvi.to_dataset(name="ndvi").rio.write_crs(raw.rio.crs)
+
+    def _fetch_cutoff(self) -> str:
+        """Return the first day of the newest published dekad."""
+        query = {"collections": _COLLECTION, "sortby": "-datetime", "limit": 1}
+        response = httpx.get(_STAC_SEARCH, params=query, timeout=60)
+        response.raise_for_status()
+        return response.json()["features"][0]["properties"]["start_datetime"][:10]
 
     def _fetch_stac_items(self, bbox: list[float]) -> list[dict[str, Any]]:
         """Return every STAC item intersecting ``bbox``, from one search cached for the plugin's lifetime.
