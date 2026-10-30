@@ -32,6 +32,8 @@ _S3_ENV: dict[str, Any] = {
     "AWS_VIRTUAL_HOSTING": "FALSE",
     "AWS_HTTPS": "YES",
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+    # A stalled S3 read fails instead of holding up the ingestion; GDAL waits indefinitely by default.
+    "GDAL_HTTP_TIMEOUT": 30,
 }
 
 
