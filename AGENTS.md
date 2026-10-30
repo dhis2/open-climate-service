@@ -26,6 +26,7 @@ open_climate_service/
   publications/     # STAC publication metadata
   extents/          # spatial extent config
   shared/           # dhis2 adapter, time utils
+  streaming/        # BaseDatasetPlugin, ingest orchestrator, normalize_period
   main.py           # FastAPI app, CORS middleware, route registration
 open_climate_service/plugins/rasters/   # built-in raster dataset templates (chirps3.yaml, worldpop.yaml, …)
 open_climate_service/plugins/vectors/   # built-in vector dataset templates and providers
@@ -51,13 +52,16 @@ Before handing work back, fix and format only the files you changed (`uv run ruf
 
 - **Test through the entry point.** Drive the route, `fetch_period`, or the publish path, not the helper underneath. Bugs found in review usually sit in a caller that bypassed a correct, well-tested helper.
 - **Count the places that enforce a rule.** If the same rule is checked in more than one place, decide it once and call that.
-- **Run the real path once.** Ingest a period or call the route on a local instance and read the output. Implausible values and leaked metadata show up there, not in unit tests.
-- **Size defaults for a laptop.** OCS normally runs on one. Concurrency, thread pools and memory-heavy work default low; servers raise them through settings.
+- **Run the real path once.** Ingest a period or call the route on a local instance and read the output. Implausible values and leaked metadata show up there, not in unit tests. Point `CLIMATE_SERVICE_CONFIG` at a copy of the config with its own `data_dir`, so a developer's data is left alone.
+- **Size defaults for a laptop.** OCS normally runs on one. Concurrency, thread pools and memory-heavy work default low; servers raise them through settings. Before raising concurrency, run a short test: if 4 concurrent fetches are no faster than 2, use 2.
+- **Start from the sibling plugins.** Before writing or porting a dataset plugin, read the plugins in `plugins/rasters/` or `plugins/vectors/` closest to it and match how they cache, find their cutoff, name helpers and set defaults. Port external or AI-written code onto those patterns rather than keeping its own. Add a feature no other plugin has (clamping the start of a range, say) only if this data source truly needs it; if it would help every plugin, suggest it as a change across all of them instead of implementing it in one.
 - **Build the simplest version first.** Add server-side machinery for speed or size only when the plain approach is too slow where OCS runs, and name the optimisation as a follow-up instead.
+- **Remove the cause, not the symptom.** When a design hits a limit (a 429, a timeout, too many requests), change the design so it stops reaching it before adding retries, caches, hooks or framework changes around it. Retrying past a provider's limit by design risks the account.
+- **Be frugal with external services.** Do a thing once rather than many times: one search for every item in the extent and time range, kept on the plugin instance and looked up per period, not a search per period (see `clms_ndvi.py`). This is not premature optimisation; it keeps a provider's limits and goodwill. Balance speed against memory rather than maximising either. The same goes for your own tests and benchmarks against a provider: keep them small, a few periods rather than years.
 - **Act on review findings that can happen.** Before adding code for a Copilot or reviewer finding, check that the stores and plugins OCS has can produce the case. Answer a hypothetical one in the thread instead.
 - **Extend a test before adding one.** A new case is often one more assertion, or one more variable, in the test beside it. A second test with copied setup doubles what a reader has to check.
-- **Explain once.** A decision is explained in the docs or in a docstring, not in both and again in a comment. A comment says why, never what the next line does.
-- **Read the diff before pushing.** When the tests and comments are several times longer than the code change, look for a test that could be merged and an explanation given twice.
+- **Explain at the level of the reader.** The reason for a decision sits with the code that makes it, as a short code comment above each block to say what it does, for a reader skimming. Raise it to the docstring when a developer calling the code needs it. Raise it to the docs when a user needs it. Each level says what its reader needs, in less detail than the one below, rather than copying it. A decision spread across many files is explained in the docs, with code comments pointing to the relevant docs files if necessary.
+- **Read the diff before pushing.** When the tests and comments are several times longer than the code change, look for a test that could be merged and an explanation copied from one level to another.
 - **No backward compatibility yet.** Renames, schema changes and forced re-downloads on existing instances are fine; say so in one line of the PR.
 - **Suppress narrowly.** A `# type: ignore`, `# pyright: ignore` or `# noqa` names the specific code it silences. Lint rejects a blanket `# type: ignore` or `# noqa`; a blanket `# pyright: ignore` is not caught, so review for it. Fix the type rather than suppress it where you can.
 - **Wording.** "Data source" in the API and web interface; "dataset template" for the YAML files that describe one.
@@ -70,6 +74,7 @@ Silent failures found the hard way. Each passed its tests at first.
 - **`TestClient(root_path=...)` does not prefix the path** the way uvicorn does, so a test of prefix handling passes with the fix removed. Use the `mounted_client_factory` fixture in `tests/conftest.py`.
 - **topozarr above 0.1.8 shards pyramids along time by default.** On an appending store every daily sync then rewrites the partial shard, about 25 times more data written. Set the shard size explicitly before upgrading.
 - **Tests that assert on a submitted request** (a process graph, a job body) do not show that it runs. Execute it once.
+- **A scaled raster keeps the raw file's attributes.** After masking and scaling a rioxarray read, the result still carries the file's `scale_factor`, `add_offset`, `_FillValue` and `valid_range`, which now describe bytes it no longer holds; a reader that applies them scales the values twice. The arithmetic also drops the encoding that pointed rioxarray at the grid mapping coordinate, so the CRS is lost. Replace the attributes and write the CRS again (see `clms_ndvi.py`).
 
 For adding a data source, follow the checklist in [docs/adding_custom_datasets.md](docs/adding_custom_datasets.md#contributing-a-data-source).
 
@@ -88,6 +93,8 @@ ingestion:
 ## Planned work
 
 Tracked in Jira, project [CLIM](https://dhis2.atlassian.net/jira/software/c/projects/CLIM/issues), component "Climate Service", grouped under one epic per area (data ingestion, processing and workflows, openEO, catalogue and metadata, GeoZarr and Icechunk storage, vector data, DHIS2 integration, and so on). GitHub issues are not used.
+
+Before starting new code work or submitting new Jira tasks (e.g. a system change, a new data source, a fix), search CLIM for issues that cover it, open and closed. Confirm with the developer which issue the work belongs to, and name its key in the branch, commits and PR (`fix/clim-1490-shared-schedule-results`, `... (CLIM-1490)`). If more than one issue covers the same work, or a related one is in progress or already done, tell the developer before starting rather than filing another. Without access to Jira, ask the developer for the issue key.
 
 When writing a Jira epic or issue, follow the [write-issue guide](https://github.com/dhis2-chap/claude-plugins/blob/main/plugins/write-issue/skills/write-issue/SKILL.md). Filing details for this repo:
 
