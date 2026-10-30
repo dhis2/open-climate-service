@@ -164,6 +164,41 @@ machine data.earthdatahub.destine.eu
 
 ---
 
+## Copernicus CLMS — vegetation index (NDVI, dekadal)
+
+| Property               | Value                                                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `clms_ndvi_dekadal`                                                                                                         |
+| **Variable**           | `ndvi`                                                                                                                      |
+| **Units**              | 1 (unitless index)                                                                                                          |
+| **Period**             | Dekadal: days 1–10, 11–20 and 21 to the end of the month                                                                    |
+| **Spatial coverage**   | Global land, 60°S–80°N                                                                                                      |
+| **Spatial resolution** | ~300 m                                                                                                                      |
+| **Record start**       | 2014-01-01                                                                                                                  |
+| **Source**             | [Copernicus Land Monitoring Service](https://land.copernicus.eu/en/products/vegetation/normalised-difference-vegetation-index-v3-0-300m) |
+
+The Normalized Difference Vegetation Index from the Copernicus Land Monitoring Service (CLMS), version 3, measures how green the land is. Dense green vegetation is above 0.6; bare soil and sand are near 0.1. The series comes from PROBA-V until 2018 and Sentinel-3 OLCI since, merged into one record. It is read from the [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/).
+
+**Sync behaviour** — each dekad is published once, a few days after it ends, and is not revised afterwards. Before each sync the API asks the Copernicus catalogue for the newest published dekad.
+
+**Transforms** — the source stores each pixel as a whole number from 0 to 250, which is scaled to NDVI with the scale and offset given in each file: NDVI = 0.004 × value − 0.08. Stored values therefore run from -0.08 to 0.92. The source cannot represent NDVI outside that range, so -0.08 means -0.08 or below (mostly water) and 0.92 means 0.92 or above. Pixels the source flags as water, snow, missing or unknown are left empty.
+
+It needs free Copernicus Data Space Ecosystem S3 keys:
+
+1. Create an account at [dataspace.copernicus.eu](https://dataspace.copernicus.eu/).
+2. Generate S3 keys at [eodata-s3keysmanager.dataspace.copernicus.eu](https://eodata-s3keysmanager.dataspace.copernicus.eu/). The secret key is shown only once.
+3. Add them as a `cdse` profile in `~/.aws/credentials`, after any profiles already there:
+
+```
+[cdse]
+aws_access_key_id = <your-access-key>
+aws_secret_access_key = <your-secret-key>
+```
+
+**Windows:** use `%USERPROFILE%\.aws\credentials` with the same content.
+
+---
+
 ## Overture Maps — administrative divisions (feature collection)
 
 | Property             | Value                                                                   |
