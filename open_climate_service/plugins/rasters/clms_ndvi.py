@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import xarray as xr
@@ -75,7 +75,9 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
         import rioxarray
         from rasterio.errors import RasterioIOError
 
-        items = [item for item in self._fetch_stac_items(bbox) if item["properties"]["start_datetime"][:10] == period_id]
+        items = [
+            item for item in self._fetch_stac_items(bbox) if item["properties"]["start_datetime"][:10] == period_id
+        ]
         if not items:
             raise RuntimeError(f"No CLMS NDVI composite published for the dekad starting {period_id}")
         if len(items) > 1:
@@ -108,14 +110,14 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
         # grid mapping coordinate stops carrying the CRS once the arithmetic drops the encoding.
         ndvi = ndvi.astype("float32").reset_coords(drop=True)
         ndvi.attrs = {"units": "1", "long_name": "NDVI"}
-        return ndvi.to_dataset(name="ndvi").rio.write_crs(raw.rio.crs)
+        return cast(xr.Dataset, ndvi.to_dataset(name="ndvi").rio.write_crs(raw.rio.crs))
 
     def _fetch_cutoff(self) -> str:
         """Return the first day of the newest published dekad."""
-        query = {"collections": _COLLECTION, "sortby": "-datetime", "limit": 1}
+        query: dict[str, str | int] = {"collections": _COLLECTION, "sortby": "-datetime", "limit": 1}
         response = httpx.get(_STAC_SEARCH, params=query, timeout=60)
         response.raise_for_status()
-        return response.json()["features"][0]["properties"]["start_datetime"][:10]
+        return str(response.json()["features"][0]["properties"]["start_datetime"][:10])
 
     def _fetch_stac_items(self, bbox: list[float]) -> list[dict[str, Any]]:
         """Return every STAC item intersecting ``bbox``, searched once and kept while the bbox is the same.
