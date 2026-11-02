@@ -103,9 +103,11 @@ Precipitation values represent **total precipitation reaching the surface**, inc
 | **Coverage** | Global, 1950–present |
 | **Resolution** | ~9 km |
 | **Source** | [CDS ERA5-Land analysis-ready data](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data) |
-| **Lag** | ~5 days |
+| **Lag** | ~6 days |
 
-Total precipitation for the **UTC calendar day**, summed from the 24 hourly values within 00:00–23:59 UTC.
+Total precipitation for the **UTC calendar day**, summed from the 24 hourly values of that day.
+
+Each hourly precipitation value is the total for the hour *ending* at its timestamp, so the value stamped 00:00 belongs to the previous day. A day therefore sums the values stamped 01:00 through 00:00 the next day. The CDS publishes whole days of timestamps (00:00–23:00), so the hour that closes the latest day only arrives with the next day's update: precipitation always ends one day earlier than temperature, and that day is appended on the next sync.
 
 ---
 

@@ -120,7 +120,9 @@
   short_name: Precipitation
   description: >-
     Daily total precipitation at 9 km worldwide, represented as a daily rate, aggregated from the
-    hourly, de-accumulated CDS geo-chunked ARCO archive. Days run in UTC.
+    hourly, de-accumulated CDS geo-chunked ARCO archive. Days run in UTC. The latest day is
+    added one day after it appears in the source, because the final hour of an accumulated total
+    is only published with the following day.
   standard_name: lwe_precipitation_rate
   variable: tp
   period_type: daily
