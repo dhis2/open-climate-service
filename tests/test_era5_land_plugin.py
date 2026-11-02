@@ -1,8 +1,13 @@
 import asyncio
+import importlib
+import pathlib
+from typing import Any
 
 import numpy as np
 import pytest
 import xarray as xr
+import yaml
+from xclim.core.units import units2pint
 
 from open_climate_service.plugins.rasters import era5_land_cds, era5_land_edh
 from open_climate_service.plugins.rasters.era5_land_cds import ERA5LandCDSZarrDailyFromHourlyPlugin
@@ -12,13 +17,19 @@ _CDS_BBOX = [28.0, -3.0, 29.5, -1.5]
 # Crosses the prime meridian, which the EDH store's 0-360 longitude axis wraps.
 _EDH_BBOX = [-1.0, 9.0, 1.0, 10.5]
 
+# The attributes the real stores carry for each variable: its units and GRIB step type.
+_SOURCE_ATTRS = {
+    "t2m": {"units": "K", "GRIB_stepType": "instant"},
+    "tp": {"units": "m", "GRIB_stepType": "accum"},
+}
+
 
 def _cds_store(variable: str, hourly_values: np.ndarray) -> xr.Dataset:
     """Hourly values from 2020-01-01 00:00 on the CDS ARCO layout: -180..180 longitude, south-up latitude."""
     times = (np.datetime64("2020-01-01T00", "h") + np.arange(len(hourly_values))).astype("datetime64[ns]")
     data = np.broadcast_to(hourly_values.reshape(-1, 1, 1), (len(times), 2, 2)).copy()
     return xr.Dataset(
-        {variable: (("time", "latitude", "longitude"), data)},
+        {variable: (("time", "latitude", "longitude"), data, _SOURCE_ATTRS[variable])},
         coords={"time": times, "latitude": [-2.5, -2.0], "longitude": [28.5, 29.0]},
     )
 
@@ -29,9 +40,40 @@ def _edh_store(variable: str, end: str, daily_values: np.ndarray | None = None) 
     values = np.arange(len(times), dtype=float) if daily_values is None else daily_values[: len(times)]
     data = np.broadcast_to(values.reshape(-1, 1, 1), (len(times), 2, 4)).copy()
     return xr.Dataset(
-        {variable: (("valid_time", "latitude", "longitude"), data)},
+        {variable: (("valid_time", "latitude", "longitude"), data, _SOURCE_ATTRS[variable])},
         coords={"valid_time": times, "latitude": [10.0, 9.5], "longitude": [0.0, 0.5, 359.0, 359.5]},
     )
+
+
+# --- units: what a plugin labels its output must match what its template declares ------------
+
+
+def _era5_templates() -> list[dict[str, Any]]:
+    rasters = pathlib.Path(era5_land_cds.__file__).parent
+    templates: list[dict[str, Any]] = []
+    for name in ("era5_land_cds.yaml", "era5_land_edh.yaml"):
+        templates += yaml.safe_load((rasters / name).read_text(encoding="utf-8"))
+    return templates
+
+
+@pytest.mark.parametrize("template", _era5_templates(), ids=lambda t: t["id"])
+def test_plugin_output_units_match_the_template(monkeypatch: pytest.MonkeyPatch, template: dict[str, Any]) -> None:
+    """The template's units are stamped on ingest, so a mismatch would only show for direct plugin use."""
+    module_name, class_name = template["ingestion"]["plugin"].rsplit(".", 1)
+    params = template["ingestion"]["params"]
+    if module_name.endswith("era5_land_cds"):
+        store = _cds_store(params["variable"], np.ones(49))
+        monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
+        period, bbox = "2020-01-01", _CDS_BBOX
+    else:
+        store = _edh_store(params["variable"], "2020-01-31")
+        monkeypatch.setattr(era5_land_edh, "_open_edh_zarr", lambda _url: store)
+        period, bbox = "2020-01", _EDH_BBOX
+    plugin = getattr(importlib.import_module(module_name), class_name)(**params)
+
+    produced = plugin.fetch_period(period, bbox)[params["variable"]].attrs["units"]
+
+    assert units2pint(produced) == units2pint(template["units"]), f"{produced!r} vs {template['units']!r}"
 
 
 # --- CDS: hourly to daily ----------------------------------------------------------------

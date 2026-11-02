@@ -15,7 +15,12 @@ from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import daily_period_ids, monthly_period_ids
 from open_climate_service.shared.zarr import DEFAULT_MAX_CACHE_BYTES, CachedTimeSeriesZarr
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
-from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
+from open_climate_service.transforms.unit_conversion import (
+    amount_as_rate,
+    is_accumulated,
+    kelvin_to_celsius,
+    metres_to_mm,
+)
 
 _EDH_DAILY_URL = "https://data.earthdatahub.destine.eu/era5/era5-land-daily-utc-v1.zarr"
 _EDH_TIME_DIM = "valid_time"
@@ -55,7 +60,9 @@ class ERA5LandEDHDailyPlugin(BaseDatasetPlugin):
             # EDH time chunks hold only 75 days, so read several chunks per cache refresh.
             chunks_per_read=chunks_per_read,
         )
+        self._cached_source: xr.Dataset | None = None
         self._cached_cutoff: date | None = None
+        self._cached_accumulated: bool | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         cutoff = await asyncio.to_thread(self._fetch_cutoff)
@@ -63,7 +70,11 @@ class ERA5LandEDHDailyPlugin(BaseDatasetPlugin):
 
     def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
         start = np.datetime64(period_id, "D").astype("datetime64[ns]")
-        return self._fetch_time_range(start, start + np.timedelta64(1, "D"), bbox)
+        daily = self._fetch_time_range(start, start + np.timedelta64(1, "D"), bbox)
+        if self._fetch_accumulated():
+            # A daily accumulated value is the day's total, an amount per day.
+            return amount_as_rate(daily, self.variable, "d")
+        return daily
 
     def _fetch_time_range(self, start: np.datetime64, end: np.datetime64, bbox: list[float]) -> xr.Dataset:
         ds = self._zarr.slice_time(
@@ -88,13 +99,20 @@ class ERA5LandEDHDailyPlugin(BaseDatasetPlugin):
 
     def _fetch_cutoff(self) -> date:
         if self._cached_cutoff is None:
-            ds = _open_edh_zarr(self._zarr.url)
-            try:
-                latest = ds[_EDH_TIME_DIM].isel({_EDH_TIME_DIM: -1}).values
-                self._cached_cutoff = date.fromisoformat(str(latest.astype("datetime64[D]")))
-            finally:
-                ds.close()
+            latest = self._fetch_source()[_EDH_TIME_DIM].isel({_EDH_TIME_DIM: -1}).values
+            self._cached_cutoff = date.fromisoformat(str(latest.astype("datetime64[D]")))
         return self._cached_cutoff
+
+    def _fetch_accumulated(self) -> bool:
+        if self._cached_accumulated is None:
+            self._cached_accumulated = is_accumulated(self._fetch_source()[self.variable])
+        return self._cached_accumulated
+
+    def _fetch_source(self) -> xr.Dataset:
+        """The store, opened lazily once, for reading its metadata."""
+        if self._cached_source is None:
+            self._cached_source = _open_edh_zarr(self._zarr.url)
+        return self._cached_source
 
 
 class ERA5LandEDHMonthlyFromDailyPlugin(ERA5LandEDHDailyPlugin):
@@ -126,7 +144,12 @@ class ERA5LandEDHMonthlyFromDailyPlugin(ERA5LandEDHDailyPlugin):
             time_dim="t",
             remove_partial_periods=False,
         )
-        return cast(xr.Dataset, monthly)
+        result = cast(xr.Dataset, monthly)
+        if self._fetch_accumulated() and self.temporal_aggregation != "sum":
+            # Daily accumulated values are amounts per day: their mean, min or max is a daily rate,
+            # while their sum is the month's total amount.
+            return amount_as_rate(result, self.variable, "d")
+        return result
 
 
 def _open_edh_zarr(url: str) -> xr.Dataset:

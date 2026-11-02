@@ -21,7 +21,12 @@ from open_climate_service.shared.time import (
 )
 from open_climate_service.shared.zarr import DEFAULT_MAX_CACHE_BYTES, CachedTimeSeriesZarr
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
-from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
+from open_climate_service.transforms.unit_conversion import (
+    amount_as_rate,
+    is_accumulated,
+    kelvin_to_celsius,
+    metres_to_mm,
+)
 
 _CDS_ZARR_GROUPS = {
     "sfc-soil-water": "005",
@@ -53,9 +58,6 @@ _CDS_ZARR_STORES = {
     )
     for variable, group in _CDS_ZARR_VARIABLE_GROUPS.items()
 }
-# Accumulated variables (GRIB stepType "accum"): each de-accumulated value is the total over the
-# hour ending at its timestamp, so 00:00 holds the last hour of the previous day.
-_CDS_ACCUMULATED_VARIABLES = {"tp", "ssrd", "strd"}
 _CDS_TIME_DIM = "time"
 _UNIT_TRANSFORMS = {
     "kelvin_to_celsius": kelvin_to_celsius,
@@ -98,7 +100,9 @@ class ERA5LandCDSZarrHourlyPlugin(BaseDatasetPlugin):
             opener=_open_cds_zarr,
             max_cache_bytes=max_cache_bytes,
         )
+        self._cached_source: xr.Dataset | None = None
         self._cached_cutoff: datetime | None = None
+        self._cached_accumulated: bool | None = None
 
     async def periods(self, start: str, end: str) -> list[str]:
         cutoff = await asyncio.to_thread(self._fetch_cutoff)
@@ -139,14 +143,20 @@ class ERA5LandCDSZarrHourlyPlugin(BaseDatasetPlugin):
 
     def _fetch_cutoff(self) -> datetime:
         if self._cached_cutoff is None:
-            ds = _open_cds_zarr(self._zarr.url)
-            try:
-                latest = ds[_CDS_TIME_DIM].isel({_CDS_TIME_DIM: -1}).values
-                last_hour = datetime.fromisoformat(str(latest))
-            finally:
-                ds.close()
-            self._cached_cutoff = last_hour.replace(tzinfo=timezone.utc)
+            latest = self._fetch_source()[_CDS_TIME_DIM].isel({_CDS_TIME_DIM: -1}).values
+            self._cached_cutoff = datetime.fromisoformat(str(latest)).replace(tzinfo=timezone.utc)
         return self._cached_cutoff
+
+    def _fetch_accumulated(self) -> bool:
+        if self._cached_accumulated is None:
+            self._cached_accumulated = is_accumulated(self._fetch_source()[self.variable])
+        return self._cached_accumulated
+
+    def _fetch_source(self) -> xr.Dataset:
+        """The store, opened lazily once, for reading its metadata."""
+        if self._cached_source is None:
+            self._cached_source = _open_cds_zarr(self._zarr.url)
+        return self._cached_source
 
 
 class ERA5LandCDSZarrDailyFromHourlyPlugin(ERA5LandCDSZarrHourlyPlugin):
@@ -161,26 +171,39 @@ class ERA5LandCDSZarrDailyFromHourlyPlugin(ERA5LandCDSZarrHourlyPlugin):
             )
         super().__init__(**kwargs)
         self.temporal_aggregation = temporal_aggregation
-        # A UTC day of an accumulated variable runs from 01:00 through 00:00 the next day.
-        self._end_stamped_hours = 1 if self.variable in _CDS_ACCUMULATED_VARIABLES else 0
+
+    def _end_stamped_hours(self) -> int:
+        """How far the day's window is shifted: 1 hour for an accumulated variable, else 0.
+
+        Each de-accumulated value is the total over the hour ending at its timestamp, so a UTC day
+        of an accumulated variable runs from 01:00 through 00:00 the next day.
+        """
+        return 1 if self._fetch_accumulated() else 0
 
     async def periods(self, start: str, end: str) -> list[str]:
         # Offer a day only once its last hour (23:00, or 00:00 the next day when accumulated) is published.
-        cutoff = super()._fetch_cutoff() - timedelta(hours=23 + self._end_stamped_hours)
+        cutoff = self._fetch_cutoff() - timedelta(hours=23 + self._end_stamped_hours())
         periods = daily_period_ids(start=start, end=end, cutoff=cutoff)
 
         return periods
 
     def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
-        start = np.datetime64(period_id, "D").astype("datetime64[ns]") + np.timedelta64(self._end_stamped_hours, "h")
+        shift = self._end_stamped_hours()
+        start = np.datetime64(period_id, "D").astype("datetime64[ns]") + np.timedelta64(shift, "h")
         hourly = self._fetch_time_range(start, start + np.timedelta64(1, "D"), bbox)
-        daily = daily_reduce(
-            hourly,
-            how=self.temporal_aggregation,
-            time_shift={"hours": -self._end_stamped_hours},
-            remove_partial_periods=False,
+        daily = cast(
+            xr.Dataset,
+            daily_reduce(
+                hourly,
+                how=self.temporal_aggregation,
+                time_shift={"hours": -shift},
+                remove_partial_periods=False,
+            ),
         )
-        return cast(xr.Dataset, daily)
+        if self._fetch_accumulated():
+            # A day's sum of hourly amounts is an amount per day; a mean, min or max stays per hour.
+            return amount_as_rate(daily, self.variable, "d" if self.temporal_aggregation == "sum" else "h")
+        return daily
 
 
 def _open_cds_zarr(url: str) -> xr.Dataset:
