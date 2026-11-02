@@ -39,7 +39,15 @@ from fastapi import HTTPException
 from open_climate_service import config as api_config
 from open_climate_service.pipelines import service, store
 from open_climate_service.pipelines import workflow as workflow_binding
-from open_climate_service.pipelines.schemas import PipelineRecord, PipelineRun, RunTrigger
+from open_climate_service.pipelines.schemas import (
+    PipelineRecord,
+    PipelineRun,
+    PipelineRunView,
+    RunFailure,
+    RunLinks,
+    RunStatus,
+    RunTrigger,
+)
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -861,28 +869,91 @@ def reconcile() -> None:
     reconcile_events()
 
 
-def run_views(record: PipelineRecord) -> list[dict[str, Any]]:
-    """Runs with their job and delivery states, for the page."""
+_SETTLED_RESULTS = frozenset({"delivered", "validated", "acknowledged"})
+
+
+def _run_status(run: PipelineRun, job_status: str, delivery_result: str | None) -> RunStatus:
+    if run.submission == "pending":
+        return "submitting"
+    if run.submission == "failed":
+        return "failed"
+    # A delivery outcome outlasts the workflow job, which a client may delete once it is delivered.
+    if delivery_result in _SETTLED_RESULTS:
+        return "succeeded"
+    if delivery_result is not None or run.delivery == "failed":
+        return "needs_attention"
+    if run.job_outcome in ("error", "missing"):
+        return "failed"
+    if run.job_outcome == "canceled" or job_status == "canceled":
+        return "canceled"
+    if job_status in ("created", "queued"):
+        return "queued"
+    if job_status == "running":
+        return "running"
+    if job_status != "finished":
+        # An error the run has not recorded yet, or a job that is gone.
+        return "failed"
+    return "held" if run.delivery == "held" else "delivering"
+
+
+def _run_failure(
+    run: PipelineRun, status: RunStatus, job_error: str | None, delivery_result: str | None
+) -> RunFailure | None:
+    if status == "failed":
+        if run.submission == "failed":
+            return RunFailure(stage="submission", message=run.error or "the job could not be submitted")
+        return RunFailure(stage="job", message=job_error or run.error or f"the job ended: {run.job_outcome or 'gone'}")
+    if status == "needs_attention":
+        return RunFailure(stage="delivery", message=run.error or f"the delivery ended {delivery_result}")
+    return None
+
+
+def run_view(pipeline_id: str, run: PipelineRun, mount: str) -> PipelineRunView:
+    """One run with its workflow and delivery jobs' current states: the one reading of its status.
+
+    ``mount`` is the deployment's path prefix, so links lead into OCS behind a proxy too.
+    """
     from open_climate_service.jobs.service import get_job_service
     from open_climate_service.openeo.jobs import store_get_job
 
-    views: list[dict[str, Any]] = []
-    for run in record.runs:
-        job = store_get_job(run.job_id)
-        view: dict[str, Any] = {
-            **run.model_dump(mode="json", exclude={"process"}),
-            "job_status": job.status.value if job else ("not created" if run.submission != "submitted" else "gone"),
-            "job_error": job.error_message if job else None,
+    job = store_get_job(run.job_id)
+    job_status = job.status.value if job else ("not created" if run.submission != "submitted" else "gone")
+    job_error = job.error_message if job else None
+    delivery_fields: dict[str, Any] = {}
+    result: str | None = run.delivery_result
+    if run.delivery_job_id:
+        try:
+            delivery = get_job_service().get_job_or_404(run.delivery_job_id)
+            report = delivery.result if isinstance(delivery.result, dict) else {}
+            delivery_fields = {
+                "delivery_status": str(getattr(delivery.status, "value", delivery.status)),
+                "delivery_outcome": report.get("outcome"),
+                "delivery_submitted": report.get("submitted"),
+                "delivery_conflicts": len(report.get("conflicts") or []),
+            }
+            # The run records the outcome on its next pass; a client polling now sees it already.
+            result = result or delivery_result(delivery)
+        except Exception:
+            delivery_fields = {"delivery_status": "unknown"}
+    status = _run_status(run, job_status, result)
+    return PipelineRunView.model_validate(
+        {
+            **run.model_dump(exclude={"process", "idempotency_key", "delivery_status_url"}),
+            **delivery_fields,
+            "delivery_result": result,
+            "status": status,
+            "failure": _run_failure(run, status, job_error, result),
+            "links": RunLinks(
+                self=f"{mount}/pipelines/{pipeline_id}/runs/{run.run_id}",
+                job=f"{mount}/jobs/{run.job_id}" if job else None,
+                delivery=f"{mount}{run.delivery_status_url}" if run.delivery_status_url else None,
+            ),
+            "job_status": job_status,
+            "job_error": job_error,
         }
-        if run.delivery_job_id:
-            try:
-                delivery = get_job_service().get_job_or_404(run.delivery_job_id)
-                result = delivery.result if isinstance(delivery.result, dict) else {}
-                view["delivery_status"] = str(getattr(delivery.status, "value", delivery.status))
-                view["delivery_outcome"] = result.get("outcome")
-                view["delivery_submitted"] = result.get("submitted")
-                view["delivery_conflicts"] = len(result.get("conflicts") or [])
-            except Exception:
-                view["delivery_status"] = "unknown"
-        views.append(view)
-    return views
+    )
+
+
+def run_views(record: PipelineRecord, mount: str) -> list[PipelineRunView]:
+    """The pipeline's runs as `run_view` reads them, newest first."""
+    return [run_view(record.spec.id, run, mount) for run in record.runs]

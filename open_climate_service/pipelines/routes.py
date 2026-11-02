@@ -4,16 +4,28 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from open_climate_service import config as api_config
 from open_climate_service.pipelines import forms, runner, service, store
-from open_climate_service.pipelines.schemas import PipelineRecord, PipelineSpec, ValidationResult
+from open_climate_service.pipelines.schemas import (
+    DryRunResult,
+    PipelineRecord,
+    PipelineRun,
+    PipelineRunList,
+    PipelineRunView,
+    PipelineSpec,
+    RunInterval,
+    RunRequest,
+    ValidationResult,
+)
+from open_climate_service.shared.api_errors import error_responses
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.urls import mount_prefix
 from open_climate_service.system.templates import wants_json
@@ -21,6 +33,18 @@ from open_climate_service.system.templates import wants_json
 router = APIRouter()
 
 _DEFAULT_WORKFLOW = "aggregate_by_features"
+
+# Runs answer JSON clients with the run and the page with a redirect; OpenAPI shows the JSON.
+_RUN_STARTED: dict[int | str, dict[str, Any]] = {
+    202: {
+        "model": PipelineRunView,
+        "description": "The run was accepted; poll the run in the Location header until its status is final.",
+        "headers": {"Location": {"description": "The run", "schema": {"type": "string"}}},
+    }
+}
+_RUN_CHANGED: dict[int | str, dict[str, Any]] = {
+    200: {"model": PipelineRunView, "description": "The run as it is now."}
+}
 
 
 def _require_writable() -> None:
@@ -39,11 +63,42 @@ def _json_request(request: Request) -> bool:
     return "application/json" in request.headers.get("content-type", "")
 
 
-def _public(record: PipelineRecord) -> dict[str, Any]:
-    public = record.model_dump(mode="json")
-    for run in public.get("runs", []):
-        run.pop("process", None)
-    return {**public, "approved": service.approved(record)}
+def _public(record: PipelineRecord, mount: str) -> dict[str, Any]:
+    """The pipeline for a client: its runs are a resource of their own, so only the latest shows."""
+    public = record.model_dump(mode="json", exclude={"runs"})
+    latest = runner.run_view(record.spec.id, record.runs[0], mount).model_dump(mode="json") if record.runs else None
+    here = f"{mount}/pipelines/{record.spec.id}"
+    return {
+        **public,
+        "approved": service.approved(record),
+        "latest_run": latest,
+        "links": {"self": here, "runs": f"{here}/runs"},
+    }
+
+
+def _run_or_404(record: PipelineRecord, run_id: str) -> PipelineRun:
+    run = next((item for item in record.runs if item.run_id == run_id), None)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"pipeline '{record.spec.id}' has no run '{run_id}'")
+    return run
+
+
+def _started(request: Request, pipeline_id: str, run: PipelineRun) -> Response:
+    """A run accepted for asynchronous execution: 202, with the run to poll as its Location."""
+    mount = mount_prefix(request)
+    if not wants_json(request) and not _json_request(request):
+        return RedirectResponse(f"{mount}/pipelines/{pipeline_id}#runs", status_code=303)
+    view = runner.run_view(pipeline_id, run, mount)
+    return JSONResponse(status_code=202, content=view.model_dump(mode="json"), headers={"Location": view.links.self})
+
+
+def _changed(request: Request, pipeline_id: str, run: PipelineRun) -> Response:
+    """A run an operator action changed: the run for a JSON client, back to the runs for the page."""
+    return _done(
+        request,
+        f"/pipelines/{pipeline_id}#runs",
+        runner.run_view(pipeline_id, run, mount_prefix(request)).model_dump(mode="json"),
+    )
 
 
 def _failures(validation: ValidationResult) -> str:
@@ -173,7 +228,12 @@ def _done(request: Request, location: str, content: Any, status_code: int = 200,
 def pipelines(request: Request) -> Response:
     """The pipelines page, or the list as JSON."""
     if wants_json(request):
-        return JSONResponse({"kind": "PipelineList", "items": [_public(record) for record in store.list_records()]})
+        return JSONResponse(
+            {
+                "kind": "PipelineList",
+                "items": [_public(record, mount_prefix(request)) for record in store.list_records()],
+            }
+        )
     return _render_page(request, "list")
 
 
@@ -239,7 +299,9 @@ async def create_pipeline(request: Request) -> Response:
         if _json_request(request):
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _render_page(request, "create", error=str(exc), draft=body)
-    return _done(request, f"/pipelines/{record.spec.id}", _public(record), status_code=201, by_body=True)
+    return _done(
+        request, f"/pipelines/{record.spec.id}", _public(record, mount_prefix(request)), status_code=201, by_body=True
+    )
 
 
 @router.get("/{pipeline_id}", response_class=Response)
@@ -247,10 +309,11 @@ def pipeline(request: Request, pipeline_id: str) -> Response:
     """Read one stored pipeline without revalidating it or changing its record."""
     record = _record_or_404(pipeline_id)
     if wants_json(request):
-        return JSONResponse({**_public(record), "runs": runner.run_views(record)})
+        return JSONResponse(_public(record, mount_prefix(request)))
     from open_climate_service.system.templates import render_pipeline_page
 
-    return HTMLResponse(render_pipeline_page(record, runner.run_views(record), mount_prefix(request)))
+    runs = [view.model_dump(mode="json") for view in runner.run_views(record, mount_prefix(request))]
+    return HTMLResponse(render_pipeline_page(record, runs, mount_prefix(request)))
 
 
 @router.get("/{pipeline_id}/edit", response_class=HTMLResponse, include_in_schema=False)
@@ -314,7 +377,7 @@ async def save_pipeline(request: Request, pipeline_id: str) -> Response:
         return _render_page(request, "create", error=str(exc), draft=body, editing=pipeline_id, status_code=409)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _done(request, f"/pipelines/{pipeline_id}", _public(saved), by_body=True)
+    return _done(request, f"/pipelines/{pipeline_id}", _public(saved, mount_prefix(request)), by_body=True)
 
 
 @router.delete("/{pipeline_id}", status_code=204)
@@ -355,26 +418,47 @@ async def validate_pipeline(request: Request, pipeline_id: str) -> Response:
     return _done(request, f"/pipelines/{pipeline_id}#validation", validation.model_dump(mode="json"))
 
 
-async def _range(request: Request) -> tuple[str, str, dict[str, Any]]:
+_Body = TypeVar("_Body", RunInterval, RunRequest)
+
+
+async def _interval(request: Request, model: type[_Body]) -> _Body:
+    """The body as ``model``: a JSON body is held to it, a page form gives only the fields it names."""
     if _json_request(request):
-        body = await request.json()
-        body = body if isinstance(body, dict) else {}
-    else:
-        form = await request.form()
-        body = {key: str(value).strip() for key, value in form.items() if isinstance(value, str)}
-    start, end = str(body.get("start", "")), str(body.get("end", ""))
-    if not start or not end:
-        raise HTTPException(status_code=400, detail="A run needs a start and an end date")
-    return start, end, body
+        try:
+            return model.model_validate(await request.json())
+        except ValidationError as exc:
+            raise RequestValidationError(exc.errors(include_url=False)) from exc
+        except ValueError as exc:  # not JSON
+            raise HTTPException(status_code=400, detail=f"The body is not JSON: {exc}") from exc
+    form = await request.form()
+    fields = {key: str(value).strip() for key in model.model_fields if isinstance(value := form.get(key), str)}
+    try:
+        return model.model_validate(fields)
+    except ValidationError as exc:
+        message = "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors())
+        raise HTTPException(status_code=400, detail=message) from exc
 
 
-@router.post("/{pipeline_id}/dry-run", response_class=Response)
+def _body_schema(model: type[RunInterval]) -> dict[str, Any]:
+    """OpenAPI for a body the route reads itself, so page forms can post to the same route."""
+    return {"requestBody": {"required": True, "content": {"application/json": {"schema": model.model_json_schema()}}}}
+
+
+@router.post(
+    "/{pipeline_id}/dry-run",
+    response_class=Response,
+    openapi_extra=_body_schema(RunInterval),
+    responses={
+        200: {"model": DryRunResult, "description": "What was rendered, and the destination's verdict on it."},
+        **error_responses(400, 403, 404, 409),
+    },
+)
 async def dry_run_pipeline(request: Request, pipeline_id: str) -> Response:
     """Run the workflow over a bounded range and dry-run the result at the destination; nothing is stored there."""
     _require_writable()
     record = _record_or_404(pipeline_id)
-    start, end, _ = await _range(request)
-    result = await run_in_threadpool(service.dry_run_pipeline, record, start, end)
+    interval = await _interval(request, RunInterval)
+    result = await run_in_threadpool(service.dry_run_pipeline, record, interval.start, interval.end)
 
     def _apply(current: PipelineRecord) -> None:
         if current.revision != record.revision:
@@ -397,20 +481,41 @@ def _start(pipeline_id: str, context: runner.RunContext) -> Any:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.post("/{pipeline_id}/runs", response_class=Response)
+@router.post(
+    "/{pipeline_id}/runs",
+    status_code=202,
+    response_class=Response,
+    openapi_extra=_body_schema(RunRequest),
+    responses={**_RUN_STARTED, **error_responses(400, 403, 404, 409)},
+)
 async def run_pipeline(request: Request, pipeline_id: str) -> Response:
     """Run once over an explicit range: a batch job of the workflow, delivered when it finishes."""
     _require_writable()
     _record_or_404(pipeline_id)
-    start, end, body = await _range(request)
-    mode = str(body.get("mode", "dry_run"))
-    if mode not in ("dry_run", "live"):
-        raise HTTPException(status_code=400, detail="mode must be dry_run or live")
-    run = _start(pipeline_id, runner.RunContext(start=start, end=end, mode="live" if mode == "live" else "dry_run"))
-    return _done(request, f"/pipelines/{pipeline_id}#runs", run.model_dump(mode="json", exclude={"process"}), 202)
+    body = await _interval(request, RunRequest)
+    run = _start(pipeline_id, runner.RunContext(start=body.start, end=body.end, mode=body.mode))
+    return _started(request, pipeline_id, run)
 
 
-@router.post("/{pipeline_id}/runs/{run_id}/retry", response_class=Response)
+@router.get("/{pipeline_id}/runs", response_model=PipelineRunList, responses=error_responses(404))
+def pipeline_runs(request: Request, pipeline_id: str) -> PipelineRunList:
+    """The pipeline's runs, newest first, each with its workflow and delivery jobs' current states."""
+    return PipelineRunList(items=runner.run_views(_record_or_404(pipeline_id), mount_prefix(request)))
+
+
+@router.get("/{pipeline_id}/runs/{run_id}", response_model=PipelineRunView, responses=error_responses(404))
+def pipeline_run(request: Request, pipeline_id: str, run_id: str) -> PipelineRunView:
+    """One run, to poll until its status is final; ``links`` lead to its workflow and delivery jobs."""
+    record = _record_or_404(pipeline_id)
+    return runner.run_view(pipeline_id, _run_or_404(record, run_id), mount_prefix(request))
+
+
+@router.post(
+    "/{pipeline_id}/runs/{run_id}/retry",
+    status_code=202,
+    response_class=Response,
+    responses={**_RUN_STARTED, **error_responses(403, 404, 409)},
+)
 def retry_pipeline_run(request: Request, pipeline_id: str, run_id: str) -> Response:
     """Run a failed or unwanted run's interval again, in the same mode, as a new run."""
     _require_writable()
@@ -422,10 +527,14 @@ def retry_pipeline_run(request: Request, pipeline_id: str, run_id: str) -> Respo
         start=previous.start, end=previous.end, trigger="retry", mode=previous.mode, retry_of=previous.run_id
     )
     run = _start(pipeline_id, context)
-    return _done(request, f"/pipelines/{pipeline_id}#runs", run.model_dump(mode="json", exclude={"process"}), 202)
+    return _started(request, pipeline_id, run)
 
 
-@router.post("/{pipeline_id}/runs/{run_id}/deliver", response_class=Response)
+@router.post(
+    "/{pipeline_id}/runs/{run_id}/deliver",
+    response_class=Response,
+    responses={**_RUN_CHANGED, **error_responses(403, 404, 409, 503)},
+)
 def deliver_pipeline_run(request: Request, pipeline_id: str, run_id: str) -> Response:
     """Submit the delivery a finished run still owes: a missed hand-off, a held one or a failed one."""
     _require_writable()
@@ -441,10 +550,14 @@ def deliver_pipeline_run(request: Request, pipeline_id: str, run_id: str) -> Res
     except Exception as exc:
         # A transient failure while handing off; the run records it and nothing was sent twice.
         raise HTTPException(status_code=503, detail=f"Delivery could not be submitted now; try again: {exc}") from exc
-    return _done(request, f"/pipelines/{pipeline_id}#runs", run.model_dump(mode="json", exclude={"process"}))
+    return _changed(request, pipeline_id, run)
 
 
-@router.post("/{pipeline_id}/runs/{run_id}/redeliver", response_class=Response)
+@router.post(
+    "/{pipeline_id}/runs/{run_id}/redeliver",
+    response_class=Response,
+    responses={**_RUN_CHANGED, **error_responses(403, 404, 409, 503)},
+)
 def redeliver_pipeline_run(request: Request, pipeline_id: str, run_id: str) -> Response:
     """Send a run again whose delivery job failed at the destination, as a new delivery."""
     _require_writable()
@@ -460,10 +573,14 @@ def redeliver_pipeline_run(request: Request, pipeline_id: str, run_id: str) -> R
     except Exception as exc:
         # A transient failure while handing off; the run records it and nothing was sent twice.
         raise HTTPException(status_code=503, detail=f"Delivery could not be submitted now; try again: {exc}") from exc
-    return _done(request, f"/pipelines/{pipeline_id}#runs", run.model_dump(mode="json", exclude={"process"}))
+    return _changed(request, pipeline_id, run)
 
 
-@router.post("/{pipeline_id}/runs/{run_id}/acknowledge", response_class=Response)
+@router.post(
+    "/{pipeline_id}/runs/{run_id}/acknowledge",
+    response_class=Response,
+    responses={**_RUN_CHANGED, **error_responses(403, 404, 409)},
+)
 def acknowledge_pipeline_delivery(request: Request, pipeline_id: str, run_id: str) -> Response:
     """Record that the destination was checked and an unconfirmed delivery is settled; nothing is sent."""
     _require_writable()
@@ -474,7 +591,7 @@ def acknowledge_pipeline_delivery(request: Request, pipeline_id: str, run_id: st
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _done(request, f"/pipelines/{pipeline_id}#runs", run.model_dump(mode="json", exclude={"process"}))
+    return _changed(request, pipeline_id, run)
 
 
 @router.post("/{pipeline_id}/mode/{mode}", response_class=Response)
@@ -510,4 +627,4 @@ def set_delivery_mode(request: Request, pipeline_id: str, mode: Literal["dry_run
         # Resuming, or going live, releases the held deliveries that are eligible now.
         runner.release_held(pipeline_id)
         saved = store.get_record(pipeline_id) or saved
-    return _done(request, f"/pipelines/{pipeline_id}#delivery", _public(saved))
+    return _done(request, f"/pipelines/{pipeline_id}#delivery", _public(saved, mount_prefix(request)))

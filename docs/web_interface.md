@@ -352,7 +352,11 @@ save (with an optional `revision`), `DELETE /pipelines/{id}`, `POST /pipelines/{
 for a run), `POST /pipelines/{id}/runs/{run_id}/deliver`, `POST /pipelines/{id}/runs/{run_id}/redeliver`,
 `POST /pipelines/{id}/runs/{run_id}/retry`,
 `POST /pipelines/{id}/runs/{run_id}/acknowledge`,
-and `POST /pipelines/{id}/mode/{dry_run|live|paused}`.
+and `POST /pipelines/{id}/mode/{dry_run|live|paused}`. A pipeline read as JSON shows its latest
+run; `GET /pipelines/{id}/runs` lists them all. Starting or retrying a run answers `202` with the
+run in the `Location` header: poll `GET /pipelines/{id}/runs/{run_id}` until its `status` is
+final, and follow its `links` to the workflow job and the delivery report. The API reference
+lists the statuses.
 
 ### The dataset page (`/datasets/{dataset_id}`)
 

@@ -220,6 +220,94 @@ class PipelineRun(BaseModel):
     error: str | None = None
 
 
+class RunInterval(BaseModel):
+    """The interval a dry run covers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: str = Field(min_length=1, description="First period, as the source dataset names it, e.g. 2025-01-01.")
+    end: str = Field(min_length=1, description="Last period, inclusive.")
+
+
+class RunRequest(RunInterval):
+    """One run over an explicit interval."""
+
+    mode: Literal["dry_run", "live"] = Field(
+        default="dry_run", description="Live writes at the destination; the pipeline must be live for it."
+    )
+
+
+RunStatus = Literal[
+    "submitting", "queued", "running", "delivering", "held", "succeeded", "needs_attention", "failed", "canceled"
+]
+
+
+class RunFailure(BaseModel):
+    """Where a run stopped, and why."""
+
+    stage: Literal["submission", "job", "delivery"]
+    message: str
+
+
+class RunLinks(BaseModel):
+    """Where to follow a run: itself, its workflow job and its delivery job."""
+
+    self: str
+    job: str | None = Field(default=None, description="The workflow's batch job, once it was created.")
+    delivery: str | None = Field(default=None, description="The delivery job's report, once one was submitted.")
+
+
+class PipelineRunView(BaseModel):
+    """A run as clients and the pages see it: the stored run with its jobs' current states.
+
+    ``status`` sums the states up, so a client polls one field. ``submitting``, ``queued``,
+    ``running`` and ``delivering`` move on by themselves; ``held`` waits for the pipeline to
+    be resumed or go live; ``succeeded``, ``failed`` and ``canceled`` are final. A run that
+    ``needs_attention`` finished its job but its delivery failed, or the destination's answer
+    was partial, a rejection or unknown: deliver, redeliver or acknowledge it. The finer
+    states below say which.
+    """
+
+    run_id: str
+    status: RunStatus
+    failure: RunFailure | None = None
+    links: RunLinks
+    trigger: RunTrigger
+    event_id: str | None = Field(default=None, description="The dataset update that started the run.")
+    retry_of: str | None = None
+    revision: int = Field(description="The pipeline revision the run used.")
+    workflow_id: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    source: dict[str, Any] = Field(default_factory=dict)
+    mode: Literal["dry_run", "live"]
+    start: str
+    end: str
+    submitted_at: str
+    job_id: str
+    job_status: str = Field(description="The batch job's status, or 'not created' and 'gone' when it has none.")
+    job_error: str | None = None
+    submission: RunSubmission
+    submission_attempts: int
+    job_outcome: RunJobOutcome | None = None
+    delivery: RunDelivery
+    delivery_attempts: int
+    delivery_round: int = Field(description="Bumped by each redelivery.")
+    delivery_result: DeliveryResult | None = None
+    delivery_job_id: str | None = None
+    delivery_status: str | None = None
+    delivery_outcome: str | None = None
+    delivery_submitted: int | None = None
+    delivery_conflicts: int | None = None
+    delivered_at: str | None = None
+    error: str | None = None
+
+
+class PipelineRunList(BaseModel):
+    """A pipeline's runs, newest first; settled runs beyond the retained number are dropped."""
+
+    items: list[PipelineRunView]
+
+
 class SkippedUpdate(BaseModel):
     """A dataset update the pipeline decided not to run, kept so an operator can run it by hand."""
 

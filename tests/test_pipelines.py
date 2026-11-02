@@ -43,6 +43,8 @@ from open_climate_service.pipelines.schemas import (
     WorkflowReference,
 )
 
+from .conftest import MountedClientFactory
+
 _OU = ["ImspTQPwCqd", "O6uvpzGd5pu"]
 _ELEMENT = "LeePHYkZwBk"
 _SETTINGS: dict[str, Any] = {"connection": "local", "data_set": "N63vVmt2uY0", "series": [{"data_element": _ELEMENT}]}
@@ -1414,7 +1416,10 @@ def test_pipeline_list_never_exposes_a_pending_run_process(client: TestClient) -
     )
     store.update_record(record.spec.id, lambda current: setattr(current, "runs", record.runs))
     listed = client.get("/pipelines", headers={"Accept": "application/json"}).json()
-    assert "process" not in listed["items"][0]["runs"][0]
+    assert "runs" not in listed["items"][0] and listed["items"][0]["links"]["runs"] == "/pipelines/rain-to-dhis2/runs"
+    [run] = client.get("/pipelines/rain-to-dhis2/runs").json()["items"]
+    for shown in (listed["items"][0]["latest_run"], run):
+        assert "process" not in shown and "idempotency_key" not in shown
 
 
 def test_read_only_pipeline_pages_hide_create_and_edit_forms(
@@ -1763,6 +1768,7 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     openeo: _FakeOpenEO,
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
+    mounted_client_factory: MountedClientFactory,
 ) -> None:
     _dhis2(monkeypatch)
     _validated()
@@ -1770,11 +1776,19 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
         "/pipelines/rain-to-dhis2/runs", json={"start": "2025-01-01", "end": "2025-01-31", "mode": "live"}
     )
     assert live_too_early.status_code == 409 and "live" in live_too_early.text
-    assert client.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-01-01"}).status_code == 400
+    for body, field in (
+        ({"start": "2025-01-01"}, "end"),
+        ({"start": "2025-01-01", "end": "2025-01-31", "mode": "now"}, "mode"),
+        ({"start": "2025-01-01", "end": "2025-01-31", "until": "x"}, "until"),
+    ):
+        refused = client.post("/pipelines/rain-to-dhis2/runs", json=body)
+        assert refused.status_code == 422 and refused.json()["detail"][0]["loc"][-1] == field, refused.text
 
     submitted = client.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-01-01", "end": "2025-01-31"})
     assert submitted.status_code == 202, submitted.text
     run = submitted.json()
+    assert submitted.headers["Location"] == run["links"]["self"] == f"/pipelines/rain-to-dhis2/runs/{run['run_id']}"
+    assert run["links"]["job"] == f"/jobs/{run['job_id']}" and run["links"]["delivery"] is None
     assert run["mode"] == "dry_run" and run["submission"] == "submitted" and run["trigger"] == "manual"
     assert openeo.intents[0].submission == "pending" and openeo.intents[0].job_id == run["job_id"]
     assert openeo.started == [run["job_id"]]
@@ -1791,6 +1805,14 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     assert too_early.status_code == 409 and "not finished" in too_early.text
     assert client.post("/pipelines/rain-to-dhis2/runs/nope/deliver").status_code == 404
 
+    def polled() -> dict[str, Any]:
+        response = client.get(run["links"]["self"])
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert polled()["status"] == "running"
+    assert client.get("/pipelines/rain-to-dhis2/runs/nope").status_code == 404
+
     runner.on_job_finished(openeo.jobs[run["job_id"]])
     assert deliveries == []
     finished = openeo.finish(run["job_id"])
@@ -1798,6 +1820,13 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     runner.on_job_finished(finished)  # a repeated completion event
     key = f"pipeline:rain-to-dhis2:pipeline-run:{run['run_id']}:dry_run"
     assert deliveries == [("rain-to-dhis2", run["job_id"], True, key)]
+    deliveries.outcomes["delivery-1"] = ("running", None)
+    delivering = polled()
+    assert delivering["status"] == "delivering" and delivering["failure"] is None
+    assert delivering["links"]["delivery"] == "/exports/rain-to-dhis2/jobs/delivery-1"
+    del deliveries.outcomes["delivery-1"]
+    # Settled as soon as the delivery job is, before the run records it.
+    assert polled()["status"] == "succeeded" and polled()["delivery_result"] == "validated"
     stored = store.get_record("rain-to-dhis2")
     assert stored is not None and stored.runs[0].delivery == "submitted"
     assert stored.runs[0].delivery_status_url == "/exports/rain-to-dhis2/jobs/delivery-1"
@@ -1810,7 +1839,31 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     page = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "text/html"})
     assert page.status_code == 200 and "Run once" in page.text and run["job_id"][:8] in page.text
     as_json = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()
-    assert as_json["runs"][0]["job_status"] == "finished" and "process" not in as_json["runs"][0]
+    assert as_json["latest_run"]["run_id"] == run["run_id"] and as_json["latest_run"]["job_status"] == "finished"
+    assert [item["run_id"] for item in client.get(as_json["links"]["runs"]).json()["items"]] == [run["run_id"]]
+
+    # Behind a proxy prefix every link leads into OCS, as the Location header does.
+    mounted = mounted_client_factory("/ocs")
+    prefixed = mounted.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-02-01", "end": "2025-02-28"})
+    links = prefixed.json()["links"]
+    assert (
+        prefixed.headers["Location"]
+        == links["self"]
+        == f"/ocs/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
+    )
+    assert links["job"] == f"/ocs/jobs/{prefixed.json()['job_id']}"
+    listed = mounted.get("/pipelines/rain-to-dhis2/runs").json()["items"]
+    assert listed[1]["links"]["delivery"] == "/ocs/exports/rain-to-dhis2/jobs/delivery-1"
+    assert mounted.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["links"] == {
+        "self": "/ocs/pipelines/rain-to-dhis2",
+        "runs": "/ocs/pipelines/rain-to-dhis2/runs",
+    }
+    operation = client.get("/openapi.json").json()["paths"]["/pipelines/{pipeline_id}/runs"]["post"]
+    body = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert set(body["properties"]) == {"start", "end", "mode"} and set(body["required"]) == {"start", "end"}
+    assert {"202", "403", "404", "409"} <= set(operation["responses"])
+    dry_run = client.get("/openapi.json").json()["paths"]["/pipelines/{pipeline_id}/dry-run"]["post"]["responses"]
+    assert dry_run["200"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/DryRunResult"}
 
 
 def test_a_failed_hand_off_is_recorded_and_recoverable(
@@ -1832,6 +1885,9 @@ def test_a_failed_hand_off_is_recorded_and_recoverable(
     assert (
         stored is not None and stored.runs[0].delivery == "failed" and stored.runs[0].error == "No result for this job"
     )
+    polled = client.get(f"/pipelines/rain-to-dhis2/runs/{run.run_id}").json()
+    assert polled["status"] == "needs_attention"
+    assert polled["failure"] == {"stage": "delivery", "message": "No result for this job"}
 
     monkeypatch.setattr(delivery_module, "submit_delivery", lambda *args: ("delivery-9", False))
     delivered = client.post(
@@ -1883,6 +1939,9 @@ def test_a_permanent_submission_failure_is_not_retried_and_can_run_again(
     openeo.fail_create = ValueError("process.process_graph must be an object")
     failed = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
     assert failed.submission == "failed" and failed.submission_attempts == 1
+    polled = client.get(f"/pipelines/rain-to-dhis2/runs/{failed.run_id}").json()
+    assert polled["status"] == "failed" and polled["failure"]["stage"] == "submission"
+    assert polled["links"]["job"] is None
     openeo.fail_create = None
     runner.recover_runs()
     assert store.get_record("rain-to-dhis2").runs[0].submission == "failed"  # type: ignore[union-attr]
@@ -2976,7 +3035,6 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
     from open_climate_service.jobs.models import JobStatus
     from open_climate_service.openeo import execution
     from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.openeo.schemas import OpenEOJobStatus
     from open_climate_service.shared.provenance import record_source
     from open_climate_service.shared.time import utc_now
 
@@ -3050,26 +3108,17 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         )
         assert run.status_code == 202, run.text
         job_id = run.json()["job_id"]
+        # Polled as a client does: the run in the Location header until its status is final.
         deadline = time.monotonic() + 30
-        record = store.get_record("rain-to-dhis2")
-        while time.monotonic() < deadline:
-            record = store.get_record("rain-to-dhis2")
-            job = openeo_jobs.store_get_job(job_id)
-            assert job is None or job.status != OpenEOJobStatus.ERROR, job.error_message if job else None
-            if record is not None and record.runs[0].delivery_job_id:
-                break
+        polled = run.json()
+        while polled["status"] not in {"succeeded", "needs_attention", "failed", "canceled"}:
+            assert time.monotonic() < deadline, polled
             time.sleep(0.05)
-        assert record is not None and record.runs[0].delivery == "submitted", record.runs[0] if record else None
-        delivery_id = record.runs[0].delivery_job_id
-        assert delivery_id is not None
+            polled = client.get(run.headers["Location"]).json()
+        assert polled["status"] == "succeeded" and polled["delivery_result"] == "delivered", polled
+        assert client.get(polled["links"]["job"]).json()["status"] == "finished"
+        assert client.get(polled["links"]["delivery"]).status_code == 200
         native = job_service_module.get_job_service()
-        delivery = native.get_job_or_404(delivery_id)
-        while time.monotonic() < deadline:
-            delivery = native.get_job_or_404(delivery_id)
-            if delivery.status in {JobStatus.SUCCESSFUL, JobStatus.FAILED, JobStatus.CANCELLED}:
-                break
-            time.sleep(0.05)
-        assert delivery.status == JobStatus.SUCCESSFUL, delivery.error
         live = sent[-1]
         assert live["dry_run"] is False and live["target"] == "local"
         assert {value["orgUnit"] for value in live["payload"]["dataValues"]} == set(_OU)
@@ -3105,6 +3154,11 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         assert manual_manifest.mapping == automatic_manifest.mapping
         assert manual_manifest.references == automatic_manifest.references
         assert manual_manifest.target == automatic_manifest.target
+
+        # A delivered run stays delivered when its workflow job is deleted afterwards.
+        assert client.delete(polled["links"]["job"]).status_code == 204
+        after = client.get(polled["links"]["self"]).json()
+        assert after["status"] == "succeeded" and after["links"]["job"] is None, after
     finally:
         job_service.shutdown()
         job_service_module.reset_job_service()
