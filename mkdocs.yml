@@ -70,6 +70,7 @@ nav:
       - Zarr and GeoZarr: zarr_and_geozarr.md
       - Raster conventions: conventions.md
       - Project overview: project_description.md
+      - Authentication (design): authentication.md
   - Guides:
       - Instance guide: instance_guide.md
       - Using the web interface: web_interface.md
