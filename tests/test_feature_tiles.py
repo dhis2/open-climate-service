@@ -25,6 +25,11 @@ TEMPLATE = {"id": "districts", "name": "District boundaries", "id_property": "co
 
 
 @pytest.fixture(autouse=True)
+def _no_vector_tiles() -> None:
+    """Build the archives the suite skips elsewhere."""
+
+
+@pytest.fixture(autouse=True)
 def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Keep collections, records and thumbnails out of the developer's data directory."""
     root = tmp_path / "vectors"

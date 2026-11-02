@@ -55,7 +55,11 @@ def test_entry_point_workflows_are_discovered(monkeypatch: pytest.MonkeyPatch, t
 
 def test_no_installed_plugins_yields_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     # With no plugins declaring the entry point, discovery is a clean no-op.
-    monkeypatch.setattr(plugin_discovery, "entry_points", lambda group: [])
+    scans: list[str] = []
+    monkeypatch.setattr(plugin_discovery, "entry_points", lambda group: scans.append(group) or [])
+    plugin_discovery.rescan()
     assert list(plugin_discovery.iter_plugin_subdirs("processes")) == []
     assert workflows._load_entry_point_workflows() == []
     assert plugin_processes._scan_plugin_package_processes() == []
+    # Read once per process, however many lookups follow.
+    assert len(scans) == 1
