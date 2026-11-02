@@ -8,7 +8,6 @@ from dataclasses import asdict
 from typing import Any, Literal, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
@@ -29,7 +28,7 @@ from open_climate_service.pipelines.schemas import (
     RunRequest,
     ValidationResult,
 )
-from open_climate_service.shared.api_errors import error_responses
+from open_climate_service.shared.api_errors import body_error, error_responses
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.urls import mount_prefix
 from open_climate_service.system.templates import wants_json
@@ -466,7 +465,7 @@ async def _interval(request: Request, model: type[_Body]) -> _Body:
         try:
             return model.model_validate(await request.json())
         except ValidationError as exc:
-            raise RequestValidationError(exc.errors(include_url=False)) from exc
+            raise body_error(exc) from exc
         except ValueError as exc:  # not JSON
             raise HTTPException(status_code=400, detail=f"The body is not JSON: {exc}") from exc
     form = await request.form()

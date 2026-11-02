@@ -426,6 +426,9 @@ def test_another_process_reports_the_check_the_clock_ran(
     (row,) = body["schedules"]
     assert row["last_outcome"] == "submitted"
     assert row["last_job_id"] == "job-123"
+    assert row["links"]["last_job"] == "/ingestions/jobs/job-123"
+    one = client.get(row["links"]["self"]).json()
+    assert one["last_job_id"] == "job-123" and one["links"]["last_job"] == "/ingestions/jobs/job-123"
     # Computed from the cron "0 6 * * *" in UTC, since the clock that will fire it runs elsewhere.
     next_check = datetime.fromisoformat(row["next_check"])
     assert (next_check.hour, next_check.minute) == (6, 0)

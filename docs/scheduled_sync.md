@@ -125,7 +125,7 @@ The API:
 | --- | --- |
 | `GET /schedules` | Everything on the clock with runtime status, each row with its `kind`; the page for a browser |
 | `GET /schedules/sync/{dataset_id}` | One dataset's effective sync schedule and status |
-| `POST /schedules/sync` | Add a stored sync schedule: `dataset_id`, `cron`, `publish`, `max_attempts`, `enabled` |
+| `POST /schedules/sync` | Add a stored sync schedule: `dataset_id`, `cron`, `publish`, `max_attempts`, `enabled`; answers `201` with the schedule in `Location` |
 | `PUT /schedules/sync/{dataset_id}` | Change a stored sync schedule; settings left out of the body are kept |
 | `POST /schedules/sync/{dataset_id}/pause`, `/resume` | Flip the pause switch |
 | `DELETE /schedules/sync/{dataset_id}` | Remove a stored sync schedule |
@@ -148,7 +148,7 @@ own write authentication.
 
 `GET /schedules` reports, for each schedule, its next check, latest enqueue outcome, message,
 and submitted native job ID. This status does not mirror the terminal job state; follow
-`last_job_id` through the native jobs API.
+`links.last_job`, which leads to `GET /ingestions/jobs/{job_id}`, and poll it.
 
 The process that runs the clock records each check's result, and a heartbeat every 30 seconds,
 in `<data_dir>/schedule_results.json`. Every process on the same data directory reports from

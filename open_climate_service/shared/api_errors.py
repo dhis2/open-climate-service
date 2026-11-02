@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 
 class ErrorDetail(BaseModel):
@@ -31,3 +32,10 @@ _DESCRIPTIONS = {
 def error_responses(*codes: int) -> dict[int | str, dict[str, Any]]:
     """OpenAPI ``responses`` entries for these error statuses."""
     return {code: {"model": ErrorDetail, "description": _DESCRIPTIONS[code]} for code in codes}
+
+
+def body_error(exc: ValidationError) -> RequestValidationError:
+    """A body a route validated itself, reported as FastAPI reports a typed body: under ``body``."""
+    return RequestValidationError(
+        [{**error, "loc": ("body", *error["loc"])} for error in exc.errors(include_url=False, include_context=False)]
+    )
