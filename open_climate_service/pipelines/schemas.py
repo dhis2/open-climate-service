@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 # A pipeline id is also the id of the named export its results are saved through.
 _PIPELINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
@@ -76,16 +76,21 @@ class PipelineDelivery(BaseModel):
         return value
 
 
-class PipelineSpec(BaseModel):
-    """What an operator declares: one workflow with its bindings, a destination and a delivery."""
+class PipelineDefinition(BaseModel):
+    """What an operator declares, apart from the id: one workflow with its bindings, a destination and a delivery."""
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
     name: str | None = None
     workflow: WorkflowReference
     destination: PipelineDestination
     delivery: PipelineDelivery = Field(default_factory=PipelineDelivery)
+
+
+class PipelineSpec(PipelineDefinition):
+    """A pipeline as created: its definition under an id, which is also its named export's id."""
+
+    id: str
 
     @field_validator("id")
     @classmethod
@@ -93,6 +98,15 @@ class PipelineSpec(BaseModel):
         if not _PIPELINE_ID.fullmatch(value):
             raise ValueError("id must start with a letter or digit and carry only letters, digits, '_' or '-'")
         return value
+
+
+class PipelineChange(PipelineDefinition):
+    """A new definition for a stored pipeline; a spec read from the pipeline can be sent back as it is."""
+
+    id: str | None = Field(default=None, description="The pipeline's id, when given; it cannot change.")
+    revision: StrictInt = Field(
+        gt=0, description="The revision the change was based on, as read; a stale one is refused with 409."
+    )
 
 
 class Check(BaseModel):
@@ -370,3 +384,86 @@ class PipelineRecord(BaseModel):
         default_factory=list, description="Newest first; settled runs beyond the retained number are dropped."
     )
     events: EventCheckpoint = Field(default_factory=EventCheckpoint)
+
+
+class PipelineInput(BaseModel):
+    """A dataset or feature collection the workflow reads, and the parameter it fills."""
+
+    kind: Literal["dataset", "features"]
+    id: str
+    name: str = Field(description="As the dataset or collection is titled; its id when it is not known.")
+    parameter: str = Field(description="The workflow parameter it is bound to: its role in the workflow.")
+    href: str
+
+
+class PipelineWorkflow(BaseModel):
+    """The workflow a pipeline runs, with the arguments it binds."""
+
+    id: str
+    title: str
+    arguments: dict[str, Any]
+    interval_parameter: str | None = Field(
+        default=None, description="The parameter each run fills with its own interval."
+    )
+    href: str
+
+
+class DestinationSetting(BaseModel):
+    """One destination setting as its plugin names it, with what a looked-up value reads as."""
+
+    name: str
+    title: str
+    value: Any = None
+    label: str | None = Field(default=None, description="How the destination names the value, where it was looked up.")
+    rows: list[list[DestinationSetting]] | None = Field(
+        default=None, description="For a list setting, its rows, each a list of its columns."
+    )
+
+
+class PipelineDestinationView(BaseModel):
+    """The destination plugin and the resources it targets, described by the plugin's own settings form.
+
+    Labels are those resolved at the pipeline's last validation, so reading a pipeline never
+    waits for the destination. Credentials are never settings: a setting names a connection.
+    """
+
+    plugin: str
+    title: str
+    settings: list[DestinationSetting]
+
+
+class PipelineTrigger(BaseModel):
+    """What starts a run by itself."""
+
+    policy: DeliveryPolicy
+    datasets: list[str] = Field(
+        default_factory=list,
+        description="With on_update, the source datasets whose updates start a run; empty with manual.",
+    )
+
+
+class PipelineView(BaseModel):
+    """A stored pipeline as clients see it: its definition resolved, its state, and its latest run."""
+
+    spec: PipelineSpec
+    revision: int
+    created_at: str
+    updated_at: str | None = None
+    automation_since: str | None = None
+    approved: bool = Field(description="Whether the current bindings have a passed dry run, as going live needs.")
+    validation: ValidationResult | None = None
+    dry_run: DryRunResult | None = None
+    events: EventCheckpoint
+    trigger: PipelineTrigger
+    inputs: list[PipelineInput]
+    workflow: PipelineWorkflow
+    destination: PipelineDestinationView
+    latest_run: PipelineRunView | None = None
+    links: dict[str, str] = Field(description="``self`` and ``runs``.")
+
+
+class PipelineList(BaseModel):
+    """Every stored pipeline."""
+
+    kind: Literal["PipelineList"] = "PipelineList"
+    items: list[PipelineView]

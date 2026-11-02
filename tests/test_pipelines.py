@@ -1283,7 +1283,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     assert "input[data-lookup]" in create_page.text, "the lookup script is on the form page"
     assert "lookup-value" not in create_page.text, "resolved names replace ids without showing an extra uid line"
 
-    created = client.post("/pipelines", data=_FORM, follow_redirects=False)
+    created = client.post("/pipelines/new", data=_FORM, follow_redirects=False)
     assert created.status_code == 303, created.text[:800]
     record = store.get_record("rain-to-dhis2")
     assert record is not None and record.validation is not None
@@ -1301,6 +1301,16 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     assert f'Rainfall total <span class="mono note">{_ELEMENT}</span>' in shown.text
     assert "Settings as JSON" in shown.text and "&#34;data_element&#34;: &#34;LeePHYkZwBk&#34;" in shown.text
     assert "<dt>Connection</dt>" in shown.text and '<span class="mono">local</span>' in shown.text
+    # Clients read the same resources the page names, described by the plugin, from the record alone.
+    destination = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["destination"]
+    assert destination["plugin"] == "dhis2" and destination["title"] == "DHIS2"
+    assert [(item["name"], item["value"], item["label"]) for item in destination["settings"][:2]] == [
+        ("connection", "local", None),
+        ("data_set", "N63vVmt2uY0", "OCS test"),
+    ]
+    assert destination["settings"][2]["rows"] == [
+        [{"name": "data_element", "title": "Data element", "value": _ELEMENT, "label": "Rainfall total", "rows": None}]
+    ]
 
     edit_page = client.get("/pipelines/rain-to-dhis2/edit", headers={"Accept": "text/html"})
     assert 'value="N63vVmt2uY0" data-lookup="data_sets" data-label="OCS test"' in edit_page.text
@@ -1367,7 +1377,7 @@ def test_page_creates_validates_and_shows_a_pipeline(client: TestClient, monkeyp
         assert f'name="{name}"' in create_page.text, name
     assert 'name="arg.temporal_extent"' in create_page.text and "Supplied by each run" in create_page.text
     assert '<option value="rain_monthly" selected>' in create_page.text
-    created = client.post("/pipelines", data=_FORM, follow_redirects=False)
+    created = client.post("/pipelines/new", data=_FORM, follow_redirects=False)
     assert created.status_code == 303, created.text[:800]
     assert created.headers["location"].endswith("/pipelines/rain-to-dhis2")
     stored = store.get_record("rain-to-dhis2")
@@ -1465,7 +1475,7 @@ def test_detail_get_is_read_only_and_renders_stored_invalid_validation(
 
 def test_page_keeps_the_draft_on_a_bad_form(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _dhis2(monkeypatch)
-    response = client.post("/pipelines", data={**_FORM, "dest.series.0.data_element": "bad"})
+    response = client.post("/pipelines/new", data={**_FORM, "dest.series.0.data_element": "bad"})
     assert response.status_code == 400
     assert "data_element must be a DHIS2 UID" in response.text and 'value="rain-to-dhis2"' in response.text
     assert store.list_records() == []
@@ -1477,7 +1487,44 @@ def test_api_creates_dry_runs_and_switches_modes(
     _dhis2(monkeypatch)
     created = client.post("/pipelines", json=_SPEC)
     assert created.status_code == 201, created.text
-    assert created.json()["validation"]["export"]["id"] == "rain-to-dhis2" and created.json()["approved"] is False
+    view = created.json()
+    assert created.headers["Location"] == view["links"]["self"] == "/pipelines/rain-to-dhis2"
+    assert view["validation"]["export"]["id"] == "rain-to-dhis2" and view["approved"] is False
+    assert view["trigger"] == {"policy": "on_update", "datasets": ["rain_monthly"]}
+    assert [(item["kind"], item["id"], item["parameter"], item["href"]) for item in view["inputs"]] == [
+        ("dataset", "rain_monthly", "dataset_id", "/datasets/rain_monthly"),
+        ("features", "districts", "geometries", "/features/districts"),
+    ]
+    assert view["workflow"]["interval_parameter"] == "temporal_extent"
+    assert view["workflow"]["href"] == "/process_graphs/aggregate_by_features"
+    assert client.post("/pipelines", json={**_SPEC, "id": "other", "colour": "red"}).json()["detail"][0]["loc"] == [
+        "body",
+        "colour",
+    ]
+    # A spec read back is sent with the revision it was read at; its id cannot change.
+    read = {**view["spec"], "revision": view["revision"]}
+    for revision in (None, True, 0, -1):
+        refused = client.put("/pipelines/rain-to-dhis2", json={**read, "revision": revision})
+        assert refused.status_code == 422 and refused.json()["detail"][0]["loc"] == ["body", "revision"], revision
+    moved = client.put("/pipelines/rain-to-dhis2", json={**read, "id": "other"})
+    assert moved.status_code == 422 and "does not match" in moved.text
+    # Two clients read revision 1: the first change is saved, the second is refused rather than overwriting it.
+    first = client.put("/pipelines/rain-to-dhis2", json={**read, "name": "First"})
+    assert first.status_code == 200 and first.json()["revision"] == 2
+    second = client.put("/pipelines/rain-to-dhis2", json={**read, "name": "Second"})
+    assert second.status_code == 409 and "changed since revision 1" in second.text
+    assert store.get_record("rain-to-dhis2").spec.name == "First"  # type: ignore[union-attr]
+    operations = client.get("/openapi.json").json()["paths"]
+    for method, path, model in (
+        ("post", "/pipelines", "PipelineSpec"),
+        ("put", "/pipelines/{pipeline_id}", "PipelineChange"),
+    ):
+        operation = operations[path][method]
+        assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{model}"
+        }
+        assert {"403", "409", "422"} <= set(operation["responses"])
+    assert "post" not in operations["/pipelines/{pipeline_id}"]
     assert client.post("/pipelines", json=_SPEC).status_code == 409
     early = client.post("/pipelines/rain-to-dhis2/mode/live", headers={"Accept": "application/json"})
     assert early.status_code == 409 and "dry run" in early.text
@@ -1574,7 +1621,7 @@ def test_save_refuses_an_invalid_pipeline(client: TestClient, monkeypatch: pytes
     refused = client.post("/pipelines", json=_SPEC)
     assert refused.status_code == 422
     assert any(check["id"] == "dhis2_metadata" for check in refused.json()["detail"]["checks"]["checks"])
-    page = client.post("/pipelines", data=_FORM)
+    page = client.post("/pipelines/new", data=_FORM)
     assert page.status_code == 400 and "not saved" in page.text and "could not read" in page.text
     assert 'value="rain-to-dhis2"' in page.text
     assert store.list_records() == []
@@ -1588,9 +1635,9 @@ def test_edit_keeps_the_approval_only_for_the_same_bindings(
     _approve()
     form = client.get("/pipelines/rain-to-dhis2/edit", headers={"Accept": "text/html"})
     assert form.status_code == 200 and "Edit pipeline" in form.text and "readonly" in form.text
-    assert 'action="/pipelines/rain-to-dhis2"' in form.text and 'name="revision" value="1"' in form.text
+    assert 'action="/pipelines/rain-to-dhis2/edit"' in form.text and 'name="revision" value="1"' in form.text
 
-    renamed = client.post("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Renamed"})
+    renamed = client.put("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Renamed", "revision": 1})
     assert renamed.status_code == 200 and renamed.json()["approved"] is True
 
     import open_climate_service.exports.dhis2 as dhis2_module
@@ -1600,18 +1647,19 @@ def test_edit_keeps_the_approval_only_for_the_same_bindings(
     summed = {
         **_SPEC,
         "workflow": {**_SPEC["workflow"], "arguments": {**_SPEC["workflow"]["arguments"], "method": "sum"}},
+        "revision": 2,
     }
-    bad = client.post("/pipelines/rain-to-dhis2", json=summed)
+    bad = client.put("/pipelines/rain-to-dhis2", json=summed)
     assert bad.status_code == 422 and "dhis2_metadata" in bad.text
     kept = store.get_record("rain-to-dhis2")
     assert kept is not None and kept.spec.workflow.arguments["method"] == "mean" and service.approved(kept)
 
     monkeypatch.setattr(dhis2_module, "get_connection", good)
-    changed = client.post("/pipelines/rain-to-dhis2", json=summed)
+    changed = client.put("/pipelines/rain-to-dhis2", json=summed)
     assert changed.status_code == 200 and changed.json()["dry_run"] is None and changed.json()["approved"] is False
     saved = store.get_record("rain-to-dhis2")
     assert saved is not None and saved.spec.workflow.arguments["method"] == "sum" and saved.revision == 3
-    assert client.post("/pipelines/missing", json=_SPEC).status_code == 404
+    assert client.put("/pipelines/missing", json={**_SPEC, "revision": 1}).status_code == 404
 
 
 def test_a_stale_edit_is_refused_and_concurrent_run_state_is_kept(
@@ -1631,13 +1679,13 @@ def test_a_stale_edit_is_refused_and_concurrent_run_state_is_kept(
     # A run hand-off lands between the edit form being read and saved: the edit keeps it.
     store.update_record("rain-to-dhis2", _run_lands)
     saved = client.post(
-        "/pipelines/rain-to-dhis2", data={**_FORM, "name": "Renamed", "revision": "1"}, follow_redirects=False
+        "/pipelines/rain-to-dhis2/edit", data={**_FORM, "name": "Renamed", "revision": "1"}, follow_redirects=False
     )
     assert saved.status_code == 303, saved.text[:600]
     record = store.get_record("rain-to-dhis2")
     assert record is not None and record.spec.name == "Renamed" and [run.run_id for run in record.runs] == ["r1"]
 
-    stale = client.post("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Again", "revision": 1})
+    stale = client.put("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Again", "revision": 1})
     assert stale.status_code == 409 and "changed since revision 1" in stale.text
     assert store.get_record("rain-to-dhis2").spec.name == "Renamed"  # type: ignore[union-attr]
 
@@ -2687,7 +2735,7 @@ def test_changing_the_bindings_restarts_the_update_boundary(
     weekly_update = _update_event("evt-weekly", dataset_id="rain_weekly", when=datetime.now(UTC))
     runner.consume([weekly_update])  # not this pipeline's source yet
     arguments = {**_SPEC["workflow"]["arguments"], "dataset_id": "rain_weekly"}
-    edited = client.post(
+    edited = client.put(
         "/pipelines/rain-to-dhis2",
         json={
             **_SPEC,
@@ -2696,6 +2744,7 @@ def test_changing_the_bindings_restarts_the_update_boundary(
                 "plugin": "dhis2",
                 "settings": {"connection": "local", "series": [{"data_element": _ELEMENT}]},
             },
+            "revision": 1,
         },
     )
     assert edited.status_code == 200, edited.text

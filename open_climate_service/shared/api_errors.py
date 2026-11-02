@@ -10,8 +10,11 @@ from pydantic import BaseModel, Field
 class ErrorDetail(BaseModel):
     """The body of an error response."""
 
-    detail: str | dict[str, Any] = Field(
-        description="What went wrong: a message, or an object such as the validation checks that failed."
+    detail: str | dict[str, Any] | list[dict[str, Any]] = Field(
+        description=(
+            "What went wrong: a message; an object such as the validation checks that failed; "
+            "or, for a body that does not fit its schema, one entry per problem."
+        )
     )
 
 
@@ -20,6 +23,7 @@ _DESCRIPTIONS = {
     403: "This instance is read-only.",
     404: "No such resource.",
     409: "Refused in the resource's current state; the detail says why.",
+    422: "The body does not fit its schema, or the change failed a check; the detail says which.",
     503: "Not possible now; try again.",
 }
 
