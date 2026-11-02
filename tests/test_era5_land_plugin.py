@@ -14,8 +14,8 @@ _EDH_BBOX = [-1.0, 9.0, 1.0, 10.5]
 
 
 def _cds_store(variable: str, hourly_values: np.ndarray) -> xr.Dataset:
-    """Two days of hourly values on the CDS ARCO layout: -180..180 longitude, south-up latitude."""
-    times = np.arange("2020-01-01", "2020-01-03", dtype="datetime64[h]").astype("datetime64[ns]")
+    """Hourly values from 2020-01-01 00:00 on the CDS ARCO layout: -180..180 longitude, south-up latitude."""
+    times = (np.datetime64("2020-01-01T00", "h") + np.arange(len(hourly_values))).astype("datetime64[ns]")
     data = np.broadcast_to(hourly_values.reshape(-1, 1, 1), (len(times), 2, 2)).copy()
     return xr.Dataset(
         {variable: (("time", "latitude", "longitude"), data)},
@@ -65,12 +65,42 @@ def test_cds_daily_precipitation_sums_the_hours_in_mm(monkeypatch: pytest.Monkey
     assert float(day.tp.mean()) == pytest.approx(24.0)
 
 
-def test_cds_daily_periods_stop_at_the_latest_hour_in_the_store(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = _cds_store("t2m", np.zeros(48))
+def test_cds_daily_precipitation_runs_from_0100_through_the_next_midnight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """De-accumulated values are stamped at the end of their hour, so 00:00 closes the previous day."""
+    hourly = np.zeros(49)
+    hourly[0] = 0.001  # 2020-01-01 00:00: the last hour of 2019-12-31
+    hourly[1] = 0.002  # 2020-01-01 01:00: the first hour of 2020-01-01
+    hourly[24] = 0.004  # 2020-01-02 00:00: the last hour of 2020-01-01
+    store = _cds_store("tp", hourly)
     monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
-    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(variable="t2m", temporal_aggregation="mean")
+    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(
+        variable="tp", temporal_aggregation="sum", unit_transform="metres_to_mm"
+    )
 
-    assert asyncio.run(plugin.periods("2019-12-31", "2020-01-10")) == ["2019-12-31", "2020-01-01", "2020-01-02"]
+    day = plugin.fetch_period("2020-01-01", _CDS_BBOX)
+
+    assert day.sizes["t"] == 1
+    assert day.t.values[0] == np.datetime64("2020-01-01", "ns")
+    assert float(day.tp.mean()) == pytest.approx(6.0)
+
+
+@pytest.mark.parametrize(
+    ("variable", "hours", "last_day"),
+    [
+        ("t2m", 47, "2020-01-01"),  # 2020-01-02 ends at 23:00, which is not published yet
+        ("t2m", 48, "2020-01-02"),
+        ("tp", 48, "2020-01-01"),  # an accumulated day ends at 00:00 the next day
+        ("tp", 49, "2020-01-02"),
+    ],
+)
+def test_cds_daily_periods_offer_only_days_whose_last_hour_is_published(
+    monkeypatch: pytest.MonkeyPatch, variable: str, hours: int, last_day: str
+) -> None:
+    store = _cds_store(variable, np.zeros(hours))
+    monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
+    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(variable=variable, temporal_aggregation="mean")
+
+    assert asyncio.run(plugin.periods("2019-12-31", "2020-01-10"))[-1] == last_day
 
 
 def test_cds_rejects_a_variable_without_a_known_store() -> None:

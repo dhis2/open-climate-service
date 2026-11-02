@@ -53,6 +53,9 @@ _CDS_ZARR_STORES = {
     )
     for variable, group in _CDS_ZARR_VARIABLE_GROUPS.items()
 }
+# Accumulated variables (GRIB stepType "accum"): each de-accumulated value is the total over the
+# hour ending at its timestamp, so 00:00 holds the last hour of the previous day.
+_CDS_ACCUMULATED_VARIABLES = {"tp", "ssrd", "strd"}
 _CDS_TIME_DIM = "time"
 _UNIT_TRANSFORMS = {
     "kelvin_to_celsius": kelvin_to_celsius,
@@ -158,20 +161,23 @@ class ERA5LandCDSZarrDailyFromHourlyPlugin(ERA5LandCDSZarrHourlyPlugin):
             )
         super().__init__(**kwargs)
         self.temporal_aggregation = temporal_aggregation
+        # A UTC day of an accumulated variable runs from 01:00 through 00:00 the next day.
+        self._end_stamped_hours = 1 if self.variable in _CDS_ACCUMULATED_VARIABLES else 0
 
     async def periods(self, start: str, end: str) -> list[str]:
-        cutoff = super()._fetch_cutoff()
+        # Offer a day only once its last hour (23:00, or 00:00 the next day when accumulated) is published.
+        cutoff = super()._fetch_cutoff() - timedelta(hours=23 + self._end_stamped_hours)
         periods = daily_period_ids(start=start, end=end, cutoff=cutoff)
 
         return periods
 
     def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
-        start = np.datetime64(period_id, "D").astype("datetime64[ns]")
+        start = np.datetime64(period_id, "D").astype("datetime64[ns]") + np.timedelta64(self._end_stamped_hours, "h")
         hourly = self._fetch_time_range(start, start + np.timedelta64(1, "D"), bbox)
         daily = daily_reduce(
             hourly,
             how=self.temporal_aggregation,
-            time_shift={"hours": 0},
+            time_shift={"hours": -self._end_stamped_hours},
             remove_partial_periods=False,
         )
         return cast(xr.Dataset, daily)
