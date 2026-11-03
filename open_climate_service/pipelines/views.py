@@ -21,6 +21,7 @@ from open_climate_service.pipelines.schemas import (
     PipelineView,
     PipelineWorkflow,
 )
+from open_climate_service.shared.urls import path_segment
 
 
 class Names:
@@ -122,7 +123,7 @@ def pipeline_view(record: PipelineRecord, mount: str, names: Names) -> PipelineV
             title=names.workflows.get(spec.workflow.id, spec.workflow.id),
             arguments=spec.workflow.arguments,
             interval_parameter=unbound[0] if len(unbound) == 1 else None,
-            href=f"{mount}/process_graphs/{spec.workflow.id}",
+            href=f"{mount}/process_graphs/{path_segment(spec.workflow.id)}",
         ),
         destination=_destination(record),
         latest_run=runner.run_view(spec.id, record.runs[0], mount) if record.runs else None,

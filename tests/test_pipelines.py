@@ -1787,9 +1787,10 @@ class _Deliveries(list[tuple[str, str, bool, str]]):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail=f"Job '{delivery_id}' not found")
-        from open_climate_service.jobs.models import JobStatus
+        from open_climate_service.jobs.models import JobError, JobStatus
 
-        return SimpleNamespace(status=JobStatus(status), result=result)
+        error = JobError(type="ExportError", message="DHIS2 refused the payload") if status == "failed" else None
+        return SimpleNamespace(status=JobStatus(status), result=result, error=error)
 
 
 @pytest.fixture
@@ -2154,6 +2155,8 @@ def test_redelivery_is_refused_where_a_repeat_could_duplicate(
     run = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
     runner.on_job_finished(openeo.finish(run.job_id))
     deliveries.outcomes["delivery-1"] = ("failed", None)
+    failure = runner.run_view("rain-to-dhis2", store.get_record("rain-to-dhis2").runs[0], "").failure  # type: ignore[union-attr]
+    assert failure is not None and failure.message == "DHIS2 refused the payload"
     with pytest.raises(runner.RunRefused, match="does not declare that a repeated delivery is harmless"):
         runner.deliver_run("rain-to-dhis2", run.run_id, operator=True, redeliver=True)
     assert len(deliveries) == 1
@@ -2206,6 +2209,9 @@ def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(
     run = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
     runner.on_job_finished(openeo.finish(run.job_id))
     deliveries.outcomes["delivery-1"] = ("missing", None)
+    # Read as unknown before recovery records it, which a read-only instance never does.
+    polled = client.get(f"/pipelines/rain-to-dhis2/runs/{run.run_id}", headers=json_only).json()
+    assert polled["status"] == "needs_attention" and "no longer exists" in polled["failure"]["message"]
     runner.recover_runs()
     runner.recover_runs()  # resolved once, not polled or re-sent on every pass
     stored = store.get_record("rain-to-dhis2").runs[0]  # type: ignore[union-attr]

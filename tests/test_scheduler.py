@@ -116,7 +116,7 @@ def test_unmaterialized_dataset_skips_submission(monkeypatch: pytest.MonkeyPatch
     """A registered-but-never-ingested dataset must not burn worker retries (CLIM-849)."""
     submit = MagicMock()
     monkeypatch.setattr("open_climate_service.scheduler.dispatcher.api_config.is_read_only", lambda: False)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher._has_active_writer_job", lambda _: False)
+    monkeypatch.setattr("open_climate_service.scheduler.dispatcher._active_writer_job", lambda _: None)
     monkeypatch.setattr("open_climate_service.scheduler.dispatcher._dataset_is_materialized", lambda _: False)
     monkeypatch.setattr("open_climate_service.scheduler.dispatcher.submit_sync_job", submit)
 
@@ -165,7 +165,7 @@ def test_active_writer_job_prevents_duplicate_submission(process_id: str, monkey
 
     result = enqueue_sync(_schedule())
 
-    assert result.outcome == CheckOutcome.ALREADY_RUNNING
+    assert result.outcome == CheckOutcome.ALREADY_RUNNING and result.job_id == "job-123"
     submit.assert_not_called()
 
 

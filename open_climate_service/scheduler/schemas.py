@@ -54,11 +54,14 @@ class ScheduleChange(BaseModel):
 
 
 class ScheduleLinks(BaseModel):
-    """Where to follow a schedule: itself, its dataset and the sync it last submitted."""
+    """Where to follow a schedule: itself, its dataset and the sync job its last check found."""
 
     self: str
     dataset: str
-    last_job: str | None = Field(default=None, description="The last submitted sync job; poll it for its status.")
+    last_job: str | None = Field(
+        default=None,
+        description="The sync job the last check submitted, or the one already running that it waited for.",
+    )
 
 
 class ScheduleStatus(BaseModel):

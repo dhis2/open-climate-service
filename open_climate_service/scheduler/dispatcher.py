@@ -42,12 +42,17 @@ class CheckResult(BaseModel):
     checked_at: datetime = Field(default_factory=utc_now)
 
 
-def _has_active_writer_job(dataset_id: str) -> bool:
-    return any(
-        record.process_id in _ACTIVE_WRITER_PROCESS_IDS
-        and record.status in _ACTIVE_JOB_STATUSES
-        and record.request.get("dataset_id") == dataset_id
-        for record in get_job_service().list_jobs().jobs
+def _active_writer_job(dataset_id: str) -> str | None:
+    """The id of a job writing to the dataset now, if one is."""
+    return next(
+        (
+            record.job_id
+            for record in get_job_service().list_jobs().jobs
+            if record.process_id in _ACTIVE_WRITER_PROCESS_IDS
+            and record.status in _ACTIVE_JOB_STATUSES
+            and record.request.get("dataset_id") == dataset_id
+        ),
+        None,
     )
 
 
@@ -80,12 +85,14 @@ def enqueue_sync(schedule: DatasetSyncSchedule) -> CheckResult:
             message="Scheduler is disabled for a read-only instance",
         )
 
-    if _has_active_writer_job(schedule.dataset_id):
+    active_job_id = _active_writer_job(schedule.dataset_id)
+    if active_job_id is not None:
         return CheckResult(
             schedule_id=schedule.schedule_id,
             dataset_id=schedule.dataset_id,
             outcome=CheckOutcome.ALREADY_RUNNING,
             message="An active sync job already exists for this dataset",
+            job_id=active_job_id,
         )
 
     if not _dataset_is_materialized(schedule.dataset_id):

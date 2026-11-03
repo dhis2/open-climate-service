@@ -440,23 +440,29 @@ def _refresh_delivery_result(pipeline_id: str, run: PipelineRun) -> PipelineRun:
     confirm: the run records ``unknown``, so it stops being polled and waits for an operator.
     Nothing is sent again by itself.
     """
-    from open_climate_service.jobs.service import get_job_service
-
     if run.delivery_job_id is None or run.delivery_result is not None:
         return run
+    delivery = _delivery_job(run.delivery_job_id)
+    if delivery is None:
+        return _update_run(pipeline_id, run.run_id, delivery_result="unknown", error=_gone(run.delivery_job_id))
+    result = delivery_result(delivery)
+    return run if result is None else _update_run(pipeline_id, run.run_id, delivery_result=result)
+
+
+def _delivery_job(job_id: str) -> Any | None:
+    """The delivery job's record, or None when it is gone."""
+    from open_climate_service.jobs.service import get_job_service
+
     try:
-        delivery = get_job_service().get_job_or_404(run.delivery_job_id)
+        return get_job_service().get_job_or_404(job_id)
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
-        return _update_run(
-            pipeline_id,
-            run.run_id,
-            delivery_result="unknown",
-            error=f"delivery job '{run.delivery_job_id}' no longer exists; its outcome cannot be confirmed",
-        )
-    result = delivery_result(delivery)
-    return run if result is None else _update_run(pipeline_id, run.run_id, delivery_result=result)
+        return None
+
+
+def _gone(job_id: str) -> str:
+    return f"delivery job '{job_id}' no longer exists; its outcome cannot be confirmed"
 
 
 def _check_redelivery(pipeline_id: str, record: PipelineRecord, run: PipelineRun) -> PipelineRun:
@@ -897,14 +903,18 @@ def _run_status(run: PipelineRun, job_status: str, delivery_result: str | None) 
 
 
 def _run_failure(
-    run: PipelineRun, status: RunStatus, job_error: str | None, delivery_result: str | None
+    run: PipelineRun,
+    status: RunStatus,
+    job_error: str | None,
+    delivery_error: str | None,
+    delivery_result: str | None,
 ) -> RunFailure | None:
     if status == "failed":
         if run.submission == "failed":
             return RunFailure(stage="submission", message=run.error or "the job could not be submitted")
         return RunFailure(stage="job", message=job_error or run.error or f"the job ended: {run.job_outcome or 'gone'}")
     if status == "needs_attention":
-        return RunFailure(stage="delivery", message=run.error or f"the delivery ended {delivery_result}")
+        return RunFailure(stage="delivery", message=delivery_error or f"the delivery ended {delivery_result}")
     return None
 
 
@@ -913,7 +923,6 @@ def run_view(pipeline_id: str, run: PipelineRun, mount: str) -> PipelineRunView:
 
     ``mount`` is the deployment's path prefix, so links lead into OCS behind a proxy too.
     """
-    from open_climate_service.jobs.service import get_job_service
     from open_climate_service.openeo.jobs import store_get_job
 
     job = store_get_job(run.job_id)
@@ -921,20 +930,28 @@ def run_view(pipeline_id: str, run: PipelineRun, mount: str) -> PipelineRunView:
     job_error = job.error_message if job else None
     delivery_fields: dict[str, Any] = {}
     result: str | None = run.delivery_result
+    delivery_error = run.error
     if run.delivery_job_id:
         try:
-            delivery = get_job_service().get_job_or_404(run.delivery_job_id)
-            report = delivery.result if isinstance(delivery.result, dict) else {}
-            delivery_fields = {
-                "delivery_status": str(getattr(delivery.status, "value", delivery.status)),
-                "delivery_outcome": report.get("outcome"),
-                "delivery_submitted": report.get("submitted"),
-                "delivery_conflicts": len(report.get("conflicts") or []),
-            }
-            # The run records the outcome on its next pass; a client polling now sees it already.
-            result = result or delivery_result(delivery)
+            delivery = _delivery_job(run.delivery_job_id)
         except Exception:
             delivery_fields = {"delivery_status": "unknown"}
+        else:
+            # The run records the outcome on its next pass; a client polling now sees it already.
+            if delivery is None:
+                delivery_fields = {"delivery_status": "gone"}
+                if result is None:
+                    result, delivery_error = "unknown", _gone(run.delivery_job_id)
+            else:
+                report = delivery.result if isinstance(delivery.result, dict) else {}
+                delivery_fields = {
+                    "delivery_status": str(getattr(delivery.status, "value", delivery.status)),
+                    "delivery_outcome": report.get("outcome"),
+                    "delivery_submitted": report.get("submitted"),
+                    "delivery_conflicts": len(report.get("conflicts") or []),
+                }
+                result = result or delivery_result(delivery)
+                delivery_error = delivery_error or (delivery.error.message if delivery.error else None)
     status = _run_status(run, job_status, result)
     return PipelineRunView.model_validate(
         {
@@ -942,7 +959,7 @@ def run_view(pipeline_id: str, run: PipelineRun, mount: str) -> PipelineRunView:
             **delivery_fields,
             "delivery_result": result,
             "status": status,
-            "failure": _run_failure(run, status, job_error, result),
+            "failure": _run_failure(run, status, job_error, delivery_error, result),
             "links": RunLinks(
                 self=f"{mount}/pipelines/{pipeline_id}/runs/{run.run_id}",
                 job=f"{mount}/jobs/{run.job_id}" if job else None,
