@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import threading
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
@@ -121,6 +122,19 @@ async def _warm_process_registry() -> None:
         logger.exception("Could not load the openEO processes at startup; they load on first use")
 
 
+async def _measure_missing_statistics(stop: threading.Event) -> None:
+    """Measure the stores that have no statistics yet, in a worker thread, once, at startup."""
+    from open_climate_service.ingestions.services import measure_missing_statistics
+
+    try:
+        filled = await asyncio.to_thread(measure_missing_statistics, stop.is_set)
+    except Exception:
+        logger.exception("Could not measure missing dataset statistics; retrying at the next start")
+        return
+    if filled:
+        logger.info("Measured statistics for %d dataset(s) that had none", filled)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Run lightweight startup recovery hooks for the application lifecycle."""
@@ -213,6 +227,11 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     scheduler_service = get_scheduler_service()
     scheduler_service.start()
     process_registry = asyncio.create_task(_warm_process_registry())
+    # Writes records, so not on a read-only instance, which may share a writer's data directory.
+    statistics_stop = threading.Event()
+    statistics = (
+        None if api_config.is_read_only() else asyncio.create_task(_measure_missing_statistics(statistics_stop))
+    )
     try:
         yield
     finally:
@@ -221,6 +240,11 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         # finish here, so nothing of it runs after shutdown. It costs time only when the server
         # stops within seconds of starting.
         await process_registry
+        # The same, but the backfill can take minutes, so it is told to stop and only the store
+        # it is measuring is finished.
+        statistics_stop.set()
+        if statistics is not None:
+            await statistics
         if maintenance is not None:
             maintenance.cancel()
         if pipeline_recovery is not None:

@@ -464,6 +464,29 @@ class ArtifactProvenance(BaseModel):
     )
 
 
+class ArtifactStatistics(BaseModel):
+    """Measured statistics of an artifact's primary variable, named as numpy and xarray name them.
+
+    Facts about the stored values, never a display decision: how a range is drawn from them is
+    the template's choice, so changing it takes no re-sync. Every field is optional, as in STAC,
+    so a statistic added later is None on records measured before it rather than a migration.
+
+    Each field can be named in a template's `display.range`, so a new one also needs its hover
+    text in `STATISTIC_TITLES` (`system/templates.py`).
+    """
+
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    p2: float | None = None
+    p5: float | None = None
+    p25: float | None = None
+    p50: float | None = None
+    p75: float | None = None
+    p95: float | None = None
+    p98: float | None = None
+
+
 class ArtifactRecord(BaseModel):
     """Stored artifact metadata."""
 
@@ -500,6 +523,14 @@ class ArtifactRecord(BaseModel):
             "Bytes on disk at `path` when this record was written, measured once at the end of "
             "the ingest, sync, publish or refresh that wrote it. None on records written before "
             "sizes were recorded, which count as nothing towards the stored total until re-ingested."
+        ),
+    )
+    statistics: ArtifactStatistics | None = Field(
+        default=None,
+        description=(
+            "Statistics of `variable` over the whole store, measured once at the end of the "
+            "ingest, sync or publish that wrote it. None for a feature collection, for a store "
+            "with no finite value, and on records written before statistics were measured."
         ),
     )
     variables: list[str] = Field(default_factory=list)
@@ -546,6 +577,8 @@ class ArtifactRecord(BaseModel):
                 raise ValueError("a geoparquet artifact has properties rather than a measured variable")
             if self.variables:
                 raise ValueError("a geoparquet artifact has properties rather than data variables")
+            if self.statistics is not None:
+                raise ValueError("a geoparquet artifact has no measured variable to carry statistics of")
             if self.period_type is not None:
                 # Not a statement about time-varying collections: CLIM-1095 gives an observed
                 # collection a time column or a version, neither of which is a raster period.

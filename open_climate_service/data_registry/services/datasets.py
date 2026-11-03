@@ -433,6 +433,14 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
             classification_from_template(dataset)
         except ValueError as exc:
             raise ValueError(f"Dataset template '{dataset_id}' in {source}: {exc}") from exc
+    # A misspelt statistic name in `display.range` would otherwise fall back to the default
+    # range without a word, so it is refused here, where the author sees it.
+    from open_climate_service.shared.display import check_display
+
+    try:
+        check_display(dataset.get("display"))
+    except ValueError as exc:
+        raise ValueError(f"Dataset template '{dataset_id}' in {source}: {exc}") from exc
 
     sync_block = dataset.get("sync", {})
     sync_kind = sync_block.get("kind") if isinstance(sync_block, dict) else None

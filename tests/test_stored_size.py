@@ -1,4 +1,4 @@
-"""Stored sizes: recorded when a store is written, read (never measured) by the overview page.
+"""Stored sizes and statistics: recorded when a store is written, read (never measured) by pages.
 
 The overview used to walk every file of every store on a page load. On an instance with
 hundreds of thousands of chunk files, during a heavy job, that took the page from seconds to
@@ -23,6 +23,7 @@ from open_climate_service import config as api_config
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.features import services as feature_services
 from open_climate_service.ingestions import services as ingestion_services
+from open_climate_service.ingestions.schemas import ArtifactStatistics
 from open_climate_service.shared import storage_size
 from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.system import templates as landing
@@ -49,6 +50,11 @@ def _refresh_collection(collection_id: str = "districts") -> ingestion_services.
             ],
         },
     )
+
+
+def _min_max(statistics: ArtifactStatistics | None) -> tuple[float | None, float | None] | None:
+    """The exact part of the statistics; the percentiles are tested in test_artifact_statistics."""
+    return (statistics.min, statistics.max) if statistics is not None else None
 
 
 def _no_walking(*_args: object, **_kwargs: object) -> int:
@@ -83,9 +89,10 @@ def test_a_feature_refresh_records_the_size_of_the_file_it_wrote() -> None:
 
     assert record.path is not None
     assert record.size_bytes == stored_bytes(record.path) > 0
+    assert record.statistics is None
 
 
-def test_a_streaming_ingest_records_the_size_of_the_published_store(
+def test_a_streaming_ingest_records_the_size_and_statistics_of_the_published_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Driven through `create_artifact`, as the thumbnail tests are, so the wiring is covered."""
@@ -98,7 +105,7 @@ def test_a_streaming_ingest_records_the_size_of_the_published_store(
         "ingestion": {"plugin": "example.Plugin", "params": {}},
     }
     cube = xr.Dataset(
-        {"precip": (("t", "y", "x"), np.ones((3, 2, 2), dtype="float32"))},
+        {"precip": (("t", "y", "x"), np.arange(12, dtype="float32").reshape(3, 2, 2))},
         coords={"t": pd.date_range("2026-01-01", periods=3, freq="D"), "y": [1.5, 0.5], "x": [10.5, 11.5]},
     )
 
@@ -145,9 +152,10 @@ def test_a_streaming_ingest_records_the_size_of_the_published_store(
 
     assert len(recorded) == 1
     assert recorded[0].size_bytes == stored_bytes(store_path) > 0
+    assert _min_max(recorded[0].statistics) == (0.0, 11.0)
 
 
-def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
+def test_an_openeo_publish_records_the_size_and_statistics_of_the_store_it_wrote(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from open_climate_service.data_registry.services import datasets as registry
@@ -160,7 +168,7 @@ def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
     monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path / "rasters")
     (tmp_path / "rasters").mkdir()
     cube = xr.Dataset(
-        {"tp": (("t", "y", "x"), np.full((3, 2, 2), 2.0, dtype="float32"), {"units": "mm/d"})},
+        {"tp": (("t", "y", "x"), np.arange(12, dtype="float32").reshape(3, 2, 2) - 4.0, {"units": "mm/d"})},
         coords={"t": pd.date_range("2026-01-01", periods=3, freq="D"), "y": [1.0, 0.0], "x": [0.0, 1.0]},
     ).rio.write_crs("EPSG:4326")
 
@@ -169,6 +177,7 @@ def test_an_openeo_publish_records_the_size_of_the_store_it_wrote(
     records = [r for r in ingestion_services._load_records() if r.dataset_id == "published_sized"]
     assert len(records) == 1 and records[0].path is not None
     assert records[0].size_bytes == stored_bytes(records[0].path) > 0
+    assert _min_max(records[0].statistics) == (-4.0, 7.0)
 
 
 def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
@@ -245,6 +254,73 @@ def test_a_failed_append_that_keeps_its_commits_refreshes_the_recorded_size(
     after = [r for r in ingestion_services._load_records() if r.dataset_id == "growing"]
     assert stored_bytes(store_path) > (before[0].size_bytes or 0)
     assert max(after, key=lambda r: r.created_at).size_bytes == stored_bytes(store_path)
+
+
+def _published_without_statistics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleared: ArtifactStatistics | None = None
+) -> Any:
+    """A real openEO-published store whose record lost its statistics, as one written before them.
+
+    *cleared* is what the record is left holding: None, or an object missing a statistic, as a
+    record measured before a statistic was added loads."""
+    from open_climate_service.data_registry.services import datasets as registry
+    from open_climate_service.openeo import jobs
+
+    configs = tmp_path / "plugins" / "rasters"
+    configs.mkdir(parents=True)
+    monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
+    registry.reset_template_caches()
+    monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path / "rasters")
+    (tmp_path / "rasters").mkdir()
+    cube = xr.Dataset(
+        {"tp": (("t", "y", "x"), np.arange(12, dtype="float32").reshape(3, 2, 2) - 4.0, {"units": "mm/d"})},
+        coords={"t": pd.date_range("2026-01-01", periods=3, freq="D"), "y": [1.0, 0.0], "x": [0.0, 1.0]},
+    ).rio.write_crs("EPSG:4326")
+    jobs._write_managed_zarr(cube, {"dataset_id": "backfilled", "variable": "tp"})
+
+    def clear(records: list[Any]) -> None:
+        for index, stored in enumerate(records):
+            records[index] = stored.model_copy(update={"statistics": cleared})
+
+    ingestion_services._mutate_records(clear)
+    return next(r for r in ingestion_services._load_records() if r.dataset_id == "backfilled")
+
+
+@pytest.mark.parametrize("cleared", [None, ArtifactStatistics(min=-4.0)], ids=["none", "missing-one"])
+def test_the_startup_backfill_measures_stores_that_have_no_statistics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleared: ArtifactStatistics | None
+) -> None:
+    """So the declared template ranges can later go without datasets rendering unmeasured."""
+    record = _published_without_statistics(tmp_path, monkeypatch, cleared)
+    feature = _refresh_collection()
+
+    assert ingestion_services.measure_missing_statistics() == 1
+
+    stored = {r.artifact_id: r for r in ingestion_services._load_records()}
+    assert _min_max(stored[record.artifact_id].statistics) == (-4.0, 7.0)
+    assert stored[feature.artifact_id].statistics is None  # a feature collection measures nothing
+    assert ingestion_services.measure_missing_statistics() == 0  # nothing left to measure
+
+
+def test_the_backfill_keeps_statistics_a_sync_recorded_while_it_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _published_without_statistics(tmp_path, monkeypatch)
+    synced = ArtifactStatistics(**dict.fromkeys(ArtifactStatistics.model_fields, 99.0))
+
+    def measure_while_a_sync_lands(store_path: object, variable: str) -> ArtifactStatistics:
+        def sync(records: list[Any]) -> None:
+            for index, stored in enumerate(records):
+                records[index] = stored.model_copy(update={"statistics": synced})
+
+        ingestion_services._mutate_records(sync)
+        return ArtifactStatistics(min=-4.0, max=7.0)
+
+    monkeypatch.setattr(ingestion_services, "measure_statistics", measure_while_a_sync_lands)
+
+    assert ingestion_services.measure_missing_statistics() == 0
+    [stored] = [r for r in ingestion_services._load_records() if r.artifact_id == record.artifact_id]
+    assert stored.statistics == synced
 
 
 # --- read by the overview page ---------------------------------------------------------------
