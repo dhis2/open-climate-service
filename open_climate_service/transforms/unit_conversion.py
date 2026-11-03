@@ -45,6 +45,7 @@ def amount_as_rate(ds: xr.Dataset, variable: str, per: str) -> xr.Dataset:
     are missing, unparseable (``m of water equivalent``) or already a rate (``kg m-2 s-1``) are
     returned unchanged, since appending ``per`` to them would not describe the values.
     """
+    from xclim.core.units import units as registry
     from xclim.core.units import units2pint
 
     da = ds[variable]
@@ -52,7 +53,7 @@ def amount_as_rate(ds: xr.Dataset, variable: str, per: str) -> xr.Dataset:
     if not units:
         return ds
     try:
-        quantity = 1 * units2pint(units)
+        quantity = registry.Quantity(1, units2pint(units))
     except Exception:  # noqa: BLE001 — not a unit we can reason about, so leave it as declared
         return ds
     # A rate has a per-time factor: a time unit (s, d, Hz) or a power (W = J/s). Its dimensionality
