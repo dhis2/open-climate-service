@@ -256,14 +256,14 @@ Multiple YAML templates can reference the same plugin class and differentiate vi
 ```yaml
 # era5_land_cds.yaml: era5land_temperature_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: t2m
     temporal_aggregation: mean
 
 # era5_land_cds.yaml: era5land_precipitation_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: tp
     temporal_aggregation: sum

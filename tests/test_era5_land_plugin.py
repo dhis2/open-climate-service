@@ -10,7 +10,7 @@ import yaml
 from xclim.core.units import units2pint
 
 from open_climate_service.plugins.rasters import era5_land_cds, era5_land_edh
-from open_climate_service.plugins.rasters.era5_land_cds import ERA5LandCDSZarrDailyFromHourlyPlugin
+from open_climate_service.plugins.rasters.era5_land_cds import ERA5LandCDSDailyFromHourlyPlugin
 from open_climate_service.plugins.rasters.era5_land_edh import ERA5LandEDHMonthlyFromDailyPlugin
 
 _CDS_BBOX = [28.0, -3.0, 29.5, -1.5]
@@ -82,7 +82,7 @@ def test_plugin_output_units_match_the_template(monkeypatch: pytest.MonkeyPatch,
 def test_cds_daily_temperature_is_the_mean_of_the_utc_day_in_celsius(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _cds_store("t2m", np.arange(48, dtype=float) + 273.15)
     monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
-    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(
+    plugin = ERA5LandCDSDailyFromHourlyPlugin(
         variable="t2m", temporal_aggregation="mean", unit_transform="kelvin_to_celsius"
     )
 
@@ -98,9 +98,7 @@ def test_cds_daily_temperature_is_the_mean_of_the_utc_day_in_celsius(monkeypatch
 def test_cds_daily_precipitation_sums_the_hours_in_mm(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _cds_store("tp", np.full(48, 0.001))  # 1 mm every hour
     monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
-    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(
-        variable="tp", temporal_aggregation="sum", unit_transform="metres_to_mm"
-    )
+    plugin = ERA5LandCDSDailyFromHourlyPlugin(variable="tp", temporal_aggregation="sum", unit_transform="metres_to_mm")
 
     day = plugin.fetch_period("2020-01-01", _CDS_BBOX)
 
@@ -115,9 +113,7 @@ def test_cds_daily_precipitation_runs_from_0100_through_the_next_midnight(monkey
     hourly[24] = 0.004  # 2020-01-02 00:00: the last hour of 2020-01-01
     store = _cds_store("tp", hourly)
     monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
-    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(
-        variable="tp", temporal_aggregation="sum", unit_transform="metres_to_mm"
-    )
+    plugin = ERA5LandCDSDailyFromHourlyPlugin(variable="tp", temporal_aggregation="sum", unit_transform="metres_to_mm")
 
     day = plugin.fetch_period("2020-01-01", _CDS_BBOX)
 
@@ -140,24 +136,24 @@ def test_cds_daily_periods_offer_only_days_whose_last_hour_is_published(
 ) -> None:
     store = _cds_store(variable, np.zeros(hours))
     monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
-    plugin = ERA5LandCDSZarrDailyFromHourlyPlugin(variable=variable, temporal_aggregation="mean")
+    plugin = ERA5LandCDSDailyFromHourlyPlugin(variable=variable, temporal_aggregation="mean")
 
     assert asyncio.run(plugin.periods("2019-12-31", "2020-01-10"))[-1] == last_day
 
 
 def test_cds_rejects_a_variable_without_a_known_store() -> None:
     with pytest.raises(ValueError, match="zarr_url"):
-        ERA5LandCDSZarrDailyFromHourlyPlugin(variable="nope", temporal_aggregation="mean")
+        ERA5LandCDSDailyFromHourlyPlugin(variable="nope", temporal_aggregation="mean")
 
 
 def test_cds_rejects_an_unknown_aggregation() -> None:
     with pytest.raises(ValueError, match="temporal_aggregation"):
-        ERA5LandCDSZarrDailyFromHourlyPlugin(variable="t2m", temporal_aggregation="median")
+        ERA5LandCDSDailyFromHourlyPlugin(variable="t2m", temporal_aggregation="median")
 
 
 def test_cds_rejects_an_unknown_unit_transform() -> None:
     with pytest.raises(ValueError, match="unit_transform"):
-        ERA5LandCDSZarrDailyFromHourlyPlugin(variable="t2m", temporal_aggregation="mean", unit_transform="fahrenheit")
+        ERA5LandCDSDailyFromHourlyPlugin(variable="t2m", temporal_aggregation="mean", unit_transform="fahrenheit")
 
 
 # --- EDH: daily to monthly ---------------------------------------------------------------

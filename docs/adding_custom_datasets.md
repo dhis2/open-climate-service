@@ -209,14 +209,14 @@ Multiple templates can share the same plugin class and differ only in `params`:
 ```yaml
 - id: era5land_temperature_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
       variable: t2m
       temporal_aggregation: mean
 
 - id: era5land_precipitation_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
       variable: tp
       temporal_aggregation: sum

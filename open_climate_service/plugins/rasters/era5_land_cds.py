@@ -65,7 +65,7 @@ _UNIT_TRANSFORMS = {
 }
 
 
-class ERA5LandCDSZarrHourlyPlugin(BaseDatasetPlugin):
+class ERA5LandCDSHourlyPlugin(BaseDatasetPlugin):
     """Read one variable from a CDS geo-chunked ERA5-Land ARCO Zarr store."""
 
     max_concurrency = 1
@@ -159,7 +159,7 @@ class ERA5LandCDSZarrHourlyPlugin(BaseDatasetPlugin):
         return self._cached_source
 
 
-class ERA5LandCDSZarrDailyFromHourlyPlugin(ERA5LandCDSZarrHourlyPlugin):
+class ERA5LandCDSDailyFromHourlyPlugin(ERA5LandCDSHourlyPlugin):
     """Aggregate hourly ERA5-Land ARCO values into UTC calendar-day outputs."""
 
     commit_batch_size = 30
