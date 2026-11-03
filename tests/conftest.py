@@ -51,6 +51,7 @@ from open_climate_service.shared import compute, urls  # noqa: E402
 
 _connect = socket.socket.connect
 _connect_ex = socket.socket.connect_ex
+_getaddrinfo = socket.getaddrinfo
 
 
 def _local_only(address: Any) -> None:
@@ -71,6 +72,17 @@ def _local_only(address: Any) -> None:
     raise OSError(f"tests must not connect outside localhost; stub the call that reached {address}")
 
 
+def _guarded_getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
+    # Before the resolver, so an unstubbed host name fails at once instead of after a DNS timeout.
+    name = host.decode() if isinstance(host, bytes) else host
+    if isinstance(name, str) and name != "localhost":
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            raise OSError(f"tests must not resolve host names; stub the call that looked up {name!r}") from None
+    return _getaddrinfo(host, *args, **kwargs)
+
+
 def _guarded_connect(self: socket.socket, address: Any) -> None:
     _local_only(address)
     _connect(self, address)
@@ -88,11 +100,13 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # For the whole session rather than per test, so threads a test leaves running are covered too.
     socket.socket.connect = _guarded_connect  # type: ignore[method-assign]
     socket.socket.connect_ex = _guarded_connect_ex  # type: ignore[method-assign]
+    socket.getaddrinfo = _guarded_getaddrinfo
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     socket.socket.connect = _connect  # type: ignore[method-assign]
     socket.socket.connect_ex = _connect_ex  # type: ignore[method-assign]
+    socket.getaddrinfo = _getaddrinfo
     if _CALLERS_CONFIG is None:
         os.environ.pop("CLIMATE_SERVICE_CONFIG", None)
     else:
@@ -111,7 +125,7 @@ def _reset_config_cache() -> Generator[None, None, None]:
     # A job a test leaves running would otherwise hold its slot for every later test.
     compute.reset_job_slots()
     # A test that installs a plugin rescans; the plugins found before it are put back after.
-    installed_plugins = plugin_discovery._installed
+    installed_plugins = plugin_discovery._installed_plugins()
     yield
     api_config._cache = None
     xclim_processes._cache = None
