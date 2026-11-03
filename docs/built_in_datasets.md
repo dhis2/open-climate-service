@@ -8,7 +8,7 @@ To ingest a built-in dataset for your configured extent, see the [API reference]
 
 ## ERA5-Land — temperature and precipitation
 
-ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine data sources are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
+ERA5-Land provides temperature and precipitation at daily and monthly resolution. Six data sources are available. Days and months run in UTC+0; the `utc_offset_hours` setting in `climate-service.yaml` is not applied to them yet.
 
 See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 
