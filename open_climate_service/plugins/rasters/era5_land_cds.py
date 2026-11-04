@@ -11,8 +11,8 @@ from typing import Any, cast
 import numpy as np
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
+from earthkit.meteo.thermo import relative_humidity_from_dewpoint
 from earthkit.transforms.temporal import daily_reduce
-from xclim.indices import relative_humidity
 
 from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import (
@@ -243,15 +243,9 @@ class ERA5LandCDSZarrDailyRelHumPlugin(BaseDatasetPlugin):
         end = start + np.timedelta64(1, "D")
         temperature = self._temperature._fetch_time_range(start, end, bbox)["t2m"]
         dewpoint = self._dewpoint._fetch_time_range(start, end, bbox)["d2m"]
-        # ERA5 defines its dewpoint over water. xclim's "ecmwf" method is the IFS saturation
-        # formula, and without an ice threshold it stays over water too.
-        hourly_rh = relative_humidity(
-            tas=temperature.assign_attrs(units="K"),
-            tdps=dewpoint.assign_attrs(units="K"),
-            method="ecmwf",
-            invalid_values="clip",
-        )
-        # Replace xclim's attrs, which include a pint-specific ``units_metadata``.
+        # The same earthkit function as the relative_humidity_from_dewpoint process: the IFS
+        # saturation formula over water, matching ERA5's dewpoint. Both inputs are in Kelvin.
+        hourly_rh = relative_humidity_from_dewpoint(temperature, dewpoint)
         hourly_rh.attrs = {"units": "%"}
         hourly = xr.Dataset({"rh": hourly_rh.rename("rh")})
         daily = daily_reduce(
