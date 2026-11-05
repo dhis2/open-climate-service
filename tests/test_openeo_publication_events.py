@@ -908,6 +908,8 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     import jsonschema
 
     from open_climate_service import __version__
+    from open_climate_service import config as api_config
+    from tests.test_feature_store import _register
     from tests.test_initial_ingestion_event import _Plugin
 
     source = "chirps3_precipitation_daily"
@@ -925,7 +927,10 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     )
     read = openeo_jobs.store_head(Path(str(input_artifact.path)))
     recorded = {**_EVIDENCE["sources"][0], "collection_id": source, "artifact_id": input_artifact.artifact_id}
-    evidence = {**_EVIDENCE, "sources": [{**recorded, "snapshot_id": read}] * 2}
+    # A feature collection keeps its artifact id when refreshed and has no snapshot to compare.
+    monkeypatch.setattr(api_config, "get_features_root", lambda: Path(str(input_artifact.path)).parent / "vectors")
+    boundaries = {"collection_id": "districts", "artifact_id": _register().artifact_id, "snapshot_id": None}
+    evidence = {**_EVIDENCE, "sources": [{**recorded, "snapshot_id": read}] * 2 + [boundaries]}
     monkeypatch.setattr(sys.modules[__name__], "_EVIDENCE", evidence)
     _job("job-1", 5.0, monkeypatch)
     service._execute("job-1")
@@ -952,13 +957,23 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
                 "current_snapshot_id": read,
                 "changed": False,
                 "href": f"/datasets/{source}",
-            }
+            },
+            {
+                "dataset_id": "districts",
+                "source_dataset_id": None,
+                "artifact_id": boundaries["artifact_id"],
+                "snapshot_id": None,
+                "current_snapshot_id": None,
+                "changed": None,
+                "href": "/datasets/districts",
+            },
         ],
     }
     assert 'href="/jobs/job-1"' in page and f'href="/datasets/{source}"' in page
     assert "updated since" not in page
     assert [link["href"] for link in collection["links"] if link["rel"] == "derived_from"] == [
-        f"http://testserver/stac/collections/{source}"
+        f"http://testserver/stac/collections/{source}",
+        "http://testserver/stac/collections/districts",
     ]
     schema = json.loads((Path(__file__).parent / "data" / "stac_processing_v1.2.0.json").read_text())
     jsonschema.validate(collection, schema)
@@ -970,7 +985,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     synced = client.post(f"/sync/{source}", json={"end": "2026-01-03", "publish": True})
     assert synced.status_code == 200, synced.text
     detail, page, _ = shown()
-    [changed] = detail["inputs"]
+    changed, _ = detail["inputs"]
     assert changed["changed"] is True and changed["current_snapshot_id"] not in {None, read}
     assert f"{source} has been updated since this dataset was produced" in page
 

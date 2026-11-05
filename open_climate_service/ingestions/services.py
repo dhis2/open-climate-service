@@ -2921,7 +2921,9 @@ def dataset_provenance(record: ArtifactRecord) -> DatasetProvenance | None:
     """How a workflow-produced artifact was made, and which of its inputs have changed since.
 
     An input is compared with what `load_collection` would read now: a different artifact, or
-    another snapshot of the same Icechunk store, means it was re-ingested or synced since.
+    another snapshot of the same Icechunk store, means it was re-ingested or synced since. An
+    input without snapshots, such as a feature collection, keeps its artifact id when refreshed,
+    so whether it changed cannot be told.
     """
     from open_climate_service.openeo.jobs import store_head
 
@@ -2943,8 +2945,6 @@ def dataset_provenance(record: ArtifactRecord) -> DatasetProvenance | None:
         if current is not None and recorded["artifact_id"] is not None:
             if recorded["artifact_id"] != current.artifact_id:
                 changed = True
-            elif current.format != ArtifactFormat.ICECHUNK:
-                changed = False
             elif recorded["snapshot_id"] is not None and current_snapshot is not None:
                 changed = recorded["snapshot_id"] != current_snapshot
         inputs.append(

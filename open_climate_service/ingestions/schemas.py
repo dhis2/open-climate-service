@@ -712,7 +712,8 @@ class DatasetInput(BaseModel):
         default=None,
         description=(
             "Whether the input has been updated since the producing job read it. None when that "
-            "cannot be told: the job did not record what it read, or the input is no longer published."
+            "cannot be told: the job did not record what it read, the input has no snapshots (a "
+            "feature collection), or it is no longer published."
         ),
     )
     href: str = Field(description="Relative API path of the input dataset.")
