@@ -8,7 +8,8 @@
     Sentinel-3 OLCI since. Dekads from December 2025 use one month of supporting data rather
     than a year, so have more gaps in cloudy areas than the archive before them. Water, snow and
     missing observations are left empty. Values run from -0.08 to 0.92. Needs free Copernicus
-    Data Space Ecosystem S3 keys.
+    Data Space Ecosystem S3 keys. Acknowledge as: Generated using European Union's Copernicus
+    Land Monitoring Service information; DOI: 10.2909/905223f4-2c3d-4cb6-ad8c-d6d065707465.
   standard_name: normalized_difference_vegetation_index
   variable: ndvi
   period_type: dekadal

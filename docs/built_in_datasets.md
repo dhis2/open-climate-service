@@ -185,6 +185,10 @@ The Normalized Difference Vegetation Index from the Copernicus Land Monitoring S
 
 **Transforms** — the source stores each pixel as a whole number from 0 to 250, which is scaled to NDVI with the scale and offset given in each file: NDVI = 0.004 × value − 0.08. Stored values therefore run from -0.08 to 0.92. The source cannot represent NDVI outside that range, so -0.08 means -0.08 or below (mostly water) and 0.92 means 0.92 or above. Pixels the source flags as water, snow, missing or unknown are left empty.
 
+**Attribution** — the [CLMS data policy](https://land.copernicus.eu/en/data-policy) requires users to acknowledge the source when publishing or sharing the data or products made from it:
+
+> Generated using European Union's Copernicus Land Monitoring Service information; DOI: 10.2909/905223f4-2c3d-4cb6-ad8c-d6d065707465.
+
 It needs free Copernicus Data Space Ecosystem S3 keys:
 
 1. Create an account at [dataspace.copernicus.eu](https://dataspace.copernicus.eu/).
