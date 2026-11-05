@@ -368,6 +368,41 @@ def test_zarr_route_serves_plain_zarr_metadata_and_ranged_files(
     assert chunk.body == b"2345"
 
 
+def test_zarr_route_loads_records_only_when_they_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
+    monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
+    stores = {}
+    for name in ("first", "second"):
+        store_path = tmp_path / f"{name}.zarr"
+        store_path.mkdir()
+        (store_path / "chunk.bin").write_bytes(name.encode())
+        artifact = _artifact(artifact_id=name, created_at=f"2026-01-1{len(stores)}T00:00:00+00:00")
+        artifact.format = ArtifactFormat.ZARR
+        artifact.path = str(store_path)
+        artifact.asset_paths = [str(store_path)]
+        stores[name] = artifact
+    services._save_records([stores["first"]])
+    loads = 0
+    load_records = services._load_records
+
+    def counting_load_records() -> list[ArtifactRecord]:
+        nonlocal loads
+        loads += 1
+        return load_records()
+
+    monkeypatch.setattr(services, "_load_records", counting_load_records)
+
+    chunks = [services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "chunk.bin") for _ in range(3)]
+    services._save_records([stores["first"], stores["second"]])
+    after_write = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "chunk.bin")
+
+    assert [chunk.body for chunk in chunks if isinstance(chunk, services.Response)] == [b"first"] * 3
+    assert isinstance(after_write, services.Response)
+    assert after_write.body == b"second"
+    assert loads == 2
+
+
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:
     records = [
         _artifact(artifact_id="a1", created_at="2026-01-10T00:00:00+00:00", end="2026-01-10"),

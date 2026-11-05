@@ -40,6 +40,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from starlette.types import ASGIApp, Receive, Scope, Send  # noqa: E402
 
 from open_climate_service import config as api_config  # noqa: E402
+from open_climate_service.ingestions import services as ingestion_services  # noqa: E402
 from open_climate_service.main import app  # noqa: E402
 from open_climate_service.openeo import earthkit_processes, xclim_processes  # noqa: E402
 from open_climate_service.shared import compute, urls  # noqa: E402
@@ -69,6 +70,9 @@ def _reset_config_cache() -> Generator[None, None, None]:
     urls._forget_base_url_warnings()
     # A job a test leaves running would otherwise hold its slot for every later test.
     compute.reset_job_slots()
+    # Keyed on records.json, so a test that patches the lookup itself would otherwise be
+    # served whatever an earlier test cached for the same file.
+    ingestion_services._store_artifacts_cache = None
     yield
     api_config._cache = None
     xclim_processes._cache = None
