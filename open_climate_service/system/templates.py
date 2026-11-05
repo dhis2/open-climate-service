@@ -448,8 +448,23 @@ def _dataset_page_context(
     def present(facts: list[Fact]) -> list[Fact]:
         return [fact for fact in facts if fact[1]]
 
+    provenance = record.provenance
+    provenance_facts: list[Fact] = []
+    if provenance is not None:
+        provenance_facts = [
+            ("Producing job", provenance.producer_job_id, provenance.producer_job_href),
+            *(
+                ("Input", f"{item.dataset_id} (updated since)" if item.changed else item.dataset_id, item.href)
+                for item in provenance.inputs
+            ),
+            ("Process graph digest", provenance.process_sha256 or "", None),
+            ("OCS version", provenance.ocs_version or "", None),
+        ]
+
     return {
         "dataset": summary,
+        "provenance_facts": present(provenance_facts),
+        "changed_inputs": [item.dataset_id for item in provenance.inputs if item.changed] if provenance else [],
         "classes": classes,
         # Static datasets and workflow outputs have no upstream to sync from; the console offers
         # the button for them and the planner answers "not syncable", which is noise here.

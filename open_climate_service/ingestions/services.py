@@ -41,8 +41,10 @@ from open_climate_service.ingestions.schemas import (
     CoverageTemporal,
     DatasetAccessLink,
     DatasetDetailRecord,
+    DatasetInput,
     DatasetItemType,
     DatasetListResponse,
+    DatasetProvenance,
     DatasetPublication,
     DatasetRecord,
     DatasetVersionRecord,
@@ -2893,6 +2895,77 @@ def _build_dataset_detail_record(dataset_id: str, artifacts: list[ArtifactRecord
             )
             for artifact in ordered_artifacts
         ],
+        provenance=dataset_provenance(ordered_artifacts[0]),
+    )
+
+
+def recorded_inputs(record: ArtifactRecord) -> list[dict[str, str | None]]:
+    """The inputs the producing job read, once each: their dataset, source, artifact and snapshot ids.
+
+    Only these ids leave the recorded execution evidence, so nothing else it may hold is
+    published. A collection the graph loaded more than once is listed once.
+    """
+    execution = record.provenance.execution if record.provenance is not None else None
+    sources = execution.get("sources") if isinstance(execution, dict) else None
+    inputs: list[dict[str, str | None]] = []
+    for source in sources if isinstance(sources, list) else []:
+        if not isinstance(source, dict) or not isinstance(source.get("collection_id"), str):
+            continue
+        entry = {key: source.get(key) for key in ("collection_id", "source_dataset_id", "artifact_id", "snapshot_id")}
+        if entry not in inputs:
+            inputs.append(entry)
+    return inputs
+
+
+def dataset_provenance(record: ArtifactRecord) -> DatasetProvenance | None:
+    """How a workflow-produced artifact was made, and which of its inputs have changed since.
+
+    An input is compared with what `load_collection` would read now: a different artifact, or
+    another snapshot of the same Icechunk store, means it was re-ingested or synced since.
+    """
+    from open_climate_service.openeo.jobs import store_head
+
+    provenance = record.provenance
+    if provenance is None:
+        return None
+    execution = provenance.execution or {}
+    current_artifacts = openeo_collection_artifacts_by_dataset()
+    inputs: list[DatasetInput] = []
+    for recorded in recorded_inputs(record):
+        dataset_id = str(recorded["collection_id"])
+        current = current_artifacts.get(dataset_id)
+        current_snapshot = (
+            store_head(Path(current.path))
+            if current is not None and current.format == ArtifactFormat.ICECHUNK and current.path
+            else None
+        )
+        changed: bool | None = None
+        if current is not None and recorded["artifact_id"] is not None:
+            if recorded["artifact_id"] != current.artifact_id:
+                changed = True
+            elif current.format != ArtifactFormat.ICECHUNK:
+                changed = False
+            elif recorded["snapshot_id"] is not None and current_snapshot is not None:
+                changed = recorded["snapshot_id"] != current_snapshot
+        inputs.append(
+            DatasetInput(
+                dataset_id=dataset_id,
+                source_dataset_id=recorded["source_dataset_id"],
+                artifact_id=recorded["artifact_id"],
+                snapshot_id=recorded["snapshot_id"],
+                current_snapshot_id=current_snapshot,
+                changed=changed,
+                href=f"/datasets/{_segment(dataset_id)}",
+            )
+        )
+    process_sha256 = execution.get("process_sha256")
+    return DatasetProvenance(
+        producer_job_id=provenance.producer_job_id,
+        producer_job_href=f"/jobs/{_segment(provenance.producer_job_id)}",
+        process_sha256=process_sha256 if isinstance(process_sha256, str) else None,
+        ocs_version=provenance.ocs_version,
+        output_snapshot_id=provenance.output_snapshot_id,
+        inputs=inputs,
     )
 
 
