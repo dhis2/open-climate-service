@@ -1,7 +1,12 @@
 """NDVI from the Copernicus Land Monitoring Service (CLMS), global, 300 m, 10-daily (V3).
 
 One composite per dekad (days 1-10, 11-20 and 21 to the end of the month) from 2014, from
-PROBA-V until 2018 and Sentinel-3 OLCI since, published once a few days after the dekad ends.
+PROBA-V until 2018 and Sentinel-3 OLCI since, published a few days after the dekad ends.
+CLMS replaces a dekad with a new production run to fix an issue (V3.0.1 to V3.0.2), and can release
+minor versions (V3.1). A dekad already in the store is not fetched again, so either needs a user to
+detect and trigger a full re-ingestion. Each dekad's STAC item carries its version in the
+``processing:version`` property, but the plugin does not yet detect or handle version changes.
+
 Items are found through the Copernicus Data Space Ecosystem (CDSE) STAC API, which needs no
 account. Each is a global cloud-optimised GeoTIFF on a 1/336 degree EPSG:4326 grid in the CDSE
 S3 store, of which only the window inside the extent is read. Reading needs free CDSE S3 keys in
