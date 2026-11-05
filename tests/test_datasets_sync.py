@@ -26,7 +26,16 @@ from open_climate_service.ingestions.schemas import (
     SyncKind,
     SyncResponse,
 )
+from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
 from open_climate_service.shared.time import next_period_string
+
+
+@pytest.fixture(autouse=True)
+def _chirps3_published_through_september(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Many tests here plan syncs through the real CHIRPS3 plugin, whose period listing probes
+    # the CHC server for the newest published month. Pin it, so the outcome does not depend on
+    # the network or on what CHC has published that day.
+    monkeypatch.setattr(CHIRPS3DailyPlugin, "_availability_cutoff", lambda self: date(2026, 9, 30))
 
 
 def _version(value: str, authority: str = "worldpop") -> ArtifactVersion:
