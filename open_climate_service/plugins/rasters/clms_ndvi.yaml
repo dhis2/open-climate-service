@@ -3,10 +3,12 @@
   short_name: NDVI
   description: >-
     Normalized Difference Vegetation Index at 300 m, worldwide, from 2014 onwards, one value per
-    dekad (days 1-10, 11-20 and 21 to the end of the month), a few days after the dekad ends.
-    From PROBA-V until 2018 and Sentinel-3 OLCI since. Water, snow and missing observations are
-    left empty. Values run from -0.08 to 0.92; dense green vegetation is above 0.6, bare soil and
-    sand near 0.1. Needs free Copernicus Data Space Ecosystem S3 keys.
+    dekad (days 1-10, 11-20 and 21 to the end of the month) drawing on the 30 days ending with
+    it, published within about two days after the dekad ends. From PROBA-V until 2018 and
+    Sentinel-3 OLCI since. Dekads from December 2025 use one month of supporting data rather
+    than a year, so have more gaps in cloudy areas than the archive before them. Water, snow and
+    missing observations are left empty. Values run from -0.08 to 0.92. Needs free Copernicus
+    Data Space Ecosystem S3 keys.
   standard_name: normalized_difference_vegetation_index
   variable: ndvi
   period_type: dekadal
