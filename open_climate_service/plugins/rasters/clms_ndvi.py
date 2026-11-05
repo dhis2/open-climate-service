@@ -13,7 +13,8 @@ S3 store, of which only the window inside the extent is read. Reading needs free
 the ``cdse`` profile of ``~/.aws/credentials``; GDAL reads the profile itself.
 
 Raw values 0-250 are NDVI, scaled with the file's own scale and offset (``0.004 * value - 0.08``);
-252 (unknown), 253 (snow), 254 (water) and 255 (missing) become NaN.
+252 (unknown), 253 (snow), 254 (water) and 255 (missing) become NaN, and so does 251, which the
+product does not use, so that every value above the valid range is masked.
 """
 
 from __future__ import annotations
