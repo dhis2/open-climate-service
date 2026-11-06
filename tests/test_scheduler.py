@@ -253,7 +253,7 @@ def test_service_skips_future_facing_schedule_without_failing_startup(monkeypatc
     scheduler.start.assert_called_once_with()
     assert _sync_jobs(scheduler) == []
     assert service.status().schedules[0].last_outcome == CheckOutcome.ERROR
-    assert "future-facing" in (service.status().schedules[0].last_message or "")
+    assert "cannot be synced on a schedule yet" in (service.status().schedules[0].last_message or "")
 
 
 def test_service_skips_static_schedule_without_failing_startup(monkeypatch: pytest.MonkeyPatch) -> None:
