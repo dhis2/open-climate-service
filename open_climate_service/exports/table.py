@@ -157,18 +157,21 @@ class TableExportPlugin(BaseExportPlugin):
         limit: int = 5,
     ) -> list[dict[str, Any]]:
         """The first rows by period, then feature, each feature shown by name when it has one."""
+        from open_climate_service.tables.store import period_label
+
         try:
-            rows = _read_payload(content)[0].to_pylist()
+            table, _name, period_type = _read_payload(content)
         except Exception:
             return []
-        rows.sort(key=lambda row: (row["period"], row["feature_id"]))
+        rows = table.to_pylist()
+        rows.sort(key=lambda row: (row["period_start"], row["feature_id"]))
         sample: list[dict[str, Any]] = []
         for row in rows[:limit]:
             name = row.get("feature_name")
             sample.append(
                 {
                     "feature": {"value": row["feature_id"], "label": name} if name else row["feature_id"],
-                    "period": row["period"].isoformat(),
+                    "period": period_label(row["period_start"], period_type),
                     "value": row["value"],
                     "reducer": row["reducer"],
                 }
@@ -208,7 +211,7 @@ class TableExportPlugin(BaseExportPlugin):
             {
                 "feature_id": str(record[id_field]),
                 "feature_name": names.get(str(record[id_field])),
-                "period": _period(record[_PERIOD_FIELD]),
+                "period_start": _period(record[_PERIOD_FIELD]),
                 "value": _value(record[value_field]),
                 "reducer": reducer,
                 "unit": mapping.get("unit"),
@@ -226,10 +229,16 @@ class TableExportPlugin(BaseExportPlugin):
         metadata = {**(table.schema.metadata or {}), _NAME_KEY: mapping.get("name", mapping["dataset_id"]).encode()}
         sink = pa.BufferOutputStream()
         pq.write_table(table.replace_schema_metadata(metadata), sink)
+        # The period type the store settled on, which may be the dataset's own.
+        resolved = metadata.get(store.PERIOD_TYPE_KEY)
+        period_type = resolved.decode() if resolved else None
         return RenderedExport(
             content=sink.getvalue().to_pybytes(),
             record_count=table.num_rows,
-            periods=tuple(sorted({period.isoformat() for period in table.column("period").to_pylist()})),
+            periods=tuple(
+                store.period_label(start, period_type)
+                for start in sorted(set(table.column("period_start").to_pylist()))
+            ),
         )
 
     def send(

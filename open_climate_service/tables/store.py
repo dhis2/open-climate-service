@@ -45,7 +45,7 @@ SCHEMA = pa.schema(
         pa.field("feature_id", pa.string(), nullable=False),
         pa.field("feature_name", pa.string()),
         pa.field("dataset_id", pa.string(), nullable=False),
-        pa.field("period", pa.date32(), nullable=False),
+        pa.field("period_start", pa.date32(), nullable=False),
         pa.field("class", pa.string()),
         pa.field("reducer", pa.string()),
         pa.field("weights", pa.string()),
@@ -71,7 +71,7 @@ KEY = (
     "collection_version",
     "feature_id",
     "dataset_id",
-    "period",
+    "period_start",
     "class",
     "reducer",
     "weights",
@@ -83,10 +83,10 @@ KEY = (
 
 PERIOD_TYPE_KEY = b"ocs:period_type"
 """Parquet metadata key holding the dataset's period type, so a reader of the files alone knows
-whether `period` starts a day, a month or a year."""
+whether `period_start` starts a day, a month or a year."""
 
 _WRITABLE = frozenset(SCHEMA.names) - {"written_at"}
-_REQUIRED = ("feature_id", "period", "value")
+_REQUIRED = ("feature_id", "period_start", "value")
 
 _dataset_locks: dict[str, threading.Lock] = {}
 _dataset_locks_mutex = threading.Lock()
@@ -150,7 +150,7 @@ def check_rows(
     """Return *rows* as the table `write_rows` would append, or raise ValueError; nothing is written.
 
     For a dry run, which needs the writer's verdict without the write. Every row names a
-    `feature_id` of the registered collection, a `period` and a `value`; the other `SCHEMA`
+    `feature_id` of the registered collection, a `period_start` and a `value`; the other `SCHEMA`
     columns are optional. `dataset_id` and `collection_id` come from the arguments, and a row
     that names others is refused. A missing value is None (NaN is read as None); a value with
     `coverage` 0 is refused, because a unit without valid cells has no value, and 0 would be
@@ -159,7 +159,7 @@ def check_rows(
 
     A dataset has one period type, the first one written. A *period_type* that differs from it is
     refused; None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`), and each
-    `period` is stored as the start of the period that contains it (`period_start`).
+    `period_start` is stored as the first day of the period that contains it (`start_of_period`).
     """
     _require_id(dataset_id, "table dataset")
     _require_id(collection_id, "feature collection")
@@ -175,7 +175,7 @@ def check_rows(
             raise ValueError(
                 f"row {index}: feature '{clean['feature_id']}' is not in feature collection '{collection_id}'"
             )
-        clean["period"] = period_start(clean["period"], period_type)
+        clean["period_start"] = start_of_period(clean["period_start"], period_type)
         clean["written_at"] = stamp
         key = tuple(clean.get(name) for name in KEY)
         if key in seen:
@@ -203,16 +203,16 @@ def read_rows(
 
     Current values only, unless *history* asks for every row ever written. The filters are all
     on key columns, so filtering before picking the latest row per key gives the same answer as
-    filtering after it. *start* and *end* are inclusive period starts.
+    filtering after it. *start* and *end* bound `period_start`, inclusive.
     """
     files = _files(Path(str(record.path)), collection_id)
     if not files:
         return SCHEMA.empty_table()
     conditions = []
     if start is not None:
-        conditions.append(pc.field("period") >= start)
+        conditions.append(pc.field("period_start") >= start)
     if end is not None:
-        conditions.append(pc.field("period") <= end)
+        conditions.append(pc.field("period_start") <= end)
     if reducer is not None:
         conditions.append(pc.field("reducer") == reducer)
     if weights is not None:
@@ -227,7 +227,7 @@ def read_rows(
         [
             ("collection_id", "ascending"),
             ("feature_id", "ascending"),
-            ("period", "ascending"),
+            ("period_start", "ascending"),
             ("written_at", "ascending"),
         ]
     )
@@ -287,8 +287,10 @@ def _coverage(dataset_id: str, period_type: str | None) -> ArtifactCoverage:
 
     root = _dataset_root(dataset_id)
     files = _files(root, None)
-    periods = pds.dataset([str(path) for path in files], schema=SCHEMA, format="parquet").to_table(columns=["period"])
-    dates = periods.column("period").unique().to_pylist()
+    periods = pds.dataset([str(path) for path in files], schema=SCHEMA, format="parquet").to_table(
+        columns=["period_start"]
+    )
+    dates = periods.column("period_start").unique().to_pylist()
     first, last = min(dates), max(dates)
     collections = registered_collections()
     boxes = [
@@ -343,7 +345,7 @@ def _validated_row(row: object, *, index: int, dataset_id: str, collection_id: s
     feature_id = row["feature_id"]
     if not isinstance(feature_id, str) or not feature_id:
         raise ValueError(f"row {index}: feature_id must be a non-empty string")
-    clean["period"] = _period(row["period"], index=index)
+    clean["period_start"] = _period(row["period_start"], index=index)
     clean["value"] = _number(row["value"], "value", index=index)
     coverage = _number(row.get("coverage"), "coverage", index=index)
     if coverage is not None and not 0 <= coverage <= 1:
@@ -364,7 +366,7 @@ def _validated_row(row: object, *, index: int, dataset_id: str, collection_id: s
     return clean
 
 
-def period_start(day: date, period_type: str | None) -> date:
+def start_of_period(day: date, period_type: str | None) -> date:
     """The first day of the *period_type* period that contains *day*; *day* itself for any other.
 
     Producers label a period by different days: pandas resampling dates a month by its last day
@@ -386,6 +388,26 @@ def period_start(day: date, period_type: str | None) -> date:
     return day
 
 
+def end_of_period(start: date, period_type: str | None) -> date | None:
+    """The last day, inclusive, of the *period_type* period starting on *start*; None for a type without one."""
+    import calendar
+
+    from open_climate_service.shared.time import dekad_bounds
+
+    if period_type == "daily":
+        return start
+    if period_type == "weekly":
+        return start + timedelta(days=6)
+    if period_type == "dekadal":
+        return dekad_bounds(start)[1]
+    if period_type in ("monthly", "quarterly"):
+        month = start.month + (2 if period_type == "quarterly" else 0)
+        return start.replace(month=month, day=calendar.monthrange(start.year, month)[1])
+    if period_type == "yearly":
+        return start.replace(month=12, day=31)
+    return None
+
+
 def period_label(day: date, period_type: str | None) -> str:
     """How OCS names the period starting on *day*, as raster datasets name theirs: `2026-01`, `2026-W01`, `2026`.
 
@@ -404,7 +426,7 @@ def period_label(day: date, period_type: str | None) -> str:
 def _period(value: object, *, index: int) -> date:
     """A period start as a date, from a date or an ISO date string. A datetime is refused: periods are days."""
     if isinstance(value, datetime):
-        raise ValueError(f"row {index}: period must be a date, not a datetime")
+        raise ValueError(f"row {index}: period_start must be a date, not a datetime")
     if isinstance(value, date):
         return value
     if isinstance(value, str):
@@ -412,7 +434,7 @@ def _period(value: object, *, index: int) -> date:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    raise ValueError(f"row {index}: period must be a date or an ISO date string, got {value!r}")
+    raise ValueError(f"row {index}: period_start must be a date or an ISO date string, got {value!r}")
 
 
 def _number(value: object, name: str, *, index: int) -> float | None:

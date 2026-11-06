@@ -20,8 +20,8 @@ router = APIRouter()
 def get_table_rows(
     dataset_id: str,
     collection: str | None = Query(default=None, description="Feature collection id, e.g. districts."),
-    start: date | None = Query(default=None, description="First period start to return, inclusive."),
-    end: date | None = Query(default=None, description="Last period start to return, inclusive."),
+    start: date | None = Query(default=None, description="Earliest period_start to return, inclusive."),
+    end: date | None = Query(default=None, description="Latest period_start to return, inclusive."),
     reducer: str | None = Query(default=None, description="Only rows computed with this reducer, e.g. mean."),
     weights: str | None = Query(default=None, description="Only rows weighted by this dataset, e.g. population."),
     history: bool = Query(
@@ -32,9 +32,9 @@ def get_table_rows(
 ) -> Response:
     """Return a published table dataset's rows, as JSON or CSV.
 
-    One row per feature, period and value key. `period` is the period's first day, and
-    `period_label` names it as raster datasets do (`2026-01`, `2026-W01`, `2026`). A missing value
-    is null in JSON and empty in CSV.
+    One row per feature, period and value key. `period` names the period as raster datasets do
+    (`2026-01`, `2026-W01`, `2026`); `period_start` and `period_end` are its first and last day.
+    A missing value is null in JSON and empty in CSV.
     """
     record = _published_table_or_404(dataset_id)
     table = store.read_rows(
@@ -64,14 +64,17 @@ def _published_table_or_404(dataset_id: str) -> ArtifactRecord:
 
 
 def _labelled(rows: list[dict[str, Any]], period_type: str | None) -> list[dict[str, Any]]:
-    """Each row with `period_label` right after `period`; computed here, never stored."""
+    """Each row with `period` and `period_end` around the stored `period_start`; computed here, never stored."""
     labelled: list[dict[str, Any]] = []
     for row in rows:
         item: dict[str, Any] = {}
         for name, value in row.items():
-            item[name] = value
-            if name == "period":
-                item["period_label"] = store.period_label(value, period_type)
+            if name == "period_start":
+                item["period"] = store.period_label(value, period_type)
+                item["period_start"] = value
+                item["period_end"] = store.end_of_period(value, period_type)
+            else:
+                item[name] = value
         labelled.append(item)
     return labelled
 
@@ -81,7 +84,9 @@ def _csv(rows: list[dict[str, Any]]) -> str:
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
     columns = [
-        label for name in store.SCHEMA.names for label in ((name, "period_label") if name == "period" else (name,))
+        label
+        for name in store.SCHEMA.names
+        for label in (("period", "period_start", "period_end") if name == "period_start" else (name,))
     ]
     writer.writerow(columns)
     for row in rows:
