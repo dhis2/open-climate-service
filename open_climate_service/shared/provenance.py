@@ -196,7 +196,7 @@ def record_incomplete_periods(labels: Sequence[str]) -> None:
 
 
 def record_completeness_unknown(reason: str) -> None:
-    """Note that destination periods could not be checked for completeness; the export refuses them."""
+    """Note that destination periods could not be checked for completeness; the destination refuses them."""
     scope = _temporal_scope.get()
     if scope is not None:
         scope["unknown"] = reason

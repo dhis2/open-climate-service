@@ -1,4 +1,4 @@
-"""An export's period must be reachable from its source cadence (CLIM-1302), and CLIM-1139's collision.
+"""A destination's period must be reachable from its source cadence (CLIM-1302), and CLIM-1139's collision.
 
 Three layers are covered here: the reachability table and completeness arithmetic in
 `shared.time`; the declaration checked at configuration time and the evidence checked at
@@ -705,7 +705,7 @@ def test_sparse_daily_input_is_not_read_as_a_coarser_cadence(
 def test_unknown_source_cadence_cannot_pass_as_complete(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With nothing declared and a sparse axis, completeness is unverifiable and the export refuses."""
+    """With nothing declared and a sparse axis, completeness is unverifiable and the destination refuses."""
     _destination_config(monkeypatch, temporal_aggregation="sum")
     monkeypatch.setattr(registry, "get_dataset", lambda dataset_id: None)
     daily_instance.coverage_end["step"] = 2  # type: ignore[attr-defined]

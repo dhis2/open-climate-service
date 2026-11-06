@@ -186,7 +186,7 @@ def aggregate_dekads(
         weights = [w for _, w in contributions[start]]
         # Coverage is independent of the reducer. A mean over fewer dekads is numerically
         # meaningful, but it still does not represent a complete destination period and must
-        # be visible to an export's completeness gate.
+        # be visible to a destination's completeness gate.
         period_days = (_target_end(start, period) - start).days + 1
         if sum(weights) < period_days:
             incomplete.append(start.isoformat())
