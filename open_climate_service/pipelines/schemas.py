@@ -235,7 +235,7 @@ class PipelineRun(BaseModel):
     delivered_at: str | None = None
     error: str | None = None
     events: list[JobEvent] = Field(
-        default_factory=list, description="Automation events for the run's final outcomes, persisted with the run."
+        default_factory=list, description="Automation events for changes in the pipeline's health this run caused."
     )
 
 
@@ -387,6 +387,9 @@ class PipelineRecord(BaseModel):
     dry_run: DryRunResult | None = None
     runs: list[PipelineRun] = Field(
         default_factory=list, description="Newest first; settled runs beyond the retained number are dropped."
+    )
+    alerting: bool = Field(
+        default=False, description="Whether the pipeline's last automation event reported it failing."
     )
     events: EventCheckpoint = Field(default_factory=EventCheckpoint)
 

@@ -2195,7 +2195,7 @@ def test_handed_off_is_not_delivered_until_the_delivery_job_confirms(
     assert [runner._settled(by_id[run_id], superseded) for run_id in runs] == [True, False, False, False, False, False]
 
 
-def test_a_failing_pipeline_posts_once_and_again_when_it_recovers(
+def test_a_failing_pipeline_posts_once_and_again_when_it_recovers_or_is_resolved(
     instance: None,
     openeo: _FakeOpenEO,
     deliveries: _Deliveries,
@@ -2220,34 +2220,38 @@ def test_a_failing_pipeline_posts_once_and_again_when_it_recovers(
 
     webhook.enabled = False
     run(1, "failed")  # before notifications were configured: history, never posted
+    run(2, "successful")
     webhook.enabled = True
     notifications.replay()
-    failing = run(2, "failed")
-    run(3, "failed")  # still the same failure episode
+    failing = run(3, "failed")
+    run(4, "failed")  # still the same failure episode
     webhook.status = 503
-    recovered = run(4, "successful")
+    recovered = run(5, "successful")
     webhook.status = 200
     notifications.replay()  # the refused recovery is not due again yet
     later = datetime.now(UTC) + timedelta(minutes=3)
     monkeypatch.setattr(notifications, "utc_now", lambda: later)
     notifications.replay()
-    older = run(5, "failed")
-    run(6, "failed")
-    # Health is per pipeline: settling an older run reads as recovered while a newer one still fails.
-    runner.acknowledge_delivery("rain-to-dhis2", older.run_id)
+    older = run(6, "failed")
+    newer = run(7, "failed")
+    runner.acknowledge_delivery("rain-to-dhis2", older.run_id)  # the newer run still fails
+    runner.acknowledge_delivery("rain-to-dhis2", newer.run_id)
 
-    outcomes = [event for event in persisted_events() if event.type.startswith("automation.")]
-    assert [event.type for event in outcomes] == ["automation.failed"] * 3 + ["automation.succeeded"] + [
-        "automation.failed"
-    ] * 2 + ["automation.succeeded"]
+    outcomes = [
+        event.type.removeprefix("automation.") for event in persisted_events() if event.type.startswith("automation.")
+    ]
+    assert outcomes == ["failed", "succeeded", "failed", "succeeded", "failed", "resolved"]
     assert [(status, body["type"]) for status, _, body in webhook.posts] == [
         (200, "failed"),
         (503, "recovered"),
         (200, "recovered"),
         (200, "failed"),
-        (200, "recovered"),
+        (200, "resolved"),
     ]
-    assert webhook.posts[-1][1] == f"{older.run_id}:1"
+    assert webhook.posts[-1][1] == f"{newer.run_id}:0"
+    assert webhook.posts[-1][2]["text"] == (
+        "Pipeline 'rain-to-dhis2' failure was acknowledged by an operator /pipelines/rain-to-dhis2"
+    )
     (_, failure_key, failure), (_, first_key, _), (_, retry_key, recovery) = webhook.posts[:3]
     assert failure_key == failure["event"] == f"{failing.run_id}:0"
     assert first_key == retry_key == f"{recovered.run_id}:0"

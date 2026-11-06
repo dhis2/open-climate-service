@@ -13,11 +13,14 @@ DATASET_UPDATED_EVENT_TYPE = "dataset.updated"
 
 AUTOMATION_FAILED_EVENT_TYPE = "automation.failed"
 AUTOMATION_SUCCEEDED_EVENT_TYPE = "automation.succeeded"
-"""Event types persisted with the final outcome of automated work: a scheduled sync or a pipeline run.
+AUTOMATION_RESOLVED_EVENT_TYPE = "automation.resolved"
+"""Event types persisted with the outcome of automated work: a scheduled sync or a pipeline.
 
-The event's ``source`` is the automation it reports on (``/schedules/sync/{dataset_id}`` or
-``/pipelines/{pipeline_id}``), and ``data`` holds ``stage`` and ``message`` for a failure, the
-``job`` or ``run`` it concerns, and ``href``, the path of that job or run.
+``failed``: it needs attention. ``succeeded``: it ran and succeeded. ``resolved``: an operator
+acknowledged the failure, which is not a success. The event's ``source`` is the automation it
+reports on (``/schedules/sync/{dataset_id}`` or ``/pipelines/{pipeline_id}``), and ``data`` holds
+``stage`` and ``message`` for a failure, the ``job`` or ``run`` it concerns, and ``href``, the
+path of that job or run.
 """
 
 

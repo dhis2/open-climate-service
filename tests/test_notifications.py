@@ -44,6 +44,71 @@ def _outcome(pipeline_id: str, number: int, clock: _Clock, *, failed: bool) -> J
     )
 
 
+def test_replay_starts_delivery_without_posting_in_the_startup_thread(
+    clock: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.jobs import events as job_events
+
+    kicked: list[bool] = []
+    monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ocs")
+    monkeypatch.setattr(job_events, "persisted_events", lambda: [])
+    monkeypatch.setattr(notifications, "_kick", lambda: kicked.append(True))
+    monkeypatch.setattr(notifications, "send_due", lambda: pytest.fail("replay posted synchronously"))
+
+    notifications.replay()
+
+    assert kicked == [True]
+
+
+def test_replay_reconstructs_transitions_when_an_older_failure_appears_late(
+    clock: _Clock, webhook: WebhookReceiver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.jobs import events as job_events
+
+    # Startup established the notification boundary before either outcome.
+    notifications._decide([], since=clock.now)
+    clock.now += timedelta(minutes=1)
+    failure = _outcome("rain", 1, clock, failed=True)
+    clock.now += timedelta(minutes=1)
+    success = _outcome("rain", 2, clock, failed=False)
+
+    # The success callback arrives while the older failure is not visible in the log yet.
+    monkeypatch.setattr(job_events, "persisted_events", lambda: [success])
+    notifications.consume([success])
+    assert webhook.posts == []
+
+    # A later replay sees the durable chronology and reports both transitions in order.
+    monkeypatch.setattr(job_events, "persisted_events", lambda: [failure, success])
+    notifications.replay()
+
+    assert [(body["type"], key) for _, key, body in webhook.posts] == [
+        ("failed", failure.event_id),
+        ("recovered", success.event_id),
+    ]
+
+
+def test_a_stale_sender_cannot_settle_another_senders_claim(clock: _Clock) -> None:
+    source = "/pipelines/rain"
+    current = notifications._Queued(
+        event_id="rain-run-1:0",
+        source=source,
+        payload={"type": "failed"},
+        next_attempt_at=clock.now,
+        claimed_until=clock.now + timedelta(minutes=2),
+        claim_id="new-sender",
+    )
+    notifications.atomic_json(
+        notifications._path(),
+        notifications._State(since=clock.now, queue=[current]).model_dump(mode="json"),
+    )
+    stale = current.model_copy(update={"claim_id": "stale-sender"})
+
+    notifications._settle(notifications._read(clock.now), stale, True, clock.now)
+
+    [kept] = notifications._read(clock.now).queue
+    assert kept.claim_id == "new-sender"
+
+
 def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_its_recovery(
     clock: _Clock, webhook: WebhookReceiver
 ) -> None:

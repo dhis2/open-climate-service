@@ -38,7 +38,12 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from open_climate_service import config as api_config
-from open_climate_service.jobs.models import AUTOMATION_FAILED_EVENT_TYPE, AUTOMATION_SUCCEEDED_EVENT_TYPE, JobEvent
+from open_climate_service.jobs.models import (
+    AUTOMATION_FAILED_EVENT_TYPE,
+    AUTOMATION_RESOLVED_EVENT_TYPE,
+    AUTOMATION_SUCCEEDED_EVENT_TYPE,
+    JobEvent,
+)
 from open_climate_service.pipelines import service, store
 from open_climate_service.pipelines import workflow as workflow_binding
 from open_climate_service.pipelines.schemas import (
@@ -111,35 +116,69 @@ def _failure(
     return RunFailure(stage="delivery", message=delivery_error or f"the delivery ended {result}")
 
 
-def _outcome_event(pipeline_id: str, run: PipelineRun, before: FinalStage | None) -> JobEvent | None:
-    """Append the automation event for a final outcome the run has just reached, and return it."""
-    stage = final_stage(run, run.delivery_result)
-    if stage is None or stage == before:
+def failing(record: PipelineRecord) -> bool:
+    """Whether the pipeline has a failed run that no newer run's success superseded.
+
+    Read from the runs, newest first. A run an operator acknowledged is settled on its own and
+    says nothing about the pipeline, so it is passed over: acknowledging an older run leaves a
+    newer failure open. A run still going either way is passed over too.
+    """
+    for run in record.runs:
+        if run.delivery_result == "acknowledged":
+            continue
+        stage = final_stage(run, run.delivery_result)
+        if stage == "succeeded":
+            return False
+        if stage is not None:
+            return True
+    return False
+
+
+def _health_event(pipeline_id: str, record: PipelineRecord, run: PipelineRun) -> JobEvent | None:
+    """Append the automation event for a change in the pipeline's health that ``run`` just caused.
+
+    ``record.alerting`` is the health the last event reported. The pipeline fails when ``run``
+    fails while nothing was failing; it recovers when ``run`` succeeds, and is resolved when
+    ``run`` is acknowledged, once that leaves no failure open. Any other change, such as a
+    redelivery that has not ended yet, reports nothing until its outcome is known.
+    """
+    now_failing = failing(record)
+    if now_failing == record.alerting:
         return None
+    stage = final_stage(run, run.delivery_result)
     data: dict[str, Any] = {"run": run.run_id, "href": f"/pipelines/{pipeline_id}/runs/{run.run_id}"}
-    if stage != "succeeded":
+    if now_failing:
+        if stage is None or stage == "succeeded":
+            return None  # an older failure, from before outcomes were reported
         failure = _failure(run, stage, None, run.error, run.delivery_result)
         data.update(stage=failure.stage, message=failure.message)
+        event_type = AUTOMATION_FAILED_EVENT_TYPE
+    elif run.delivery_result == "acknowledged":
+        event_type = AUTOMATION_RESOLVED_EVENT_TYPE
+    elif stage == "succeeded":
+        event_type = AUTOMATION_SUCCEEDED_EVENT_TYPE
+    else:
+        return None
     event = JobEvent(
         event_id=f"{run.run_id}:{len(run.events)}",
         time=utc_now(),
-        type=AUTOMATION_SUCCEEDED_EVENT_TYPE if stage == "succeeded" else AUTOMATION_FAILED_EVENT_TYPE,
+        type=event_type,
         source=f"/pipelines/{pipeline_id}",
         data=data,
     )
     run.events.append(event)
+    record.alerting = now_failing
     return event
 
 
 def _update_run_record(pipeline_id: str, run_id: str, change: Callable[[PipelineRun], None]) -> PipelineRun:
-    """Change one stored run, persisting the automation event of a final outcome in the same write."""
+    """Change one stored run, persisting the automation event of a change in health in the same write."""
     reached: list[JobEvent] = []
 
     def _apply(current: PipelineRecord) -> PipelineRun:
         stored = _find(current, run_id)
-        before = final_stage(stored, stored.delivery_result)
         change(stored)
-        event = _outcome_event(pipeline_id, stored, before)
+        event = _health_event(pipeline_id, current, stored)
         if event is not None:
             reached.append(event)
         return stored

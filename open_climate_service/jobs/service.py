@@ -292,6 +292,43 @@ class JobService:
         self._consume_events(created)
         return created
 
+    def record_failed_job(
+        self,
+        *,
+        label: str,
+        request: dict[str, Any],
+        error: JobError,
+        outcome_source: str,
+        job_href_base: str = "/jobs",
+    ) -> JobRecord:
+        """Persist automated work that failed before it could become a queued job.
+
+        A scheduled check that cannot submit its sync is the case: recorded as a failed job, it
+        reports its failure through the same outcome event as a sync job that failed. The record
+        is created in its terminal state and is never executed or recovered.
+        """
+        job_id = str(uuid4())
+        now = utc_now()
+        record = JobRecord(
+            job_id=job_id,
+            process_id=label,
+            status=JobStatus.FAILED,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+            attempt=1,
+            executor_kind="inline",
+            request={key: value for key, value in request.items() if key != "__fn_path__"},
+            progress=JobProgress(message="Failed"),
+            error=error,
+            outcome_source=outcome_source,
+            links=_job_links(job_id, href_base=job_href_base),
+        )
+        record.events = _persisted_events(job_id, _outcome_events(record, error), now)
+        created = store.create_job_record(record)
+        self._consume_events(created)
+        return created
+
     def _consume_events(self, record: JobRecord) -> None:
         if record.events and self._event_consumer is not None:
             try:

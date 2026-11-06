@@ -1,9 +1,10 @@
-"""Post a webhook when a scheduled sync or a pipeline starts failing, and when it recovers.
+"""Post a webhook when a scheduled sync or a pipeline starts failing, and when that ends.
 
-Reads the automation events (`automation.failed`, `automation.succeeded`) that native jobs and
-pipeline runs persist with their final outcome. Each event's source is one automation: a
-schedule or a pipeline. Its health is kept in ``<data_dir>/notifications.json``, so a schedule
-that keeps failing posts once, on its first failure, and once more when it next succeeds.
+Reads the automation events (`automation.failed`, `automation.succeeded`, `automation.resolved`)
+that native jobs and pipeline runs persist with their outcomes. Each event's source is one
+automation: a schedule or a pipeline. Its health is kept in ``<data_dir>/notifications.json``, so
+a schedule that keeps failing posts once, on its first failure, and once more when it ends:
+``recovered`` when it next succeeds, ``resolved`` when an operator acknowledged the failure.
 
 A notification is queued in the same file before it is posted, and stays queued until the
 receiver answers 2xx, so a crash or an unreachable receiver delays it rather than losing it.
@@ -26,19 +27,31 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError
 
 from open_climate_service import config as api_config
-from open_climate_service.jobs.models import AUTOMATION_FAILED_EVENT_TYPE, AUTOMATION_SUCCEEDED_EVENT_TYPE, JobEvent
+from open_climate_service.jobs.models import (
+    AUTOMATION_FAILED_EVENT_TYPE,
+    AUTOMATION_RESOLVED_EVENT_TYPE,
+    AUTOMATION_SUCCEEDED_EVENT_TYPE,
+    JobEvent,
+)
 from open_climate_service.shared import urls
 from open_climate_service.shared.persistence import atomic_json, index_lock
 from open_climate_service.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
 
-_OUTCOME_TYPES = frozenset({AUTOMATION_FAILED_EVENT_TYPE, AUTOMATION_SUCCEEDED_EVENT_TYPE})
+# What a receiver is told when an automation's health changes on an event of each type.
+_NOTIFICATION_TYPES = {
+    AUTOMATION_FAILED_EVENT_TYPE: "failed",
+    AUTOMATION_SUCCEEDED_EVENT_TYPE: "recovered",
+    AUTOMATION_RESOLVED_EVENT_TYPE: "resolved",
+}
+_OUTCOME_TYPES = frozenset(_NOTIFICATION_TYPES)
 _TIMEOUT_S = 10.0
 # Attempts per notification before it is dropped: about five hours of retries.
 _MAX_ATTEMPTS = 10
@@ -78,12 +91,15 @@ class _Queued(BaseModel):
     attempts: int = 0
     next_attempt_at: datetime
     claimed_until: datetime | None = None
+    claim_id: str | None = None
 
 
 class _State(BaseModel):
     since: datetime
     health: dict[str, _Health] = Field(default_factory=dict)
     queue: list[_Queued] = Field(default_factory=list)
+    decided: set[str] = Field(default_factory=set)
+    abandoned: set[str] = Field(default_factory=set)
 
 
 def _path() -> Path:
@@ -107,55 +123,82 @@ def _enabled() -> str | None:
 
 
 def consume(events: list[JobEvent]) -> None:
-    """Decide the automation events this process has just persisted, then post in the background."""
+    """Reconcile durable outcomes after a live callback, then post in the background."""
     outcomes = [event for event in events if event.type in _OUTCOME_TYPES]
     if not outcomes or _enabled() is None:
         return
+    from open_climate_service.jobs.events import persisted_events
+
+    # Callbacks from concurrent jobs can arrive out of order. Read the durable log so a later
+    # callback also decides an earlier event whose own callback was delayed or missed. Keep the
+    # supplied events too: a test double or a newly added event owner may not be in the log yet.
+    durable = {(event.source, event.event_id): event for event in persisted_events() if event.type in _OUTCOME_TYPES}
+    durable.update({(event.source, event.event_id): event for event in outcomes})
     # A first event can be stamped just before the state is created, at its job's completion.
-    _decide(outcomes, since=min([utc_now(), *(_utc(event.time) for event in outcomes)]))
+    _decide(list(durable.values()), since=min([utc_now(), *(_utc(event.time) for event in outcomes)]))
     _kick()
 
 
 def replay() -> None:
-    """Decide every persisted automation event not decided yet, then post what is due."""
+    """Decide every persisted automation event not decided yet, then post in the background."""
     from open_climate_service.jobs.events import persisted_events
 
     if _enabled() is None:
         return
     _decide([event for event in persisted_events() if event.type in _OUTCOME_TYPES], since=utc_now())
-    send_due()
+    _kick()
 
 
 def _decide(events: list[JobEvent], *, since: datetime) -> None:
     with index_lock(_path()):
         state = _read(since)
         before = state.model_dump_json()
-        for event in sorted(events, key=lambda item: (_utc(item.time), item.event_id)):
-            _apply(state, event)
+        _reconcile(state, events)
         if state.model_dump_json() != before or not _path().exists():
             atomic_json(_path(), state.model_dump(mode="json"))
 
 
-def _apply(state: _State, event: JobEvent) -> None:
-    """Move one automation's health to the event's outcome, queueing a notification on a change."""
-    time = _utc(event.time)
-    if time < state.since:
-        return
-    current = state.health.get(event.source)
-    if current is not None and (time, event.event_id) <= (current.time, current.event_id):
-        return  # already decided, or older than the outcome already known
-    failed = event.type == AUTOMATION_FAILED_EVENT_TYPE
-    state.health[event.source] = _Health(failed=failed, event_id=event.event_id, time=time)
-    was_failing = current is not None and current.failed
-    if failed != was_failing:
+def _event_key(event: JobEvent) -> str:
+    return f"{event.source}\n{event.event_id}"
+
+
+def _reconcile(state: _State, events: list[JobEvent]) -> None:
+    """Rebuild health chronologically, queueing each transition not decided before.
+
+    Rebuilding matters when a failure is persisted before a success but its live callback
+    arrives later: advancing health from callback order would discard that failure forever.
+    ``decided`` keeps transitions idempotent after their notification leaves the queue.
+    """
+    health: dict[str, bool] = {}
+    latest: dict[str, _Health] = {}
+    for event in sorted(events, key=lambda item: (_utc(item.time), item.event_id)):
+        time = _utc(event.time)
+        if time < state.since:
+            continue
+        failed = event.type == AUTOMATION_FAILED_EVENT_TYPE
+        was_failing = health.get(event.source, False)
+        health[event.source] = failed
+        latest[event.source] = _Health(failed=failed, event_id=event.event_id, time=time)
+        if failed == was_failing:
+            continue
+        key = _event_key(event)
+        if not failed and event.source in state.abandoned:
+            # The receiver never got this episode's failure, so it must not get its ending.
+            state.abandoned.discard(event.source)
+            state.decided.add(key)
+            continue
+        if key in state.decided:
+            continue
+        state.decided.add(key)
         state.queue.append(
             _Queued(
                 event_id=event.event_id,
                 source=event.source,
-                payload=_payload(event, failed),
+                payload=_payload(event),
                 next_attempt_at=utc_now(),
             )
         )
+    state.health.update(latest)
 
 
 def _absolute(path: str) -> str:
@@ -163,19 +206,23 @@ def _absolute(path: str) -> str:
     return urls.configured_public_root() + path
 
 
-def _payload(event: JobEvent, failed: bool) -> dict[str, Any]:
+def _payload(event: JobEvent) -> dict[str, Any]:
     kind, _, name = event.source.strip("/").rpartition("/")
     automation = "pipeline" if kind == "pipelines" else "schedule"
     subject = f"Pipeline '{name}'" if automation == "pipeline" else f"Scheduled sync of '{name}'"
     link = _absolute(event.source)
     data = event.data
+    notification = _NOTIFICATION_TYPES[event.type]
+    failed = notification == "failed"
     if failed:
         stage = data.get("stage")
         text = f"{subject} failed{f' at {stage}' if automation == 'pipeline' and stage else ''}: {data.get('message')}"
+    elif notification == "resolved":
+        text = f"{subject} failure was acknowledged by an operator"
     else:
         text = f"{subject} succeeded again"
     payload: dict[str, Any] = {
-        "type": "failed" if failed else "recovered",
+        "type": notification,
         "event": event.event_id,
         "time": _utc(event.time).isoformat(),
         "automation": automation,
@@ -216,11 +263,11 @@ def send_due() -> None:
 
 
 def _send_round(url: str) -> bool:
-    """Claim and post each automation's due notifications; return whether any was accepted."""
+    """Claim and post one due notification; return whether any work was claimed."""
     now = utc_now()
     with index_lock(_path()):
         state = _read(now)
-        claimed: list[_Queued] = []
+        claimed: _Queued | None = None
         waiting: set[str] = set()
         for item in state.queue:
             if item.source in waiting:
@@ -228,53 +275,42 @@ def _send_round(url: str) -> bool:
             if item.next_attempt_at > now or (item.claimed_until is not None and item.claimed_until > now):
                 waiting.add(item.source)
                 continue
+            item.claim_id = str(uuid4())
             item.claimed_until = now + _CLAIM
-            claimed.append(item)
-        if not claimed:
+            claimed = item.model_copy(deep=True)
+            break
+        if claimed is None:
             return False
         atomic_json(_path(), state.model_dump(mode="json"))
-    sent: set[str] = set()
-    refused: set[str] = set()
-    for item in claimed:
-        if item.source in refused:
-            continue
-        if _post(url, item):
-            sent.add(item.event_id)
-        else:
-            refused.add(item.source)
+    accepted = _post(url, claimed)
     with index_lock(_path()):
-        _settle(_read(now), claimed, sent, refused, now)
-    return bool(sent)
+        _settle(_read(now), claimed, accepted, now)
+    return True
 
 
-def _settle(state: _State, claimed: list[_Queued], sent: set[str], refused: set[str], now: datetime) -> None:
-    """Record a round: drop what was sent, release the rest, and back off the refused."""
-    mine = {item.event_id for item in claimed}
-    abandoned: set[str] = set()  # automations whose failure was given up on
+def _settle(state: _State, claimed: _Queued, accepted: bool, now: datetime) -> None:
+    """Settle one claim only if this sender still owns it."""
     kept: list[_Queued] = []
     for item in state.queue:
-        if item.event_id in sent:
+        owns = item.event_id == claimed.event_id and item.source == claimed.source and item.claim_id == claimed.claim_id
+        if not owns:
+            kept.append(item)
             continue
-        if item.source in abandoned and item.payload.get("type") == "recovered":
-            abandoned.discard(item.source)  # the receiver never got the failure it recovers from
+        if accepted:
             continue
-        if item.event_id in mine:
-            item.claimed_until = None
-            if item.source in refused and item.event_id not in sent:
-                item.attempts += 1
-                refused.discard(item.source)  # only the first refused one was posted
-                if item.attempts >= _MAX_ATTEMPTS:
-                    logger.error("Dropping notification %s after %d attempts", item.event_id, item.attempts)
-                    if item.payload.get("type") == "failed":
-                        abandoned.add(item.source)
-                    continue
-                item.next_attempt_at = now + timedelta(minutes=min(60, 2**item.attempts))
+        item.claimed_until = None
+        item.claim_id = None
+        item.attempts += 1
+        if item.attempts >= _MAX_ATTEMPTS:
+            logger.error("Dropping notification %s after %d attempts", item.event_id, item.attempts)
+            if item.payload.get("type") == "failed":
+                state.abandoned.add(item.source)
+                kept = [queued for queued in kept if queued.source != item.source]
+            continue
+        item.next_attempt_at = now + timedelta(minutes=min(60, 2**item.attempts))
         kept.append(item)
-    for source in abandoned:
-        # No recovery was queued yet: the next success must not post one either.
-        health = state.health.get(source)
-        if health is not None:
-            health.failed = False
+    if claimed.source in state.abandoned:
+        kept = [item for item in kept if item.source != claimed.source]
     state.queue = kept
     atomic_json(_path(), state.model_dump(mode="json"))
 

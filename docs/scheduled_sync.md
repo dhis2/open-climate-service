@@ -166,8 +166,8 @@ are follow-up work for the persistent job-store implementation.
 
 ## Failure alerts
 
-OCS can post to a webhook when a scheduled sync or a pipeline starts failing, and again when it
-next succeeds. Set the URL in `climate-service.yaml`; a Slack or Mattermost incoming-webhook URL
+OCS can post to a webhook when a scheduled sync or a pipeline starts failing, and again when
+that ends. Set the URL in `climate-service.yaml`; a Slack or Mattermost incoming-webhook URL
 works as it is:
 
 ```yaml
@@ -175,13 +175,21 @@ notifications:
   webhook_url: ${OCS_WEBHOOK_URL}
 ```
 
-Each schedule and each pipeline posts once when it fails and once when it recovers, not once
-per failure: a daily sync that keeps failing alerts on the first morning only. A scheduled sync
-fails when its job fails after its last attempt. A pipeline run fails when its job cannot be
-submitted, its workflow job errors or disappears, or its delivery fails or ends partial,
-rejected or unknown; it succeeds when the delivery is confirmed or validated, or an operator
-acknowledges it. A cancelled job is neither. Health is kept per pipeline, not per run, so
-acknowledging an older failed run posts a recovery even while a newer run is still failing.
+Each schedule and each pipeline posts once when it starts failing and once when that ends, not
+once per failure: a daily sync that keeps failing alerts on the first morning only.
+
+A scheduled sync fails when its job fails after its last attempt, and also when its check fails
+before any job exists: the check errors, the dataset has not been ingested, or the clock refuses
+the schedule when it loads it (an unknown data source, a cron it cannot read). Such a check is
+recorded as a failed job, so it shows in the jobs list too. The schedule recovers when a sync
+job next succeeds.
+
+A pipeline run fails when its job cannot be submitted, its workflow job errors or disappears, or
+its delivery fails or ends partial, rejected or unknown; it succeeds when the delivery is
+confirmed or validated. A cancelled job is neither. The pipeline is failing while it has a failed
+run that no newer successful run superseded. It recovers when a newer run succeeds, and is
+resolved when an operator has acknowledged every failed run since the last success.
+Acknowledging an older run while a newer one still fails changes nothing.
 
 The body is JSON, posted with the header `Idempotency-Key` set to the outcome's event id:
 
@@ -201,7 +209,9 @@ The body is JSON, posted with the header `Idempotency-Key` set to the outcome's 
 }
 ```
 
-`type` is `failed` or `recovered`; `automation` is `pipeline` or `schedule`; a scheduled sync
+`type` is `failed`, `recovered` (a run succeeded) or `resolved` (an operator acknowledged the
+failure, which is not a success; only pipelines have this). A receiver that only opens and closes
+alerts can treat `recovered` and `resolved` alike. `automation` is `pipeline` or `schedule`; a scheduled sync
 names its `job` instead of a `run`. `text` is the one-line summary that chat tools show. Links
 are absolute when `CLIMATE_SERVICE_BASE_URL` is set, and paths otherwise; either way they carry
 the deployment prefix, the base URL's path or else `ROOT_PATH`.
@@ -210,8 +220,8 @@ The outcomes are durable events, persisted with the job or run that reached them
 is queued in `<data_dir>/notifications.json` before it is posted. An alert the receiver does not
 answer with 2xx is retried on the 15-minute maintenance interval with a growing delay, for about
 five hours. Each schedule's and pipeline's alerts arrive in order, and one that is refused holds
-up only its own. A failure alert given up on drops its recovery too, so a receiver never gets a
-recovery alone. After a restart, outcomes that no process decided are decided then.
+up only its own. A failure alert given up on drops the alert that would end it too, so a
+receiver never gets a recovery or resolution alone. After a restart, outcomes that no process decided are decided then.
 Outcomes from before the webhook was first configured are not posted. A read-only instance posts
 nothing.
 
