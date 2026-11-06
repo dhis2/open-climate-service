@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from open_climate_service import plugin_discovery
 from open_climate_service.exports import ExportOutcome, ExportReport, merge_chunk_reports
 from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
@@ -396,6 +397,7 @@ def _install_delivery_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n", encoding="utf-8")
     (metadata / "entry_points.txt").write_text(f"[open_climate_service.plugins]\n{name} = {name}\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
+    plugin_discovery.rescan()
     return name
 
 
