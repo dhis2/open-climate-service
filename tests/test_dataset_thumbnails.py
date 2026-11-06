@@ -13,6 +13,7 @@ distinction invisible in the published result — only the final image survives 
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,12 +24,15 @@ import pandas as pd
 import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
+from matplotlib import colormaps
+from matplotlib.colors import to_hex
 
 from open_climate_service.data_manager.services import downloader
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.shared import thumbnails
 from open_climate_service.shared.thumbnails import (
     THUMBNAIL_LONG_SIDE_PIXELS,
+    colormap_stops,
     decimate,
     declared_midpoint,
     render_png,
@@ -407,20 +411,38 @@ def test_every_built_in_template_colormap_resolves_to_itself() -> None:
     default would render every one of them in the wrong colours while still "working"."""
     from open_climate_service.data_registry.services import datasets as registry
 
-    declared = {
-        str(template["display"]["colormap"])
+    declared = [
+        template["display"]["colormap"]
         for template in registry.list_datasets()
         if isinstance(template.get("display"), dict) and template["display"].get("colormap")
-    }
+    ]
     assert declared, "no template declares a colormap"
 
-    unresolved = {name for name in declared if resolve_colormap(name).name.lower() != name.lower()}
+    unresolved = [spec for spec in declared if resolve_colormap(spec).name.lower() not in {str(spec).lower(), "custom"}]
     assert not unresolved, f"colormaps that fell back to the default instead of resolving: {unresolved}"
 
 
-def test_an_unknown_colormap_falls_back_instead_of_raising() -> None:
-    assert resolve_colormap("not-a-colormap").name == "viridis"
+def test_a_list_of_colours_is_a_ramp_through_them() -> None:
+    stops = colormap_stops(["#000000", "#ff0000", "#ffffff"])
+    assert (len(stops), stops[0], stops[-1]) == (256, "#000000", "#ffffff")
+    # An alpha is dropped, so every render path draws the same opaque colour.
+    assert colormap_stops(["#ff000040", "#00f8"], count=2) == ["#ff0000", "#0000ff"]
+    assert colormap_stops("terrain", count=2) == [to_hex(colormaps["terrain"](0.0)), to_hex(colormaps["terrain"](1.0))]
+
+
+def test_an_unknown_colormap_falls_back_instead_of_raising(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="open_climate_service.shared.thumbnails"):
+        assert resolve_colormap("not-a-colormap").name == "viridis"
+        assert resolve_colormap("not-a-colormap").name == "viridis"
+    # Logged on every fallback, so each map viewer request that draws it shows in the logs.
+    assert ["'not-a-colormap'" in r.getMessage() for r in caplog.records] == [True, True]
     assert resolve_colormap(None).name == "viridis"
+    assert resolve_colormap(["#000000"]).name == "viridis"
+    assert resolve_colormap(["not-a-colour", "#ffffff"]).name == "viridis"
+    # A custom list takes hex colours only.
+    assert resolve_colormap(["red", "#ffffff"]).name == "viridis"
+    assert resolve_colormap([[1, 0, 0], [0, 0, 1]]).name == "viridis"
+    assert resolve_colormap([]).name == "viridis"
 
 
 def test_a_low_signal_slice_still_shows_its_structure(tmp_path: Path) -> None:

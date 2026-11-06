@@ -314,19 +314,6 @@
       import { Protocol as PMTilesProtocol } from "https://esm.sh/pmtiles@4.5.0";
       maplibregl.addProtocol("pmtiles", new PMTilesProtocol().tile);
 
-      // Suffix _r means the scale is reversed (matplotlib convention).
-      // chroma-js resolves ColorBrewer/D3 scale names case-insensitively.
-      function buildColormap(name = "viridis") {
-        const reversed = name.endsWith("_r");
-        const scaleName = reversed ? name.slice(0, -2) : name;
-        try {
-          const colors = chroma.scale(scaleName).colors(256);
-          return reversed ? colors.reverse() : colors;
-        } catch {
-          return chroma.scale("viridis").colors(256);
-        }
-      }
-
       // Every non-spatial dimension, in cube order, that the user steps through.
       // Each gets its own control; the layer selector must pin all of them so the
       // cube reduces to 2-D for rendering. Skip the synthetic openEO `bands`
@@ -742,7 +729,9 @@
         const { cm, clim } = classes.length
           ? classColormap(classes, colors)
           : {
-              cm: buildColormap(renders.colormap_name ?? "viridis"),
+              // The server resolves the template's colormap to its colours, keyed 0-255, so the
+              // viewer never looks a colormap name up itself.
+              cm: renders.colormap ? Object.values(renders.colormap) : chroma.scale("viridis").colors(256),
               clim: renders.rescale?.[0] ?? [0, 100],
             };
         const fillValue = renders.nodata ?? null;

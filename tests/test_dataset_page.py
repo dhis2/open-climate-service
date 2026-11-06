@@ -222,13 +222,22 @@ def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypa
     assert "/#datasets" not in body
 
 
-def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp() -> None:
+def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp(monkeypatch: pytest.MonkeyPatch) -> None:
     view = landing._dataset_view(_record("never_rendered"), {"display": {"colormap": "blues"}})
 
     assert view["has_thumbnail"] is False
     assert view["ramp"].startswith("linear-gradient(90deg, #")
     assert view["description"] == "First line wraps here. Second paragraph."
     assert view["coverage"] == "2020-01 – 2026-07"
+
+    # A list of colours is drawn through, and named as a custom scale rather than printed as a list.
+    custom = {"display": {"colormap": ["#000000", "#ffffff"], "range": [0, 1]}}
+    view = landing._dataset_view(_record("never_rendered"), custom)
+    assert view["ramp"].startswith("linear-gradient(90deg, #000000, ")
+    assert view["ramp"].endswith(", #ffffff)")
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: _template("chirps_monthly", **custom))
+    text = " ".join(_visible_text(landing.render_dataset_page(_record(), "/ocs")).split())
+    assert "Colour scale Custom" in text and "#000000" not in text
 
 
 def test_a_dataset_with_a_thumbnail_links_it() -> None:
