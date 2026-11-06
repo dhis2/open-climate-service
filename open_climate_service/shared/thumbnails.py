@@ -18,6 +18,7 @@ geometry instead, to the same path, size and publishing rules.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -66,34 +67,53 @@ def resolve_colormap(spec: object) -> Any:
 
     ``spec`` is a matplotlib colormap name, matched **case-insensitively** with the ``_r``
     reversed suffix, or a list of two or more hex colours spread evenly from the low end of the
-    display range to the high end. Hex only, and any alpha dropped, because the STAC render
-    hints publish opaque hex: a colour written another way, or a transparent one, would draw
-    differently in the thumbnail than in the map viewer. Case-insensitive because
-    the templates were first written for chroma-js, which matches that way: ``blues``,
+    display range to the high end. Any alpha is dropped: transparency is set by
+    ``display.nodata``, and every render path draws the same opaque colour. Case-insensitive
+    because the templates were first written for chroma-js, which matches that way: ``blues``,
     ``rdbu_r`` and ``reds`` all raise when passed to matplotlib as written.
 
     An unresolvable spec falls back to the default rather than raising. A thumbnail in the
     wrong colours is worth more than no thumbnail, and this must never be able to fail a
-    render on its own.
+    render on its own. Each fallback is logged, so a layer drawn in unexpected colours can be
+    traced in the logs.
     """
     from matplotlib import colormaps
     from matplotlib.colors import LinearSegmentedColormap, to_rgb
 
-    if isinstance(spec, list | tuple):
+    # handle colormap missing from template, fallback without warning
+    if spec is None:
+        return colormaps[_DEFAULT_COLORMAP]
+
+    # handle string colormap name
+    if isinstance(spec, str):
+        requested = spec.strip().lower()
+        matched = {registered.lower(): registered for registered in colormaps}.get(requested)
+        if matched is None:
+            _warn_unresolved_colormap(repr(spec))
+            return colormaps[_DEFAULT_COLORMAP]
+        return colormaps[matched]
+
+    # handle list of colors
+    elif isinstance(spec, list | tuple):
         colors = list(spec)
         if len(colors) < 2 or not all(isinstance(c, str) and _HEX_COLOUR.fullmatch(c) for c in colors):
+            _warn_unresolved_colormap(repr(spec))
             return colormaps[_DEFAULT_COLORMAP]
         return LinearSegmentedColormap.from_list("custom", [to_rgb(c) for c in colors])
-    requested = spec.strip() if isinstance(spec, str) else ""
-    if requested:
-        try:
-            return colormaps[requested]
-        except KeyError:
-            pass
-        matched = {registered.lower(): registered for registered in colormaps}.get(requested.lower())
-        if matched is not None:
-            return colormaps[matched]
-    return colormaps[_DEFAULT_COLORMAP]
+
+    # handle invalid spec
+    else:
+        _warn_unresolved_colormap(repr(spec))
+        return colormaps[_DEFAULT_COLORMAP]
+
+
+def _warn_unresolved_colormap(spec: str) -> None:
+    logging.getLogger(__name__).warning(
+        "display.colormap %s is neither a matplotlib colormap name nor a list of two or more hex colours; "
+        "drawing %s instead",
+        spec,
+        _DEFAULT_COLORMAP,
+    )
 
 
 def colormap_stops(spec: object, count: int = 256) -> list[str]:
