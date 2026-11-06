@@ -3,9 +3,8 @@
 import csv
 import io
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
-import pyarrow as pa
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
@@ -33,10 +32,13 @@ def get_table_rows(
 ) -> Response:
     """Return a published table dataset's rows, as JSON or CSV.
 
-    One row per feature, period and value key. A missing value is null in JSON and empty in CSV.
+    One row per feature, period and value key. `period` is the period's first day, and
+    `period_label` names it as raster datasets do (`2026-01`, `2026-W01`, `2026`). A missing value
+    is null in JSON and empty in CSV.
     """
+    record = _published_table_or_404(dataset_id)
     table = store.read_rows(
-        _published_table_or_404(dataset_id),
+        record,
         collection_id=collection,
         start=start,
         end=end,
@@ -44,13 +46,14 @@ def get_table_rows(
         weights=weights,
         history=history,
     )
+    rows = _labelled(table.to_pylist(), record.period_type)
     if output_format == "csv":
         return Response(
-            content=_csv(table),
+            content=_csv(rows),
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{dataset_id}.csv"'},
         )
-    return JSONResponse(jsonable_encoder({"dataset_id": dataset_id, "history": history, "items": table.to_pylist()}))
+    return JSONResponse(jsonable_encoder({"dataset_id": dataset_id, "history": history, "items": rows}))
 
 
 def _published_table_or_404(dataset_id: str) -> ArtifactRecord:
@@ -60,13 +63,29 @@ def _published_table_or_404(dataset_id: str) -> ArtifactRecord:
     return record
 
 
-def _csv(table: pa.Table) -> str:
+def _labelled(rows: list[dict[str, Any]], period_type: str | None) -> list[dict[str, Any]]:
+    """Each row with `period_label` right after `period`; computed here, never stored."""
+    labelled: list[dict[str, Any]] = []
+    for row in rows:
+        item: dict[str, Any] = {}
+        for name, value in row.items():
+            item[name] = value
+            if name == "period":
+                item["period_label"] = store.period_label(value, period_type)
+        labelled.append(item)
+    return labelled
+
+
+def _csv(rows: list[dict[str, Any]]) -> str:
     """One line per row, ISO dates and times, lead_time in seconds, and an empty cell for NULL."""
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    writer.writerow(table.column_names)
-    for row in table.to_pylist():
-        writer.writerow([_cell(value) for value in row.values()])
+    columns = [
+        label for name in store.SCHEMA.names for label in ((name, "period_label") if name == "period" else (name,))
+    ]
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([_cell(row[name]) for name in columns])
     return out.getvalue()
 
 
