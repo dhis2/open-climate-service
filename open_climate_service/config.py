@@ -229,6 +229,14 @@ def get_features_root() -> Path:
     return get_data_root() / "vectors"
 
 
+def get_tables_root() -> Path:
+    """Return the directory holding table datasets, one folder per dataset (CLIM-1553).
+
+    Like `vectors/`, not an inbox: a table exists because a record names its folder.
+    """
+    return get_data_root() / "tables"
+
+
 def get_utc_offset_hours() -> float:
     """Return the UTC offset in hours for daily period boundaries, defaulting to 0 (UTC).
 

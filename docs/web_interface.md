@@ -198,7 +198,9 @@ managed dataset. The create form lists only the workflows that meet the contract
 
 The destination's settings belong to the destination plugin. The plugin validates them, compiles
 them into the named destination the pipeline's results are saved and delivered through, and runs its
-own destination checks. For DHIS2 these are the connection, the data element and data set UIDs,
+own destination checks. The `table` destination keeps the result in this instance as a table
+dataset, and checks that its id is free and the workflow binds one registered feature collection
+([Read table datasets](managed_data_api_guide.md#12-read-table-datasets)). For DHIS2 these are the connection, the data element and data set UIDs,
 that the dataset's cadence is a DHIS2 period, that the organisation units come from a DHIS2
 collection fetched over the same connection, and, when a data set is declared, its period type,
 data elements and organisation-unit assignments. The pipeline core knows none of this.

@@ -15,6 +15,7 @@ class PipelineDataset:
     id: str
     variable: str | None
     cadence: str | None
+    units: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,9 +142,9 @@ class BaseDestinationPlugin(ABC):
     """Render a computed result and deliver it to a destination.
 
     ``render`` and configuration validation are pure: no network calls and no side effects.
-    ``send`` delivers, to a remote system such as DHIS2 or to a store of this instance. Plugin
-    modules expose an instance as ``plugin``. Instances may be shared between threads; keep
-    invocation state in local variables.
+    ``send`` delivers, to a remote system such as DHIS2 or to a store of this instance such as
+    its table datasets. Plugin modules expose an instance as ``plugin``. Instances may be shared
+    between threads; keep invocation state in local variables.
     """
 
     id: str

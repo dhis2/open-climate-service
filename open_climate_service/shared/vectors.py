@@ -27,6 +27,12 @@ aggregation puts in the labels. A `location_field` or `org_unit_field` of `geome
 GEOMETRY_FIELD = "geometry"
 """The default location field of the exports, and the default geometry dimension name."""
 
+SPATIAL_REDUCER_ATTR = "ocs_spatial_reducer"
+"""Attribute naming the statistic a vector cube's values were reduced with, such as `mean`.
+
+Set by `aggregate_spatial_weighted`, and read by the table destination for its `reducer` column.
+"""
+
 
 def geometries_to_frame(geometries: Any) -> gpd.GeoDataFrame:
     """The features of an aggregation's `geometries` argument, indexed by feature id.

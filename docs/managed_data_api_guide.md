@@ -8,6 +8,7 @@ The current public story is:
 - discover the configured extent with `/extent`
 - discover managed datasets with `/datasets`
 - discover vector feature collections with `/features`
+- read values per feature and period with `/tables/{dataset_id}/rows`
 - discover published datasets, rasters and vector datasets, with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
@@ -35,6 +36,7 @@ Operational note:
 - `GET /features/{collection_id}/data.parquet`
 - `GET /features/{collection_id}/data.pmtiles`
 - `GET /features/{collection_id}/styles/default.json`
+- `GET /tables/{dataset_id}/rows`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
@@ -284,7 +286,7 @@ What this means:
 
 - `/datasets` is the public native catalog of managed datasets
 - `itemType` says what the dataset holds: `coverage` for a raster, `feature` for a feature
-  collection such as a boundary set. It is the field to filter a listing on, because `format`
+  collection such as a boundary set, `table` for values per feature and period. It is the field to filter a listing on, because `format`
   sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
   name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
   the collection object; `coverage` is convention rather than conformance, since OGC API -
@@ -567,7 +569,60 @@ attribution on the source. The STAC collection lists it as its `style` asset, an
 archive and its layer in a `pmtiles` link (web-map-links extension), whenever the collection has
 tiles.
 
-## 12. `/sync`
+## 12. Read table datasets
+
+A table dataset holds values per feature and period, such as monthly precipitation per district.
+It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
+`GET /tables/{dataset_id}/rows`, as JSON or with `format=csv`:
+
+```bash
+curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?collection=districts&start=2026-01-01&reducer=mean" | jq
+curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?format=csv"
+```
+
+Each row names its `collection_id`, `feature_id`, its period, `value`, `unit`, and, for computed
+rows, the `reducer`, the `weights` dataset and `coverage`, the share of the unit with valid cells. A
+value per class (people per hazard class, say) has a `class`; other rows have none. A missing value
+is `null`, or an empty cell in CSV, never 0.
+
+A period is given three ways: `period` names it as raster datasets name theirs (`2026-01`,
+`2026-W01`, `2026-Q2`, `2026`; a day or a dekad by its date), and `period_start` and `period_end`
+are its first and last day (`2026-01-01` and `2026-01-31` for January 2026, a Monday and a Sunday
+for an ISO week). Only `period_start` is stored; the other two follow from it and the dataset's
+period type, shown as `period_type` on `/datasets`. The dataset's extent there uses the `period`
+names.
+
+A table dataset has one period type. Rows with another period type are refused, and each stored
+Parquet file carries it in its metadata as `ocs:period_type`, for readers of the files themselves. A
+row dated other than on its period's first day, such as a month labelled by its last day the way
+`aggregate_temporal_period` labels it, is stored at its period's start.
+
+Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
+the latest row for each feature, period, class, reducer and weights. Add `history=true` for every
+row ever written.
+
+Filters: `collection`, `start` and `end` (inclusive bounds on `period_start`), `reducer` and `weights`. Only
+published table datasets are served.
+
+A pipeline with the `table` destination keeps its workflow's value per feature and period as a
+table dataset, created on its first delivery. With `policy: on_update`, a revised source period
+is computed again and written as new rows, which become the current values:
+
+```yaml
+workflow:
+  id: aggregate_by_features
+  arguments: { dataset_id: chirps3_precipitation_monthly, geometries: { from_features: districts }, method: mean }
+destination:
+  plugin: table
+  settings: { dataset_id: chirps3_precipitation_monthly_districts, name: Monthly precipitation by district }
+delivery: { policy: on_update }
+```
+
+The rows take the dataset's period type and units, the feature names of the collection, and the
+`reducer` the aggregation used. A dry run shows the first rows and checks them against the store
+without writing.
+
+## 13. `/sync`
 
 `/sync` advances an existing managed dataset from its latest local coverage toward a requested upstream period.
 
