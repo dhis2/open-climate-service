@@ -8,6 +8,7 @@ The current public story is:
 - discover the configured extent with `/extent`
 - discover managed datasets with `/datasets`
 - discover vector feature collections with `/features`
+- read values per feature and period with `/tables/{dataset_id}/rows`
 - discover published datasets, rasters and vector datasets, with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
@@ -35,6 +36,7 @@ Operational note:
 - `GET /features/{collection_id}/data.parquet`
 - `GET /features/{collection_id}/data.pmtiles`
 - `GET /features/{collection_id}/styles/default.json`
+- `GET /tables/{dataset_id}/rows`
 - `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/collections/{dataset_id}`
@@ -284,7 +286,7 @@ What this means:
 
 - `/datasets` is the public native catalog of managed datasets
 - `itemType` says what the dataset holds: `coverage` for a raster, `feature` for a feature
-  collection such as a boundary set. It is the field to filter a listing on, because `format`
+  collection such as a boundary set, `table` for values per feature and period. It is the field to filter a listing on, because `format`
   sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
   name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
   the collection object; `coverage` is convention rather than conformance, since OGC API -
@@ -567,7 +569,30 @@ attribution on the source. The STAC collection lists it as its `style` asset, an
 archive and its layer in a `pmtiles` link (web-map-links extension), whenever the collection has
 tiles.
 
-## 12. `/sync`
+## 12. Read table datasets
+
+A table dataset holds values per feature and period, such as monthly precipitation per district.
+It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
+`GET /tables/{dataset_id}/rows`, as JSON or with `format=csv`:
+
+```bash
+curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?collection=districts&start=2026-01-01&reducer=mean" | jq
+curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?format=csv"
+```
+
+Each row names its `collection_id`, `feature_id`, `period` (the start date), `value`, `unit`,
+and, for computed rows, the `reducer`, the `weights` dataset and `coverage`, the share of the unit
+with valid cells. A value per class (people per hazard class, say) has a `class`; other rows have
+none. A missing value is `null`, or an empty cell in CSV, never 0.
+
+Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
+the latest row for each feature, period, class, reducer and weights. Add `history=true` for every
+row ever written.
+
+Filters: `collection`, `start` and `end` (inclusive period starts), `reducer` and `weights`. Only
+published table datasets are served.
+
+## 13. `/sync`
 
 `/sync` advances an existing managed dataset from its latest local coverage toward a requested upstream period.
 
