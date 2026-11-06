@@ -164,11 +164,11 @@ machine data.earthdatahub.destine.eu
 
 ---
 
-## Copernicus CLMS — vegetation index (NDVI, dekadal)
+## Copernicus CLMS — vegetation index (NDVI V3, dekadal)
 
 | Property               | Value                                                                                                                       |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Dataset ID**         | `clms_ndvi_dekadal`                                                                                                         |
+| **Dataset ID**         | `clms_ndvi_v3_dekadal`                                                                                                      |
 | **Variable**           | `ndvi`                                                                                                                      |
 | **Units**              | 1 (unitless index)                                                                                                          |
 | **Period**             | Dekadal: days 1–10, 11–20 and 21 to the end of the month                                                                    |
