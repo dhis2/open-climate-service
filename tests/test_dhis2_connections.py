@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from open_climate_service import config
-from open_climate_service.exports.dhis2 import get_connection, get_connection_config
+from open_climate_service.destinations.dhis2 import get_connection, get_connection_config
 
 
 def _write_config(path: Path, value: object) -> None:
@@ -131,7 +131,7 @@ def test_exports_can_be_added_to_config_with_yaml_fragment_interpolation(
     connection_file.write_text(
         "extent:\n"
         "  bbox: [${WEST}, 6.9, -10.1, 10.0]\n"
-        "exports:\n"
+        "destinations:\n"
         "  - id: rainfall\n"
         "    plugin: dhis2\n"
         "    period_type: monthly\n"
@@ -144,10 +144,10 @@ def test_exports_can_be_added_to_config_with_yaml_fragment_interpolation(
     )
     loaded = config.get_config()
     assert loaded["extent"]["bbox"] == [-13.5, 6.9, -10.1, 10.0]
-    assert loaded["exports"][0]["id"] == "rainfall"
+    assert loaded["destinations"][0]["id"] == "rainfall"
 
 
-@pytest.mark.parametrize("block", ["exports", "dhis2_connections"])
+@pytest.mark.parametrize("block", ["destinations", "dhis2_connections"])
 def test_protected_config_block_rejects_inline_interpolation(
     connection_file: Path, monkeypatch: pytest.MonkeyPatch, block: str
 ) -> None:
@@ -163,11 +163,11 @@ def test_protected_config_block_rejects_interpolation_after_column_zero_comment(
 ) -> None:
     monkeypatch.setenv("PLUGIN", "dhis2")
     connection_file.write_text(
-        "exports:\n  - id: rainfall\n# operator note\n    plugin: ${PLUGIN}\n",
+        "destinations:\n  - id: rainfall\n# operator note\n    plugin: ${PLUGIN}\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exports does not support environment interpolation"):
+    with pytest.raises(ValueError, match="destinations does not support environment interpolation"):
         config.get_config()
 
 
@@ -190,7 +190,7 @@ def test_missing_or_invalid_token(connection_file: Path, monkeypatch: pytest.Mon
         if "\x00" in token:
             # Real process environments cannot contain NUL; exercise header validation directly.
             monkeypatch.setattr(
-                "open_climate_service.exports.dhis2.os.environ", dict(os.environ) | {"TEST_DHIS2_TOKEN": token}
+                "open_climate_service.destinations.dhis2.os.environ", dict(os.environ) | {"TEST_DHIS2_TOKEN": token}
             )
         else:
             monkeypatch.setenv("TEST_DHIS2_TOKEN", token)
@@ -258,7 +258,7 @@ def test_external_provider_uses_only_public_accessor(
     module_file = tmp_path / "external_provider.py"
     module_file.write_text(
         "from contextlib import closing\n"
-        "from open_climate_service.exports.dhis2 import get_connection\n"
+        "from open_climate_service.destinations.dhis2 import get_connection\n"
         "def fetch(connection_id, level):\n"
         "    with closing(get_connection(connection_id)) as client:\n"
         "        return client.get_org_units_geojson(level=level)\n"

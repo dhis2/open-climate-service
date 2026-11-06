@@ -4,7 +4,7 @@ An operator's run, a retry and a source dataset update all resolve to a `RunCont
 explicit interval and go through `run_pipeline`. It checks the pipeline may run, stores the
 run with its deterministic job id *before* the job exists, then submits the workflow as an
 openEO batch job. When the job finishes, `on_job_finished` hands the saved result to the
-export delivery framework, the same path as ``POST /exports/{id}``, under the run's
+destination delivery framework, the same path as ``POST /destinations/{id}``, under the run's
 idempotency key.
 
 Recovery. `recover_runs` finishes what an interruption or a transient failure left open:
@@ -106,12 +106,12 @@ def _message(exc: BaseException) -> str:
 def _is_permanent(exc: BaseException) -> bool:
     """Whether repeating the same call can only fail the same way.
 
-    A refusal (an HTTP 4xx: a changed export, a manifest mismatch, an invalid graph, a reused
+    A refusal (an HTTP 4xx: a changed destination, a manifest mismatch, an invalid graph, a reused
     key) or an invalid value is permanent. A 408, 425 or 429, and a conflict that only says a
-    result or an export is busy (`ResourceBusy`), say "not now" and are retried, as is
+    result or a destination is busy (`ResourceBusy`), say "not now" and are retried, as is
     anything else: the store, a lock, the network.
     """
-    from open_climate_service.exports.retention import ResourceBusy
+    from open_climate_service.destinations.retention import ResourceBusy
 
     if isinstance(exc, ResourceBusy):
         return False
@@ -143,7 +143,7 @@ def run_pipeline(pipeline_id: str, context: RunContext) -> PipelineRun:
     Returns the run, or the existing one when the same event or request already produced it.
     Raises LookupError for an unknown pipeline and RunRefused when it may not run.
     """
-    from open_climate_service.exports.service import resolve_named_export
+    from open_climate_service.destinations.service import resolve_named_destination
     from open_climate_service.openeo.jobs import triggered_job_id
 
     record = store.get_record(pipeline_id)
@@ -160,13 +160,13 @@ def run_pipeline(pipeline_id: str, context: RunContext) -> PipelineRun:
     if record.validation.bindings != digest:
         raise RunRefused("the workflow or bindings changed since the pipeline was validated; re-check it")
     plugin = service.destination_plugin(spec)
-    # The export must resolve by name, because the job saves and the delivery sends through it.
-    resolve_named_export(plugin.format, {"export": spec.id})
+    # The destination must resolve by name, because the job saves and the delivery sends through it.
+    resolve_named_destination(plugin.format, {"destination": spec.id})
 
     run_id = uuid4().hex
     event = context.event_id or f"pipeline-run:{run_id}"
     process, resolved = workflow_binding.build_process(
-        spec.workflow, bound, start=context.start, end=context.end, save_format=plugin.format, export_id=spec.id
+        spec.workflow, bound, start=context.start, end=context.end, save_format=plugin.format, destination_id=spec.id
     )
     run = PipelineRun(
         run_id=run_id,
@@ -335,14 +335,14 @@ def _record_job_outcome(pipeline_id: str, run: PipelineRun, job: Any) -> str | N
 
 
 def deliver_run(pipeline_id: str, run_id: str, *, operator: bool, redeliver: bool = False) -> PipelineRun:
-    """Submit the delivery a finished run owes, through the export delivery framework.
+    """Submit the delivery a finished run owes, through the destination delivery framework.
 
     ``operator`` is True for the page's actions and False for the automatic hand-off. A
     repeat returns the delivery already submitted, under the same idempotency key. With
     ``redeliver``, an operator sends a run again whose delivery job failed at the destination:
     that is a new delivery with a new key, refused while the earlier one has not failed.
     """
-    from open_climate_service.exports.delivery import submit_delivery
+    from open_climate_service.destinations.delivery import submit_delivery
     from open_climate_service.openeo.jobs import store_get_job
     from open_climate_service.openeo.schemas import OpenEOJobStatus
 
@@ -399,7 +399,7 @@ def deliver_run(pipeline_id: str, run_id: str, *, operator: bool, redeliver: boo
             delivery_attempts=1,
             error=None,
             delivery_job_id=delivery_job_id,
-            delivery_status_url=f"/exports/{pipeline_id}/jobs/{delivery_job_id}",
+            delivery_status_url=f"/destinations/{pipeline_id}/jobs/{delivery_job_id}",
             delivered_at=utc_now().isoformat(),
         )
     return _update_run(
@@ -409,7 +409,7 @@ def deliver_run(pipeline_id: str, run_id: str, *, operator: bool, redeliver: boo
         delivery_attempts=run.delivery_attempts + 1,
         error=None,
         delivery_job_id=delivery_job_id,
-        delivery_status_url=f"/exports/{pipeline_id}/jobs/{delivery_job_id}",
+        delivery_status_url=f"/destinations/{pipeline_id}/jobs/{delivery_job_id}",
         delivered_at=utc_now().isoformat(),
     )
 

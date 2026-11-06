@@ -1,9 +1,9 @@
-"""An export's period must be reachable from its source cadence (CLIM-1302), and CLIM-1139's collision.
+"""A destination's period must be reachable from its source cadence (CLIM-1302), and CLIM-1139's collision.
 
 Three layers are covered here: the reachability table and completeness arithmetic in
 `shared.time`; the declaration checked at configuration time and the evidence checked at
 execution time in `exports.service`; and the two places a label meets data: the ad-hoc
-`save_result` path, and a graph that aggregates explicitly before a named export. The export
+`save_result` path, and a graph that aggregates explicitly before a named destination. The export
 never aggregates; it exports what exists and refuses the rest.
 """
 
@@ -21,14 +21,14 @@ from openeo_pg_parser_networkx.process_registry import Process
 
 from open_climate_service import config
 from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-from open_climate_service.exports.service import (
+from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+from open_climate_service.destinations.service import (
     _drop_periods,
     check_execution_declarations,
     incomplete_periods_to_drop,
-    render_named_export,
-    resolve_named_export,
-    validate_configured_exports,
+    render_named_destination,
+    resolve_named_destination,
+    validate_configured_destinations,
 )
 from open_climate_service.jobs import service as job_service_module
 from open_climate_service.jobs import store as native_store
@@ -143,7 +143,9 @@ def _mapping(**extra: Any) -> dict[str, Any]:
 
 
 def test_mapping_accepts_the_two_new_fields() -> None:
-    validated = Dhis2ExportPlugin().validate_mapping(_mapping(temporal_aggregation="sum", incomplete_periods="drop"))
+    validated = Dhis2DestinationPlugin().validate_mapping(
+        _mapping(temporal_aggregation="sum", incomplete_periods="drop")
+    )
     assert validated["temporal_aggregation"] == "sum"
     assert validated["incomplete_periods"] == "drop"
 
@@ -151,7 +153,7 @@ def test_mapping_accepts_the_two_new_fields() -> None:
 @pytest.mark.parametrize("extra", [{"temporal_aggregation": "median"}, {"incomplete_periods": "ignore"}])
 def test_mapping_rejects_unknown_vocabulary(extra: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
-        Dhis2ExportPlugin().validate_mapping(_mapping(**extra))
+        Dhis2DestinationPlugin().validate_mapping(_mapping(**extra))
 
 
 # --- configuration time ------------------------------------------------------------------------
@@ -166,7 +168,7 @@ def _configure(monkeypatch: pytest.MonkeyPatch, source: str | None, **extra: Any
         "series": [{"data_element": _DATA_ELEMENT}],
         **extra,
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [export]})
+    monkeypatch.setattr(config, "_cache", {"destinations": [export]})
     template = {"id": "src", "period_type": source} if source is not None else None
     monkeypatch.setattr(registry, "get_dataset", lambda dataset_id: template if dataset_id == "src" else None)
 
@@ -174,15 +176,15 @@ def _configure(monkeypatch: pytest.MonkeyPatch, source: str | None, **extra: Any
 def test_daily_dataset_with_monthly_export_must_declare_temporal_aggregation(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "daily")
     with pytest.raises(ValueError, match="must declare temporal_aggregation"):
-        resolve_named_export("DHIS2JSON", {"export": "rain"})
+        resolve_named_destination("DHIS2JSON", {"destination": "rain"})
     with pytest.raises(ValueError, match="must declare temporal_aggregation"):
-        validate_configured_exports()
+        validate_configured_destinations()
 
 
 def test_daily_dataset_with_monthly_export_and_a_declaration_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "daily", temporal_aggregation="sum")
-    assert resolve_named_export("DHIS2JSON", {"export": "rain"}).mapping["temporal_aggregation"] == "sum"
-    validate_configured_exports()
+    assert resolve_named_destination("DHIS2JSON", {"destination": "rain"}).mapping["temporal_aggregation"] == "sum"
+    validate_configured_destinations()
 
 
 @pytest.mark.parametrize(
@@ -192,15 +194,15 @@ def test_daily_dataset_with_monthly_export_and_a_declaration_resolves(monkeypatc
 def test_startup_rejects_malformed_export_definitions(
     monkeypatch: pytest.MonkeyPatch, definitions: list[Any], message: str
 ) -> None:
-    monkeypatch.setattr(config, "_cache", {"exports": definitions})
+    monkeypatch.setattr(config, "_cache", {"destinations": definitions})
     with pytest.raises(ValueError, match=message):
-        validate_configured_exports()
+        validate_configured_destinations()
 
 
 def test_monthly_dataset_with_monthly_export_refuses_a_declaration(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "monthly", temporal_aggregation="mean")
     with pytest.raises(ValueError, match="remove the declaration"):
-        resolve_named_export("DHIS2JSON", {"export": "rain"})
+        resolve_named_destination("DHIS2JSON", {"destination": "rain"})
 
 
 @pytest.mark.parametrize(("source", "period_type"), [("weekly", "daily"), ("monthly", "weekly"), ("weekly", "monthly")])
@@ -209,12 +211,12 @@ def test_unreachable_periods_are_refused_at_configuration(
 ) -> None:
     _configure(monkeypatch, source, period_type=period_type)
     with pytest.raises(ValueError, match="cannot emit"):
-        resolve_named_export("DHIS2JSON", {"export": "rain"})
+        resolve_named_destination("DHIS2JSON", {"destination": "rain"})
 
 
 def test_unknown_dataset_defers_to_the_data(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, None)
-    resolve_named_export("DHIS2JSON", {"export": "rain"})
+    resolve_named_destination("DHIS2JSON", {"destination": "rain"})
 
 
 # --- execution time ----------------------------------------------------------------------------
@@ -226,7 +228,7 @@ def _provenance(**overrides: Any) -> dict[str, Any]:
 
 def test_declared_temporal_aggregation_must_have_run_with_that_method(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "daily", temporal_aggregation="sum")
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain"})
     with pytest.raises(ValueError, match="no temporal aggregation to that period ran"):
         check_execution_declarations(resolved, _provenance())
     with pytest.raises(ValueError, match="used 'mean'"):
@@ -242,14 +244,14 @@ def test_incomplete_periods_are_refused_unless_dropped(monkeypatch: pytest.Monke
     observed = _provenance(temporal_aggregations=[{"period": "monthly", "method": "sum", "incomplete": ["202503"]}])
     _configure(monkeypatch, "daily", temporal_aggregation="sum")
     with pytest.raises(ValueError, match="does not fully cover: 202503"):
-        check_execution_declarations(resolve_named_export("DHIS2JSON", {"export": "rain"}), observed)
+        check_execution_declarations(resolve_named_destination("DHIS2JSON", {"destination": "rain"}), observed)
     _configure(monkeypatch, "daily", temporal_aggregation="sum", incomplete_periods="drop")
-    check_execution_declarations(resolve_named_export("DHIS2JSON", {"export": "rain"}), observed)
+    check_execution_declarations(resolve_named_destination("DHIS2JSON", {"destination": "rain"}), observed)
 
 
 def test_undeclared_export_refuses_an_aggregation_to_another_period(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "monthly")
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain"})
     with pytest.raises(ValueError, match="aggregated to yearly"):
         check_execution_declarations(
             resolved, _provenance(temporal_aggregations=[{"period": "yearly", "method": "sum", "incomplete": []}])
@@ -261,7 +263,7 @@ def test_render_refuses_data_spaced_finer_than_the_export_period(monkeypatch: py
     _configure(monkeypatch, None)
     frame = pd.DataFrame({"geometry": [_OU_A] * 3, "t": _days("2025-01-01", "2025-01-03"), "rain": [1.0, 2.0, 3.0]})
     with pytest.raises(ValueError, match="spaced daily"):
-        render_named_export(frame, "DHIS2JSON", {"export": "rain"})
+        render_named_destination(frame, "DHIS2JSON", {"destination": "rain"})
 
 
 def test_observe_temporal_aggregation_records_method_and_incomplete_periods() -> None:
@@ -408,12 +410,12 @@ def daily_instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
         job_service_module.reset_job_service()
 
 
-def _export_config(monkeypatch: pytest.MonkeyPatch, **extra: Any) -> None:
+def _destination_config(monkeypatch: pytest.MonkeyPatch, **extra: Any) -> None:
     monkeypatch.setattr(
         config,
         "_cache",
         {
-            "exports": [
+            "destinations": [
                 {
                     "id": "rain-monthly",
                     "plugin": "dhis2",
@@ -437,7 +439,7 @@ def _builtin_workflow() -> dict[str, Any]:
                     "dataset_id": "rain_daily",
                     "temporal_extent": ["2025-01-01", "2025-03-31"],
                     "geometries": _GEOMETRIES,
-                    "export": "rain-monthly",
+                    "destination": "rain-monthly",
                     "method": "mean",
                 },
                 "result": True,
@@ -447,7 +449,7 @@ def _builtin_workflow() -> dict[str, Any]:
 
 
 def _explicit_graph(reducer: str = "sum") -> dict[str, Any]:
-    """load -> aggregate_temporal_period(month) -> aggregate_spatial_weighted(mean) -> named export."""
+    """load -> aggregate_temporal_period(month) -> aggregate_spatial_weighted(mean) -> named destination."""
     return {
         "process_graph": {
             "load": {
@@ -479,7 +481,7 @@ def _explicit_graph(reducer: str = "sum") -> dict[str, Any]:
                 "arguments": {
                     "data": {"from_node": "zonal"},
                     "format": "DHIS2JSON",
-                    "options": {"export": "rain-monthly"},
+                    "options": {"destination": "rain-monthly"},
                 },
                 "result": True,
             },
@@ -505,7 +507,7 @@ def test_builtin_workflow_exports_only_what_exists_and_refuses_a_daily_source(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The export never aggregates: a daily source behind a monthly export is refused, not resampled."""
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     record = _run(daily_instance, "builtin-daily", _builtin_workflow())
     assert record.status == OpenEOJobStatus.ERROR
     assert "no temporal aggregation to that period ran" in str(record.error_message)
@@ -514,7 +516,7 @@ def test_builtin_workflow_exports_only_what_exists_and_refuses_a_daily_source(
 def test_explicit_aggregation_is_verified_and_exported(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     record = _run(daily_instance, "explicit-sum", _explicit_graph("sum"))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
     values = _values(record)
@@ -527,7 +529,7 @@ def test_explicit_aggregation_is_verified_and_exported(
 def test_explicit_aggregation_with_the_wrong_reducer_is_refused(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     record = _run(daily_instance, "explicit-mean", _explicit_graph("mean"))
     assert record.status == OpenEOJobStatus.ERROR
     assert "used 'mean'" in str(record.error_message)
@@ -536,7 +538,7 @@ def test_explicit_aggregation_with_the_wrong_reducer_is_refused(
 def test_incomplete_trailing_month_is_refused_by_default(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     daily_instance.coverage_end["end"] = "2025-03-14"  # type: ignore[attr-defined]
     record = _run(daily_instance, "incomplete-march", _explicit_graph("sum"))
     assert record.status == OpenEOJobStatus.ERROR
@@ -546,7 +548,7 @@ def test_incomplete_trailing_month_is_refused_by_default(
 def test_incomplete_trailing_month_is_dropped_when_declared(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _export_config(monkeypatch, temporal_aggregation="sum", incomplete_periods="drop")
+    _destination_config(monkeypatch, temporal_aggregation="sum", incomplete_periods="drop")
     daily_instance.coverage_end["end"] = "2025-03-14"  # type: ignore[attr-defined]
     record = _run(daily_instance, "dropped-march", _explicit_graph("sum"))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
@@ -556,7 +558,7 @@ def test_incomplete_trailing_month_is_dropped_when_declared(
 def test_export_without_a_declaration_fails_at_resolution(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _export_config(monkeypatch)
+    _destination_config(monkeypatch)
     record = _run(daily_instance, "undeclared", _explicit_graph("sum"))
     assert record.status == OpenEOJobStatus.ERROR
     assert "must declare temporal_aggregation" in str(record.error_message)
@@ -569,7 +571,7 @@ def test_a_single_day_does_not_pass_as_a_whole_month(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One timestamp has no spacing to infer, so the declared dataset cadence must fill in."""
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     daily_instance.coverage_end["end"] = "2025-01-01"  # type: ignore[attr-defined]
     record = _run(daily_instance, "single-day", _explicit_graph("sum"))
     assert record.status == OpenEOJobStatus.ERROR
@@ -599,7 +601,7 @@ def test_chained_aggregation_keeps_an_incomplete_month_as_an_incomplete_year(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Daily to monthly to yearly: the year sees twelve whole months, but December was short of days."""
-    _export_config(monkeypatch, period_type="yearly", temporal_aggregation="sum")
+    _destination_config(monkeypatch, period_type="yearly", temporal_aggregation="sum")
     daily_instance.coverage_end["end"] = "2025-12-14"  # type: ignore[attr-defined]
     record = _run(daily_instance, "chained-year", _chained_graph())
     assert record.status == OpenEOJobStatus.ERROR
@@ -615,9 +617,11 @@ def test_incomplete_periods_are_relabelled_at_the_export_period(monkeypatch: pyt
     )
     _configure(monkeypatch, "daily", period_type="yearly", temporal_aggregation="sum")
     with pytest.raises(ValueError, match="does not fully cover: 2025"):
-        check_execution_declarations(resolve_named_export("DHIS2JSON", {"export": "rain"}), observed)
+        check_execution_declarations(resolve_named_destination("DHIS2JSON", {"destination": "rain"}), observed)
     _configure(monkeypatch, "daily", period_type="yearly", temporal_aggregation="sum", incomplete_periods="drop")
-    assert incomplete_periods_to_drop(resolve_named_export("DHIS2JSON", {"export": "rain"}), observed) == ["2025"]
+    assert incomplete_periods_to_drop(resolve_named_destination("DHIS2JSON", {"destination": "rain"}), observed) == [
+        "2025"
+    ]
 
 
 def test_period_label_start_round_trips() -> None:
@@ -634,7 +638,7 @@ def test_period_label_start_round_trips() -> None:
 def test_dropping_periods_indexes_the_dimension_the_coordinate_lies_along(monkeypatch: pytest.MonkeyPatch) -> None:
     """A vector cube carries `t(observation)`; isel must index `observation`, not `t`."""
     _configure(monkeypatch, None, incomplete_periods="drop")
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain"})
     stamps = pd.date_range("2025-01-01", "2025-03-01", freq="MS").values
     data = xr.DataArray(
         [1.0, 2.0, 3.0],
@@ -649,7 +653,7 @@ def test_dropping_periods_indexes_the_dimension_the_coordinate_lies_along(monkey
 
 def test_unexportable_aggregation_periods_do_not_leak_none_into_the_message(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "monthly")
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain"})
     with pytest.raises(ValueError) as caught:
         check_execution_declarations(
             resolved, _provenance(temporal_aggregations=[{"period": None, "method": "mean", "incomplete": []}])
@@ -660,7 +664,7 @@ def test_unexportable_aggregation_periods_do_not_leak_none_into_the_message(monk
 
 def test_malformed_incomplete_periods_are_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "daily", temporal_aggregation="sum")
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain"})
     check_execution_declarations(
         resolved, _provenance(temporal_aggregations=[{"period": "monthly", "method": "sum", "incomplete": None}])
     )
@@ -690,7 +694,7 @@ def test_sparse_daily_input_is_not_read_as_a_coarser_cadence(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every other day missing infers as weekly; the declared daily cadence must win and count the gaps."""
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     daily_instance.coverage_end["end"] = "2025-02-28"  # type: ignore[attr-defined]
     daily_instance.coverage_end["step"] = 2  # type: ignore[attr-defined]
     record = _run(daily_instance, "sparse-daily", _explicit_graph("sum"))
@@ -701,8 +705,8 @@ def test_sparse_daily_input_is_not_read_as_a_coarser_cadence(
 def test_unknown_source_cadence_cannot_pass_as_complete(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With nothing declared and a sparse axis, completeness is unverifiable and the export refuses."""
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    """With nothing declared and a sparse axis, completeness is unverifiable and the destination refuses."""
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     monkeypatch.setattr(registry, "get_dataset", lambda dataset_id: None)
     daily_instance.coverage_end["step"] = 2  # type: ignore[attr-defined]
     record = _run(daily_instance, "unknown-cadence", _explicit_graph("sum"))
@@ -712,7 +716,7 @@ def test_unknown_source_cadence_cannot_pass_as_complete(
 
 def test_unverifiable_completeness_is_refused_even_with_drop(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "daily", temporal_aggregation="sum", incomplete_periods="drop")
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain"})
     observed = _provenance(
         temporal_aggregations=[
             {"period": "monthly", "method": "sum", "incomplete": [], "completeness": "unknown", "reason": "no axis"}
@@ -756,7 +760,7 @@ def test_complete_chained_aggregation_is_exported(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Daily to monthly to yearly over a whole year: the yearly step must count months, not days."""
-    _export_config(monkeypatch, period_type="yearly", temporal_aggregation="sum")
+    _destination_config(monkeypatch, period_type="yearly", temporal_aggregation="sum")
     daily_instance.coverage_end["end"] = "2025-12-31"  # type: ignore[attr-defined]
     record = _run(daily_instance, "chained-complete", _chained_graph())
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
@@ -779,7 +783,7 @@ def test_ad_hoc_export_validates_the_result_cadence(
     daily_instance: openeo_jobs.OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """After an explicit monthly aggregation, `month` exports and `day` is refused as not derivable."""
-    _export_config(monkeypatch, temporal_aggregation="sum")
+    _destination_config(monkeypatch, temporal_aggregation="sum")
     record = _run(daily_instance, "adhoc-month", _ad_hoc_chap_graph("month"))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
     rows = Path(str((record.usage or {})["output_path"])).read_text().splitlines()

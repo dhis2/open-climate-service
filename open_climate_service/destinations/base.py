@@ -1,11 +1,11 @@
-"""Public contract for export renderers and optional delivery."""
+"""Public contract for destination plugins: rendering and delivery."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from open_climate_service.exports.report import ExportReport
+from open_climate_service.destinations.report import DeliveryReport
 
 
 @dataclass(frozen=True)
@@ -23,11 +23,11 @@ class DestinationContext:
 
     The pipeline core derives this from the workflow arguments without knowing the
     destination: the datasets bound to ``collection-id`` parameters and the feature
-    collections bound with ``from_features``. ``export_id`` is the named export the
+    collections bound with ``from_features``. ``destination_id`` is the named destination the
     pipeline's results are saved and delivered through.
     """
 
-    export_id: str
+    destination_id: str
     datasets: tuple[PipelineDataset, ...]
     feature_collections: tuple[str, ...]
 
@@ -84,8 +84,8 @@ class PipelineSettingsForm:
     appended safely, so adding a schema property cannot make it impossible to configure.
 
     A string field with ``widget="lookup"`` and a ``lookup`` name is chosen from the
-    destination: the form searches it through ``BaseExportPlugin.lookup_options`` and shows
-    stored values by the labels ``BaseExportPlugin.lookup_labels`` resolves.
+    destination: the form searches it through ``BaseDestinationPlugin.lookup_options`` and shows
+    stored values by the labels ``BaseDestinationPlugin.lookup_labels`` resolves.
     """
 
     title: str
@@ -95,7 +95,7 @@ class PipelineSettingsForm:
 
 
 @dataclass(frozen=True)
-class RenderedExport:
+class RenderedPayload:
     """Serialized payload and counts; the framework owns file creation."""
 
     content: bytes
@@ -105,10 +105,10 @@ class RenderedExport:
 
     def __post_init__(self) -> None:
         if type(self.content) is not bytes:
-            raise TypeError("Export content must be bytes")
+            raise TypeError("Payload content must be bytes")
         for count in (self.record_count, self.skipped_count):
             if type(count) is not int or count < 0:
-                raise ValueError("Export counts must be non-negative integers")
+                raise ValueError("Payload counts must be non-negative integers")
 
 
 class DeliveryContext(Protocol):
@@ -137,12 +137,13 @@ class DeliveryContext(Protocol):
         ...
 
 
-class BaseExportPlugin(ABC):
-    """Render a computed result without network calls or delivery side effects.
+class BaseDestinationPlugin(ABC):
+    """Render a computed result and deliver it to a destination.
 
-    Plugin modules expose an instance as ``plugin``. Configuration validation must
-    also be pure. Instances may be shared between threads; keep invocation state
-    in local variables. Delivery will be introduced as a separate capability.
+    ``render`` and configuration validation are pure: no network calls and no side effects.
+    ``send`` delivers, to a remote system such as DHIS2 or to a store of this instance. Plugin
+    modules expose an instance as ``plugin``. Instances may be shared between threads; keep
+    invocation state in local variables.
     """
 
     id: str
@@ -152,8 +153,6 @@ class BaseExportPlugin(ABC):
     # Renderer authors bump this when changing payload semantics. An unversioned
     # renderer may produce files but cannot supply a verified delivery input.
     version: str | None = None
-    # Render-only plugins leave this False; the delivery endpoint refuses them.
-    supports_delivery: bool = False
     # True when ``send(dry_run=True)`` has the far end validate without storing anything.
     # A pipeline whose destination lacks it dry-runs by rendering only.
     supports_dry_run: bool = False
@@ -164,9 +163,9 @@ class BaseExportPlugin(ABC):
     # --- delivery target hooks (delivery plugins) -----------------------------------------
 
     def target_binding(self, references: dict[str, str]) -> dict[str, str] | None:
-        """Credential-free identity of the target an export's references name, or None.
+        """Credential-free identity of the target a destination's references name, or None.
 
-        Recorded in the saved export's manifest and compared again before delivery, so a
+        Recorded in the saved payload's manifest and compared again before delivery, so a
         target that changed in between is refused. Must not contain secrets or URLs with
         credentials; a digest of an address is the usual identity.
 
@@ -174,7 +173,7 @@ class BaseExportPlugin(ABC):
         reference names one of the instance's named connections, bound by id and URL digest.
         Override both target hooks for any other kind of target.
         """
-        from open_climate_service.exports.manifest import named_connection_binding
+        from open_climate_service.destinations.manifest import named_connection_binding
 
         return named_connection_binding(references)
 
@@ -210,7 +209,7 @@ class BaseExportPlugin(ABC):
         search needs, such as the connection. May contact the destination. Raise ValueError
         naming what is missing or what the destination answered.
         """
-        raise NotImplementedError(f"Export plugin '{self.id}' has no lookup '{lookup}'")
+        raise NotImplementedError(f"Destination plugin '{self.id}' has no lookup '{lookup}'")
 
     def lookup_labels(self, lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
         """How stored lookup values read, by value; a value the destination does not know is left out.
@@ -220,14 +219,14 @@ class BaseExportPlugin(ABC):
         """
         return {}
 
-    def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
-        """Compile destination settings into this plugin's export definition, without ``id`` or ``plugin``.
+    def destination_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
+        """Compile destination settings into this plugin's destination definition, without ``id`` or ``plugin``.
 
-        The result is resolved like a configured named export, so it holds the mapping plus
+        The result is resolved like a configured named destination, so it holds the mapping plus
         any ``dataset``/``connection`` references. Raise ValueError naming what is wrong.
         Must be pure: no network calls.
         """
-        raise NotImplementedError(f"Export plugin '{self.id}' is not a pipeline destination")
+        raise NotImplementedError(f"Destination plugin '{self.id}' is not a pipeline destination")
 
     def check_destination(self, settings: dict[str, Any], context: DestinationContext) -> list[DestinationCheck]:
         """Destination-side checks run on save, on re-check and before going live.
@@ -261,9 +260,10 @@ class BaseExportPlugin(ABC):
         """Return a validated mapping or raise ValueError."""
 
     @abstractmethod
-    def render(self, data: Any, mapping: dict[str, Any]) -> RenderedExport:
+    def render(self, data: Any, mapping: dict[str, Any]) -> RenderedPayload:
         """Serialize a computed result using a validated mapping."""
 
+    @abstractmethod
     def send(
         self,
         payload: bytes,
@@ -271,13 +271,9 @@ class BaseExportPlugin(ABC):
         *,
         dry_run: bool = False,
         context: DeliveryContext | None = None,
-    ) -> ExportReport:
-        """Deliver a rendered payload and report what the far end accepted.
+    ) -> DeliveryReport:
+        """Deliver a rendered payload and report what the destination accepted.
 
-        Delivery plugins override this and set ``supports_delivery = True``. The
-        ``context`` carries progress, cancellation, and checkpoint hooks; a plugin
-        must tolerate ``context=None`` so it remains callable standalone. The
-        default raises so a render-only plugin fails loudly instead of being
-        silently treated as a no-op delivery.
+        The ``context`` carries progress, cancellation, and checkpoint hooks; a plugin must
+        tolerate ``context=None`` so it remains callable standalone.
         """
-        raise NotImplementedError(f"Export plugin '{self.id}' does not support delivery")

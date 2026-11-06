@@ -45,7 +45,7 @@ uv run uvicorn open_climate_service.main:app --reload
 - [Instance guide](https://dhis2.github.io/open-climate-service/instance_guide/) — run a service for your country (recommended)
 - [Using the web interface](https://dhis2.github.io/open-climate-service/web_interface/) — manage ingestion, sync, and the map viewer
 - [Accessing data](https://dhis2.github.io/open-climate-service/user_guide/) — the Python client, STAC, and xarray
-- [openEO](https://dhis2.github.io/open-climate-service/openeo/) — process graphs, workflows, and exports
+- [openEO](https://dhis2.github.io/open-climate-service/openeo/) — process graphs, workflows, and destinations
 - [API reference](https://dhis2.github.io/open-climate-service/managed_data_api_guide/)
 - [Roadmap](https://dhis2.github.io/open-climate-service/roadmap/) · [Team](https://dhis2.github.io/open-climate-service/team/)
 

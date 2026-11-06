@@ -1,4 +1,4 @@
-"""Structured outcome of one export delivery attempt."""
+"""Structured outcome of one destination delivery attempt."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ExportOutcome(StrEnum):
+class DeliveryOutcome(StrEnum):
     """Distinct terminal states a delivery attempt can reach."""
 
     SUCCESS = "success"
@@ -30,7 +30,7 @@ class ExportOutcome(StrEnum):
     """The remote outcome could not be reconciled (e.g. timeout after POST)."""
 
 
-class ExportReport(BaseModel):
+class DeliveryReport(BaseModel):
     """Authoritative summary of a delivery attempt, persisted on the delivery job."""
 
     model_config = ConfigDict(extra="forbid")
@@ -38,7 +38,7 @@ class ExportReport(BaseModel):
     plugin_id: str
     connection_id: str | None = None
     dry_run: bool = False
-    outcome: ExportOutcome
+    outcome: DeliveryOutcome
     message: str | None = None
     payload_sha256: str
     attempts: int = 1
@@ -55,16 +55,16 @@ class ExportReport(BaseModel):
 
 
 # Ordered by severity; a merged report takes the first matching outcome.
-_OUTCOME_PRECEDENCE: tuple[ExportOutcome, ...] = (
-    ExportOutcome.REJECTED,
-    ExportOutcome.UNKNOWN,
-    ExportOutcome.CANCELLED,
-    ExportOutcome.PARTIAL,
+_OUTCOME_PRECEDENCE: tuple[DeliveryOutcome, ...] = (
+    DeliveryOutcome.REJECTED,
+    DeliveryOutcome.UNKNOWN,
+    DeliveryOutcome.CANCELLED,
+    DeliveryOutcome.PARTIAL,
 )
 
 
 def merge_chunk_reports(
-    reports: list[ExportReport],
+    reports: list[DeliveryReport],
     *,
     plugin_id: str,
     connection_id: str | None,
@@ -75,7 +75,7 @@ def merge_chunk_reports(
     submitted: int | None = None,
     cancelled_early: bool = False,
     message: str | None = None,
-) -> ExportReport:
+) -> DeliveryReport:
     """Combine per-chunk reports into one authoritative delivery report.
 
     Counts, conflicts, remote task IDs, and attempts are summed. The aggregate
@@ -84,7 +84,7 @@ def merge_chunk_reports(
     cancellation is recorded as ``cancelled`` unless a chunk was rejected or its
     outcome is unknown.
     """
-    outcomes: set[ExportOutcome]
+    outcomes: set[DeliveryOutcome]
     if reports:
         attempts = sum(report.attempts for report in reports)
         imported = sum(report.imported for report in reports)
@@ -105,15 +105,15 @@ def merge_chunk_reports(
         total_submitted = submitted if submitted is not None else 0
         outcomes = set()
 
-    outcome = ExportOutcome.SUCCESS
+    outcome = DeliveryOutcome.SUCCESS
     for candidate in _OUTCOME_PRECEDENCE:
-        if candidate in outcomes or (candidate == ExportOutcome.CANCELLED and cancelled_early):
+        if candidate in outcomes or (candidate == DeliveryOutcome.CANCELLED and cancelled_early):
             outcome = candidate
             break
-    if outcome == ExportOutcome.SUCCESS:
-        outcome = ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS
+    if outcome == DeliveryOutcome.SUCCESS:
+        outcome = DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS
 
-    return ExportReport(
+    return DeliveryReport(
         plugin_id=plugin_id,
         connection_id=connection_id,
         dry_run=dry_run,

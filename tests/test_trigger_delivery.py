@@ -1,4 +1,4 @@
-"""CLIM-1213: deliver a triggered workflow's named export automatically when the job finishes."""
+"""CLIM-1213: deliver a triggered workflow's named destination automatically when the job finishes."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ from open_climate_service import config
 from open_climate_service.automation import service as automation_module
 from open_climate_service.automation.config import AutomationConfig, TriggerDelivery, WorkflowTrigger
 from open_climate_service.automation.service import WorkflowAutomationService, delivery_idempotency_key
-from open_climate_service.exports import ExportReport
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-from open_climate_service.exports.report import ExportOutcome
+from open_climate_service.destinations import DeliveryReport
+from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+from open_climate_service.destinations.report import DeliveryOutcome
 from open_climate_service.jobs import service as job_service_module
 from open_climate_service.jobs import store as native_store
 from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent, JobRecord, JobStatus
@@ -58,7 +58,7 @@ def _automation(deliver: TriggerDelivery | None = None, max_attempts: int = 3) -
                 workflow_id="aggregate_to_dhis2_json",
                 arguments={
                     "dataset_id": "$event.dataset_id",
-                    "export": deliver.export if deliver is not None else _EXPORT,
+                    "destination": deliver.destination if deliver is not None else _EXPORT,
                 },
                 deliver=deliver,
                 max_attempts=max_attempts,
@@ -80,27 +80,27 @@ def instance_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterato
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
     monkeypatch.setattr(native_store, "JOBS_INDEX_PATH", tmp_path / "data" / "jobs" / "jobs.json")
     settings: dict[str, Any] = {
-        "exports": [
+        "destinations": [
             {
-                "id": export_id,
+                "id": destination_id,
                 "plugin": "dhis2",
                 "connection": "hmis",
                 "period_type": "monthly",
                 "series": [{"data_element": "BXgDHhPdFVU"}],
             }
-            for export_id in (_EXPORT, _OTHER_EXPORT)
+            for destination_id in (_EXPORT, _OTHER_EXPORT)
         ],
         "dhis2_connections": [{"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "TEST_TOKEN"}],
     }
     monkeypatch.setattr(config, "_cache", settings)
     # The workflow graph itself is CLIM-1216's concern; here a job only has to save a
-    # deliverable named export, so execution returns one directly. Tests switch which
+    # deliverable named destination, so execution returns one directly. Tests switch which
     # export the workflow saves through `saved_export`.
     state: dict[str, Any] = {"saved_export": _EXPORT}
     monkeypatch.setattr(
         execution,
         "run_process_graph",
-        lambda *args, **kwargs: SaveResultEnvelope(_frame(), "DHIS2JSON", {"export": state["saved_export"]}),
+        lambda *args, **kwargs: SaveResultEnvelope(_frame(), "DHIS2JSON", {"destination": state["saved_export"]}),
     )
     # Deliveries run on the native job service singleton; never inherit one bound to
     # another test's store.
@@ -119,14 +119,14 @@ def sent_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
 
     def send(
-        self: Dhis2ExportPlugin, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None
-    ) -> ExportReport:
+        self: Dhis2DestinationPlugin, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None
+    ) -> DeliveryReport:
         calls.append({"target": target, "dry_run": dry_run})
-        return ExportReport(
+        return DeliveryReport(
             plugin_id=self.id,
             connection_id=target,
             dry_run=dry_run,
-            outcome=ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS,
+            outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
             message="accepted",
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             submitted=1,
@@ -135,7 +135,7 @@ def sent_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             finished_at=utc_now().isoformat(),
         )
 
-    monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "send", send)
     return calls
 
 
@@ -172,7 +172,7 @@ def _await_openeo(job_id: str, timeout: float = 5.0) -> OpenEOJobRecord:
 def _await_deliveries(count: int, timeout: float = 5.0) -> list[JobRecord]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        records = [record for record in native_store.list_job_records() if record.process_id.startswith("export:")]
+        records = [record for record in native_store.list_job_records() if record.process_id.startswith("destination:")]
         if len(records) >= count and all(
             record.status in {JobStatus.SUCCESSFUL, JobStatus.FAILED, JobStatus.CANCELLED} for record in records
         ):
@@ -182,7 +182,7 @@ def _await_deliveries(count: int, timeout: float = 5.0) -> list[JobRecord]:
 
 
 def _deliveries() -> list[JobRecord]:
-    return [record for record in native_store.list_job_records() if record.process_id.startswith("export:")]
+    return [record for record in native_store.list_job_records() if record.process_id.startswith("destination:")]
 
 
 def _triggered_job_id(service: Any, index: int = 0) -> str:
@@ -195,7 +195,7 @@ def _triggered_job_id(service: Any, index: int = 0) -> str:
 def test_finished_triggered_job_delivers_once_and_links_the_delivery(
     instance: dict[str, Any], sent: list[dict[str, Any]]
 ) -> None:
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    service = _service(instance, TriggerDelivery(destination=_EXPORT))
     job_id = _triggered_job_id(service)
     source = _await_openeo(job_id)
     assert source.status == OpenEOJobStatus.FINISHED
@@ -204,7 +204,7 @@ def test_finished_triggered_job_delivers_once_and_links_the_delivery(
     [delivery] = _await_deliveries(1)
     assert delivery.status == JobStatus.SUCCESSFUL
     assert delivery.request["dry_run"] is True  # the default
-    assert isinstance(delivery.result, dict) and delivery.result["outcome"] == ExportOutcome.DRY_RUN
+    assert isinstance(delivery.result, dict) and delivery.result["outcome"] == DeliveryOutcome.DRY_RUN
     assert sent == [{"target": "hmis", "dry_run": True}]
     links = (openeo_jobs.store_get_job(job_id).usage or {})["deliveries"]  # type: ignore[union-attr]
     assert [link["delivery_job_id"] for link in links] == [delivery.job_id]
@@ -213,7 +213,7 @@ def test_finished_triggered_job_delivers_once_and_links_the_delivery(
 def test_failed_submission_is_visible_and_cleared_after_restart_retry(
     instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.exports import delivery as delivery_module
+    from open_climate_service.destinations import delivery as delivery_module
 
     original = delivery_module.submit_delivery
 
@@ -221,7 +221,7 @@ def test_failed_submission_is_visible_and_cleared_after_restart_retry(
         raise RuntimeError("delivery queue unavailable")
 
     monkeypatch.setattr(delivery_module, "submit_delivery", fail_submission)
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    service = _service(instance, TriggerDelivery(destination=_EXPORT))
     job_id = _triggered_job_id(service)
     _await_openeo(job_id)
 
@@ -235,7 +235,7 @@ def test_failed_submission_is_visible_and_cleared_after_restart_retry(
     else:
         pytest.fail("delivery submission error was not recorded on the source job")
 
-    assert error["export_id"] == _EXPORT
+    assert error["destination_id"] == _EXPORT
     assert error["message"] == "RuntimeError: delivery queue unavailable"
     assert _deliveries() == []
 
@@ -251,7 +251,7 @@ def test_failed_submission_is_visible_and_cleared_after_restart_retry(
 def test_replayed_event_and_repeated_reconciliation_create_no_second_delivery(
     instance: dict[str, Any], sent: list[dict[str, Any]]
 ) -> None:
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    service = _service(instance, TriggerDelivery(destination=_EXPORT))
     job_id = _triggered_job_id(service)
     _await_openeo(job_id)
     _await_deliveries(1)
@@ -259,7 +259,7 @@ def test_replayed_event_and_repeated_reconciliation_create_no_second_delivery(
     service.consume([_event()])  # the same durable event again
     service.reconcile_deliveries()
     service.reconcile_deliveries()
-    _service(instance, TriggerDelivery(export=_EXPORT)).reconcile_deliveries()  # a restart
+    _service(instance, TriggerDelivery(destination=_EXPORT)).reconcile_deliveries()  # a restart
 
     assert len(_deliveries()) == 1
     assert len(sent) == 1
@@ -268,11 +268,11 @@ def test_replayed_event_and_repeated_reconciliation_create_no_second_delivery(
 def test_switching_to_live_delivers_new_jobs_and_leaves_earlier_ones(
     instance: dict[str, Any], sent: list[dict[str, Any]]
 ) -> None:
-    first = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT, dry_run=True)))
+    first = _triggered_job_id(_service(instance, TriggerDelivery(destination=_EXPORT, dry_run=True)))
     _await_openeo(first)
     _await_deliveries(1)
 
-    live = _service(instance, TriggerDelivery(export=_EXPORT, dry_run=False))
+    live = _service(instance, TriggerDelivery(destination=_EXPORT, dry_run=False))
     live.reconcile_deliveries()
     assert len(_deliveries()) == 1  # the earlier job is not re-delivered live
     second = _triggered_job_id(live, index=1)
@@ -289,12 +289,12 @@ def test_undelivered_dry_run_job_is_not_imported_after_switching_to_live(
     instance: dict[str, Any], sent: list[dict[str, Any]]
 ) -> None:
     # A job finishes under dry_run, but its delivery is missed (no listener, as after a crash).
-    dry = _service(instance, TriggerDelivery(export=_EXPORT, dry_run=True), listen=False)
+    dry = _service(instance, TriggerDelivery(destination=_EXPORT, dry_run=True), listen=False)
     missed = _triggered_job_id(dry)
     _await_openeo(missed)
     assert _deliveries() == []
 
-    live = _service(instance, TriggerDelivery(export=_EXPORT, dry_run=False))
+    live = _service(instance, TriggerDelivery(destination=_EXPORT, dry_run=False))
     live.reconcile_deliveries()
     assert _deliveries() == []  # never imported live
     assert sent == []
@@ -309,9 +309,9 @@ def test_undelivered_dry_run_job_is_not_imported_after_switching_to_live(
 def test_boundary_without_a_recorded_mode_is_restamped(instance: dict[str, Any]) -> None:
     # A boundary stored before the mode was recorded cannot prove which mode it covered.
     automation_module._save_delivery_activations(
-        {_TRIGGER: {"export": _EXPORT, "activated_at": "2020-01-01T00:00:00+00:00"}}  # type: ignore[dict-item]
+        {_TRIGGER: {"destination": _EXPORT, "activated_at": "2020-01-01T00:00:00+00:00"}}  # type: ignore[dict-item]
     )
-    _service(instance, TriggerDelivery(export=_EXPORT, dry_run=False))
+    _service(instance, TriggerDelivery(destination=_EXPORT, dry_run=False))
     stored = automation_module._load_delivery_activations()[_TRIGGER]
     assert stored["mode"] == "live"
     assert stored["activated_at"] > "2020-01-01T00:00:00+00:00"
@@ -324,7 +324,7 @@ def test_adding_deliver_does_not_push_jobs_finished_before_activation(
     job_id = _triggered_job_id(without)
     assert _await_openeo(job_id).status == OpenEOJobStatus.FINISHED
 
-    later = _service(instance, TriggerDelivery(export=_EXPORT))
+    later = _service(instance, TriggerDelivery(destination=_EXPORT))
     later.reconcile_deliveries()
     later.on_job_finished(openeo_jobs.store_get_job(job_id))  # type: ignore[arg-type]
 
@@ -335,12 +335,12 @@ def test_adding_deliver_does_not_push_jobs_finished_before_activation(
 def test_removing_and_readding_deliver_resets_the_boundary(
     instance: dict[str, Any], sent: list[dict[str, Any]]
 ) -> None:
-    _service(instance, TriggerDelivery(export=_EXPORT))
+    _service(instance, TriggerDelivery(destination=_EXPORT))
     without = _service(instance, None)  # delivery removed while jobs keep finishing
     job_id = _triggered_job_id(without)
     _await_openeo(job_id)
 
-    _service(instance, TriggerDelivery(export=_EXPORT)).reconcile_deliveries()
+    _service(instance, TriggerDelivery(destination=_EXPORT)).reconcile_deliveries()
     assert _deliveries() == []
 
 
@@ -348,7 +348,7 @@ def test_removing_and_readding_deliver_resets_the_boundary(
 def test_failed_or_canceled_job_produces_no_delivery(
     instance: dict[str, Any], sent: list[dict[str, Any]], status: OpenEOJobStatus
 ) -> None:
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    service = _service(instance, TriggerDelivery(destination=_EXPORT))
     record = OpenEOJobRecord(
         id="triggered",
         status=status,
@@ -370,7 +370,7 @@ def test_failed_workflow_job_produces_no_delivery(
 
     monkeypatch.setattr(execution, "run_process_graph", fail)
     # A single attempt: this test is about delivery, not retries (tests/test_workflow_retries.py).
-    service = _service(instance, TriggerDelivery(export=_EXPORT), max_attempts=1)
+    service = _service(instance, TriggerDelivery(destination=_EXPORT), max_attempts=1)
     job_id = _triggered_job_id(service)
     assert _await_openeo(job_id).status == OpenEOJobStatus.ERROR
     service.reconcile_deliveries()
@@ -381,19 +381,19 @@ def test_job_finished_while_no_listener_ran_delivers_on_next_start(
     instance: dict[str, Any], sent: list[dict[str, Any]]
 ) -> None:
     # Simulates a process killed after FINISHED and before the delivery was submitted.
-    stopped = _service(instance, TriggerDelivery(export=_EXPORT), listen=False)
+    stopped = _service(instance, TriggerDelivery(destination=_EXPORT), listen=False)
     job_id = _triggered_job_id(stopped)
     _await_openeo(job_id)
     assert _deliveries() == []
 
-    _service(instance, TriggerDelivery(export=_EXPORT)).reconcile_deliveries()
+    _service(instance, TriggerDelivery(destination=_EXPORT)).reconcile_deliveries()
     [delivery] = _await_deliveries(1)
     assert delivery.request["job_id"] == job_id
     assert delivery.status == JobStatus.SUCCESSFUL
 
 
 def test_crash_between_reservation_and_link_is_repaired(instance: dict[str, Any], sent: list[dict[str, Any]]) -> None:
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    service = _service(instance, TriggerDelivery(destination=_EXPORT))
     job_id = _triggered_job_id(service)
     _await_openeo(job_id)
     [delivery] = _await_deliveries(1)
@@ -417,9 +417,9 @@ def test_delivery_keys_are_deterministic_per_job_export_and_mode() -> None:
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (lambda settings: settings.update(exports=[]), "which is invalid"),
-        (lambda settings: settings["exports"][0].update(plugin="summary"), "which is invalid"),
-        (lambda settings: settings["exports"][0].pop("connection"), "which has no DHIS2 connection"),
+        (lambda settings: settings.update(destinations=[]), "which is invalid"),
+        (lambda settings: settings["destinations"][0].update(plugin="summary"), "which is invalid"),
+        (lambda settings: settings["destinations"][0].pop("connection"), "which has no DHIS2 connection"),
         (lambda settings: settings.update(dhis2_connections=[]), "is not configured under dhis2_connections"),
     ],
 )
@@ -428,26 +428,26 @@ def test_invalid_delivery_is_rejected_at_startup_naming_the_trigger(
 ) -> None:
     change(instance["settings"])
     service = WorkflowAutomationService(
-        config_loader=lambda: _automation(TriggerDelivery(export=_EXPORT)), openeo_service=instance["openeo"]
+        config_loader=lambda: _automation(TriggerDelivery(destination=_EXPORT)), openeo_service=instance["openeo"]
     )
     with pytest.raises(ValueError, match=message) as error:
         service.start()
-    assert f"Workflow trigger '{_TRIGGER}' delivers export '{_EXPORT}'" in str(error.value)
+    assert f"Workflow trigger '{_TRIGGER}' delivers to destination '{_EXPORT}'" in str(error.value)
 
 
 def test_workflow_and_delivery_exports_must_match(instance: dict[str, Any]) -> None:
-    automation = _automation(TriggerDelivery(export=_EXPORT))
-    automation.workflow_triggers[0].arguments["export"] = _OTHER_EXPORT
+    automation = _automation(TriggerDelivery(destination=_EXPORT))
+    automation.workflow_triggers[0].arguments["destination"] = _OTHER_EXPORT
     service = WorkflowAutomationService(config_loader=lambda: automation, openeo_service=instance["openeo"])
 
-    with pytest.raises(ValueError, match="workflow and delivery must use the same named export"):
+    with pytest.raises(ValueError, match="workflow and delivery must use the same named destination"):
         service.start()
 
 
 def test_read_only_instance_validates_delivery_but_keeps_it_inactive(instance: dict[str, Any]) -> None:
     instance["settings"]["read_only"] = True
     service = WorkflowAutomationService(
-        config_loader=lambda: _automation(TriggerDelivery(export=_EXPORT)), openeo_service=instance["openeo"]
+        config_loader=lambda: _automation(TriggerDelivery(destination=_EXPORT)), openeo_service=instance["openeo"]
     )
 
     service.start()
@@ -473,7 +473,7 @@ def test_job_without_finish_time_counts_as_before_activation(instance: dict[str,
 
 
 def test_switching_export_starts_a_new_boundary(instance: dict[str, Any], sent: list[dict[str, Any]]) -> None:
-    before = _service(instance, TriggerDelivery(export=_EXPORT))
+    before = _service(instance, TriggerDelivery(destination=_EXPORT))
     delivered = _triggered_job_id(before)
     _await_openeo(delivered)
     _await_deliveries(1)
@@ -484,7 +484,7 @@ def test_switching_export_starts_a_new_boundary(instance: dict[str, Any], sent: 
     _await_openeo(undelivered)
     assert len(_deliveries()) == 1
 
-    switched = _service(instance, TriggerDelivery(export=_OTHER_EXPORT))
+    switched = _service(instance, TriggerDelivery(destination=_OTHER_EXPORT))
     switched.reconcile_deliveries()
     # Both jobs finished before the switch, so neither is delivered to the new export,
     # even the one whose saved result would verify against it.
@@ -495,7 +495,7 @@ def test_switching_export_starts_a_new_boundary(instance: dict[str, Any], sent: 
     deliveries = _await_deliveries(2)
 
     assert all(record.status == JobStatus.SUCCESSFUL for record in deliveries)
-    targets = {record.request["job_id"]: record.request["export_id"] for record in deliveries}
+    targets = {record.request["job_id"]: record.request["destination_id"] for record in deliveries}
     assert targets == {delivered: _EXPORT, after: _OTHER_EXPORT}
 
 
@@ -512,7 +512,7 @@ def test_reconciliation_reads_boundaries_once_per_start(
                 finished_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
         )
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    service = _service(instance, TriggerDelivery(destination=_EXPORT))
     reads: list[None] = []
     original = automation_module._load_delivery_activations
     monkeypatch.setattr(automation_module, "_load_delivery_activations", lambda: reads.append(None) or original())
@@ -546,14 +546,14 @@ def test_trigger_fields_survive_persistence(instance: dict[str, Any]) -> None:
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (lambda settings: settings["exports"].append(dict(settings["exports"][0])), "which is invalid"),
-        (lambda settings: settings["exports"][0].update(series=[]), "which is invalid"),
+        (lambda settings: settings["destinations"].append(dict(settings["destinations"][0])), "which is invalid"),
+        (lambda settings: settings["destinations"][0].update(series=[]), "which is invalid"),
     ],
 )
 def test_export_that_delivery_would_reject_fails_startup(instance: dict[str, Any], change: Any, message: str) -> None:
     change(instance["settings"])
     service = WorkflowAutomationService(
-        config_loader=lambda: _automation(TriggerDelivery(export=_EXPORT)), openeo_service=instance["openeo"]
+        config_loader=lambda: _automation(TriggerDelivery(destination=_EXPORT)), openeo_service=instance["openeo"]
     )
     with pytest.raises(ValueError, match=message):
         service.start()
@@ -570,7 +570,7 @@ def test_cancel_arriving_while_the_result_is_saved_wins(
         return original(job_id, result)
 
     monkeypatch.setattr(openeo, "_persist_result", cancel_during_save)
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
+    service = _service(instance, TriggerDelivery(destination=_EXPORT))
     job_id = _triggered_job_id(service)
 
     record = _await_openeo(job_id)
@@ -583,7 +583,7 @@ def test_cancel_arriving_while_the_result_is_saved_wins(
     "content",
     [
         b"\xff\xfe not utf-8",
-        b'{"rain-to-districts": {"export": "rain-monthly", "mode": "dry-run", "activated_at": "yesterday"}}',
+        b'{"rain-to-districts": {"destination": "rain-monthly", "mode": "dry-run", "activated_at": "yesterday"}}',
     ],
 )
 def test_corrupt_boundary_is_restamped(instance: dict[str, Any], content: bytes) -> None:
@@ -591,7 +591,7 @@ def test_corrupt_boundary_is_restamped(instance: dict[str, Any], content: bytes)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
 
-    _service(instance, TriggerDelivery(export=_EXPORT))
+    _service(instance, TriggerDelivery(destination=_EXPORT))
 
     stored = automation_module._load_delivery_activations()[_TRIGGER]
     assert automation_module._parse_time(stored["activated_at"]) is not None
@@ -600,7 +600,7 @@ def test_corrupt_boundary_is_restamped(instance: dict[str, Any], content: bytes)
 def test_job_finishing_while_delivery_is_off_is_never_delivered(
     instance: dict[str, Any], sent: list[dict[str, Any]]
 ) -> None:
-    _service(instance, TriggerDelivery(export=_EXPORT))  # boundary stamped
+    _service(instance, TriggerDelivery(destination=_EXPORT))  # boundary stamped
     # A read-only start without `deliver` cannot clear the boundary, but a job finishing
     # then records that it owes nothing.
     instance["settings"]["read_only"] = True
@@ -611,16 +611,16 @@ def test_job_finishing_while_delivery_is_off_is_never_delivered(
     assert record.status == OpenEOJobStatus.FINISHED
     assert record.delivery_due is None
 
-    _service(instance, TriggerDelivery(export=_EXPORT)).reconcile_deliveries()
+    _service(instance, TriggerDelivery(destination=_EXPORT)).reconcile_deliveries()
     assert _deliveries() == []
 
 
 def test_rerun_after_switching_to_live_is_not_imported(instance: dict[str, Any], sent: list[dict[str, Any]]) -> None:
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT, dry_run=True)))
+    job_id = _triggered_job_id(_service(instance, TriggerDelivery(destination=_EXPORT, dry_run=True)))
     _await_openeo(job_id)
     [dry] = _await_deliveries(1)
 
-    _service(instance, TriggerDelivery(export=_EXPORT, dry_run=False))
+    _service(instance, TriggerDelivery(destination=_EXPORT, dry_run=False))
     instance["openeo"].start_job(job_id)  # a manual re-run
     rerun = _await_openeo(job_id)
 
@@ -644,7 +644,7 @@ def test_cancel_losing_the_race_to_completion_is_refused(
             created=finished,
             trigger_id=_TRIGGER,
             finished_at=finished,
-            delivery_due={"export": _EXPORT, "mode": "dry-run"},
+            delivery_due={"destination": _EXPORT, "mode": "dry-run"},
         )
     )
     # The cancel request read the job while it was still running; the worker finished it

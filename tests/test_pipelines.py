@@ -21,13 +21,13 @@ import xarray as xr
 from fastapi.testclient import TestClient
 
 from open_climate_service import config as api_config
-from open_climate_service.exports import dhis2_destination
-from open_climate_service.exports.base import (
-    BaseExportPlugin,
+from open_climate_service.destinations import dhis2_destination
+from open_climate_service.destinations.base import (
+    BaseDestinationPlugin,
     DestinationCheck,
     DestinationContext,
     PipelineSettingsForm,
-    RenderedExport,
+    RenderedPayload,
     SettingsFormField,
     SettingsFormSection,
 )
@@ -179,7 +179,7 @@ def _dhis2(
             "conflicts": [],
         },
     )
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_climate_service.destinations.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: client)
     return client
@@ -257,7 +257,11 @@ def test_a_workflow_that_saves_its_own_result_is_refused(instance: None) -> None
         workflow_binding.bind(
             WorkflowReference(
                 id="aggregate_to_dhis2_json",
-                arguments={"dataset_id": "rain_monthly", "geometries": {"from_features": "districts"}, "export": "x"},
+                arguments={
+                    "dataset_id": "rain_monthly",
+                    "geometries": {"from_features": "districts"},
+                    "destination": "x",
+                },
             )
         )
 
@@ -301,7 +305,7 @@ def test_run_graph_freezes_the_registered_workflow(instance: None) -> None:
     assert bound.interval_parameter == "temporal_extent"
     assert bound.dataset_ids == ("rain_monthly",) and bound.feature_collections == ("districts",)
     process, resolved = workflow_binding.build_process(
-        spec.workflow, bound, start="2025-01-01", end="2025-01-31", save_format="DHIS2JSON", export_id=spec.id
+        spec.workflow, bound, start="2025-01-01", end="2025-01-31", save_format="DHIS2JSON", destination_id=spec.id
     )
     graph = process["process_graph"]
     registered = workflow_store.get_workflow("aggregate_by_features")
@@ -321,7 +325,7 @@ def test_run_graph_freezes_the_registered_workflow(instance: None) -> None:
     assert graph["save"]["arguments"] == {
         "data": {"from_node": "workflow__zonal"},
         "format": "DHIS2JSON",
-        "options": {"export": "rain-to-dhis2"},
+        "options": {"destination": "rain-to-dhis2"},
     }
     assert [node_id for node_id, node in graph.items() if node.get("result")] == ["save"]
     assert resolved["temporal_extent"] == ["2025-01-01", "2025-01-31"]
@@ -366,7 +370,7 @@ def test_a_multi_process_workflow_runs_without_the_pipeline_knowing_its_steps(
     bound = workflow_binding.bind(reference)
     assert bound.interval_parameter == "period" and bound.dataset_ids == ("rain_monthly",)
     process, _ = workflow_binding.build_process(
-        reference, bound, start="2025-01-01", end="2025-03-31", save_format="CSV", export_id="x"
+        reference, bound, start="2025-01-01", end="2025-03-31", save_format="CSV", destination_id="x"
     )
     graph = process["process_graph"]
     assert {node for node in graph if node.startswith("workflow__")} == {
@@ -413,7 +417,7 @@ def test_a_queued_run_keeps_the_workflow_it_was_approved_with(instance: None, mo
     )
     bound = workflow_binding.bind(reference)
     process, _ = workflow_binding.build_process(
-        reference, bound, start="2025-01-01", end="2025-01-31", save_format="DHIS2JSON", export_id="x"
+        reference, bound, start="2025-01-01", end="2025-01-31", save_format="DHIS2JSON", destination_id="x"
     )
     graph = process["process_graph"]
     # The nested call is inlined too, so no node names a workflow the registry could change.
@@ -490,9 +494,12 @@ def test_one_workflow_serves_several_pipelines(
     one, two = service.validate_pipeline(first), service.validate_pipeline(second)
     assert one.valid and two.valid, (one.checks, two.checks)
     assert first.spec.workflow.id == second.spec.workflow.id == "aggregate_by_features"
-    assert one.export is not None and two.export is not None
-    assert (one.export["id"], one.export["period_type"]) == ("rain-to-dhis2", "monthly")
-    assert (two.export["id"], two.export["period_type"]) == ("weekly-rain-sum", "weekly")
+    assert one.destination_definition is not None and two.destination_definition is not None
+    assert (one.destination_definition["id"], one.destination_definition["period_type"]) == ("rain-to-dhis2", "monthly")
+    assert (two.destination_definition["id"], two.destination_definition["period_type"]) == (
+        "weekly-rain-sum",
+        "weekly",
+    )
 
 
 # --- validation ------------------------------------------------------------------------------
@@ -515,7 +522,7 @@ def test_validation_passes_when_everything_lines_up(instance: None, monkeypatch:
         "configuration": "pass",
         "delivery": "pass",
     }
-    assert result.export == {
+    assert result.destination_definition == {
         "id": "rain-to-dhis2",
         "plugin": "dhis2",
         "dataset": "rain_monthly",
@@ -561,7 +568,7 @@ def test_plugin_validation_errors_surface_as_checks(instance: None, monkeypatch:
 def test_validation_reports_dhis2_period_and_assignment(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
     _dhis2(monkeypatch, period_type="Daily", assigned=[_OU[0]])
     message = _by_id(service.validate_pipeline(store.create_record(_spec())))["dhis2_metadata"].message
-    assert "period type is 'Daily', the export is Monthly" in message
+    assert "period type is 'Daily', the payload is Monthly" in message
     assert "1 of 2 organisation units are not assigned" in message
 
 
@@ -650,7 +657,7 @@ def test_validation_names_the_source_schedule_and_the_delivery_policy(
 def test_validation_fails_when_declared_dhis2_dataset_cannot_be_read(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_climate_service.destinations.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
     check = _by_id(service.validate_pipeline(store.create_record(_spec())))["dhis2_metadata"]
@@ -664,7 +671,7 @@ def test_validation_refuses_a_cadence_dhis2_cannot_take(
     _dhis2(monkeypatch)
     result = service.validate_pipeline(store.create_record(_spec()))
     assert _by_id(result)["cadence"].status == "fail" and _by_id(result)["destination"].status == "fail"
-    assert result.export is None and not result.valid
+    assert result.destination_definition is None and not result.valid
 
 
 def test_live_delivery_needs_a_dry_run_of_the_current_bindings(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -678,7 +685,7 @@ def test_live_delivery_needs_a_dry_run_of_the_current_bindings(instance: None, m
     assert _by_id(service.validate_pipeline(record))["delivery"].status == "pass"
 
 
-class _DropPlugin(BaseExportPlugin):
+class _DropPlugin(BaseDestinationPlugin):
     """A destination that is not DHIS2 and cannot dry-run: a file drop with one setting."""
 
     id = "drop"
@@ -689,8 +696,21 @@ class _DropPlugin(BaseExportPlugin):
     def validate_mapping(self, mapping: dict[str, Any]) -> dict[str, Any]:
         return mapping
 
-    def render(self, data: Any, mapping: dict[str, Any]) -> RenderedExport:
-        return RenderedExport(content=b"a,b\n1,2\n", record_count=1)
+    def render(self, data: Any, mapping: dict[str, Any]) -> RenderedPayload:
+        return RenderedPayload(content=b"a,b\n1,2\n", record_count=1)
+
+    def send(self, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None) -> Any:
+        from open_climate_service.destinations.report import DeliveryOutcome, DeliveryReport
+        from open_climate_service.shared.time import utc_now
+
+        return DeliveryReport(
+            plugin_id=self.id,
+            outcome=DeliveryOutcome.SUCCESS,
+            payload_sha256=hashlib.sha256(payload).hexdigest(),
+            submitted=1,
+            created_at=utc_now().isoformat(),
+            finished_at=utc_now().isoformat(),
+        )
 
     def destination_settings_schema(self) -> dict[str, Any] | None:
         return {"type": "object", "properties": {"folder": {"type": "string"}}, "required": ["folder"]}
@@ -703,7 +723,7 @@ class _DropPlugin(BaseExportPlugin):
             fields=(SettingsFormField(name="folder", label="Destination folder"),),
         )
 
-    def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
+    def destination_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
         if not settings.get("folder"):
             raise ValueError("folder is required")
         return {"dataset": context.datasets[0].id}
@@ -713,32 +733,32 @@ class _DropPlugin(BaseExportPlugin):
 
 
 def _only_drop(monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
+    import open_climate_service.destinations.registry as registry
+    import open_climate_service.destinations.service as destination_service
 
     plugin = _DropPlugin()
-    monkeypatch.setattr(registry, "load_export_plugins", lambda: {"drop": plugin})
-    monkeypatch.setattr(export_service, "load_export_plugins", lambda: {"drop": plugin})
+    monkeypatch.setattr(registry, "load_destination_plugins", lambda: {"drop": plugin})
+    monkeypatch.setattr(destination_service, "load_destination_plugins", lambda: {"drop": plugin})
 
 
 def test_approval_digest_includes_plugin_identity_and_resolved_export(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
+    import open_climate_service.destinations.registry as registry
+    import open_climate_service.destinations.service as destination_service
 
     plugin = _DropPlugin()
     plugin.version = "1"
     monkeypatch.setattr(service, "destination_plugins", lambda: {"drop": plugin})
-    monkeypatch.setattr(registry, "load_export_plugins", lambda: {"drop": plugin})
-    monkeypatch.setattr(export_service, "load_export_plugins", lambda: {"drop": plugin})
+    monkeypatch.setattr(registry, "load_destination_plugins", lambda: {"drop": plugin})
+    monkeypatch.setattr(destination_service, "load_destination_plugins", lambda: {"drop": plugin})
     spec = _spec(destination={"plugin": "drop", "settings": {"folder": "/srv/out"}})
     bound = workflow_binding.bind(spec.workflow)
     original = service.bindings_digest(spec, bound)
     plugin.version = "2"
     assert service.bindings_digest(spec, bound) != original
     plugin.version = "1"
-    monkeypatch.setattr(plugin, "export_definition", lambda settings, context: {"dataset": "different"})
+    monkeypatch.setattr(plugin, "destination_definition", lambda settings, context: {"dataset": "different"})
     assert service.bindings_digest(spec, bound) != original
 
 
@@ -967,12 +987,21 @@ def test_the_core_needs_no_dhis2_identifiers(instance: None, monkeypatch: pytest
         "configuration",
         "delivery",
     ]
-    assert result.export == {"dataset": "rain_monthly", "id": "rain-to-dhis2", "plugin": "drop"}
+    assert result.destination_definition == {"dataset": "rain_monthly", "id": "rain-to-dhis2", "plugin": "drop"}
     live = store.create_record(_spec(id="drop-live", delivery={"mode": "live"}, destination=spec.destination))
-    assert "renders only" in _by_id(service.validate_pipeline(live))["delivery"].message
+    assert "needs a dry run that passed first" in _by_id(service.validate_pipeline(live))["delivery"].message
 
     source = Path(service.__file__).parent
-    core = ("schemas.py", "service.py", "runner.py", "workflow.py", "store.py", "routes.py", "forms.py", "exports.py")
+    core = (
+        "schemas.py",
+        "service.py",
+        "runner.py",
+        "workflow.py",
+        "store.py",
+        "routes.py",
+        "forms.py",
+        "destinations.py",
+    )
     for module in core:
         text = (source / module).read_text(encoding="utf-8")
         assert "dhis2" not in text.lower(), module
@@ -998,7 +1027,7 @@ def test_destination_settings_are_validated_by_the_plugin_schema(
 def _envelope(frame: pd.DataFrame) -> Any:
     from open_climate_service.openeo.execution import SaveResultEnvelope
 
-    envelope = SaveResultEnvelope(frame, "DHIS2JSON", {"export": "rain-to-dhis2"})
+    envelope = SaveResultEnvelope(frame, "DHIS2JSON", {"destination": "rain-to-dhis2"})
     envelope.provenance = {"sources": [{"collection_id": "rain_monthly"}], "spatial_aggregations": ["mean"]}
     return envelope
 
@@ -1155,7 +1184,7 @@ class _LookupClient(_FakeClient):
 
 
 def _dhis2_lookups(monkeypatch: pytest.MonkeyPatch) -> _LookupClient:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_climate_service.destinations.dhis2 as dhis2_module
 
     original = _dhis2(monkeypatch)
     client = _LookupClient(original.data_set, original.summary)
@@ -1164,7 +1193,7 @@ def _dhis2_lookups(monkeypatch: pytest.MonkeyPatch) -> _LookupClient:
 
 
 def test_lookup_widget_applies_only_to_plain_string_fields() -> None:
-    from open_climate_service.exports.base import PipelineSettingsForm, SettingsFormField
+    from open_climate_service.destinations.base import PipelineSettingsForm, SettingsFormField
 
     schema = {
         "type": "object",
@@ -1389,7 +1418,7 @@ def test_page_creates_validates_and_shows_a_pipeline(client: TestClient, monkeyp
     shown = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "text/html"})
     assert shown.status_code == 200
     assert "dhis2_metadata" in shown.text and "every organisation unit assigned" in shown.text
-    assert "aggregate_by_features" in shown.text and "Export definition" in shown.text
+    assert "aggregate_by_features" in shown.text and "Destination definition" in shown.text
     assert '<span class="flow-label">Destination</span><strong>DHIS2</strong>' in shown.text
     assert "<dt>Destination</dt><dd>DHIS2</dd>" in shown.text
     listed = client.get("/pipelines", headers={"Accept": "application/json"}).json()
@@ -1489,7 +1518,7 @@ def test_api_creates_dry_runs_and_switches_modes(
     assert created.status_code == 201, created.text
     view = created.json()
     assert created.headers["Location"] == view["links"]["self"] == "/pipelines/rain-to-dhis2"
-    assert view["validation"]["export"]["id"] == "rain-to-dhis2" and view["approved"] is False
+    assert view["validation"]["destination_definition"]["id"] == "rain-to-dhis2" and view["approved"] is False
     assert view["trigger"] == {"policy": "on_update", "datasets": ["rain_monthly"]}
     assert [(item["kind"], item["id"], item["parameter"], item["href"]) for item in view["inputs"]] == [
         ("dataset", "rain_monthly", "dataset_id", "/datasets/rain_monthly"),
@@ -1586,13 +1615,13 @@ def _approve(pipeline_id: str = "rain-to-dhis2", *, live: bool = False) -> Pipel
 def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_climate_service.destinations.service import resolve_named_destination
 
     _dhis2(monkeypatch)
-    with pytest.raises(ValueError, match="Unknown export"):
-        resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
+    with pytest.raises(ValueError, match="Unknown destination"):
+        resolve_named_destination("DHIS2JSON", {"destination": "rain-to-dhis2"})
     _validated()
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain-to-dhis2"})
     assert resolved.references["dataset"] == "rain_monthly" and resolved.mapping["period_type"] == "monthly"
 
     def _invalidate(record: PipelineRecord) -> None:
@@ -1600,22 +1629,22 @@ def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
         record.validation.valid = False
 
     store.update_record("rain-to-dhis2", _invalidate)
-    with pytest.raises(ValueError, match="Unknown export"):
-        resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
+    with pytest.raises(ValueError, match="Unknown destination"):
+        resolve_named_destination("DHIS2JSON", {"destination": "rain-to-dhis2"})
 
     store.delete_record("rain-to-dhis2")
     _validated()
-    api_config._cache["exports"] = [  # type: ignore[index]
+    api_config._cache["destinations"] = [  # type: ignore[index]
         {"id": "rain-to-dhis2", "plugin": "dhis2", "period_type": "monthly", "series": [{"data_element": _ELEMENT}]}
     ]
     with pytest.raises(ValueError, match="declared in the configuration and owned by the pipeline"):
-        resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
+        resolve_named_destination("DHIS2JSON", {"destination": "rain-to-dhis2"})
     check = _by_id(service.validate_pipeline(store.get_record("rain-to-dhis2")))["configuration"]  # type: ignore[arg-type]
     assert check.status == "fail" and "already configured" in check.message
 
 
 def test_save_refuses_an_invalid_pipeline(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_climate_service.destinations.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
     refused = client.post("/pipelines", json=_SPEC)
@@ -1640,7 +1669,7 @@ def test_edit_keeps_the_approval_only_for_the_same_bindings(
     renamed = client.put("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Renamed", "revision": 1})
     assert renamed.status_code == 200 and renamed.json()["approved"] is True
 
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_climate_service.destinations.dhis2 as dhis2_module
 
     good = dhis2_module.get_connection
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
@@ -1795,16 +1824,16 @@ class _Deliveries(list[tuple[str, str, bool, str]]):
 
 @pytest.fixture
 def deliveries(monkeypatch: pytest.MonkeyPatch) -> _Deliveries:
-    import open_climate_service.exports.delivery as delivery_module
+    import open_climate_service.destinations.delivery as delivery_module
     from open_climate_service.jobs import service as job_service_module
 
     calls = _Deliveries()
 
-    def fake_submit(export_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
+    def fake_submit(destination_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
         for index, call in enumerate(calls):
             if call[3] == idempotency_key:
                 return f"delivery-{index + 1}", True
-        calls.append((export_id, source_job_id, dry_run, idempotency_key))
+        calls.append((destination_id, source_job_id, dry_run, idempotency_key))
         return f"delivery-{len(calls)}", False
 
     monkeypatch.setattr(delivery_module, "submit_delivery", fake_submit)
@@ -1844,7 +1873,7 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     graph = openeo.jobs[run["job_id"]].process["process_graph"]
     assert graph["workflow__load"]["arguments"]["temporal_extent"] == ["2025-01-01", "2025-01-31"]
     assert graph["workflow__zonal"]["arguments"]["reducer"] == "mean"
-    assert graph["save"]["arguments"]["options"] == {"export": "rain-to-dhis2"}
+    assert graph["save"]["arguments"]["options"] == {"destination": "rain-to-dhis2"}
     assert run["arguments"]["method"] == "mean" and run["workflow_id"] == "aggregate_by_features"
     assert (run["start"], run["end"]) == ("2025-01-01", "2025-01-31")
 
@@ -1872,13 +1901,13 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     deliveries.outcomes["delivery-1"] = ("running", None)
     delivering = polled()
     assert delivering["status"] == "delivering" and delivering["failure"] is None
-    assert delivering["links"]["delivery"] == "/exports/rain-to-dhis2/jobs/delivery-1"
+    assert delivering["links"]["delivery"] == "/destinations/rain-to-dhis2/jobs/delivery-1"
     del deliveries.outcomes["delivery-1"]
     # Settled as soon as the delivery job is, before the run records it.
     assert polled()["status"] == "succeeded" and polled()["delivery_result"] == "validated"
     stored = store.get_record("rain-to-dhis2")
     assert stored is not None and stored.runs[0].delivery == "submitted"
-    assert stored.runs[0].delivery_status_url == "/exports/rain-to-dhis2/jobs/delivery-1"
+    assert stored.runs[0].delivery_status_url == "/destinations/rain-to-dhis2/jobs/delivery-1"
 
     again = client.post(
         f"/pipelines/rain-to-dhis2/runs/{run['run_id']}/deliver", headers={"Accept": "application/json"}
@@ -1902,7 +1931,7 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     )
     assert links["job"] == f"/ocs/jobs/{prefixed.json()['job_id']}"
     listed = mounted.get("/pipelines/rain-to-dhis2/runs").json()["items"]
-    assert listed[1]["links"]["delivery"] == "/ocs/exports/rain-to-dhis2/jobs/delivery-1"
+    assert listed[1]["links"]["delivery"] == "/ocs/destinations/rain-to-dhis2/jobs/delivery-1"
     assert mounted.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["links"] == {
         "self": "/ocs/pipelines/rain-to-dhis2",
         "runs": "/ocs/pipelines/rain-to-dhis2/runs",
@@ -1920,9 +1949,9 @@ def test_a_failed_hand_off_is_recorded_and_recoverable(
 ) -> None:
     from fastapi import HTTPException
 
-    import open_climate_service.exports.delivery as delivery_module
+    import open_climate_service.destinations.delivery as delivery_module
 
-    def refuse(export_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
+    def refuse(destination_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
         raise HTTPException(status_code=409, detail="No result for this job")
 
     monkeypatch.setattr(delivery_module, "submit_delivery", refuse)
@@ -2009,14 +2038,14 @@ def test_delivery_hand_off_recovers_transient_failures_and_stops_on_permanent_on
 ) -> None:
     from fastapi import HTTPException
 
-    import open_climate_service.exports.delivery as delivery_module
+    import open_climate_service.destinations.delivery as delivery_module
 
     _dhis2(monkeypatch)
     _validated()
     attempts: list[str] = []
     outcome: dict[str, Any] = {"raise": OSError("lock timeout")}
 
-    def submit(export_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
+    def submit(destination_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
         attempts.append(idempotency_key)
         if outcome["raise"] is not None:
             raise outcome["raise"]
@@ -2037,7 +2066,7 @@ def test_delivery_hand_off_recovers_transient_failures_and_stops_on_permanent_on
     assert set(attempts) == {run.idempotency_key} and len(attempts) == 2
 
     second = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-02-01", end="2025-02-28"))
-    outcome["raise"] = HTTPException(status_code=409, detail="Export mapping or references changed")
+    outcome["raise"] = HTTPException(status_code=409, detail="Destination mapping or references changed")
     runner.on_job_finished(openeo.finish(second.job_id))
     for _ in range(3):
         runner.recover_runs()
@@ -2147,11 +2176,11 @@ def test_redelivery_is_refused_where_a_repeat_could_duplicate(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
 
     _dhis2(monkeypatch)
     _validated()
-    monkeypatch.setattr(Dhis2ExportPlugin, "redelivery_safe", False)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "redelivery_safe", False)
     run = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
     runner.on_job_finished(openeo.finish(run.job_id))
     deliveries.outcomes["delivery-1"] = ("failed", None)
@@ -2201,7 +2230,7 @@ def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2226,7 +2255,7 @@ def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(
     other = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-02-01", end="2025-02-28"))
     runner.on_job_finished(openeo.finish(other.job_id))
     deliveries.outcomes["delivery-3"] = ("missing", None)
-    monkeypatch.setattr(Dhis2ExportPlugin, "redelivery_safe", False)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "redelivery_safe", False)
     refused = client.post(f"/pipelines/rain-to-dhis2/runs/{other.run_id}/redeliver", headers=json_only)
     assert refused.status_code == 409 and "acknowledge" in refused.text and len(deliveries) == 3
     acknowledged = client.post(f"/pipelines/rain-to-dhis2/runs/{other.run_id}/acknowledge", headers=json_only)
@@ -2241,8 +2270,8 @@ def test_a_refused_redelivery_leaves_the_earlier_round_unchanged(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    import open_climate_service.destinations.delivery as delivery_module
+    from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2265,7 +2294,7 @@ def test_a_refused_redelivery_leaves_the_earlier_round_unchanged(
         )
 
     before = delivery_state()
-    assert before == (0, "submitted", "failed", "delivery-1", "/exports/rain-to-dhis2/jobs/delivery-1", 1)
+    assert before == (0, "submitted", "failed", "delivery-1", "/destinations/rain-to-dhis2/jobs/delivery-1", 1)
 
     # Paused: a live delivery may not go out, so sending again is refused before anything changes.
     assert client.post("/pipelines/rain-to-dhis2/mode/paused", headers=html, follow_redirects=False).status_code == 303
@@ -2275,10 +2304,10 @@ def test_a_refused_redelivery_leaves_the_earlier_round_unchanged(
 
     # A destination that does not declare a repeat harmless: refused, unchanged.
     assert client.post("/pipelines/rain-to-dhis2/mode/live", headers=html, follow_redirects=False).status_code == 303
-    monkeypatch.setattr(Dhis2ExportPlugin, "redelivery_safe", False)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "redelivery_safe", False)
     unsafe = client.post(f"/pipelines/rain-to-dhis2/runs/{run.run_id}/redeliver", headers=json_only)
     assert unsafe.status_code == 409 and delivery_state() == before
-    monkeypatch.setattr(Dhis2ExportPlugin, "redelivery_safe", True)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "redelivery_safe", True)
 
     # The source job is gone: refused, unchanged.
     finished = openeo.jobs[run.job_id]
@@ -2291,7 +2320,7 @@ def test_a_refused_redelivery_leaves_the_earlier_round_unchanged(
     real_submit = delivery_module.submit_delivery
     keys: list[str] = []
 
-    def flaky(export_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
+    def flaky(destination_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
         keys.append(idempotency_key)
         raise OSError("lock timeout")
 
@@ -2351,15 +2380,15 @@ def test_only_refusals_are_permanent(status: int, permanent: bool) -> None:
 def test_a_busy_result_or_export_is_retried_not_given_up(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.exports.retention import ResourceBusy
+    import open_climate_service.destinations.delivery as delivery_module
+    from open_climate_service.destinations.retention import ResourceBusy
 
     assert not runner._is_permanent(ResourceBusy("Source job results are currently in use"))
     _dhis2(monkeypatch)
     _validated()
     busy = {"on": True}
 
-    def submit(export_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
+    def submit(destination_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
         if busy["on"]:
             raise ResourceBusy("Source job results are currently in use")
         return "delivery-1", False
@@ -2764,7 +2793,7 @@ def test_manual_and_update_runs_share_the_bindings_and_the_export(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_climate_service.destinations.service import resolve_named_destination
 
     _dhis2(monkeypatch)
     record = _validated()
@@ -2778,9 +2807,9 @@ def test_manual_and_update_runs_share_the_bindings_and_the_export(
     for run in (manual, automatic):
         runner.on_job_finished(openeo.finish(run.job_id))
     assert {call[0] for call in deliveries} == {"rain-to-dhis2"}
-    assert record.validation is not None and record.validation.export is not None
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
-    assert resolved.mapping["series"] == record.validation.export["series"]
+    assert record.validation is not None and record.validation.destination_definition is not None
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain-to-dhis2"})
+    assert resolved.mapping["series"] == record.validation.destination_definition["series"]
 
 
 def test_updates_while_paused_are_listed_not_run_on_resume(
@@ -2820,7 +2849,7 @@ def test_a_refused_update_is_listed_with_its_interval(
 def test_an_unreachable_destination_does_not_stop_an_update_run(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_climate_service.destinations.dhis2 as dhis2_module
 
     _dhis2(monkeypatch)
     _validated()
@@ -2963,7 +2992,6 @@ class _WarehousePlugin(_DropPlugin):
 
     id = "warehouse"
     format = "CSV"
-    supports_delivery = True
     supports_dry_run = True
 
     def __init__(self) -> None:
@@ -2975,7 +3003,7 @@ class _WarehousePlugin(_DropPlugin):
     def pipeline_settings_form(self) -> PipelineSettingsForm | None:
         return None
 
-    def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
+    def destination_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
         return {"dataset": context.datasets[0].id, "connection": settings["database"]}
 
     def target_binding(self, references: dict[str, str]) -> dict[str, str] | None:
@@ -2985,14 +3013,14 @@ class _WarehousePlugin(_DropPlugin):
         return f"warehouse://{binding['database']}"
 
     def send(self, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None) -> Any:
-        from open_climate_service.exports.report import ExportOutcome, ExportReport
+        from open_climate_service.destinations.report import DeliveryOutcome, DeliveryReport
         from open_climate_service.shared.time import utc_now
 
         self.sent.append((target, dry_run))
-        return ExportReport(
+        return DeliveryReport(
             plugin_id=self.id,
             dry_run=dry_run,
-            outcome=ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS,
+            outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             created_at=utc_now().isoformat(),
             finished_at=utc_now().isoformat(),
@@ -3002,14 +3030,14 @@ class _WarehousePlugin(_DropPlugin):
 def test_the_delivery_target_belongs_to_the_plugin(
     instance: None, monkeypatch: pytest.MonkeyPatch, executed: list[dict[str, Any]]
 ) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.manifest import target_binding
+    import open_climate_service.destinations.registry as registry
+    import open_climate_service.destinations.service as destination_service
+    from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+    from open_climate_service.destinations.manifest import target_binding
 
     plugin = _WarehousePlugin()
-    monkeypatch.setattr(registry, "load_export_plugins", lambda: {"warehouse": plugin})
-    monkeypatch.setattr(export_service, "load_export_plugins", lambda: {"warehouse": plugin})
+    monkeypatch.setattr(registry, "load_destination_plugins", lambda: {"warehouse": plugin})
+    monkeypatch.setattr(destination_service, "load_destination_plugins", lambda: {"warehouse": plugin})
     record = store.create_record(_spec(destination={"plugin": "warehouse", "settings": {"database": "climate"}}))
     result = service.dry_run_pipeline(record, "2025-01-01", "2025-02-28")
     assert result.error is None and result.passed and not result.rendered_only
@@ -3018,7 +3046,7 @@ def test_the_delivery_target_belongs_to_the_plugin(
     assert target_binding(plugin, {"connection": "climate"}) == {"database": "climate"}
 
     # DHIS2 keeps the binding its saved manifests already carry.
-    dhis2 = Dhis2ExportPlugin()
+    dhis2 = Dhis2DestinationPlugin()
     binding = target_binding(dhis2, {"connection": "local"})
     assert binding == {"connection_id": "local", "url_sha256": hashlib.sha256(b"http://dhis2.test").hexdigest()}
     assert binding is not None and dhis2.delivery_target(binding) == "local"
@@ -3032,7 +3060,7 @@ def test_the_delivery_target_belongs_to_the_plugin(
 
 
 def test_a_check_for_an_older_revision_is_never_installed(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_climate_service.destinations.service import resolve_named_destination
 
     _dhis2(monkeypatch)
     _validated()
@@ -3064,8 +3092,8 @@ def test_a_check_for_an_older_revision_is_never_installed(client: TestClient, mo
     assert record is not None and record.revision == 2 and record.validation is not None
     assert record.validation.revision == 1
     # The revision-1 export is not published for the revision-2 spec, and runs are refused.
-    with pytest.raises(ValueError, match="Unknown export"):
-        resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
+    with pytest.raises(ValueError, match="Unknown destination"):
+        resolve_named_destination("DHIS2JSON", {"destination": "rain-to-dhis2"})
     with pytest.raises(runner.RunRefused, match="changed since it was last validated"):
         runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
 
@@ -3083,8 +3111,8 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
     """The real job service and workflow engine, the built-in workflow, and the DHIS2 delivery path with a fake send."""
     from openeo_pg_parser_networkx.process_registry import Process
 
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.report import ExportOutcome, ExportReport
+    from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+    from open_climate_service.destinations.report import DeliveryOutcome, DeliveryReport
     from open_climate_service.jobs import service as job_service_module
     from open_climate_service.jobs import store as native_store
     from open_climate_service.jobs.models import JobStatus
@@ -3130,21 +3158,21 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
     sent: list[dict[str, Any]] = []
 
     def send(
-        self: Dhis2ExportPlugin, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None
-    ) -> ExportReport:
+        self: Dhis2DestinationPlugin, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None
+    ) -> DeliveryReport:
         sent.append({"payload": json.loads(payload), "target": target, "dry_run": dry_run})
-        return ExportReport(
+        return DeliveryReport(
             plugin_id=self.id,
             connection_id=target,
             dry_run=dry_run,
-            outcome=ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS,
+            outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             submitted=4,
             created_at=utc_now().isoformat(),
             finished_at=utc_now().isoformat(),
         )
 
-    monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "send", send)
     _dhis2(monkeypatch)
     job_service = openeo_jobs.OpenEOJobService()
     monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: job_service)
@@ -3181,7 +3209,7 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         assert len(live["payload"]["dataValues"]) == 4
 
         # A dataset update goes through the same runner, job service and delivery path.
-        from open_climate_service.exports.delivery_input import lease_export_input
+        from open_climate_service.destinations.delivery_input import lease_delivery_input
 
         runner.consume([_update_event("evt-e2e")])
         automatic = None
@@ -3202,9 +3230,9 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
             time.sleep(0.05)
         assert second.status == JobStatus.SUCCESSFUL, second.error
         assert sent[-1]["dry_run"] is False and sent[-1]["target"] == "local"
-        with lease_export_input("rain-to-dhis2", job_id) as manual_saved:
+        with lease_delivery_input("rain-to-dhis2", job_id) as manual_saved:
             manual_manifest = manual_saved.manifest
-        with lease_export_input("rain-to-dhis2", automatic.job_id) as automatic_saved:
+        with lease_delivery_input("rain-to-dhis2", automatic.job_id) as automatic_saved:
             automatic_manifest = automatic_saved.manifest
         assert manual_manifest.mapping == automatic_manifest.mapping
         assert manual_manifest.references == automatic_manifest.references
@@ -3231,8 +3259,8 @@ def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
 
     from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
     from open_climate_service.data_registry.services import datasets as registry
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.report import ExportOutcome, ExportReport
+    from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+    from open_climate_service.destinations.report import DeliveryOutcome, DeliveryReport
     from open_climate_service.ingestions import services as ingestion_services
     from open_climate_service.jobs import service as job_service_module
     from open_climate_service.jobs.models import JobStatus
@@ -3322,21 +3350,21 @@ def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
     sent: list[dict[str, Any]] = []
 
     def send(
-        self: Dhis2ExportPlugin, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None
-    ) -> ExportReport:
+        self: Dhis2DestinationPlugin, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None
+    ) -> DeliveryReport:
         sent.append({"payload": json.loads(payload), "target": target, "dry_run": dry_run})
-        return ExportReport(
+        return DeliveryReport(
             plugin_id=self.id,
             connection_id=target,
             dry_run=dry_run,
-            outcome=ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS,
+            outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             submitted=4,
             created_at=utc_now().isoformat(),
             finished_at=utc_now().isoformat(),
         )
 
-    monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "send", send)
     _dhis2(monkeypatch)
 
     # The aggregation pipeline over the derived dataset, created before the dataset updates.

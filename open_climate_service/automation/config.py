@@ -11,11 +11,11 @@ from open_climate_service.openeo.jobs import MAX_TRIGGERED_ATTEMPTS
 
 
 class TriggerDelivery(BaseModel):
-    """Deliver a triggered job's named export once the job finishes."""
+    """Deliver a triggered job's named destination once the job finishes."""
 
     model_config = ConfigDict(extra="forbid")
 
-    export: str = Field(min_length=1)
+    destination: str = Field(min_length=1)
     # Writing to a production DHIS2 is an explicit opt-in.
     dry_run: bool = True
 

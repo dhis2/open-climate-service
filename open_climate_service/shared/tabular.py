@@ -1,4 +1,4 @@
-"""Shared tabular serialization used by legacy writers and export plugins."""
+"""Shared tabular serialization used by legacy writers and destination plugins."""
 
 from __future__ import annotations
 

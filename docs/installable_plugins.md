@@ -1,6 +1,6 @@
 # Installable plugins
 
-There are two ways to add datasets, processes, workflows, export renderers, and feature
+There are two ways to add datasets, processes, workflows, destination plugins, and feature
 collections to an instance, and they complement each other:
 
 - **`plugins_dir`** — drop files into the instance's local plugins folder. Ideal for
@@ -16,8 +16,8 @@ keeps working exactly as before, and still takes precedence (see [Precedence](#p
 ## Package layout
 
 An importable package can ship any combination of these extension points — **raster and vector
-data sources, processes, workflows and exports are auto-discovered** when the package is
-installed. `rasters/`, `vectors/`, `processes/` and `exports/` hold importable Python (with the
+data sources, processes, workflows and destinations are auto-discovered** when the package is
+installed. `rasters/`, `vectors/`, `processes/` and `destinations/` hold importable Python (with the
 templates alongside it in `rasters/` and `vectors/`), so each needs an `__init__.py` (`workflows/` is plain JSON and does
 not):
 
@@ -33,9 +33,9 @@ osc_example_plugin/
     my_process.py
   workflows/             # optional: openEO UDP JSON graphs
     my_workflow.json
-  exports/               # optional: pure export renderers
+  destinations/          # optional: destination plugins
     __init__.py
-    my_export.py         # exposes plugin = BaseExportPlugin subclass instance
+    my_destination.py    # exposes plugin = BaseDestinationPlugin subclass instance
   vectors/               # optional: vector templates and their providers
     __init__.py
     example.yaml         # feature templates (id, name, id_property, optional provider + params)
@@ -87,7 +87,7 @@ uv add osc-example-plugin
 
 OCS auto-discovers every installed package in the `open_climate_service.plugins` group and loads
 its `rasters/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
-`workflows/*.json` (openEO UDPs), its `exports/` renderers (see [Export plugins](export_plugins.md)),
+`workflows/*.json` (openEO UDPs), its `destinations/` plugins (see [Destination plugins](destination_plugins.md)),
 and its `vectors/*.yaml` templates and `@feature_provider`-decorated callables. The ingestion
 plugin class is importable by dotted path because the package is installed. The datasets then
 appear in `/datasets` and can be ingested like any built-in.

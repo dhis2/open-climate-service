@@ -1,4 +1,4 @@
-"""Resolve named mappings and persist pure export results."""
+"""Resolve named destinations and persist their rendered payloads."""
 
 from __future__ import annotations
 
@@ -12,56 +12,56 @@ from typing import Any, cast
 from uuid import uuid4
 
 from open_climate_service import config
-from open_climate_service.exports.base import BaseExportPlugin, RenderedExport
-from open_climate_service.exports.registry import load_export_plugins
+from open_climate_service.destinations.base import BaseDestinationPlugin, RenderedPayload
+from open_climate_service.destinations.registry import load_destination_plugins
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ResolvedExport:
+class ResolvedDestination:
     """Invocation-local mapping and source/target references."""
 
-    export_id: str
-    plugin: BaseExportPlugin
+    destination_id: str
+    plugin: BaseDestinationPlugin
     mapping: dict[str, Any]
     references: dict[str, str]
 
 
-def _configured_export_definitions() -> dict[str, dict[str, Any]]:
-    """Validate configured and pipeline-owned export definitions and index them by ID.
+def _configured_destination_definitions() -> dict[str, dict[str, Any]]:
+    """Validate configured and pipeline-owned destination definitions and index them by ID.
 
     An ID claimed by both the configuration and a pipeline is left out and listed by
-    :func:`_contested_export_ids`, so resolving it fails instead of picking one.
+    :func:`_contested_destination_ids`, so resolving it fails instead of picking one.
     """
-    by_id, _ = _export_definitions()
+    by_id, _ = _destination_definitions()
     return by_id
 
 
-def _export_definitions() -> tuple[dict[str, dict[str, Any]], set[str]]:
-    definitions = config.get_config().get("exports", [])
+def _destination_definitions() -> tuple[dict[str, dict[str, Any]], set[str]]:
+    definitions = config.get_config().get("destinations", [])
     if not isinstance(definitions, list):
-        raise ValueError("exports must be a list of named mappings")
+        raise ValueError("destinations must be a list of named mappings")
     by_id: dict[str, dict[str, Any]] = {}
     for definition in definitions:
         if not isinstance(definition, dict):
-            raise ValueError("Each export definition must be a mapping")
+            raise ValueError("Each destination definition must be a mapping")
         identifier = definition.get("id")
         if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", identifier):
-            raise ValueError("Each export requires an ID containing letters, digits, underscores, or hyphens")
+            raise ValueError("Each destination requires an ID containing letters, digits, underscores, or hyphens")
         if identifier in by_id:
-            raise ValueError(f"Duplicate export ID '{identifier}'")
+            raise ValueError(f"Duplicate destination ID '{identifier}'")
         by_id[identifier] = definition
-    # A validated pipeline owns the named export under its id. Neither side wins a clash.
-    from open_climate_service.pipelines.exports import pipeline_export_definitions
+    # A validated pipeline owns the named destination under its id. Neither side wins a clash.
+    from open_climate_service.pipelines.destinations import pipeline_destination_definitions
 
     contested: set[str] = set()
-    for definition in pipeline_export_definitions():
+    for definition in pipeline_destination_definitions():
         identifier = str(definition["id"])
         if identifier in by_id:
             contested.add(identifier)
             logger.error(
-                "Export '%s' is declared in the configuration and owned by the pipeline of the same id; "
+                "Destination '%s' is declared in the configuration and owned by the pipeline of the same id; "
                 "neither is used until one is renamed or removed",
                 identifier,
             )
@@ -72,81 +72,82 @@ def _export_definitions() -> tuple[dict[str, dict[str, Any]], set[str]]:
     return by_id, contested
 
 
-def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
+def resolve_named_destination(fmt: str, options: dict[str, Any]) -> ResolvedDestination:
     """Resolve and validate a mapping without rendering or resolving a target."""
-    export_id = options.get("export")
-    if not isinstance(export_id, str) or not export_id.strip() or set(options) != {"export"}:
-        raise ValueError("Named exports require options containing only a non-empty 'export' ID")
-    by_id, contested = _export_definitions()
-    if export_id in contested:
+    destination_id = options.get("destination")
+    if not isinstance(destination_id, str) or not destination_id.strip() or set(options) != {"destination"}:
+        raise ValueError("Named destinations require options containing only a non-empty 'destination' ID")
+    by_id, contested = _destination_definitions()
+    if destination_id in contested:
         raise ValueError(
-            f"Export '{export_id}' is declared in the configuration and owned by the pipeline of the same id; "
-            "rename the pipeline or remove the configured export"
+            f"Destination '{destination_id}' is declared in the configuration and owned by the pipeline "
+            "of the same id; "
+            "rename the pipeline or remove the configured destination"
         )
-    if export_id not in by_id:
-        raise ValueError(f"Unknown export '{export_id}'")
-    resolved = resolve_export_definition(by_id[export_id])
+    if destination_id not in by_id:
+        raise ValueError(f"Unknown destination '{destination_id}'")
+    resolved = resolve_destination_definition(by_id[destination_id])
     if resolved.plugin.format != fmt:
-        raise ValueError(f"Export '{export_id}' requires format '{resolved.plugin.format}', received '{fmt}'")
+        raise ValueError(f"Destination '{destination_id}' requires format '{resolved.plugin.format}', received '{fmt}'")
     return resolved
 
 
-def resolve_export_definition(definition: dict[str, Any]) -> ResolvedExport:
-    """Resolve one explicit definition through the same path as an instance named export.
+def resolve_destination_definition(definition: dict[str, Any]) -> ResolvedDestination:
+    """Resolve one explicit definition through the same path as an instance named destination.
 
     Pipelines use this to validate and dry-run the definition their destination compiles,
     before it is resolvable by name. It deliberately accepts a complete definition rather than
-    adding a process-wide temporary export that concurrent jobs could observe.
+    adding a process-wide temporary destination that concurrent jobs could observe.
     """
     definition = deepcopy(definition)
-    export_id = definition.pop("id", None)
-    if not isinstance(export_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", export_id):
-        raise ValueError("Each export requires an ID containing letters, digits, underscores, or hyphens")
+    destination_id = definition.pop("id", None)
+    if not isinstance(destination_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", destination_id):
+        raise ValueError("Each destination requires an ID containing letters, digits, underscores, or hyphens")
     plugin_id = definition.pop("plugin", None)
     if not isinstance(plugin_id, str):
-        raise ValueError("Export definition requires a plugin ID")
-    plugin = load_export_plugins().get(plugin_id)
+        raise ValueError("Destination definition requires a plugin ID")
+    plugin = load_destination_plugins().get(plugin_id)
     if plugin is None:
-        raise ValueError(f"Unknown export plugin '{plugin_id}'")
+        raise ValueError(f"Unknown destination plugin '{plugin_id}'")
     references: dict[str, str] = {}
     for field in ("dataset", "org_units", "connection"):
         value = definition.pop(field, None)
         if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise ValueError(f"Export {field} must be a non-empty reference string")
+            raise ValueError(f"Destination {field} must be a non-empty reference string")
         if value is not None:
             references[field] = value.strip()
-    from open_climate_service.exports.manifest import validate_public_mapping
+    from open_climate_service.destinations.manifest import validate_public_mapping
 
     validate_public_mapping(definition)
     mapping = plugin.validate_mapping(definition)
     validate_public_mapping(mapping)
-    resolved = ResolvedExport(export_id, plugin, deepcopy(mapping), references)
+    resolved = ResolvedDestination(destination_id, plugin, deepcopy(mapping), references)
     check_cadence_declaration(resolved)
     return resolved
 
 
-def validate_configured_exports() -> None:
-    """Resolve every configured export, so a cadence contradiction fails startup, not a job.
+def validate_configured_destinations() -> None:
+    """Resolve every configured destination, so a cadence contradiction fails startup, not a job.
 
-    Automation already resolves the exports its triggers deliver through; this covers the
-    rest, so an export nobody has run yet is refused with the same message at the same time.
+    Automation already resolves the destinations its triggers deliver through; this covers the
+    rest, so a destination nobody has run yet is refused with the same message at the same time.
     """
-    # A pipeline's export is checked when the pipeline validates; a stale one must not stop startup.
-    from open_climate_service.pipelines.exports import pipeline_export_definitions
+    # A pipeline's destination is checked when the pipeline validates; a stale one must not stop startup.
+    from open_climate_service.pipelines.destinations import pipeline_destination_definitions
 
-    owned = {str(definition["id"]) for definition in pipeline_export_definitions()}
-    for export_id, definition in _configured_export_definitions().items():
-        if export_id in owned:
+    owned = {str(definition["id"]) for definition in pipeline_destination_definitions()}
+    for destination_id, definition in _configured_destination_definitions().items():
+        if destination_id in owned:
             continue
         plugin_id = definition.get("plugin")
-        plugin = load_export_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
+        plugin = load_destination_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
         if plugin is None:
-            raise ValueError(f"Export '{export_id}' names an unknown plugin {plugin_id!r}")
-        resolve_named_export(plugin.format, {"export": export_id})
+            raise ValueError(f"Destination '{destination_id}' names an unknown plugin {plugin_id!r}")
+        resolve_named_destination(plugin.format, {"destination": destination_id})
 
 
-def declared_dataset_cadence(resolved: ResolvedExport) -> str | None:
-    """The native period_type of the export's declared dataset, when both are known."""
+def declared_dataset_cadence(resolved: ResolvedDestination) -> str | None:
+    """The native period_type of the destination's declared dataset, when both are known."""
     dataset_id = resolved.references.get("dataset")
     if dataset_id is None:
         return None
@@ -155,14 +156,14 @@ def declared_dataset_cadence(resolved: ResolvedExport) -> str | None:
     try:
         template = registry.get_dataset(dataset_id)
     except Exception:
-        logger.debug("Could not read the dataset template for export '%s'", resolved.export_id, exc_info=True)
+        logger.debug("Could not read the dataset template for destination '%s'", resolved.destination_id, exc_info=True)
         return None
     cadence = template.get("period_type") if isinstance(template, dict) else None
     return cadence if isinstance(cadence, str) else None
 
 
-def check_cadence_declaration(resolved: ResolvedExport) -> None:
-    """Refuse an export whose period cannot be produced from its dataset, or that is declared wrong.
+def check_cadence_declaration(resolved: ResolvedDestination) -> None:
+    """Refuse a destination whose period cannot be produced from its dataset, or that is declared wrong.
 
     With a declared dataset, the three outcomes of `period_reachability` map to: pass-through
     needs no `temporal_aggregation` and refuses one; aggregation requires one; unreachable is
@@ -181,56 +182,56 @@ def check_cadence_declaration(resolved: ResolvedExport) -> None:
     outcome, reason = period_reachability(source, destination)
     if outcome is Reachability.UNREACHABLE:
         raise ValueError(
-            f"Export '{resolved.export_id}' cannot emit {destination} periods from the {source} dataset "
+            f"Destination '{resolved.destination_id}' cannot emit {destination} periods from the {source} dataset "
             f"'{resolved.references['dataset']}': {reason}"
         )
     if outcome is Reachability.AGGREGATE and declared is None:
         raise ValueError(
-            f"Export '{resolved.export_id}' emits {destination} periods from the {source} dataset "
+            f"Destination '{resolved.destination_id}' emits {destination} periods from the {source} dataset "
             f"'{resolved.references['dataset']}', so it must declare temporal_aggregation "
             "(sum, mean, min or max) to say how source periods are combined"
         )
     if outcome is Reachability.PASS_THROUGH and declared is not None:
         raise ValueError(
-            f"Export '{resolved.export_id}' declares temporal_aggregation '{declared}' but its dataset "
+            f"Destination '{resolved.destination_id}' declares temporal_aggregation '{declared}' but its dataset "
             f"'{resolved.references['dataset']}' is already {source}; remove the declaration"
         )
 
 
-def render_named_export(
+def render_named_destination(
     data: Any,
     fmt: str,
     options: dict[str, Any],
     *,
     provenance: dict[str, Any] | None = None,
-) -> tuple[BaseExportPlugin, RenderedExport]:
-    """Render a declared export without resolving a connection or credential.
+) -> tuple[BaseDestinationPlugin, RenderedPayload]:
+    """Render a declared destination without resolving a connection or credential.
 
-    When execution provenance is available, the export's declarations are checked
-    against it exactly as for a saved batch export.
+    When execution provenance is available, the destination's declarations are checked
+    against it exactly as for a saved batch payload.
     """
-    resolved = resolve_named_export(fmt, options)
-    return resolved.plugin, render_resolved_export(data, resolved, provenance=provenance)
+    resolved = resolve_named_destination(fmt, options)
+    return resolved.plugin, render_resolved_destination(data, resolved, provenance=provenance)
 
 
-def render_resolved_export(
+def render_resolved_destination(
     data: Any,
-    resolved: ResolvedExport,
+    resolved: ResolvedDestination,
     *,
     provenance: dict[str, Any] | None = None,
-) -> RenderedExport:
-    """Render an already resolved export through every provenance and data-side gate.
+) -> RenderedPayload:
+    """Render an already resolved destination through every provenance and data-side gate.
 
-    This is the invocation-local counterpart to :func:`render_named_export`. Draft pipelines
+    This is the invocation-local counterpart to :func:`render_named_destination`. Draft pipelines
     resolve their generated definition directly, but must still receive the exact cadence and
-    incomplete-period checks applied to configured named exports.
+    incomplete-period checks applied to configured named destinations.
     """
     if provenance is not None:
         check_execution_declarations(resolved, provenance)
     return _render(data, resolved, provenance)
 
 
-def check_execution_declarations(resolved: ResolvedExport, provenance: dict[str, Any]) -> None:
+def check_execution_declarations(resolved: ResolvedDestination, provenance: dict[str, Any]) -> None:
     """Refuse a render whose declared dataset or aggregation contradicts what ran.
 
     A declaration is checked only where provenance can attribute an observation to
@@ -240,7 +241,7 @@ def check_execution_declarations(resolved: ResolvedExport, provenance: dict[str,
     """
     sources_value = provenance.get("sources", [])
     if not isinstance(sources_value, list) or not all(isinstance(source, dict) for source in sources_value):
-        raise ValueError("Export provenance sources must be a list of mappings")
+        raise ValueError("Result provenance sources must be a list of mappings")
     sources = cast(list[dict[str, Any]], sources_value)
     declared = resolved.references.get("dataset")
     if (
@@ -248,13 +249,13 @@ def check_execution_declarations(resolved: ResolvedExport, provenance: dict[str,
         and sources
         and not any(declared in (source.get("collection_id"), source.get("source_dataset_id")) for source in sources)
     ):
-        raise ValueError("Declared export dataset was not observed during execution")
+        raise ValueError("Declared destination dataset was not observed during execution")
 
     observed_value = provenance.get("spatial_aggregations", [])
     if not isinstance(observed_value, list) or not all(
         method is None or isinstance(method, str) for method in observed_value
     ):
-        raise ValueError("Export provenance spatial_aggregations must be a list of method names")
+        raise ValueError("Result provenance spatial_aggregations must be a list of method names")
     observed = cast(list[str | None], observed_value)
     declared_aggregation = resolved.mapping.get("aggregation")
     if (
@@ -264,24 +265,24 @@ def check_execution_declarations(resolved: ResolvedExport, provenance: dict[str,
         and observed[0] != declared_aggregation
     ):
         raise ValueError(
-            f"Declared export aggregation '{declared_aggregation}' does not match the executed "
+            f"Declared destination aggregation '{declared_aggregation}' does not match the executed "
             f"spatial aggregation '{observed[0]}'"
         )
     _check_temporal_declaration(resolved, provenance)
 
 
-def _check_temporal_declaration(resolved: ResolvedExport, provenance: dict[str, Any]) -> None:
-    """Verify the export's period was produced the way it declares (CLIM-1302).
+def _check_temporal_declaration(resolved: ResolvedDestination, provenance: dict[str, Any]) -> None:
+    """Verify the destination's period was produced the way it declares (CLIM-1302).
 
     A declared `temporal_aggregation` must be matched by exactly one observed temporal
-    aggregation that produced the export's period with that reducer. An undeclared one must
+    aggregation that produced the destination's period with that reducer. An undeclared one must
     not have been aggregated to some other period on the way. Incomplete destination periods
-    are refused unless the export says `incomplete_periods: drop`, in which case `_render`
+    are refused unless the destination says `incomplete_periods: drop`, in which case `_render`
     drops them.
     """
     observed_value = provenance.get("temporal_aggregations", [])
     if not isinstance(observed_value, list) or not all(isinstance(entry, dict) for entry in observed_value):
-        raise ValueError("Export provenance temporal_aggregations must be a list of mappings")
+        raise ValueError("Result provenance temporal_aggregations must be a list of mappings")
     observed = cast(list[dict[str, Any]], observed_value)
     destination = resolved.mapping.get("period_type")
     declared = resolved.mapping.get("temporal_aggregation")
@@ -289,40 +290,40 @@ def _check_temporal_declaration(resolved: ResolvedExport, provenance: dict[str, 
     if declared is not None:
         if not producing:
             raise ValueError(
-                f"Export '{resolved.export_id}' declares temporal_aggregation '{declared}' to {destination} "
+                f"Destination '{resolved.destination_id}' declares temporal_aggregation '{declared}' to {destination} "
                 "periods, but no temporal aggregation to that period ran; add aggregate_temporal_period "
-                "before save_result, or export a dataset already at that period"
+                "before save_result, or deliver a dataset already at that period"
             )
         if len(producing) > 1:
             raise ValueError(
-                f"Export '{resolved.export_id}' saw {len(producing)} temporal aggregations to {destination} "
+                f"Destination '{resolved.destination_id}' saw {len(producing)} temporal aggregations to {destination} "
                 "periods; only one can be attributed to the result"
             )
         method = producing[0].get("method")
         if method != declared:
             raise ValueError(
-                f"Export '{resolved.export_id}' declares temporal_aggregation '{declared}' but the executed "
+                f"Destination '{resolved.destination_id}' declares temporal_aggregation '{declared}' but the executed "
                 f"aggregation to {destination} periods used {method!r}"
             )
     elif observed and not producing:
         periods = sorted({str(entry["period"]) for entry in observed if entry.get("period")}) or ["another period"]
         raise ValueError(
-            f"Export '{resolved.export_id}' emits {destination} periods but the graph aggregated to "
-            f"{', '.join(periods)}; the export's period_type and the aggregation disagree"
+            f"Destination '{resolved.destination_id}' emits {destination} periods but the graph aggregated to "
+            f"{', '.join(periods)}; the destination's period_type and the aggregation disagree"
         )
     unverifiable = _unverifiable_completeness(observed, str(destination))
     if unverifiable is not None:
         raise ValueError(
-            f"Export '{resolved.export_id}' cannot verify that its {destination} periods are complete: "
-            f"{unverifiable}. Declare the dataset on the export and register its period_type, or export a "
+            f"Destination '{resolved.destination_id}' cannot verify that its {destination} periods are complete: "
+            f"{unverifiable}. Declare the dataset on the destination and register its period_type, or deliver a "
             "dataset already at that period"
         )
     incomplete = _incomplete_at_destination(observed, str(destination))
     if incomplete and resolved.mapping.get("incomplete_periods", "reject") != "drop":
         raise ValueError(
-            f"Export '{resolved.export_id}' would emit {destination} periods the source does not fully "
+            f"Destination '{resolved.destination_id}' would emit {destination} periods the source does not fully "
             f"cover: {', '.join(incomplete)}. Sync through the end of the period, narrow the temporal "
-            "extent, or declare incomplete_periods: drop on the export"
+            "extent, or declare incomplete_periods: drop on the destination"
         )
 
 
@@ -330,7 +331,7 @@ def _unverifiable_completeness(entries: list[dict[str, Any]], destination: str) 
     """The reason completeness could not be checked by an aggregation feeding this period, if any.
 
     An entry that could not count its input is not evidence of completeness, and `drop` has
-    nothing to drop, so the export refuses rather than guess. Older provenance without the
+    nothing to drop, so the destination refuses rather than guess. Older provenance without the
     field counted everything it recorded.
     """
     from open_climate_service.shared.time import Reachability, period_reachability
@@ -348,7 +349,7 @@ def _unverifiable_completeness(entries: list[dict[str, Any]], destination: str) 
 
 
 def _incomplete_at_destination(entries: list[dict[str, Any]], destination: str) -> list[str]:
-    """Every incomplete period any temporal aggregation recorded, relabelled at the export's period.
+    """Every incomplete period any temporal aggregation recorded, relabelled at the destination's period.
 
     A chain of aggregations (daily to monthly to yearly) loses nothing this way: a month the
     first step found short of days marks the year it falls in, even though the second step saw
@@ -369,7 +370,7 @@ def _incomplete_at_destination(entries: list[dict[str, Any]], destination: str) 
         if labels is None:
             labels = []
         if not isinstance(labels, list) or not all(isinstance(label, str) for label in labels):
-            raise ValueError("Export provenance temporal_aggregations carry malformed incomplete periods")
+            raise ValueError("Result provenance temporal_aggregations carry malformed incomplete periods")
         if not isinstance(period, str) or not labels:
             continue
         outcome, _ = period_reachability(period, destination)
@@ -380,8 +381,8 @@ def _incomplete_at_destination(entries: list[dict[str, Any]], destination: str) 
     return sorted(relabelled)
 
 
-def incomplete_periods_to_drop(resolved: ResolvedExport, provenance: dict[str, Any] | None) -> list[str]:
-    """Destination periods the export has chosen to drop rather than refuse."""
+def incomplete_periods_to_drop(resolved: ResolvedDestination, provenance: dict[str, Any] | None) -> list[str]:
+    """Destination periods the destination has chosen to drop rather than refuse."""
     if provenance is None or resolved.mapping.get("incomplete_periods") != "drop":
         return []
     destination = resolved.mapping.get("period_type")
@@ -391,11 +392,11 @@ def incomplete_periods_to_drop(resolved: ResolvedExport, provenance: dict[str, A
     return _incomplete_at_destination([entry for entry in entries if isinstance(entry, dict)], destination)
 
 
-def check_data_cadence(data: Any, resolved: ResolvedExport) -> None:
+def check_data_cadence(data: Any, resolved: ResolvedDestination) -> None:
     """Refuse a render whose data is spaced differently from the period it would be labelled with.
 
     The decisive guard, independent of configuration: the cadence the result carries (stamped
-    at load, rewritten by each temporal aggregation) must be the export's period. A mismatch
+    at load, rewritten by each temporal aggregation) must be the destination's period. A mismatch
     means either a temporal step is missing (finer data, CLIM-1139's collision) or the period
     cannot be derived at all (coarser data). A result carrying no cadence is read from its axis
     spacing, which needs two timestamps; a single period is then accepted as is.
@@ -425,12 +426,13 @@ def check_data_cadence(data: Any, resolved: ResolvedExport) -> None:
         period = cadence_to_openeo_period(destination)
         step = f"aggregate_temporal_period(period='{period}')" if period else "a temporal aggregation"
         raise ValueError(
-            f"Export '{resolved.export_id}' emits {destination} periods but the result is spaced {source}; "
+            f"Destination '{resolved.destination_id}' emits {destination} periods but the result is spaced {source}; "
             f"each {destination} period would receive several values. Add {step} with the reducer you "
-            f"mean before save_result, or export {source} periods"
+            f"mean before save_result, or deliver {source} periods"
         )
     raise ValueError(
-        f"Export '{resolved.export_id}' emits {destination} periods but the result is spaced {source}: {reason}"
+        f"Destination '{resolved.destination_id}' emits {destination} periods but the result is spaced "
+        f"{source}: {reason}"
     )
 
 
@@ -458,7 +460,7 @@ def _period_values(data: Any, period_field: str) -> Any:
     return np.unique(values)
 
 
-def _drop_periods(data: Any, resolved: ResolvedExport, labels: list[str]) -> Any:
+def _drop_periods(data: Any, resolved: ResolvedDestination, labels: list[str]) -> Any:
     """Remove rows or steps whose period label is in ``labels``."""
     from open_climate_service.shared.time import export_period_label
 
@@ -483,19 +485,19 @@ def _drop_periods(data: Any, resolved: ResolvedExport, labels: list[str]) -> Any
     return data
 
 
-def _render(data: Any, resolved: ResolvedExport, provenance: dict[str, Any] | None = None) -> RenderedExport:
+def _render(data: Any, resolved: ResolvedDestination, provenance: dict[str, Any] | None = None) -> RenderedPayload:
     dropped = incomplete_periods_to_drop(resolved, provenance)
     if dropped:
         data = _drop_periods(data, resolved, dropped)
     check_data_cadence(data, resolved)
     rendered = resolved.plugin.render(data, deepcopy(resolved.mapping))
     # External Python plugins are not necessarily type-checked.
-    if not isinstance(rendered, RenderedExport):  # pyright: ignore[reportUnnecessaryIsInstance]
-        raise TypeError("Export plugin render() must return RenderedExport")
+    if not isinstance(rendered, RenderedPayload):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise TypeError("Destination plugin render() must return RenderedPayload")
     return rendered
 
 
-def write_named_export(
+def write_named_destination(
     data: Any,
     directory: Path,
     fmt: str,
@@ -507,8 +509,8 @@ def write_named_export(
     """Freeze a resolved invocation and publish its payload and versioned manifest."""
     import hashlib
 
-    from open_climate_service.exports.manifest import (
-        ExportManifest,
+    from open_climate_service.destinations.manifest import (
+        DeliveryManifest,
         plugin_identity,
         publish_manifest,
         target_binding,
@@ -517,7 +519,7 @@ def write_named_export(
     from open_climate_service.shared.provenance import json_digest
     from open_climate_service.shared.time import utc_now
 
-    resolved = resolve_named_export(fmt, options)
+    resolved = resolve_named_destination(fmt, options)
     identity = plugin_identity(resolved.plugin)
     target = target_binding(resolved.plugin, resolved.references)
     evidence = (
@@ -533,9 +535,9 @@ def write_named_export(
     validate_public_mapping(evidence)
     check_execution_declarations(resolved, evidence)
     rendered = _render(data, resolved, evidence)
-    manifest = ExportManifest(
+    manifest = DeliveryManifest(
         source_job_id=job_id,
-        export_id=resolved.export_id,
+        destination_id=resolved.destination_id,
         created_at=utc_now().isoformat(),
         filename=f"export-{uuid4().hex}{identity.extension}",
         payload_sha256=hashlib.sha256(rendered.content).hexdigest(),
@@ -553,7 +555,7 @@ def write_named_export(
     return publish_manifest(directory, manifest, rendered.content)
 
 
-def read_export_metadata(path: Path) -> dict[str, Any] | None:
+def read_payload_metadata(path: Path) -> dict[str, Any] | None:
     """Return usable display metadata; delivery separately validates its manifest."""
     metadata_path = path.parent / ".export.json"
     try:
@@ -561,13 +563,13 @@ def read_export_metadata(path: Path) -> dict[str, Any] | None:
     except FileNotFoundError:
         return None
     except (OSError, UnicodeError, json.JSONDecodeError):
-        logger.warning("Could not read export metadata '%s'; using result-file defaults", metadata_path)
+        logger.warning("Could not read payload metadata '%s'; using result-file defaults", metadata_path)
         return None
     if not isinstance(metadata, dict) or any(
         not isinstance(metadata.get(field), str) or not metadata[field].strip()
         for field in ("filename", "format", "media_type")
     ):
-        logger.warning("Invalid export metadata fields in '%s'; using result-file defaults", metadata_path)
+        logger.warning("Invalid payload metadata fields in '%s'; using result-file defaults", metadata_path)
         return None
     media_type = metadata["media_type"]
     manifest = metadata.get("manifest")
@@ -581,7 +583,7 @@ def read_export_metadata(path: Path) -> dict[str, Any] | None:
             or "\\" in manifest
         )
     ):
-        logger.warning("Invalid export metadata fields in '%s'; using result-file defaults", metadata_path)
+        logger.warning("Invalid payload metadata fields in '%s'; using result-file defaults", metadata_path)
         return None
     if metadata["filename"] != path.name:
         return None

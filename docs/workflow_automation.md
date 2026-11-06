@@ -6,7 +6,7 @@ scheduling a second cron expression.
 
 > For a new setup, use a [pipeline](web_interface.md#the-pipeline-pages-pipelines) instead: it
 > runs one workflow on the same dataset updates and adds validation, a dry-run gate, delivery
-> modes and run history. Workflow triggers and the named `exports` they deliver through remain
+> modes and run history. Workflow triggers and the named `destinations` they deliver through remain
 > supported for existing configurations, but are due to be retired in favour of pipelines.
 
 ## Configure a trigger
@@ -232,7 +232,7 @@ that event and trigger, and replaying the event does not create another.
   save-result configuration errors can be classified as permanent before execution.
 - **A permanent error is not retried**, because it fails the same way on every attempt: an
   invalid process graph, a request a process refuses (an unknown collection, for example),
-  or invalid configuration found while saving the result, such as an unknown export or a
+  or invalid configuration found while saving the result, such as an unknown destination or a
   units mismatch.
 - **A restart during an attempt** requeues the job if it has attempts left. The interruption
   counts as an attempt, so a job that keeps crashing the server still stops.
@@ -257,7 +257,7 @@ startup: it is left to that process, and taken over if the process exits without
 ## Deliver the result to DHIS2
 
 A trigger can deliver its job's result once the job finishes. The workflow must save through a
-[named export](export_plugins.md), and `deliver.export` names that same export:
+[named destination](destination_plugins.md), and `deliver.destination` names that same destination:
 
 ```yaml
 automation:
@@ -269,15 +269,15 @@ automation:
         dataset_id: $event.dataset_id
         temporal_extent: [$event.previous_end, $event.current_end]
         geometries: { from_features: districts }
-        export: chirps-monthly-districts
+        destination: chirps-monthly-districts
       deliver:
-        export: chirps-monthly-districts
+        destination: chirps-monthly-districts
         dry_run: true   # the default; set false to import into DHIS2
 ```
 
 When a job created by the trigger finishes, OCS submits a delivery exactly as
-[`POST /exports/{export_id}`](export_plugins.md#deliver-a-saved-export) does. Verification,
-chunking, checkpoints, the per-export lock, and the import report all come from that delivery
+[`POST /destinations/{destination_id}`](destination_plugins.md#deliver-a-saved-payload) does. Verification,
+chunking, checkpoints, the per-destination lock, and the import report all come from that delivery
 job. The source job lists it under `usage.deliveries`. A job that fails or is canceled
 delivers nothing.
 
@@ -285,8 +285,8 @@ delivers nothing.
 reports first, then set `dry_run: false`. Only jobs that finish after the change are imported.
 Jobs that finished earlier are never imported live, whether or not their dry run was delivered.
 
-Each finished job is delivered at most once per export and mode. The idempotency key is
-`auto:{job_id}:{export}:{dry-run|live}`, so replaying an event or restarting OCS creates no
+Each finished job is delivered at most once per destination and mode. The idempotency key is
+`auto:{job_id}:{destination}:{dry-run|live}`, so replaying an event or restarting OCS creates no
 second delivery. A job records the delivery it owes in the same write that marks it finished.
 At startup OCS submits any recorded delivery missed because the process stopped after a job
 finished. If submission fails, the source job exposes the latest failure under
@@ -294,25 +294,25 @@ finished. If submission fails, the source job exposes the latest failure under
 in-process timer. A workflow finishing during shutdown may likewise defer submission until
 the next startup reconciliation. A job keeps its delivery links when re-run by hand, so a
 delivered job is not delivered again, even after switching to live; submit the new result through
-`POST /exports/{export_id}` instead.
+`POST /destinations/{destination_id}` instead.
 
 Adding `deliver` to an existing trigger does not deliver its history. The delivery step has
 its own activation time, and only jobs that finish after it are delivered. Changing
-`deliver.export` or `deliver.dry_run`, or removing `deliver` and adding it back, starts a new
+`deliver.destination` or `deliver.dry_run`, or removing `deliver` and adding it back, starts a new
 activation. A job that finishes while its trigger has no active delivery step, for example
 while `deliver` is absent or the instance is read-only, owes nothing and is never delivered
 later. `replay_existing` applies to workflow submission only, never to delivery.
 
-Startup fails, naming the trigger, when `deliver.export` is not a configured export, is
+Startup fails, naming the trigger, when `deliver.destination` is not a configured destination, is
 configured more than once, its plugin is not `dhis2`, it has no `connection`, that connection
-is not configured, its mapping is invalid, or a literal `arguments.export` differs from
-`deliver.export`. A read-only instance validates the same configuration but leaves delivery
+is not configured, its mapping is invalid, or a literal `arguments.destination` differs from
+`deliver.destination`. A read-only instance validates the same configuration but leaves delivery
 inactive, allowing writable and serving instances to share one tracked configuration.
 
-The export delivers what exists at its period. To deliver a monthly export from a daily
+A destination delivers what exists at its period. To deliver monthly values from a daily
 dataset, let one trigger derive and publish the monthly dataset, and a second trigger on that
-dataset's update run the export. See
-[the export's period must be reachable](export_plugins.md#the-exports-period-must-be-reachable-from-the-datasets-cadence).
+dataset's update deliver them. See
+[the destination's period must be reachable](destination_plugins.md#the-destinations-period-must-be-reachable-from-the-datasets-cadence).
 
 Delivery needs the `dhis2` extra (`open-climate-service[dhis2]`) and the connection's token in
 the server environment. See

@@ -1,7 +1,7 @@
-"""DHIS2 as a pipeline destination: its settings, its export definition and its checks.
+"""DHIS2 as a pipeline destination: its settings, its destination definition and its checks.
 
 Everything a pipeline needs to know about DHIS2 lives here and is reached through the
-export plugin hooks, so the pipeline core never names DHIS2, its UIDs or its period types.
+destination plugin hooks, so the pipeline core never names DHIS2, its UIDs or its period types.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from open_climate_service import config as api_config
-from open_climate_service.exports.base import (
+from open_climate_service.destinations.base import (
     DestinationCheck,
     DestinationContext,
     LookupOption,
@@ -92,7 +92,7 @@ class FeatureBinding:
 
 def connections() -> dict[str, Any]:
     """The named DHIS2 connections the instance configures, by id."""
-    from open_climate_service.exports.dhis2_config import parse_connections
+    from open_climate_service.destinations.dhis2_config import parse_connections
 
     return parse_connections(api_config.get_config().get("dhis2_connections", []))
 
@@ -218,7 +218,7 @@ def lookup_labels(lookup: str, settings: dict[str, Any], values: Sequence[str]) 
 
 def _lookup_client(settings: dict[str, Any]) -> Any:
     """A client for the connection the form names, or a ValueError saying what to choose first."""
-    from open_climate_service.exports.dhis2 import get_connection
+    from open_climate_service.destinations.dhis2 import get_connection
 
     connection = settings.get("connection")
     if not isinstance(connection, str) or not connection:
@@ -244,8 +244,8 @@ def _single(items: tuple[Any, ...], noun: str) -> Any:
     return items[0]
 
 
-def export_definition(settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
-    """The named-export definition: the dataset's cadence passes through as the DHIS2 period."""
+def destination_definition(settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
+    """The named-destination definition: the dataset's cadence passes through as the DHIS2 period."""
     parsed = parse_settings(settings)
     dataset: PipelineDataset = _single(context.datasets, "source dataset")
     period_type = normalise_export_period(dataset.cadence)
@@ -411,7 +411,7 @@ def _check_dhis2_metadata(
     if settings.connection not in connections():
         return DestinationCheck(id="dhis2_metadata", status="skip", message="connection not configured")
     try:
-        from open_climate_service.exports.dhis2 import get_connection
+        from open_climate_service.destinations.dhis2 import get_connection
 
         with closing(get_connection(settings.connection)) as client:
             metadata = client.get(
@@ -425,7 +425,7 @@ def _check_dhis2_metadata(
     problems: list[str] = []
     expected = _DHIS2_PERIOD_TYPE.get(period_type or "")
     if expected and metadata.get("periodType") != expected:
-        problems.append(f"data set period type is {metadata.get('periodType')!r}, the export is {expected}")
+        problems.append(f"data set period type is {metadata.get('periodType')!r}, the payload is {expected}")
     elements = {entry.get("dataElement", {}).get("id") for entry in metadata.get("dataSetElements", [])}
     missing = [series.data_element for series in settings.series if series.data_element not in elements]
     if missing:

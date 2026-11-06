@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
-# A pipeline id is also the id of the named export its results are saved through.
+# A pipeline id is also the id of the named destination its results are saved through.
 _PIPELINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
@@ -35,15 +35,15 @@ class WorkflowReference(BaseModel):
 
 
 class PipelineDestination(BaseModel):
-    """Which export plugin renders and delivers the results, with that plugin's own settings.
+    """Which destination plugin renders and delivers the results, with that plugin's own settings.
 
     The core never reads ``settings``: the plugin validates them, compiles them into the
-    pipeline's named export, and runs its destination-side checks.
+    pipeline's named destination, and runs its destination-side checks.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    plugin: str = Field(min_length=1, description="Id of an export plugin that is a pipeline destination.")
+    plugin: str = Field(min_length=1, description="Id of an destination plugin that is a pipeline destination.")
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -88,13 +88,13 @@ class PipelineDefinition(BaseModel):
 
 
 class PipelineSpec(PipelineDefinition):
-    """A pipeline as created: its definition under an id, which is also its named export's id."""
+    """A pipeline as created: its definition under an id, which is also its named destination's id."""
 
     id: str
 
     @field_validator("id")
     @classmethod
-    def _export_safe(cls, value: str) -> str:
+    def _destination_safe(cls, value: str) -> str:
         if not _PIPELINE_ID.fullmatch(value):
             raise ValueError("id must start with a letter or digit and carry only letters, digits, '_' or '-'")
         return value
@@ -128,8 +128,8 @@ class ValidationResult(BaseModel):
     revision: int | None = Field(
         default=None, description="The pipeline revision this result was stored for; set when it is stored."
     )
-    export: dict[str, Any] | None = Field(
-        default=None, description="The named-export definition compiled from the destination, when it compiled."
+    destination_definition: dict[str, Any] | None = Field(
+        default=None, description="The named-destination definition compiled from the settings, when it compiled."
     )
     labels: dict[str, dict[str, str]] = Field(
         default_factory=dict,

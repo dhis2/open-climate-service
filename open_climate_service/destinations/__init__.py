@@ -1,25 +1,25 @@
 """Public integration helpers for exporting computed results."""
 
-from open_climate_service.exports.base import (
-    BaseExportPlugin,
+from open_climate_service.destinations.base import (
+    BaseDestinationPlugin,
     DeliveryContext,
     LookupOption,
     PipelineSettingsForm,
-    RenderedExport,
+    RenderedPayload,
     SettingsFormField,
     SettingsFormSection,
 )
-from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
+from open_climate_service.destinations.report import DeliveryOutcome, DeliveryReport, merge_chunk_reports
 
 __all__ = [
-    "BaseExportPlugin",
+    "BaseDestinationPlugin",
     "DeliveryContext",
     "LookupOption",
     "PipelineSettingsForm",
     "SettingsFormField",
     "SettingsFormSection",
-    "RenderedExport",
-    "ExportOutcome",
-    "ExportReport",
+    "RenderedPayload",
+    "DeliveryOutcome",
+    "DeliveryReport",
     "merge_chunk_reports",
 ]

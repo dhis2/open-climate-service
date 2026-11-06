@@ -59,16 +59,16 @@ data_dir: ./data   # required — directory for downloaded NetCDF files and Zarr
 #         dataset_id: $event.dataset_id
 #         temporal_extent: [$event.previous_end, $event.current_end]
 #         geometries: {from_features: districts}
-#         export: chirps-daily   # a named export under `exports` (below)
-#         method: mean           # must match the export's `aggregation` when it declares one
+#         destination: chirps-daily   # a named destination under `destinations` (below)
+#         method: mean           # must match the destination's `aggregation` when it declares one
 #
-# The named export owns the DHIS2 mapping and connection. The job it produces carries a
-# delivery manifest, so the saved result can be submitted to POST /exports/chirps-daily.
+# The named destination owns the DHIS2 mapping and connection. The job it produces carries a
+# delivery manifest, so the saved result can be submitted to POST /destinations/chirps-daily.
 # dhis2_connections:
 #   - id: national-hmis
 #     url: https://hmis.example.org/dhis
 #     token_env: DHIS2_IMPORT_TOKEN
-# exports:
+# destinations:
 #   - id: chirps-daily
 #     plugin: dhis2
 #     dataset: chirps3_precipitation_daily

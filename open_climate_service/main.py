@@ -15,7 +15,7 @@ from open_climate_service import config as api_config
 from open_climate_service.automation import routes as automation_routes
 from open_climate_service.automation.service import get_workflow_automation_service
 from open_climate_service.data_registry import routes as data_source_routes
-from open_climate_service.exports import routes as exports_routes
+from open_climate_service.destinations import routes as destination_routes
 from open_climate_service.extents import routes as extent_routes
 from open_climate_service.features import routes as feature_routes
 from open_climate_service.ingestions import routes as ingestion_routes
@@ -130,12 +130,12 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     log_plugin_loading()
     # Before any job is recovered, so no computation starts a dask pool of its own.
     install_shared_dask_pool()
-    # Every configured export is resolved here, so an export whose period cannot be produced
+    # Every configured destination is resolved here, so a destination whose period cannot be produced
     # from its dataset, or that lacks the temporal_aggregation it needs, refuses startup with
     # the same message a job would fail with later (CLIM-1302).
-    from open_climate_service.exports.service import validate_configured_exports
+    from open_climate_service.destinations.service import validate_configured_destinations
 
-    validate_configured_exports()
+    validate_configured_destinations()
     maintenance: asyncio.Task[None] | None = None
     pipeline_recovery: asyncio.Task[None] | None = None
     if not api_config.is_read_only():
@@ -350,7 +350,7 @@ def create_app() -> FastAPI:
     _app.include_router(ingestion_routes.sync_router, prefix="/sync", tags=["Sync"])
     _app.include_router(scheduler_routes.router, prefix="/schedules", tags=["Schedules"])
     _app.include_router(openeo_routes.processes_router, prefix="/processes", tags=["openEO"])
-    _app.include_router(exports_routes.router, prefix="/exports", tags=["Exports"])
+    _app.include_router(destination_routes.router, prefix="/destinations", tags=["Destinations"])
     _app.include_router(pipeline_routes.router, prefix="/pipelines", tags=["Pipelines"])
     _app.include_router(automation_routes.router, prefix="/automation", tags=["Automation"])
 

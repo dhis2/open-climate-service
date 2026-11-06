@@ -19,34 +19,7 @@ from fastapi import HTTPException
 
 from open_climate_service import __version__
 from open_climate_service import config as api_config
-from open_climate_service.exports.retention import result_lease
-from open_climate_service.exports.tabular import (
-    _NON_VALUE_FIELDS as _NON_VALUE_FIELDS,
-)
-from open_climate_service.exports.tabular import (
-    _build_dhis2_json_payload as _build_dhis2_json_payload,
-)
-from open_climate_service.exports.tabular import (
-    _format_dhis2_timestamp as _format_dhis2_timestamp,
-)
-from open_climate_service.exports.tabular import (
-    _is_nullish as _is_nullish,
-)
-from open_climate_service.exports.tabular import (
-    _optional_str_option as _optional_str_option,
-)
-from open_climate_service.exports.tabular import (
-    _select_dhis2_value_field as _select_dhis2_value_field,
-)
-from open_climate_service.exports.tabular import (
-    _to_dhis2_period_string as _to_dhis2_period_string,
-)
-from open_climate_service.exports.tabular import (
-    _to_dhis2_value_string as _to_dhis2_value_string,
-)
-from open_climate_service.exports.tabular import (
-    non_value_fields as _non_value_fields,
-)
+from open_climate_service.destinations.retention import result_lease
 from open_climate_service.jobs.models import JobEvent
 from open_climate_service.openeo.schemas import (
     ManagedPublication,
@@ -69,6 +42,33 @@ from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.netcdf import write_netcdf
 from open_climate_service.shared.persistence import execution_lease
 from open_climate_service.shared.storage_size import stored_bytes
+from open_climate_service.shared.tabular import (
+    _NON_VALUE_FIELDS as _NON_VALUE_FIELDS,
+)
+from open_climate_service.shared.tabular import (
+    _build_dhis2_json_payload as _build_dhis2_json_payload,
+)
+from open_climate_service.shared.tabular import (
+    _format_dhis2_timestamp as _format_dhis2_timestamp,
+)
+from open_climate_service.shared.tabular import (
+    _is_nullish as _is_nullish,
+)
+from open_climate_service.shared.tabular import (
+    _optional_str_option as _optional_str_option,
+)
+from open_climate_service.shared.tabular import (
+    _select_dhis2_value_field as _select_dhis2_value_field,
+)
+from open_climate_service.shared.tabular import (
+    _to_dhis2_period_string as _to_dhis2_period_string,
+)
+from open_climate_service.shared.tabular import (
+    _to_dhis2_value_string as _to_dhis2_value_string,
+)
+from open_climate_service.shared.tabular import (
+    non_value_fields as _non_value_fields,
+)
 from open_climate_service.shared.thumbnails import write_dataset_thumbnail
 from open_climate_service.shared.time import utc_now
 from open_climate_service.shared.vectors import (
@@ -1317,7 +1317,7 @@ class OpenEOJobService:
             result = result.data
 
         # Resolve a lazy dask_geopandas GeoDataFrame before any tabular path,
-        # including named exports, so a lazy frame never reaches a renderer.
+        # including named destinations, so a lazy frame never reaches a renderer.
         try:
             import dask_geopandas
 
@@ -1326,10 +1326,10 @@ class OpenEOJobService:
         except ImportError:
             pass
 
-        if "export" in options:
-            from open_climate_service.exports.service import write_named_export
+        if "destination" in options:
+            from open_climate_service.destinations.service import write_named_destination
 
-            return write_named_export(result, results_dir, fmt, options, job_id=job_id, provenance=provenance)
+            return write_named_destination(result, results_dir, fmt, options, job_id=job_id, provenance=provenance)
 
         # Resolve DataArray → Dataset for raster formats
         if isinstance(result, xr.DataArray):
@@ -2276,9 +2276,9 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
     if not output_path or not isinstance(output_path, str):
         return {}
     if not output_path.startswith("managed://"):
-        from open_climate_service.exports.service import read_export_metadata
+        from open_climate_service.destinations.service import read_payload_metadata
 
-        metadata = read_export_metadata(Path(output_path))
+        metadata = read_payload_metadata(Path(output_path))
         if metadata is not None:
             export_assets = {
                 "result": {

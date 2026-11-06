@@ -111,7 +111,7 @@ class OpenEOJobRecord(BaseModel):
     # When the job last reached FINISHED. `updated` moves on every later mutation, so it
     # cannot tell whether a job finished before a delivery activation boundary.
     finished_at: datetime | None = Field(default=None, exclude=True)
-    # The delivery this job owed when it finished ({"export", "mode"}), written with FINISHED.
+    # The delivery this job owed when it finished ({"destination", "mode"}), written with FINISHED.
     delivery_due: dict[str, str] | None = Field(default=None, exclude=True)
     # Execution attempts under this one job ID. Triggered jobs retry up to `max_attempts`;
     # `retry_at` is when a job waiting out a backoff becomes due again.

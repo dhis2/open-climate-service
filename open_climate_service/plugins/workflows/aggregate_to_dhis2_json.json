@@ -1,7 +1,7 @@
 {
   "id": "aggregate_to_dhis2_json",
   "summary": "Aggregate a GeoZarr dataset to DHIS2 org units and save a named, deliverable DHIS2 export",
-  "description": "Org-unit aggregation workflow for DHIS2. Loads a published GeoZarr dataset over a time range, spatially aggregates its variable within each GeoJSON feature (a DHIS2 organisation unit) using the chosen method, and saves the result as a DHIS2 `dataValueSet` through a named export configured in `climate-service.yaml`.\n\nThe named export owns every instance-specific setting: data element and category option combos, period type, the DHIS2 connection, and the optional dataset and org-unit references. The workflow itself stays reusable across instances. As a batch job it writes a versioned delivery manifest, so the saved result can be submitted to `POST /exports/{export_id}` for DHIS2 delivery.\n\nEach feature's GeoJSON `id` must be the DHIS2 organisation unit UID. Aggregation is performed at the dataset's native temporal resolution, so the export's `period_type` must match it. When the export declares `aggregation`, it must equal `method`.\n\nFor an ad-hoc payload without instance configuration, write the graph directly and call `save_result` with format `DHIS2JSON` and the `data_element_id`, `org_unit_field`, and `period_type` options; such a payload is downloadable but not eligible for server-side delivery.\n\nUsage:\n\n{\n  \"agg\": {\n    \"process_id\": \"aggregate_to_dhis2_json\",\n    \"arguments\": {\n      \"dataset_id\": \"era5land_precipitation_monthly\",\n      \"temporal_extent\": [\"2025-01-01\", \"2025-12-31\"],\n      \"geometries\": { \"type\": \"FeatureCollection\", \"features\": [ ... ] },\n      \"export\": \"rainfall-monthly\",\n      \"method\": \"mean\"\n    },\n    \"result\": true\n  }\n}",
+  "description": "Org-unit aggregation workflow for DHIS2. Loads a published GeoZarr dataset over a time range, spatially aggregates its variable within each GeoJSON feature (a DHIS2 organisation unit) using the chosen method, and saves the result as a DHIS2 `dataValueSet` through a named destination configured in `climate-service.yaml`.\n\nThe named destination owns every instance-specific setting: data element and category option combos, period type, the DHIS2 connection, and the optional dataset and org-unit references. The workflow itself stays reusable across instances. As a batch job it writes a versioned delivery manifest, so the saved result can be submitted to `POST /destinations/{destination_id}` for DHIS2 delivery.\n\nEach feature's GeoJSON `id` must be the DHIS2 organisation unit UID. Aggregation is performed at the dataset's native temporal resolution, so the destination's `period_type` must match it. When the destination declares `aggregation`, it must equal `method`.\n\nFor an ad-hoc payload without instance configuration, write the graph directly and call `save_result` with format `DHIS2JSON` and the `data_element_id`, `org_unit_field`, and `period_type` options; such a payload is downloadable but not eligible for server-side delivery.\n\nUsage:\n\n{\n  \"agg\": {\n    \"process_id\": \"aggregate_to_dhis2_json\",\n    \"arguments\": {\n      \"dataset_id\": \"era5land_precipitation_monthly\",\n      \"temporal_extent\": [\"2025-01-01\", \"2025-12-31\"],\n      \"geometries\": { \"type\": \"FeatureCollection\", \"features\": [ ... ] },\n      \"destination\": \"rainfall-monthly\",\n      \"method\": \"mean\"\n    },\n    \"result\": true\n  }\n}",
   "parameters": [
     {
       "name": "dataset_id",
@@ -27,8 +27,8 @@
       }
     },
     {
-      "name": "export",
-      "description": "ID of a named DHIS2 export declared under `exports` in the instance configuration. It supplies the data element mapping, period type, and delivery connection.",
+      "name": "destination",
+      "description": "ID of a named DHIS2 export declared under `destinations` in the instance configuration. It supplies the data element mapping, period type, and delivery connection.",
       "schema": {
         "type": "string"
       }
@@ -83,8 +83,8 @@
         },
         "format": "DHIS2JSON",
         "options": {
-          "export": {
-            "from_parameter": "export"
+          "destination": {
+            "from_parameter": "destination"
           }
         }
       },

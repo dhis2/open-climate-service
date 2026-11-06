@@ -12,7 +12,7 @@ import pytest
 import xarray as xr
 
 from open_climate_service import config
-from open_climate_service.exports.service import render_named_export
+from open_climate_service.destinations.service import render_named_destination
 
 
 @pytest.mark.parametrize("field", ["category_option_combo", "attribute_option_combo"])
@@ -50,12 +50,12 @@ def definition(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             {"select": {"variable": "population"}, "data_element": "POPU0000001"},
         ],
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [definition]})
+    monkeypatch.setattr(config, "_cache", {"destinations": [definition]})
     return definition
 
 
 def _render(data: Any, definition: dict[str, Any]) -> Any:
-    return render_named_export(data, "DHIS2JSON", {"export": definition["id"]})[1]
+    return render_named_destination(data, "DHIS2JSON", {"destination": definition["id"]})[1]
 
 
 def test_multi_series_wide_frame(definition: dict[str, Any]):
@@ -175,8 +175,8 @@ def test_multi_series_ambiguous_empty_selector_rejected(definition: dict[str, An
 def test_multi_series_captures_all_contributing_sources(definition: dict[str, Any], tmp_path: Path):
     import hashlib
 
-    from open_climate_service.exports.manifest import ExportManifest
-    from open_climate_service.exports.service import write_named_export
+    from open_climate_service.destinations.manifest import DeliveryManifest
+    from open_climate_service.destinations.service import write_named_destination
 
     definition["series"] = [
         {"select": {"variable": "temperature"}, "data_element": "TEMP0000001"},
@@ -194,8 +194,10 @@ def test_multi_series_captures_all_contributing_sources(definition: dict[str, An
         "features": [],
         "missing": [],
     }
-    path = write_named_export(frame, directory, "DHIS2JSON", {"export": "three"}, job_id="j", provenance=provenance)
+    path = write_named_destination(
+        frame, directory, "DHIS2JSON", {"destination": "three"}, job_id="j", provenance=provenance
+    )
     metadata = json.loads((Path(path).parent / ".export.json").read_text())
-    manifest = ExportManifest.model_validate_json((Path(path).parent / metadata["manifest"]).read_bytes())
+    manifest = DeliveryManifest.model_validate_json((Path(path).parent / metadata["manifest"]).read_bytes())
     collections = {source["collection_id"] for source in manifest.provenance["sources"]}
     assert collections == {"era5-temperature", "worldpop"}

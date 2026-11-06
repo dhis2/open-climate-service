@@ -87,15 +87,15 @@ def test_both_workflows_registered_as_processes() -> None:
 
 def test_aggregate_to_org_units_dhis2json() -> None:
     overlay = _overlay_with_mock_dataset()
-    # Mapping and period type come from the named export, so the workflow forwards only its ID.
+    # Mapping and period type come from the named destination, so the workflow forwards only its ID.
     envelope = overlay["aggregate_to_dhis2_json"].implementation(
         dataset_id="my_dataset",
         temporal_extent=["2025-01-01", "2025-02-28"],
         geometries=_GEOMETRIES,
-        export="rain-monthly",
+        destination="rain-monthly",
     )
     assert envelope.format == "DHIS2JSON"
-    assert envelope.options == {"export": "rain-monthly"}
+    assert envelope.options == {"destination": "rain-monthly"}
     frame = envelope.data.to_dataframe().reset_index()
     assert set(frame["feature_id"]) == {"OU_A", "OU_B"}
     assert len(frame) == 4
@@ -125,7 +125,7 @@ def test_method_selects_reducer(method: str, expected: float) -> None:
         dataset_id="my_dataset",
         temporal_extent=["2025-01-01", "2025-02-28"],
         geometries=_GEOMETRIES,
-        export="rain-monthly",
+        destination="rain-monthly",
         method=method,
     )
     frame = envelope.data.to_dataframe().reset_index()

@@ -1,8 +1,8 @@
 """Validate and dry-run a pipeline: its workflow binding, its inputs and its destination.
 
 Nothing here knows a destination. The workflow reference is checked against the workflow
-registry; the destination's settings, export definition and destination-side checks come
-from its export plugin's pipeline hooks. Running and delivering is `pipelines.runner`.
+registry; the destination's settings, destination definition and destination-side checks come
+from its destination plugin's pipeline hooks. Running and delivering is `pipelines.runner`.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from typing import Any
 import jsonschema
 
 from open_climate_service import config as api_config
-from open_climate_service.exports.base import BaseExportPlugin, DestinationContext, PipelineDataset
-from open_climate_service.exports.manifest import plugin_identity
+from open_climate_service.destinations.base import BaseDestinationPlugin, DestinationContext, PipelineDataset
+from open_climate_service.destinations.manifest import plugin_identity
 from open_climate_service.pipelines import workflow as workflow_binding
 from open_climate_service.pipelines.schemas import (
     Check,
@@ -40,18 +40,18 @@ def dataset_record(dataset_id: str) -> Any:
     return None
 
 
-def destination_plugins() -> dict[str, BaseExportPlugin]:
-    """The export plugins that declare themselves pipeline destinations, by id."""
-    from open_climate_service.exports.registry import load_export_plugins
+def destination_plugins() -> dict[str, BaseDestinationPlugin]:
+    """The destination plugins that declare themselves pipeline destinations, by id."""
+    from open_climate_service.destinations.registry import load_destination_plugins
 
     return {
         plugin_id: plugin
-        for plugin_id, plugin in load_export_plugins().items()
+        for plugin_id, plugin in load_destination_plugins().items()
         if plugin.destination_settings_schema() is not None
     }
 
 
-def destination_plugin(spec: PipelineSpec) -> BaseExportPlugin:
+def destination_plugin(spec: PipelineSpec) -> BaseDestinationPlugin:
     """The spec's destination plugin, or a ValueError naming the ones available."""
     plugins = destination_plugins()
     plugin = plugins.get(spec.destination.plugin)
@@ -74,25 +74,25 @@ def destination_context(spec: PipelineSpec, bound: BoundWorkflow) -> Destination
             )
         )
     return DestinationContext(
-        export_id=spec.id, datasets=tuple(datasets), feature_collections=bound.feature_collections
+        destination_id=spec.id, datasets=tuple(datasets), feature_collections=bound.feature_collections
     )
 
 
-def compile_export(spec: PipelineSpec, bound: BoundWorkflow) -> dict[str, Any]:
-    """The named-export definition the destination plugin compiles from its settings."""
+def compile_destination(spec: PipelineSpec, bound: BoundWorkflow) -> dict[str, Any]:
+    """The named-destination definition the destination plugin compiles from its settings."""
     plugin = destination_plugin(spec)
     schema = plugin.destination_settings_schema()
     if schema is None:
-        raise ValueError(f"export plugin '{plugin.id}' no longer declares the pipeline destination capability")
+        raise ValueError(f"destination plugin '{plugin.id}' no longer declares the pipeline destination capability")
     try:
         jsonschema.validate(instance=spec.destination.settings, schema=schema)
     except jsonschema.SchemaError as exc:
-        message = f"export plugin '{plugin.id}' has an invalid destination settings schema: {exc.message}"
+        message = f"destination plugin '{plugin.id}' has an invalid destination settings schema: {exc.message}"
         raise ValueError(message) from None
     except jsonschema.ValidationError as exc:
         location = ".".join(str(part) for part in exc.absolute_path)
         raise ValueError(f"destination setting {location + ': ' if location else ''}{exc.message}") from None
-    definition = plugin.export_definition(spec.destination.settings, destination_context(spec, bound))
+    definition = plugin.destination_definition(spec.destination.settings, destination_context(spec, bound))
     return {**definition, "id": spec.id, "plugin": plugin.id}
 
 
@@ -103,16 +103,16 @@ def bindings_digest(spec: PipelineSpec, bound: BoundWorkflow | None) -> str:
     destination with its settings. The name, mode and policy are left out: switching a
     pipeline live is what an approval is for, and must not invalidate it.
     """
-    from open_climate_service.exports.service import resolve_export_definition
+    from open_climate_service.destinations.service import resolve_destination_definition
 
-    plugin: BaseExportPlugin | None = None
-    resolved_export: dict[str, Any] | None = None
+    plugin: BaseDestinationPlugin | None = None
+    resolved_destination: dict[str, Any] | None = None
     try:
         plugin = destination_plugin(spec)
         if bound is not None:
-            resolved = resolve_export_definition(compile_export(spec, bound))
-            resolved_export = {
-                "id": resolved.export_id,
+            resolved = resolve_destination_definition(compile_destination(spec, bound))
+            resolved_destination = {
+                "id": resolved.destination_id,
                 "mapping": resolved.mapping,
                 "references": resolved.references,
             }
@@ -125,7 +125,7 @@ def bindings_digest(spec: PipelineSpec, bound: BoundWorkflow | None) -> str:
             "definition": bound.definition_digest if bound is not None else None,
             "destination": spec.destination.model_dump(mode="json"),
             "destination_plugin": plugin_identity(plugin).model_dump(mode="json") if plugin is not None else None,
-            "export": resolved_export,
+            "resolved_destination": resolved_destination,
         }
     )
 
@@ -195,12 +195,12 @@ def choices() -> dict[str, Any]:
 
 def validate_pipeline(record: PipelineRecord) -> ValidationResult:
     """Check every binding a pipeline relies on, in the order a run would hit them."""
-    from open_climate_service.exports.service import resolve_export_definition
+    from open_climate_service.destinations.service import resolve_destination_definition
 
     spec = record.spec
     checks: list[Check] = []
     bound: BoundWorkflow | None = None
-    export: dict[str, Any] | None = None
+    definition: dict[str, Any] | None = None
     labels: dict[str, dict[str, str]] = {}
 
     try:
@@ -220,20 +220,20 @@ def validate_pipeline(record: PipelineRecord) -> ValidationResult:
 
     if bound is not None:
         checks.append(_check_inputs(bound, on_update=spec.delivery.policy == "on_update"))
-        plugin: BaseExportPlugin | None = None
+        plugin: BaseDestinationPlugin | None = None
         try:
             plugin = destination_plugin(spec)
-            export = compile_export(spec, bound)
-            resolve_export_definition(export)
+            definition = compile_destination(spec, bound)
+            resolve_destination_definition(definition)
             checks.append(
                 Check(
                     id="destination",
                     status="pass",
-                    message=f"saves as {plugin.format} through export '{spec.id}' of plugin '{plugin.id}'",
+                    message=f"saves as {plugin.format} through destination '{spec.id}' of plugin '{plugin.id}'",
                 )
             )
         except ValueError as exc:
-            export = None
+            definition = None
             checks.append(Check(id="destination", status="fail", message=str(exc)))
         if plugin is not None:
             # Run even when the definition did not compile, so every destination problem shows at once.
@@ -251,20 +251,20 @@ def validate_pipeline(record: PipelineRecord) -> ValidationResult:
         valid=not any(check.status == "fail" for check in checks),
         checked_at=utc_now().isoformat(),
         bindings=digest,
-        export=export,
+        destination_definition=definition,
         labels=labels,
         checks=checks,
     )
 
 
-def settings_fields(plugin: BaseExportPlugin) -> list[dict[str, Any]]:
+def settings_fields(plugin: BaseDestinationPlugin) -> list[dict[str, Any]]:
     """The plugin's settings as form fields: the one reading of its schema and presentation."""
     from open_climate_service.pipelines import forms
 
     return forms.settings_fields(plugin.destination_settings_schema(), plugin.pipeline_settings_form())
 
 
-def settings_labels(plugin: BaseExportPlugin, settings: dict[str, Any]) -> dict[str, dict[str, str]]:
+def settings_labels(plugin: BaseDestinationPlugin, settings: dict[str, Any]) -> dict[str, dict[str, str]]:
     """How the lookup settings read at the destination, by field path then value.
 
     A lookup the destination cannot answer is left out, and logged: the labels are a courtesy
@@ -320,19 +320,19 @@ def _check_inputs(bound: BoundWorkflow, *, on_update: bool) -> Check:
 
 
 def _check_configuration(spec: PipelineSpec) -> Check:
-    """Refuse an id a configured named export already owns: the two would be ambiguous."""
-    raw = api_config.get_config().get("exports", [])
+    """Refuse an id a configured named destination already owns: the two would be ambiguous."""
+    raw = api_config.get_config().get("destinations", [])
     configured = {item.get("id") for item in raw if isinstance(item, dict)} if isinstance(raw, list) else set()
     if spec.id in configured:
         return Check(
             id="configuration",
             status="fail",
             message=(
-                f"export id '{spec.id}' is already configured in climate-service.yaml; a pipeline owns the export "
-                "named after it, so rename the pipeline or remove the configured export"
+                f"destination id '{spec.id}' is already configured in climate-service.yaml; a pipeline owns the "
+                "destination named after it, so rename the pipeline or remove the configured destination"
             ),
         )
-    return Check(id="configuration", status="pass", message=f"export id '{spec.id}' belongs to this pipeline")
+    return Check(id="configuration", status="pass", message=f"destination id '{spec.id}' belongs to this pipeline")
 
 
 def _check_schedule(bound: BoundWorkflow) -> Check:
@@ -386,11 +386,9 @@ def _check_delivery(record: PipelineRecord, digest: str) -> Check:
     if delivery.mode == "dry_run":
         return Check(id="delivery", status="pass", message=f"dry run {when}; the destination stores nothing")
     try:
-        plugin = destination_plugin(record.spec)
+        destination_plugin(record.spec)
     except ValueError:
         return Check(id="delivery", status="fail", message="live delivery needs a destination plugin")
-    if not plugin.supports_delivery:
-        return Check(id="delivery", status="fail", message=f"plugin '{plugin.id}' renders only; it cannot deliver live")
     dry_run = record.dry_run
     if dry_run is not None and dry_run.passed and dry_run.bindings == digest:
         return Check(
@@ -424,8 +422,8 @@ def dry_run_pipeline(record: PipelineRecord, start: str, end: str) -> DryRunResu
         plugin = destination_plugin(spec)
         resolved, rendered = _render(spec, bound, plugin, start, end)
         report: dict[str, Any] | None = None
-        if plugin.supports_delivery and plugin.supports_dry_run:
-            # The same target binding a saved export records in its manifest and delivers to.
+        if plugin.supports_dry_run:
+            # The same target binding a saved payload records in its manifest and delivers to.
             binding = plugin.target_binding(resolved.references)
             if binding is None:
                 raise ValueError(f"the destination names no target plugin '{plugin.id}' can deliver to")
@@ -455,27 +453,27 @@ def dry_run_pipeline(record: PipelineRecord, start: str, end: str) -> DryRunResu
 
 
 def _render(
-    spec: PipelineSpec, bound: BoundWorkflow, plugin: BaseExportPlugin, start: str, end: str
+    spec: PipelineSpec, bound: BoundWorkflow, plugin: BaseDestinationPlugin, start: str, end: str
 ) -> tuple[Any, Any]:
-    """Execute the run graph and render it through the export definition compiled for this spec.
+    """Execute the run graph and render it through the destination definition compiled for this spec.
 
     The definition is resolved directly rather than by name, so a draft dry-runs exactly what
-    it would save, before its export is resolvable by other jobs.
+    it would save, before its destination is resolvable by other jobs.
     """
-    from open_climate_service.exports.service import render_resolved_export, resolve_export_definition
+    from open_climate_service.destinations.service import render_resolved_destination, resolve_destination_definition
     from open_climate_service.openeo import execution
     from open_climate_service.openeo.execution import SaveResultEnvelope
 
-    resolved = resolve_export_definition(compile_export(spec, bound))
+    resolved = resolve_destination_definition(compile_destination(spec, bound))
     process, _ = workflow_binding.build_process(
-        spec.workflow, bound, start=start, end=end, save_format=plugin.format, export_id=spec.id
+        spec.workflow, bound, start=start, end=end, save_format=plugin.format, destination_id=spec.id
     )
     envelope = execution.run_process_graph(process)
     if not isinstance(envelope, SaveResultEnvelope):
         raise TypeError("pipeline graph did not return a save_result envelope")
     if envelope.provenance is None:
         raise ValueError("pipeline graph returned no execution provenance")
-    rendered = render_resolved_export(envelope.data, resolved, provenance=envelope.provenance)
+    rendered = render_resolved_destination(envelope.data, resolved, provenance=envelope.provenance)
     if rendered.record_count == 0:
         raise ValueError("the workflow produced no values to submit")
     return resolved, rendered

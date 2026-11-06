@@ -5,7 +5,7 @@ returns it as a GeoJSON FeatureCollection -- the geometry source for a `provider
 feature template.
 
 Ships built-in -- a DHIS2 provider inside a DHIS2 climate service is core -- but is written
-against public names only (`open_climate_service.exports.dhis2.get_connection`,
+against public names only (`open_climate_service.destinations.dhis2.get_connection`,
 `open_climate_service.features.providers.feature_provider`), so the same file would work
 unchanged as an installed-package or `plugins_dir` plugin. That constraint is what keeps the
 provider seam honest: if this provider needed a new hook, an external provider would have
@@ -18,7 +18,7 @@ import logging
 from contextlib import closing
 from typing import Any, Protocol
 
-from open_climate_service.exports.dhis2 import get_connection
+from open_climate_service.destinations.dhis2 import get_connection
 from open_climate_service.features.providers import feature_provider
 
 logger = logging.getLogger(__name__)
