@@ -19,6 +19,29 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_ENTRY_POINT_GROUP = "open_climate_service.plugins"
 
+_installed: tuple[tuple[str, str], ...] | None = None
+"""``(name, package)`` of every installed plugin, found by the first lookup in this process.
+
+Reading entry points scans the metadata of every installed distribution, and templates,
+workflows, processes and exports are looked up on many requests. A package installed later
+is found after a restart. Tests that install one call `rescan`.
+"""
+
+
+def _installed_plugins() -> tuple[tuple[str, str], ...]:
+    global _installed
+    if _installed is None:
+        _installed = tuple(
+            (entry_point.name, entry_point.module) for entry_point in entry_points(group=PLUGIN_ENTRY_POINT_GROUP)
+        )
+    return _installed
+
+
+def rescan() -> None:
+    """Forget the installed plugins found so far; the next lookup reads the entry points again."""
+    global _installed
+    _installed = None
+
 
 def iter_plugin_subdirs(subdir: str) -> Iterator[tuple[str, str, Traversable]]:
     """Yield ``(plugin_name, package, <package>/<subdir>)`` for installed plugins.
@@ -29,12 +52,11 @@ def iter_plugin_subdirs(subdir: str) -> Iterator[tuple[str, str, Traversable]]:
     the dotted path, while a caller that reads files (dataset templates, workflows) can iterate
     the returned traversable.
     """
-    for entry_point in entry_points(group=PLUGIN_ENTRY_POINT_GROUP):
-        package = entry_point.module
+    for name, package in _installed_plugins():
         try:
             resource = importlib.resources.files(package) / subdir
         except (ImportError, ModuleNotFoundError, TypeError):
-            logger.exception("Could not resolve resources for plugin '%s'", entry_point.name)
+            logger.exception("Could not resolve resources for plugin '%s'", name)
             continue
         if resource.is_dir():
-            yield entry_point.name, package, resource
+            yield name, package, resource

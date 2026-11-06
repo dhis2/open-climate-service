@@ -448,8 +448,23 @@ def _dataset_page_context(
     def present(facts: list[Fact]) -> list[Fact]:
         return [fact for fact in facts if fact[1]]
 
+    provenance = record.provenance
+    provenance_facts: list[Fact] = []
+    if provenance is not None:
+        provenance_facts = [
+            ("Producing job", provenance.producer_job_id, provenance.producer_job_href),
+            *(
+                ("Input", f"{item.dataset_id} (updated since)" if item.changed else item.dataset_id, item.href)
+                for item in provenance.inputs
+            ),
+            ("Process graph digest", provenance.process_sha256 or "", None),
+            ("OCS version", provenance.ocs_version or "", None),
+        ]
+
     return {
         "dataset": summary,
+        "provenance_facts": present(provenance_facts),
+        "changed_inputs": [item.dataset_id for item in provenance.inputs if item.changed] if provenance else [],
         "classes": classes,
         # Static datasets and workflow outputs have no upstream to sync from; the console offers
         # the button for them and the planner answers "not syncable", which is noise here.
@@ -2201,34 +2216,21 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
 
 
 def _settings_items(plugin: Any, settings: dict[str, Any], labels: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
-    """The destination settings as the form names them, each lookup value with the label it resolved to."""
-    from open_climate_service.pipelines import forms
-    from open_climate_service.pipelines.service import settings_fields
+    """The destination settings as `destination_settings` describes them, each value as the page shows it."""
+    from open_climate_service.pipelines.views import destination_settings
 
-    def cell(field: dict[str, Any], value: Any, path: str) -> dict[str, Any]:
-        text = json.dumps(value) if isinstance(value, (dict, list)) else "" if value is None else str(value)
-        return {"title": field["title"], "value": text, "label": labels.get(path, {}).get(text, "")}
+    def text(value: Any) -> str:
+        return json.dumps(value) if isinstance(value, (dict, list)) else "" if value is None else str(value)
 
-    items: list[dict[str, Any]] = []
-    for field in settings_fields(plugin):
-        if field["kind"] == "rows":
-            rows = [row for row in forms.setting_rows(settings, field) if row["existing"]]
-            items.append(
-                {
-                    "title": field["title"],
-                    "rows": [
-                        [
-                            cell(column, row["values"].get(column["name"]), f"{field['name']}.{column['name']}")
-                            for column in field["columns"]
-                            if row["values"].get(column["name"]) is not None
-                        ]
-                        for row in rows
-                    ],
-                }
-            )
-        elif settings.get(field["name"]) is not None:
-            items.append({**cell(field, settings.get(field["name"]), field["name"]), "rows": None})
-    return items
+    def cell(item: Any) -> dict[str, Any]:
+        return {"title": item.title, "value": text(item.value), "label": item.label or ""}
+
+    return [
+        {"title": item.title, "rows": [[cell(column) for column in row] for row in item.rows]}
+        if item.rows is not None
+        else {**cell(item), "rows": None}
+        for item in destination_settings(plugin, settings, labels)
+    ]
 
 
 def _pipeline_skipped_kept() -> int:

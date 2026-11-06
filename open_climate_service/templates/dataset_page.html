@@ -75,6 +75,23 @@
                 {% endfor %}
               </dl>
             </section>
+
+            {% if provenance_facts %}
+            <section class="panel" aria-labelledby="provenance-title">
+              <h3 id="provenance-title">Provenance</h3>
+              {% if changed_inputs %}
+              <div class="notice">{{ changed_inputs | join(", ") }} {{ "has" if changed_inputs | length == 1 else "have" }} been updated since this dataset was produced. Run its workflow again to bring it up to date.</div>
+              {% endif %}
+              <dl class="facts">
+                {% for label, value, href in provenance_facts %}
+                <dt>{{ label }}</dt>
+                <dd>
+                  {% if href %}<a href="{{ mount ~ href }}">{{ value }}</a>{% else %}<span class="mono">{{ value }}</span>{% endif %}
+                </dd>
+                {% endfor %}
+              </dl>
+            </section>
+            {% endif %}
           </div>
 
           <div class="stack">

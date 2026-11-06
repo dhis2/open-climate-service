@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service import config
+from open_climate_service import config, plugin_discovery
 from open_climate_service.exports import RenderedExport
 from open_climate_service.exports.registry import load_export_plugins
 from open_climate_service.exports.service import render_named_export
@@ -174,6 +174,7 @@ def _install_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n")
     (metadata / "entry_points.txt").write_text(f"[open_climate_service.plugins]\n{name} = {name}\n")
     monkeypatch.syspath_prepend(str(tmp_path))
+    plugin_discovery.rescan()
     return name
 
 

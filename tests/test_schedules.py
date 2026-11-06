@@ -32,6 +32,8 @@ from open_climate_service.scheduler.presets import (
 from open_climate_service.scheduler.service import SchedulerService
 from open_climate_service.scheduler.store import ScheduleStoreUnreadable, StoredSchedule
 
+from .conftest import MountedClientFactory
+
 BROWSER = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 _TEMPLATES: dict[str, dict[str, Any]] = {
     "chirps": {"id": "chirps", "sync": {"kind": "temporal", "execution": "append"}},
@@ -404,10 +406,44 @@ def test_reload_on_a_disabled_scheduler_only_updates_the_listing(instance: None)
 # --- API -----------------------------------------------------------------------------------------
 
 
-def test_api_creates_reads_updates_pauses_and_deletes(client: TestClient) -> None:
+def test_api_creates_reads_updates_pauses_and_deletes(
+    client: TestClient, mounted_client_factory: MountedClientFactory
+) -> None:
     created = client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"})
     assert created.status_code == 201, created.text
     assert created.json()["source"] == "store" and created.json()["enabled"] is True
+    assert created.headers["Location"] == created.json()["links"]["self"] == "/schedules/sync/era5"
+    assert created.json()["links"] == {"self": "/schedules/sync/era5", "dataset": "/datasets/era5", "last_job": None}
+    for body, field in (
+        ({"dataset_id": "chirps", "cron": "0 6 * * *", "every": "day"}, "every"),
+        ({"dataset_id": "chirps", "cron": "0 6 * * *", "max_attempts": 0}, "max_attempts"),
+    ):
+        refused = client.post("/schedules/sync", json=body)
+        assert refused.status_code == 422 and refused.json()["detail"][0]["loc"][-1] == field, refused.text
+    # A setting left out is kept; one sent as null is refused rather than read as left out.
+    for setting in ("cron", "publish", "max_attempts", "enabled"):
+        refused = client.put("/schedules/sync/era5", json={setting: None})
+        assert refused.status_code == 422 and refused.json()["detail"][0]["loc"] == ["body", setting], refused.text
+    assert client.get("/schedules/sync/era5").json()["cron"] == "0 6 * * *"
+    mounted = mounted_client_factory("/ocs")
+    assert mounted.get("/schedules/sync/era5").json()["links"]["self"] == "/ocs/schedules/sync/era5"
+    operations = client.get("/openapi.json").json()["paths"]
+    for method, path, model in (
+        ("post", "/schedules/sync", "ScheduleCreate"),
+        ("put", "/schedules/sync/{dataset_id}", "ScheduleChange"),
+    ):
+        operation = operations[path][method]
+        assert operation["requestBody"]["content"]["application/json"]["schema"]["title"] == model
+        assert {"403", "409", "422", "503"} <= set(operation["responses"])
+    change = operations["/schedules/sync/{dataset_id}"]["put"]["requestBody"]["content"]["application/json"]["schema"]
+    for setting in ("cron", "publish", "max_attempts", "enabled"):
+        advertised = change["properties"][setting]
+        assert "anyOf" not in advertised and "default" not in advertised and advertised["type"] != "null", advertised
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert "links" in schemas["ScheduleView"]["required"]
+    assert schemas["ScheduleListView"]["properties"]["schedules"]["items"] == {
+        "$ref": "#/components/schemas/ScheduleView"
+    }
     assert client.post("/schedules/sync", json={"dataset_id": "era5", "cron": "0 6 * * *"}).status_code == 409
     listed = client.get("/schedules").json()
     assert [item["dataset_id"] for item in listed["schedules"]] == ["era5"] and listed["reload_error"] is None

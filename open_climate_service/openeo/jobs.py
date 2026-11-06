@@ -17,6 +17,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import portalocker
 from fastapi import HTTPException
 
+from open_climate_service import __version__
 from open_climate_service import config as api_config
 from open_climate_service.exports.retention import result_lease
 from open_climate_service.exports.tabular import (
@@ -1502,7 +1503,7 @@ def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobReco
     if publication.state == "completed":
         return job
     planned = ArtifactRecord.model_validate(publication.record)
-    provenance = (planned.provenance or ArtifactProvenance(producer_job_id=job_id)).model_copy(
+    provenance = (planned.provenance or ArtifactProvenance(producer_job_id=job_id, ocs_version=__version__)).model_copy(
         update={"output_snapshot_id": snapshot_id}
     )
     record = planned.model_copy(
@@ -1759,7 +1760,11 @@ def _write_managed_zarr(
         publication=ArtifactPublication(),
         # The execution evidence as the graph produced it; the output snapshot is added once
         # the commit has landed.
-        provenance=ArtifactProvenance(producer_job_id=job_id, execution=provenance) if job_id is not None else None,
+        provenance=(
+            ArtifactProvenance(producer_job_id=job_id, execution=provenance, ocs_version=__version__)
+            if job_id is not None
+            else None
+        ),
     )
 
     # The same writer lock as ingestion and sync. Publishing into a store while one of those

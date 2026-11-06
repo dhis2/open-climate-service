@@ -102,7 +102,8 @@ authorization are not yet implemented. Read-only mode is an HTTP access policy,
 not an identity or permissions system. Operational diagnostics such as job errors
 must not be treated as public merely because reading them does not mutate state.
 See [Read-only instances](instance_guide.md#read-only-instances) for the current
-deployment behavior.
+deployment behavior, and [Authentication and authorization](authentication.md) for
+the planned design.
 
 Schedule definitions come from the single `<data_dir>/schedules.json` store, whether
 prepared before startup or saved through the web interface or API. The instance-wide

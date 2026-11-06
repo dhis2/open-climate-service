@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -240,6 +241,7 @@ def test_failed_job_exposes_failure_only_after_its_lock_is_free(
 
     monkeypatch.setattr(icechunk.Session, "commit", conflicting_commit)
     lock_free_when_failed: list[bool] = []
+    probed = threading.Event()
     original_mutate = native_store.mutate_job_record
 
     def observe(job_id: str, mutation: Any) -> Any:
@@ -250,11 +252,14 @@ def test_failed_job_exposes_failure_only_after_its_lock_is_free(
             lock_free_when_failed.append(acquired)
             if acquired:
                 probe.release()
+            probed.set()
         return updated
 
     monkeypatch.setattr(native_store, "mutate_job_record", observe)
 
     failed = _await(jobs, jobs.submit_callable_job(**_ingestion_job()).job_id)
+    # The FAILED record is readable before the worker has probed the lock.
+    assert probed.wait(timeout=10)
 
     assert failed.status == JobStatus.FAILED
     assert "simulated concurrent writer" in (failed.error.message if failed.error else "")

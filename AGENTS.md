@@ -39,7 +39,8 @@ docs/
 make run      # start uvicorn with --reload
 make fix      # ruff autofix + format, whole tree
 make lint     # ruff check + ruff format + mypy + pyright
-make test     # pytest
+make test     # pytest on PYTEST_WORKERS workers (default 2)
+make test-serial  # pytest in one process, to diagnose a failure
 make start    # docker compose up --build
 ```
 
