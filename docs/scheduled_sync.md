@@ -164,6 +164,57 @@ Every due check creates a native job, including checks that finish without findi
 Native job history is currently retained in `jobs.json`; retention and indexed active-job lookup
 are follow-up work for the persistent job-store implementation.
 
+## Failure alerts
+
+OCS can post to a webhook when a scheduled sync or a pipeline starts failing, and again when it
+next succeeds. Set the URL in `climate-service.yaml`; a Slack or Mattermost incoming-webhook URL
+works as it is:
+
+```yaml
+notifications:
+  webhook_url: ${OCS_WEBHOOK_URL}
+```
+
+Each schedule and each pipeline posts once when it fails and once when it recovers, not once
+per failure: a daily sync that keeps failing alerts on the first morning only. A scheduled sync
+fails when its job fails after its last attempt. A pipeline run fails when its job cannot be
+submitted, its workflow job errors or disappears, or its delivery fails or ends partial,
+rejected or unknown; it succeeds when the delivery is confirmed or validated, or an operator
+acknowledges it. A cancelled job is neither. Health is kept per pipeline, not per run, so
+acknowledging an older failed run posts a recovery even while a newer run is still failing.
+
+The body is JSON, posted with the header `Idempotency-Key` set to the outcome's event id:
+
+```json
+{
+  "type": "failed",
+  "event": "8f1c...:0",
+  "time": "2026-11-06T06:00:12+00:00",
+  "automation": "pipeline",
+  "id": "rainfall-to-dhis2",
+  "link": "https://ocs.example.org/pipelines/rainfall-to-dhis2",
+  "run": "8f1c...",
+  "details": "https://ocs.example.org/pipelines/rainfall-to-dhis2/runs/8f1c...",
+  "stage": "delivery",
+  "message": "DHIS2 refused the payload",
+  "text": "Pipeline 'rainfall-to-dhis2' failed at delivery: DHIS2 refused the payload https://ocs.example.org/pipelines/rainfall-to-dhis2"
+}
+```
+
+`type` is `failed` or `recovered`; `automation` is `pipeline` or `schedule`; a scheduled sync
+names its `job` instead of a `run`. `text` is the one-line summary that chat tools show. Links
+are absolute when `CLIMATE_SERVICE_BASE_URL` is set, and paths otherwise; either way they carry
+the deployment prefix, the base URL's path or else `ROOT_PATH`.
+
+The outcomes are durable events, persisted with the job or run that reached them, and each alert
+is queued in `<data_dir>/notifications.json` before it is posted. An alert the receiver does not
+answer with 2xx is retried on the 15-minute maintenance interval with a growing delay, for about
+five hours. Each schedule's and pipeline's alerts arrive in order, and one that is refused holds
+up only its own. A failure alert given up on drops its recovery too, so a receiver never gets a
+recovery alone. After a restart, outcomes that no process decided are decided then.
+Outcomes from before the webhook was first configured are not posted. A read-only instance posts
+nothing.
+
 ## Deployment constraints
 
 Exactly one OCS process or replica may set `scheduler.enabled: true`. Active-job detection

@@ -11,6 +11,15 @@ from pydantic import BaseModel, ConfigDict, Field
 DATASET_UPDATED_EVENT_TYPE = "dataset.updated"
 """Event type persisted when an ingestion or sync changes a managed dataset."""
 
+AUTOMATION_FAILED_EVENT_TYPE = "automation.failed"
+AUTOMATION_SUCCEEDED_EVENT_TYPE = "automation.succeeded"
+"""Event types persisted with the final outcome of automated work: a scheduled sync or a pipeline run.
+
+The event's ``source`` is the automation it reports on (``/schedules/sync/{dataset_id}`` or
+``/pipelines/{pipeline_id}``), and ``data`` holds ``stage`` and ``message`` for a failure, the
+``job`` or ``run`` it concerns, and ``href``, the path of that job or run.
+"""
+
 
 class JobCancelledError(Exception):
     """Raised by a job implementation when cooperative cancellation is honored."""
@@ -116,6 +125,12 @@ class JobRecord(BaseModel):
         serialization_alias="retryAfter",
     )
     cursor: dict[str, Any] | None = None
+    outcome_source: str | None = Field(
+        default=None,
+        validation_alias="outcomeSource",
+        serialization_alias="outcomeSource",
+        description="The automation this job's final outcome is reported for, as an automation event's source.",
+    )
     links: list[JobLink] = Field(default_factory=list)
 
 

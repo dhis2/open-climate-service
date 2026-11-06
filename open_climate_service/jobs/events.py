@@ -1,10 +1,12 @@
 """The durable domain-event log: every persisted event, whichever kind of job owns it.
 
-A domain event (such as `dataset.updated`) is persisted atomically with the job whose work it
-describes. Two kinds of job own events: a native job (an ingestion or a sync), which writes its
-events when it succeeds, and an openEO job, which writes the event of a managed dataset it
-publishes together with that publication's outcome. Consumers that replay events read them
-here, never from one job store, so an event is found whichever job owns it.
+A domain event (such as `dataset.updated`) is persisted atomically with the record whose work it
+describes. Three kinds of record own events: a native job (an ingestion or a sync), which writes
+its events when it succeeds, and the automation event of its final outcome when it reports one;
+an openEO job, which writes the event of a managed dataset it publishes together with that
+publication's outcome; and a pipeline run, which writes the automation event of each final
+outcome it reaches. Consumers that replay events read them here, never from one store, so an
+event is found whichever record owns it.
 
 There is no cursor over this log; `read_event_log` reads both stores once.
 """
@@ -26,9 +28,9 @@ class EventLog:
     ``open_since`` bounds the time of an event persisted after this read. It is the creation
     time of the oldest unfinished native job, because a native job stamps its events with its
     completion time before writing them, so one that completes just as the log is read can
-    persist an event stamped earlier than the read. An openEO job needs no bound: it stamps its
-    event inside the same store write that persists it, so an event this read missed carries a
-    later time than the read. None when no native job is unfinished.
+    persist an event stamped earlier than the read. An openEO job and a pipeline run need no
+    bound: each stamps its event inside the same store write that persists it, so an event this
+    read missed carries a later time than the read. None when no native job is unfinished.
     """
 
     events: list[JobEvent]
@@ -40,12 +42,13 @@ def _utc(value: datetime) -> datetime:
 
 
 def read_event_log() -> EventLog:
-    """Read every persisted event from the native and the openEO job stores.
+    """Read every persisted event from the native and openEO job stores and the pipeline runs.
 
     Ordered by time, then id, so events stamped with the same time replay in the same order.
     """
     from open_climate_service.jobs import store as native_store
     from open_climate_service.openeo.jobs import read_job_records
+    from open_climate_service.pipelines import store as pipeline_store
 
     events: list[JobEvent] = []
     open_since: list[datetime] = []
@@ -55,6 +58,9 @@ def read_event_log() -> EventLog:
             open_since.append(_utc(record.created_at))
     for job in read_job_records():
         events.extend(job.events)
+    for pipeline in pipeline_store.list_records():
+        for run in pipeline.runs:
+            events.extend(run.events)
     events.sort(key=lambda event: (_utc(event.time), event.event_id))
     return EventLog(events=events, open_since=min(open_since) if open_since else None)
 

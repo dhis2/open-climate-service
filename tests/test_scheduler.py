@@ -109,6 +109,7 @@ def test_due_schedule_enqueues_retryable_native_job(monkeypatch: pytest.MonkeyPa
         publish=True,
         label="scheduled-sync",
         max_attempts=4,
+        outcome_source="/schedules/sync/chirps3_precipitation_daily",
     )
 
 

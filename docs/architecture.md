@@ -217,7 +217,9 @@ for failed work. An async sync that actually appends or rematerializes data reco
 `dataset.updated` event with the dataset, artifact, executed action, and previous/current coverage.
 An up-to-date sync records no event. Instance-configured workflow triggers consume these durable
 outcomes and submit existing openEO workflows. A deterministic job ID makes replay after restart
-idempotent. External notification remains a separate concern.
+idempotent. A scheduled sync and a pipeline run also persist an `automation.failed` or
+`automation.succeeded` event with their final outcome, which drives the
+[failure alerts](scheduled_sync.md#failure-alerts).
 
 Jobs provide:
 

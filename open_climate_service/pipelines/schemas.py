@@ -15,6 +15,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
+from open_climate_service.jobs.models import JobEvent
+
 # A pipeline id is also the id of the named export its results are saved through.
 _PIPELINE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
@@ -232,6 +234,9 @@ class PipelineRun(BaseModel):
     delivery_status_url: str | None = None
     delivered_at: str | None = None
     error: str | None = None
+    events: list[JobEvent] = Field(
+        default_factory=list, description="Automation events for the run's final outcomes, persisted with the run."
+    )
 
 
 class RunInterval(BaseModel):

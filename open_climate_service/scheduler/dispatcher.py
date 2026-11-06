@@ -109,6 +109,7 @@ def enqueue_sync(schedule: DatasetSyncSchedule) -> CheckResult:
         publish=schedule.publish,
         label="scheduled-sync",
         max_attempts=schedule.max_attempts,
+        outcome_source=f"/schedules/sync/{schedule.dataset_id}",
     )
     return CheckResult(
         schedule_id=schedule.schedule_id,
