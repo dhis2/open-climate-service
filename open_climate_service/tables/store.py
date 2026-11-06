@@ -8,7 +8,8 @@ partial one. Rows are never updated or deleted: a revised value is a new row wit
 
 `write_rows` is the one writer. It validates rows against the feature collection they report
 on, appends them, and registers the dataset's record, which is what lists it under `/datasets`
-as `itemType: table`. `read_rows` reads them back with pyarrow.
+as `itemType: table`. `check_rows` gives the same verdict without writing, for a dry run.
+`read_rows` reads them back with pyarrow.
 """
 
 from __future__ import annotations
@@ -103,16 +104,48 @@ def write_rows(
     written_at: datetime | None = None,
     publish: bool = True,
 ) -> ArtifactRecord:
-    """Validate *rows* for one feature collection, append them as one file and register the dataset.
+    """Check *rows* with `check_rows`, append them as one file and register the dataset.
 
-    Every row names a `feature_id` of the registered collection, a `period` and a `value`; the
-    other `SCHEMA` columns are optional. `dataset_id` and `collection_id` come from the
-    arguments, and a row that names others is refused. A missing value is None (NaN is read as
-    None); a value with `coverage` 0 is refused, because a unit without valid cells has no value,
-    and 0 would be exported as a measurement.
+    Raises ValueError before anything is written when any row is refused.
+    """
+    stamp = _utc(written_at or datetime.now(UTC), "written_at")
+    table = check_rows(dataset_id=dataset_id, collection_id=collection_id, rows=rows, written_at=stamp)
 
-    All rows of a write share one `written_at`, now unless given. Raises ValueError before
-    anything is written when any row is refused.
+    from open_climate_service.ingestions import services as ingestion_services
+
+    with _dataset_lock(dataset_id):
+        _append(_dataset_root(dataset_id) / collection_id, table, stamp)
+        existing = _existing_record(dataset_id)
+        record = ArtifactRecord(
+            artifact_id=str(uuid4()),
+            dataset_id=dataset_id,
+            dataset_name=dataset_name or (existing.dataset_name if existing else dataset_id),
+            period_type=period_type or (existing.period_type if existing else None),
+            format=ArtifactFormat.PARQUET,
+            path=str(_dataset_root(dataset_id)),
+            size_bytes=stored_bytes(_dataset_root(dataset_id)),
+            request_scope=ArtifactRequestScope(),
+            coverage=_coverage(dataset_id),
+            created_at=datetime.now(UTC),
+        )
+        return ingestion_services.register_artifact_record(record, publish=publish)
+
+
+def check_rows(
+    *,
+    dataset_id: str,
+    collection_id: str,
+    rows: Iterable[Mapping[str, Any]],
+    written_at: datetime | None = None,
+) -> pa.Table:
+    """Return *rows* as the table `write_rows` would append, or raise ValueError; nothing is written.
+
+    For a dry run, which needs the writer's verdict without the write. Every row names a
+    `feature_id` of the registered collection, a `period` and a `value`; the other `SCHEMA`
+    columns are optional. `dataset_id` and `collection_id` come from the arguments, and a row
+    that names others is refused. A missing value is None (NaN is read as None); a value with
+    `coverage` 0 is refused, because a unit without valid cells has no value, and 0 would be
+    exported as a measurement. All rows share one `written_at`, now unless given.
     """
     _require_id(dataset_id, "table dataset")
     _require_id(collection_id, "feature collection")
@@ -135,26 +168,7 @@ def write_rows(
             columns[name].append(clean.get(name))
     if not seen:
         raise ValueError(f"no rows to write to table dataset '{dataset_id}'")
-    table = pa.table(columns, schema=SCHEMA)
-
-    from open_climate_service.ingestions import services as ingestion_services
-
-    with _dataset_lock(dataset_id):
-        _append(_dataset_root(dataset_id) / collection_id, table, stamp)
-        existing = _existing_record(dataset_id)
-        record = ArtifactRecord(
-            artifact_id=str(uuid4()),
-            dataset_id=dataset_id,
-            dataset_name=dataset_name or (existing.dataset_name if existing else dataset_id),
-            period_type=period_type or (existing.period_type if existing else None),
-            format=ArtifactFormat.PARQUET,
-            path=str(_dataset_root(dataset_id)),
-            size_bytes=stored_bytes(_dataset_root(dataset_id)),
-            request_scope=ArtifactRequestScope(),
-            coverage=_coverage(dataset_id),
-            created_at=datetime.now(UTC),
-        )
-        return ingestion_services.register_artifact_record(record, publish=publish)
+    return pa.table(columns, schema=SCHEMA)
 
 
 def read_rows(
