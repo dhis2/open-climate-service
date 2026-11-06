@@ -81,6 +81,10 @@ KEY = (
 )
 """The columns that identify one value. The current value is the latest `written_at` per key."""
 
+PERIOD_TYPE_KEY = b"ocs:period_type"
+"""Parquet metadata key holding the dataset's period type, so a reader of the files alone knows
+whether `period` starts a day, a month or a year."""
+
 _WRITABLE = frozenset(SCHEMA.names) - {"written_at"}
 _REQUIRED = ("feature_id", "period", "value")
 
@@ -109,11 +113,14 @@ def write_rows(
     Raises ValueError before anything is written when any row is refused.
     """
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
-    table = check_rows(dataset_id=dataset_id, collection_id=collection_id, rows=rows, written_at=stamp)
 
     from open_climate_service.ingestions import services as ingestion_services
 
+    # Checked under the lock, so two first writes cannot give one dataset two period types.
     with _dataset_lock(dataset_id):
+        table = check_rows(
+            dataset_id=dataset_id, collection_id=collection_id, rows=rows, period_type=period_type, written_at=stamp
+        )
         _append(_dataset_root(dataset_id) / collection_id, table, stamp)
         existing = _existing_record(dataset_id)
         record = ArtifactRecord(
@@ -136,6 +143,7 @@ def check_rows(
     dataset_id: str,
     collection_id: str,
     rows: Iterable[Mapping[str, Any]],
+    period_type: str | None = None,
     written_at: datetime | None = None,
 ) -> pa.Table:
     """Return *rows* as the table `write_rows` would append, or raise ValueError; nothing is written.
@@ -147,10 +155,14 @@ def check_rows(
     `coverage` 0 is refused, because a unit without valid cells has no value, and 0 would be
     exported as a measurement. All rows share one `written_at`, now unless given. A dataset id
     a raster or feature collection already holds is refused, so the two never share a listing.
+
+    A dataset has one period type, the first one written. A *period_type* that differs from it is
+    refused; None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`).
     """
     _require_id(dataset_id, "table dataset")
     _require_id(collection_id, "feature collection")
     require_table_id(dataset_id)
+    period_type = _dataset_period_type(dataset_id, period_type)
     feature_ids = _collection_feature_ids(collection_id)
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
     columns: dict[str, list[Any]] = {name: [] for name in SCHEMA.names}
@@ -170,7 +182,8 @@ def check_rows(
             columns[name].append(clean.get(name))
     if not seen:
         raise ValueError(f"no rows to write to table dataset '{dataset_id}'")
-    return pa.table(columns, schema=SCHEMA)
+    table = pa.table(columns, schema=SCHEMA)
+    return table.replace_schema_metadata({PERIOD_TYPE_KEY: period_type.encode()}) if period_type else table
 
 
 def read_rows(
@@ -380,6 +393,18 @@ def _utc(value: object, name: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise ValueError(f"{name} must be a timezone-aware datetime")
     return value.astimezone(UTC)
+
+
+def _dataset_period_type(dataset_id: str, period_type: str | None) -> str | None:
+    """The period type a write uses: the dataset's own, which *period_type* must not contradict."""
+    existing = _existing_record(dataset_id)
+    current = existing.period_type if existing else None
+    if period_type is not None and current is not None and period_type != current:
+        raise ValueError(
+            f"table dataset '{dataset_id}' is {current}; it cannot take {period_type} rows. "
+            "Write them to another table dataset"
+        )
+    return period_type or current
 
 
 def require_table_id(dataset_id: str) -> None:

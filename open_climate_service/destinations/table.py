@@ -33,7 +33,6 @@ _PERIOD_FIELD = "t"
 _MAPPING_FIELDS = ("dataset_id", "collection_id", "name", "period_type", "unit")
 # Dataset-level facts travel in the Parquet footer, so `send` needs nothing but the payload.
 _NAME_KEY = b"ocs:dataset_name"
-_PERIOD_TYPE_KEY = b"ocs:period_type"
 
 
 class TableDestinationSettings(BaseModel):
@@ -216,11 +215,11 @@ class TableDestinationPlugin(BaseDestinationPlugin):
             dataset_id=mapping["dataset_id"],
             collection_id=mapping["collection_id"],
             rows=rows,
+            period_type=mapping.get("period_type"),
             written_at=datetime.now(UTC),
         )
-        metadata = {_NAME_KEY: mapping.get("name", mapping["dataset_id"]).encode()}
-        if mapping.get("period_type"):
-            metadata[_PERIOD_TYPE_KEY] = mapping["period_type"].encode()
+        # The store's metadata carries the period type; the payload adds the dataset name.
+        metadata = {**(table.schema.metadata or {}), _NAME_KEY: mapping.get("name", mapping["dataset_id"]).encode()}
         sink = pa.BufferOutputStream()
         pq.write_table(table.replace_schema_metadata(metadata), sink)
         return RenderedPayload(
@@ -255,7 +254,7 @@ class TableDestinationPlugin(BaseDestinationPlugin):
         message: str | None = None
         try:
             if dry_run:
-                store.check_rows(**arguments)
+                store.check_rows(**arguments, period_type=period_type)
             else:
                 store.write_rows(**arguments, dataset_name=name, period_type=period_type)
         except ValueError as exc:
@@ -288,9 +287,11 @@ def _read_payload(payload: bytes) -> tuple[Any, str | None, str | None]:
     """The rows of a rendered payload, with the dataset name and period type from its footer."""
     import pyarrow.parquet as pq
 
+    from open_climate_service.tables.store import PERIOD_TYPE_KEY
+
     table = pq.read_table(io.BytesIO(payload))
     metadata = table.schema.metadata or {}
-    name, period_type = metadata.get(_NAME_KEY), metadata.get(_PERIOD_TYPE_KEY)
+    name, period_type = metadata.get(_NAME_KEY), metadata.get(PERIOD_TYPE_KEY)
     return (
         table.replace_schema_metadata(None),
         name.decode() if name else None,

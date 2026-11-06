@@ -327,3 +327,35 @@ def test_destination_checks_name_a_held_dataset_id_and_a_missing_collection() ->
     assert {check.status for check in checks.values()} == {"pass"}
     bad = plugin.check_destination({"dataset_id": "no spaces"}, context)
     assert [check.status for check in bad] == ["fail"]
+
+
+def test_a_dataset_keeps_one_period_type_and_its_files_carry_it(stores: Path) -> None:
+    import pyarrow.parquet as pq
+
+    _write([_row("D1", 1.0)], written_at=FIRST)  # monthly
+    # Rows with another cadence are refused, by the writer and by a dry run alike.
+    for attempt in (
+        lambda: store.write_rows(
+            dataset_id="precip_districts", collection_id="districts", rows=[_row("D2", 2.0)], period_type="daily"
+        ),
+        lambda: store.check_rows(
+            dataset_id="precip_districts", collection_id="districts", rows=[_row("D2", 2.0)], period_type="daily"
+        ),
+    ):
+        with pytest.raises(ValueError, match="'precip_districts' is monthly; it cannot take daily rows"):
+            attempt()
+    # A write that names no period type keeps the dataset's.
+    store.write_rows(dataset_id="precip_districts", collection_id="districts", rows=[_row("D2", 2.0)], written_at=LATER)
+
+    files = sorted((stores / "precip_districts" / "districts").glob("*.parquet"))
+    assert len(files) == 2
+    assert {pq.read_schema(path).metadata[store.PERIOD_TYPE_KEY] for path in files} == {b"monthly"}
+    assert ingestion_services.published_table_artifacts_by_dataset()["precip_districts"].period_type == "monthly"
+
+
+def test_a_destination_payload_for_another_period_type_is_rejected(stores: Path) -> None:
+    from open_climate_service.destinations.table import plugin
+
+    _write([_row("D1", 1.0)])  # monthly
+    with pytest.raises(ValueError, match="is monthly; it cannot take daily rows"):
+        plugin.render(_cube([1.0, 2.0]), plugin.validate_mapping({**_MAPPING, "period_type": "daily"}))

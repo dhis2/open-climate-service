@@ -585,6 +585,10 @@ and, for computed rows, the `reducer`, the `weights` dataset and `coverage`, the
 with valid cells. A value per class (people per hazard class, say) has a `class`; other rows have
 none. A missing value is `null`, or an empty cell in CSV, never 0.
 
+A table dataset has one period type, shown as `period_type` on `/datasets`: whether `period` starts
+a day, a month or a year. Rows with another period type are refused, and each stored Parquet file
+carries it in its metadata as `ocs:period_type`, for readers of the files themselves.
+
 Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
 the latest row for each feature, period, class, reducer and weights. Add `history=true` for every
 row ever written.
