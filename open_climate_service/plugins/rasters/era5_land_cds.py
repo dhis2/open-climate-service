@@ -11,6 +11,7 @@ from typing import Any, cast
 import numpy as np
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
+from earthkit.meteo.thermo import relative_humidity_from_dewpoint
 from earthkit.transforms.temporal import daily_reduce
 
 from open_climate_service.shared.raster_contract import normalize_y_direction
@@ -204,6 +205,57 @@ class ERA5LandCDSDailyFromHourlyPlugin(ERA5LandCDSHourlyPlugin):
             # A day's sum of hourly amounts is an amount per day; a mean, min or max stays per hour.
             return amount_as_rate(daily, self.variable, "d" if self.temporal_aggregation == "sum" else "h")
         return daily
+
+
+class ERA5LandCDSDailyRelHumPlugin(BaseDatasetPlugin):
+    """Daily relative humidity from hourly ERA5-Land 2 m temperature and dewpoint.
+
+    RH is computed for each hour before the daily reduction: saturation vapour pressure is
+    exponential in temperature, so RH from daily mean temperature and dewpoint underestimates
+    the daily mean of hourly RH, most where the diurnal temperature range is large.
+    """
+
+    max_concurrency = 1
+    commit_batch_size = 30
+
+    def __init__(
+        self,
+        *,
+        temporal_aggregation: str,
+        max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES,
+        **kwargs: Any,
+    ) -> None:
+        if temporal_aggregation not in {"mean", "min", "max"}:
+            raise ValueError(
+                f"temporal_aggregation must be one of 'mean', 'min', or 'max'; got {temporal_aggregation!r}"
+            )
+        self.temporal_aggregation = temporal_aggregation
+        # Both inputs stay in Kelvin; the two caches share the configured budget.
+        self._temperature = ERA5LandCDSHourlyPlugin(variable="t2m", max_cache_bytes=max_cache_bytes // 2)
+        self._dewpoint = ERA5LandCDSHourlyPlugin(variable="d2m", max_cache_bytes=max_cache_bytes // 2)
+
+    async def periods(self, start: str, end: str) -> list[str]:
+        # Offer a day only once its 23:00 hour is published; neither input is accumulated.
+        cutoff = await asyncio.to_thread(self._temperature._fetch_cutoff)
+        return daily_period_ids(start=start, end=end, cutoff=cutoff - timedelta(hours=23))
+
+    def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
+        start = np.datetime64(period_id, "D").astype("datetime64[ns]")
+        end = start + np.timedelta64(1, "D")
+        temperature = self._temperature._fetch_time_range(start, end, bbox)["t2m"]
+        dewpoint = self._dewpoint._fetch_time_range(start, end, bbox)["d2m"]
+        # The same earthkit function as the relative_humidity_from_dewpoint process: the IFS
+        # saturation formula over water, matching ERA5's dewpoint. Both inputs are in Kelvin.
+        hourly_rh = relative_humidity_from_dewpoint(temperature, dewpoint)
+        hourly_rh.attrs = {"units": "%"}
+        hourly = xr.Dataset({"rh": hourly_rh.rename("rh")})
+        daily = daily_reduce(
+            hourly,
+            how=self.temporal_aggregation,
+            time_shift={"hours": 0},
+            remove_partial_periods=False,
+        )
+        return cast(xr.Dataset, daily)
 
 
 def _open_cds_zarr(url: str) -> xr.Dataset:

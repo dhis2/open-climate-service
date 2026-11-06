@@ -10,7 +10,10 @@ import yaml
 from xclim.core.units import units2pint
 
 from open_climate_service.plugins.rasters import era5_land_cds, era5_land_edh
-from open_climate_service.plugins.rasters.era5_land_cds import ERA5LandCDSDailyFromHourlyPlugin
+from open_climate_service.plugins.rasters.era5_land_cds import (
+    ERA5LandCDSDailyFromHourlyPlugin,
+    ERA5LandCDSDailyRelHumPlugin,
+)
 from open_climate_service.plugins.rasters.era5_land_edh import ERA5LandEDHMonthlyFromDailyPlugin
 
 _CDS_BBOX = [28.0, -3.0, 29.5, -1.5]
@@ -20,6 +23,7 @@ _EDH_BBOX = [-1.0, 9.0, 1.0, 10.5]
 # The attributes the real stores carry for each variable: its units and GRIB step type.
 _SOURCE_ATTRS = {
     "t2m": {"units": "K", "GRIB_stepType": "instant"},
+    "d2m": {"units": "K", "GRIB_stepType": "instant"},
     "tp": {"units": "m", "GRIB_stepType": "accum"},
 }
 
@@ -53,7 +57,8 @@ def _era5_templates() -> list[dict[str, Any]]:
     templates: list[dict[str, Any]] = []
     for name in ("era5_land_cds.yaml", "era5_land_edh.yaml"):
         templates += yaml.safe_load((rasters / name).read_text(encoding="utf-8"))
-    return templates
+    # A static template is produced by a workflow, not ingested by a plugin.
+    return [template for template in templates if "ingestion" in template]
 
 
 @pytest.mark.parametrize("template", _era5_templates(), ids=lambda t: t["id"])
@@ -62,7 +67,8 @@ def test_plugin_output_units_match_the_template(monkeypatch: pytest.MonkeyPatch,
     module_name, class_name = template["ingestion"]["plugin"].rsplit(".", 1)
     params = template["ingestion"]["params"]
     if module_name.endswith("era5_land_cds"):
-        store = _cds_store(params["variable"], np.ones(49))
+        # One store holding every variable, as a plugin may read more than one (relative humidity).
+        store = xr.merge([_cds_store(variable, np.ones(49)) for variable in _SOURCE_ATTRS])
         monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
         period, bbox = "2020-01-01", _CDS_BBOX
     else:
@@ -71,7 +77,7 @@ def test_plugin_output_units_match_the_template(monkeypatch: pytest.MonkeyPatch,
         period, bbox = "2020-01", _EDH_BBOX
     plugin = getattr(importlib.import_module(module_name), class_name)(**params)
 
-    produced = plugin.fetch_period(period, bbox)[params["variable"]].attrs["units"]
+    produced = plugin.fetch_period(period, bbox)[template["variable"]].attrs["units"]
 
     assert units2pint(produced) == units2pint(template["units"]), f"{produced!r} vs {template['units']!r}"
 
@@ -154,6 +160,57 @@ def test_cds_rejects_an_unknown_aggregation() -> None:
 def test_cds_rejects_an_unknown_unit_transform() -> None:
     with pytest.raises(ValueError, match="unit_transform"):
         ERA5LandCDSDailyFromHourlyPlugin(variable="t2m", temporal_aggregation="mean", unit_transform="fahrenheit")
+
+
+def _cds_humidity_store(temperature: np.ndarray, dewpoint: np.ndarray) -> xr.Dataset:
+    """The ARCO ``sfc-2m-temperature`` group, which holds both 2 m temperature and dewpoint."""
+    return xr.merge([_cds_store("t2m", temperature), _cds_store("d2m", dewpoint)])
+
+
+def test_cds_daily_relative_humidity_averages_hourly_values_not_daily_means(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A constant 15 degC dewpoint under a diurnal swing of 15..35 degC: RH runs from 100 %
+    # at night to about 30 % in the afternoon.
+    hours = np.arange(48)
+    temperature = 298.15 + 10.0 * np.sin(2 * np.pi * (hours - 9) / 24)
+    dewpoint = np.full(48, 288.15)
+    store = _cds_humidity_store(temperature, dewpoint)
+    monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
+    mean_plugin = ERA5LandCDSDailyRelHumPlugin(temporal_aggregation="mean")
+    max_plugin = ERA5LandCDSDailyRelHumPlugin(temporal_aggregation="max")
+
+    day = mean_plugin.fetch_period("2020-01-02", _CDS_BBOX)
+    day_max = max_plugin.fetch_period("2020-01-02", _CDS_BBOX)
+
+    assert dict(day.sizes) == {"t": 1, "y": 2, "x": 2}
+    assert day.t.values[0] == np.datetime64("2020-01-02", "ns")
+    assert day.rh.attrs == {"units": "%"}
+    assert float(day_max.rh.max()) == pytest.approx(100.0, abs=0.01)
+    # RH of the daily means would be 53.8 %.
+    assert float(day.rh.mean()) == pytest.approx(59.41, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    ("hours", "last_day"),
+    [
+        (47, "2020-01-01"),  # 2020-01-02 ends at 23:00, which is not published yet
+        (48, "2020-01-02"),
+    ],
+)
+def test_cds_daily_relative_humidity_periods_offer_only_days_whose_last_hour_is_published(
+    monkeypatch: pytest.MonkeyPatch, hours: int, last_day: str
+) -> None:
+    store = _cds_humidity_store(np.full(hours, 298.15), np.full(hours, 288.15))
+    monkeypatch.setattr(era5_land_cds, "_open_cds_zarr", lambda _url: store)
+    plugin = ERA5LandCDSDailyRelHumPlugin(temporal_aggregation="mean")
+
+    assert asyncio.run(plugin.periods("2019-12-31", "2020-01-10"))[-1] == last_day
+
+
+def test_cds_daily_relative_humidity_rejects_a_sum() -> None:
+    with pytest.raises(ValueError, match="temporal_aggregation"):
+        ERA5LandCDSDailyRelHumPlugin(temporal_aggregation="sum")
 
 
 # --- EDH: daily to monthly ---------------------------------------------------------------

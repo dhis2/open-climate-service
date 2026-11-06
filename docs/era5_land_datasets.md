@@ -134,6 +134,46 @@ Mean daily precipitation for the calendar month, averaged from the Earth Data Hu
 
 ---
 
+## Humidity datasets
+
+### Daily dewpoint (from hourly)
+
+| Property | Value |
+| --- | --- |
+| **Dataset ID** | `era5land_dewpoint_daily` |
+| **Variable** | `d2m` |
+| **Units** | °C |
+| **Period** | Daily |
+| **Coverage** | Global, 1950–present |
+| **Resolution** | ~9 km |
+| **Source** | [CDS ERA5-Land analysis-ready data](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data) |
+| **Lag** | ~5 days |
+
+Daily mean 2 m dewpoint temperature, averaged from the 24 hourly values of the **UTC calendar day**. Dewpoint is the temperature at which water vapor will start condensing as dew.
+
+Together with `era5land_temperature_daily`, it can be used as input to the [`relative_humidity_from_daily_dewpoint`](workflows.md#relative-humidity-from-daily-dewpoint) workflow, which publishes an estimated daily relative humidity where only daily inputs exist.
+
+---
+
+### Daily relative humidity (from hourly)
+
+| Property | Value |
+| --- | --- |
+| **Dataset ID** | `era5land_relative_humidity_daily` |
+| **Variable** | `rh` |
+| **Units** | % |
+| **Period** | Daily |
+| **Coverage** | Global, 1950–present |
+| **Resolution** | ~9 km |
+| **Source** | [CDS ERA5-Land analysis-ready data](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land?tab=analysis_ready_data) |
+| **Lag** | ~5 days |
+
+Daily mean 2 m relative humidity for the **UTC calendar day**. It is computed for each hour from the hourly temperature and dewpoint, then averaged. Computing it from daily means instead underestimates it, most where days are hot and nights cool, because saturation vapour pressure rises exponentially with temperature. Ingesting it reads both hourly variables.
+
+`era5land_relative_humidity_daily_min` and `era5land_relative_humidity_daily_max` are the same, with the daily minimum and maximum of the hourly values instead of the mean. The `relative_humidity_from_daily_dewpoint` workflow cannot produce these, as it estimates relative humidity from daily means only.
+
+---
+
 ## Choosing the right dataset
 
 | Use case | Recommended dataset |
