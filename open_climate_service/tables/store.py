@@ -123,16 +123,17 @@ def write_rows(
         )
         _append(_dataset_root(dataset_id) / collection_id, table, stamp)
         existing = _existing_record(dataset_id)
+        period_type = period_type or (existing.period_type if existing else None)
         record = ArtifactRecord(
             artifact_id=str(uuid4()),
             dataset_id=dataset_id,
             dataset_name=dataset_name or (existing.dataset_name if existing else dataset_id),
-            period_type=period_type or (existing.period_type if existing else None),
+            period_type=period_type,
             format=ArtifactFormat.PARQUET,
             path=str(_dataset_root(dataset_id)),
             size_bytes=stored_bytes(_dataset_root(dataset_id)),
             request_scope=ArtifactRequestScope(),
-            coverage=_coverage(dataset_id),
+            coverage=_coverage(dataset_id, period_type),
             created_at=datetime.now(UTC),
         )
         return ingestion_services.register_artifact_record(record, publish=publish)
@@ -237,7 +238,7 @@ def _latest(table: pa.Table, keys: tuple[str, ...]) -> pa.Table:
     frame = table.select([*KEY, "written_at"]).to_pandas()
     frame["row"] = range(len(frame))
     latest = frame.sort_values("written_at", kind="stable").drop_duplicates(subset=list(keys), keep="last")
-    return table.take(pa.array(sorted(latest["row"])))
+    return table.take(pa.array(sorted(latest["row"]), type=pa.int64()))
 
 
 def _append(folder: Path, table: pa.Table, stamp: datetime) -> Path:
@@ -280,8 +281,8 @@ def _existing_record(dataset_id: str) -> ArtifactRecord | None:
     return max(records, key=lambda record: record.created_at) if records else None
 
 
-def _coverage(dataset_id: str) -> ArtifactCoverage:
-    """The period range of every row stored, and the extent of the collections they report on."""
+def _coverage(dataset_id: str, period_type: str | None) -> ArtifactCoverage:
+    """The period range of every row stored, as period labels, and the extent of the collections they report on."""
     from open_climate_service.features.services import registered_collections
 
     root = _dataset_root(dataset_id)
@@ -303,7 +304,7 @@ def _coverage(dataset_id: str) -> ArtifactCoverage:
     )
     return ArtifactCoverage(
         spatial=spatial,
-        temporal=CoverageTemporal(start=first.isoformat(), end=last.isoformat()),
+        temporal=CoverageTemporal(start=period_label(first, period_type), end=period_label(last, period_type)),
     )
 
 
@@ -383,6 +384,21 @@ def period_start(day: date, period_type: str | None) -> date:
     if period_type == "yearly":
         return day.replace(month=1, day=1)
     return day
+
+
+def period_label(day: date, period_type: str | None) -> str:
+    """How OCS names the period starting on *day*, as raster datasets name theirs: `2026-01`, `2026-W01`, `2026`.
+
+    For reading only: storage, filters and the key use the date. A dekad is named by its first
+    day, as in raster datasets; a period type OCS has no name for keeps the ISO date.
+    """
+    from open_climate_service.shared.time import datetime_to_period_string
+
+    if period_type == "quarterly":
+        return f"{day.year:04d}-Q{(day.month - 1) // 3 + 1}"
+    if period_type in ("daily", "dekadal", "weekly", "monthly", "yearly"):
+        return datetime_to_period_string(datetime(day.year, day.month, day.day), period_type)
+    return day.isoformat()
 
 
 def _period(value: object, *, index: int) -> date:

@@ -77,22 +77,27 @@ def test_written_rows_are_listed_as_a_table_dataset_and_served_as_json_and_csv(c
     table = listed["precip_districts"]
     assert table["itemType"] == "table"
     assert table["period_type"] == "monthly"
-    assert table["extent"]["temporal"] == {"start": "2026-01-01", "end": "2026-01-01"}
+    # Named as raster datasets name their periods; the rows themselves keep the date.
+    assert table["extent"]["temporal"] == {"start": "2026-01", "end": "2026-01"}
     assert table["extent"]["spatial"] == {"xmin": 30.0, "ymin": -2.0, "xmax": 32.0, "ymax": 0.0}
     assert {"rel": "rows", "href": "/tables/precip_districts/rows", "title": "Table rows"} in table["links"]
 
     rows = client.get("/tables/precip_districts/rows").json()["items"]
-    assert [(row["feature_id"], row["value"], row["period"]) for row in rows] == [
-        ("D1", 12.5, "2026-01-01"),
-        ("D2", None, "2026-01-01"),
+    assert [(row["feature_id"], row["value"], row["period"], row["period_label"]) for row in rows] == [
+        ("D1", 12.5, "2026-01-01", "2026-01"),
+        ("D2", None, "2026-01-01", "2026-01"),
     ]
+    assert list(rows[0])[4:6] == ["period", "period_label"]
     assert rows[0]["collection_id"] == "districts"
     assert rows[0]["dataset_id"] == "precip_districts"
 
     response = client.get("/tables/precip_districts/rows", params={"format": "csv"})
     assert response.headers["content-type"].startswith("text/csv")
     parsed = list(csv.DictReader(io.StringIO(response.text)))
-    assert [(row["feature_id"], row["value"]) for row in parsed] == [("D1", "12.5"), ("D2", "")]
+    assert [(row["feature_id"], row["value"], row["period_label"]) for row in parsed] == [
+        ("D1", "12.5", "2026-01"),
+        ("D2", "", "2026-01"),
+    ]
 
 
 def test_a_later_write_of_the_same_key_is_current_and_the_first_is_history(client: TestClient) -> None:
@@ -456,3 +461,35 @@ def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkey
         (date(2026, 1, 1), 31.0),
         (date(2026, 2, 1), 28.0),
     }
+
+
+@pytest.mark.parametrize(
+    ("period_type", "start", "label"),
+    [
+        ("daily", date(2026, 1, 15), "2026-01-15"),
+        ("weekly", date(2025, 12, 29), "2026-W01"),
+        ("dekadal", date(2026, 1, 11), "2026-01-11"),
+        ("monthly", date(2026, 1, 1), "2026-01"),
+        ("quarterly", date(2026, 4, 1), "2026-Q2"),
+        ("yearly", date(2026, 1, 1), "2026"),
+        (None, date(2026, 1, 1), "2026-01-01"),
+    ],
+)
+def test_a_period_is_labelled_the_way_raster_datasets_name_theirs(
+    period_type: str | None, start: date, label: str
+) -> None:
+    assert store.period_label(start, period_type) == label
+
+
+def test_an_empty_csv_still_names_every_column(client: TestClient) -> None:
+    _write([_row("D1", 1.0)])
+    response = client.get("/tables/precip_districts/rows", params={"format": "csv", "start": "2030-01-01"})
+    header = response.text.splitlines()[0].split(",")
+    assert header[4:6] == ["period", "period_label"] and len(header) == len(store.SCHEMA.names) + 1
+
+
+def test_a_filter_that_matches_nothing_returns_no_rows(client: TestClient) -> None:
+    _write([_row("D1", 1.0)])
+    for history in ("false", "true"):
+        response = client.get("/tables/precip_districts/rows", params={"start": "2030-01-01", "history": history})
+        assert response.status_code == 200 and response.json()["items"] == []

@@ -590,7 +590,10 @@ a day, a month or a year. Rows with another period type are refused, and each st
 carries it in its metadata as `ocs:period_type`, for readers of the files themselves. `period` is
 always the first day of the period: January 2026 is `2026-01-01`, an ISO week its Monday, a dekad
 the 1st, 11th or 21st. A row dated otherwise, such as a month labelled by its last day the way
-`aggregate_temporal_period` labels it, is stored at its period's start.
+`aggregate_temporal_period` labels it, is stored at its period's start. Each row in the API also
+has a `period_label` naming the period the way raster datasets name theirs (`2026-01`, `2026-W01`,
+`2026-Q2`, `2026`), and the dataset's extent on `/datasets` uses the same labels. The label is for
+reading only: filters and the stored files use the date.
 
 Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
 the latest row for each feature, period, class, reducer and weights. Add `history=true` for every
