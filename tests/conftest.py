@@ -197,3 +197,35 @@ def mounted_client_factory() -> MountedClientFactory:
         return TestClient(uvicorn_shaped)
 
     return make
+
+
+class WebhookReceiver:
+    """The configured notification webhook: what it was sent, and how it answers."""
+
+    def __init__(self) -> None:
+        self.enabled = True
+        self.status = 200
+        self.refused: set[str] = set()
+        """Automation ids whose posts are answered 503 whatever ``status`` is."""
+        self.posts: list[tuple[int, str, dict[str, Any]]] = []
+        """Every post as (the status it was answered with, its Idempotency-Key, its body)."""
+
+
+@pytest.fixture
+def webhook(monkeypatch: pytest.MonkeyPatch) -> WebhookReceiver:
+    """Notifications configured, posted in the calling thread to a receiver that records them."""
+    import httpx
+
+    from open_climate_service.notifications import webhook as notifications
+
+    receiver = WebhookReceiver()
+
+    def post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: float) -> httpx.Response:
+        status = 503 if json.get("id") in receiver.refused else receiver.status
+        receiver.posts.append((status, headers["Idempotency-Key"], json))
+        return httpx.Response(status)
+
+    monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ocs" if receiver.enabled else None)
+    monkeypatch.setattr(notifications.httpx, "post", post)
+    monkeypatch.setattr(notifications, "_kick", notifications.send_due)
+    return receiver

@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from open_climate_service.jobs import store as native_store
 from open_climate_service.jobs.models import JobRecord, JobStatus
 from open_climate_service.scheduler import service as scheduler_service
 from open_climate_service.scheduler.config import DatasetSyncSchedule, SchedulerConfig
@@ -22,8 +23,17 @@ from open_climate_service.scheduler.store import StoredSchedule
 
 @pytest.fixture(autouse=True)
 def _own_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Each test gets its own data directory, so no test reads another's check results or heartbeat."""
+    """Each test gets its own data directory, so no test reads another's check results, heartbeat or jobs."""
     monkeypatch.setattr(scheduler_service.api_config, "get_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
+    monkeypatch.setattr(native_store, "JOBS_INDEX_PATH", tmp_path / "data" / "jobs" / "jobs.json")
+
+
+def _failed_job(job_id: str | None) -> JobRecord:
+    """The failed job a check that could not submit its sync was recorded as."""
+    record = native_store.get_job_record(str(job_id))
+    assert record is not None and record.status == JobStatus.FAILED
+    return record
 
 
 def _schedule(**updates: object) -> DatasetSyncSchedule:
@@ -109,6 +119,7 @@ def test_due_schedule_enqueues_retryable_native_job(monkeypatch: pytest.MonkeyPa
         publish=True,
         label="scheduled-sync",
         max_attempts=4,
+        outcome_source="/schedules/sync/chirps3_precipitation_daily",
     )
 
 
@@ -295,6 +306,14 @@ def test_service_skips_missing_template_without_failing_startup(monkeypatch: pyt
     assert service.status().schedules[0].last_outcome == CheckOutcome.ERROR
     assert "no registered data source" in (service.status().schedules[0].last_message or "")
     assert warning.call_args.args[-1] == 0
+    # A refused schedule never checks its dataset: it is reported once, as a failed job.
+    [refusal] = native_store.list_job_records()
+    [event] = _failed_job(refusal.job_id).events
+    assert (event.type, event.source) == ("automation.failed", "/schedules/sync/chirps3_precipitation_daily")
+    assert "no registered data source" in event.data["message"]
+    service._stamp = "changed"
+    service.reload()
+    assert len(native_store.list_job_records()) == 1
 
 
 def test_service_does_not_start_on_read_only_instance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -355,6 +374,14 @@ def test_check_error_is_retained_without_escaping() -> None:
 
     assert result.outcome == CheckOutcome.ERROR
     assert "source unavailable" in result.message
+    [event] = _failed_job(result.job_id).events
+    assert (event.type, event.source) == ("automation.failed", "/schedules/sync/chirps3_precipitation_daily")
+    assert event.data == {
+        "job": result.job_id,
+        "href": f"/ingestions/jobs/{result.job_id}",
+        "stage": "job",
+        "message": result.message,
+    }
 
 
 def test_schedules_endpoint_is_read_only_status(client: TestClient) -> None:
@@ -384,7 +411,9 @@ def _submitted() -> CheckResult:
     )
 
 
-def _clock_process(monkeypatch: pytest.MonkeyPatch, store: SharedResultsStore) -> SchedulerService:
+def _clock_process(
+    monkeypatch: pytest.MonkeyPatch, store: SharedResultsStore, registered: bool = True
+) -> SchedulerService:
     """The process that runs the clock, with APScheduler itself replaced."""
     scheduler = MagicMock()
     scheduler.get_jobs.return_value = []
@@ -394,19 +423,19 @@ def _clock_process(monkeypatch: pytest.MonkeyPatch, store: SharedResultsStore) -
         config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored_schedule()],
         dispatcher=lambda _: _submitted(),
-        template_loader=lambda _: _template(),
+        template_loader=lambda _: _template() if registered else None,
         results=store,
     )
     service.start()
     return service
 
 
-def _other_process(store: SharedResultsStore) -> SchedulerService:
+def _other_process(store: SharedResultsStore, registered: bool = True) -> SchedulerService:
     """A process on the same data directory whose configuration leaves the clock off."""
     return SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=False),
         store_loader=lambda: [_stored_schedule()],
-        template_loader=lambda _: _template(),
+        template_loader=lambda _: _template() if registered else None,
         results=store,
     )
 
@@ -436,6 +465,22 @@ def test_another_process_reports_the_check_the_clock_ran(
     page = client.get("/schedules", headers={"Accept": "text/html"}).text
     assert "Scheduler running in another process" in page
     assert "Automatic checks are off" not in page
+    clock.shutdown()
+
+
+def test_another_process_links_the_job_a_refused_schedule_was_recorded_as(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = SharedResultsStore(tmp_path / "shared" / "schedule_results.json")
+    clock = _clock_process(monkeypatch, store, registered=False)
+    # The reader refuses the schedule too, after the clock did: the clock's result still wins.
+    monkeypatch.setattr(scheduler_service, "_service", _other_process(store, registered=False))
+
+    (row,) = client.get("/schedules", headers={"Accept": "application/json"}).json()["schedules"]
+
+    [refusal] = native_store.list_job_records()
+    assert row["last_outcome"] == "error" and row["last_job_id"] == refusal.job_id
+    assert row["links"]["last_job"] == f"/ingestions/jobs/{refusal.job_id}"
     clock.shutdown()
 
 

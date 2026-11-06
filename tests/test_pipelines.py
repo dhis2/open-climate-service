@@ -43,7 +43,7 @@ from open_climate_service.pipelines.schemas import (
     WorkflowReference,
 )
 
-from .conftest import MountedClientFactory
+from .conftest import MountedClientFactory, WebhookReceiver
 
 _OU = ["ImspTQPwCqd", "O6uvpzGd5pu"]
 _ELEMENT = "LeePHYkZwBk"
@@ -2193,6 +2193,76 @@ def test_handed_off_is_not_delivered_until_the_delivery_job_confirms(
     # Only the confirmed one may be pruned.
     superseded: set[str] = set()
     assert [runner._settled(by_id[run_id], superseded) for run_id in runs] == [True, False, False, False, False, False]
+
+
+def test_a_failing_pipeline_posts_once_and_again_when_it_recovers_or_is_resolved(
+    instance: None,
+    openeo: _FakeOpenEO,
+    deliveries: _Deliveries,
+    webhook: WebhookReceiver,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from open_climate_service.jobs.events import persisted_events
+    from open_climate_service.notifications import webhook as notifications
+
+    _dhis2(monkeypatch)
+    _validated()
+    monkeypatch.setattr(runner, "_event_consumer", notifications.consume)
+
+    def run(month: int, delivery: str) -> runner.PipelineRun:
+        interval = runner.RunContext(start=f"2025-0{month}-01", end=f"2025-0{month}-28")
+        started = runner.run_pipeline("rain-to-dhis2", interval)
+        runner.on_job_finished(openeo.finish(started.job_id))
+        if delivery == "failed":
+            deliveries.outcomes[f"delivery-{len(deliveries)}"] = ("failed", None)
+        runner.recover_runs()
+        return started
+
+    webhook.enabled = False
+    run(1, "failed")  # before notifications were configured: history, never posted
+    run(2, "successful")
+    webhook.enabled = True
+    notifications.replay()
+    failing = run(3, "failed")
+    run(4, "failed")  # still the same failure episode
+    webhook.status = 503
+    recovered = run(5, "successful")
+    webhook.status = 200
+    notifications.replay()  # the refused recovery is not due again yet
+    later = datetime.now(UTC) + timedelta(minutes=3)
+    monkeypatch.setattr(notifications, "utc_now", lambda: later)
+    notifications.replay()
+    older = run(6, "failed")
+    newer = run(7, "failed")
+    runner.acknowledge_delivery("rain-to-dhis2", older.run_id)  # the newer run still fails
+    runner.acknowledge_delivery("rain-to-dhis2", newer.run_id)
+
+    outcomes = [
+        event.type.removeprefix("automation.") for event in persisted_events() if event.type.startswith("automation.")
+    ]
+    assert outcomes == ["failed", "succeeded", "failed", "succeeded", "failed", "resolved"]
+    assert [(status, body["type"]) for status, _, body in webhook.posts] == [
+        (200, "failed"),
+        (503, "recovered"),
+        (200, "recovered"),
+        (200, "failed"),
+        (200, "resolved"),
+    ]
+    assert webhook.posts[-1][1] == f"{newer.run_id}:0"
+    assert webhook.posts[-1][2]["text"] == (
+        "Pipeline 'rain-to-dhis2' failure was acknowledged by an operator /pipelines/rain-to-dhis2"
+    )
+    (_, failure_key, failure), (_, first_key, _), (_, retry_key, recovery) = webhook.posts[:3]
+    assert failure_key == failure["event"] == f"{failing.run_id}:0"
+    assert first_key == retry_key == f"{recovered.run_id}:0"
+    assert failure["run"] == failing.run_id and failure["details"] == f"/pipelines/rain-to-dhis2/runs/{failing.run_id}"
+    assert (failure["automation"], failure["id"]) == ("pipeline", "rain-to-dhis2")
+    assert failure["link"] == "/pipelines/rain-to-dhis2"
+    assert (failure["stage"], failure["message"]) == ("delivery", "DHIS2 refused the payload")
+    assert failure["text"] == (
+        "Pipeline 'rain-to-dhis2' failed at delivery: DHIS2 refused the payload /pipelines/rain-to-dhis2"
+    )
+    assert recovery["text"] == "Pipeline 'rain-to-dhis2' succeeded again /pipelines/rain-to-dhis2"
 
 
 def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(

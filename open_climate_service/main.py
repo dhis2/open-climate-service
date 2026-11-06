@@ -105,6 +105,18 @@ async def _recover_pipeline_runs_periodically() -> None:
             logger.exception("Pipeline run recovery failed; retrying at the next interval")
 
 
+async def _replay_notifications_periodically() -> None:
+    """Decide automation outcomes a process missed, and retry webhooks that were not accepted."""
+    from open_climate_service.notifications import webhook
+
+    while True:
+        await asyncio.sleep(_MAINTENANCE_INTERVAL_S)
+        try:
+            await asyncio.to_thread(webhook.replay)
+        except Exception:
+            logger.exception("Notification replay failed; retrying at the next interval")
+
+
 async def _warm_process_registry() -> None:
     """Load the openEO process implementations in a worker thread, once, at startup.
 
@@ -136,8 +148,12 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     from open_climate_service.exports.service import validate_configured_exports
 
     validate_configured_exports()
+    from open_climate_service.notifications import webhook
+
+    webhook.webhook_url()  # a malformed notifications block refuses startup
     maintenance: asyncio.Task[None] | None = None
     pipeline_recovery: asyncio.Task[None] | None = None
+    notification_replay: asyncio.Task[None] | None = None
     if not api_config.is_read_only():
         # Before any job is recovered, so no pyramid rebuild can be in progress. A read-only
         # instance may share its data directory with a writing one, so it leaves them alone.
@@ -156,6 +172,7 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             logger.exception("Could not run pending store collections; continuing startup")
         maintenance = asyncio.create_task(_collect_pending_garbage_periodically())
         pipeline_recovery = asyncio.create_task(_recover_pipeline_runs_periodically())
+        notification_replay = asyncio.create_task(_replay_notifications_periodically())
     job_service = get_job_service()
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()
@@ -173,8 +190,14 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             pipeline_runner.consume(events)
         except Exception:
             logger.exception("Pipeline dispatch for dataset updates failed")
+        try:
+            webhook.consume(events)
+        except Exception:
+            logger.exception("Deciding failure notifications failed; the next replay decides them")
 
     job_service.set_event_consumer(_consume)
+    # A pipeline run persists the automation event of its final outcome on its own record.
+    pipeline_runner.set_event_consumer(_consume)
     # An openEO job that publishes a managed dataset owns its update event; it reaches the
     # same consumers when the job finishes, and startup replay reads it from the job store.
     openeo_service.set_event_consumer(_consume)
@@ -210,6 +233,10 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         # Replay must not take down startup: a partial replay is idempotent and the consumer
         # above still handles every newly persisted event.
         logger.exception("Workflow automation replay failed; continuing startup")
+    try:
+        webhook.replay()
+    except Exception:
+        logger.exception("Notification replay failed; continuing startup")
     scheduler_service = get_scheduler_service()
     scheduler_service.start()
     process_registry = asyncio.create_task(_warm_process_registry())
@@ -225,7 +252,10 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             maintenance.cancel()
         if pipeline_recovery is not None:
             pipeline_recovery.cancel()
+        if notification_replay is not None:
+            notification_replay.cancel()
         job_service.set_event_consumer(None)
+        pipeline_runner.set_event_consumer(None)
         openeo_service.set_event_consumer(None)
         # The listener goes first: a delivery a job records from here on is reconciled at the
         # next start. The delivery provider is deliberately left in place. The executor does
