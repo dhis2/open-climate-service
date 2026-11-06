@@ -232,7 +232,7 @@
                       {% if stopped and not read_only %}<form method="post" action="{{ mount }}/pipelines/{{ spec.id }}/runs/{{ r.run_id }}/retry" class="form-actions"><button type="submit">Run again</button></form>{% endif %}
                     </td>
                     <td>
-                      {% if r.delivery_job_id %}<a href="{{ mount }}{{ r.delivery_status_url }}">{{ r.delivery_status }}</a>{% if r.delivery_outcome %} <span class="chip {{ 'chip-published' if r.delivery_outcome in ['success', 'dry_run'] else 'chip-unpublished' }}">{{ r.delivery_outcome }}</span>{% if r.delivery_submitted is not none %} {{ r.delivery_submitted }} values, {{ r.delivery_conflicts }} conflicts{% endif %}{% endif %}
+                      {% if r.delivery_job_id %}<a href="{{ r.links.delivery }}">{{ r.delivery_status }}</a>{% if r.delivery_outcome %} <span class="chip {{ 'chip-published' if r.delivery_outcome in ['success', 'dry_run'] else 'chip-unpublished' }}">{{ r.delivery_outcome }}</span>{% if r.delivery_submitted is not none %} {{ r.delivery_submitted }} values, {{ r.delivery_conflicts }} conflicts{% endif %}{% endif %}
                       {% if r.delivery_result %}<span class="chip {{ 'chip-published' if r.delivery_result in ['delivered', 'validated', 'acknowledged'] else 'chip-unpublished' }}">{{ r.delivery_result }}</span>{% endif %}
                       {% if r.delivery_result in ['partial', 'rejected', 'unknown', 'failed', 'cancelled'] and not read_only %}
                       {% if r.error %}<small>{{ r.error }}</small>{% endif %}

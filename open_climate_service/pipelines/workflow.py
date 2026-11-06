@@ -9,7 +9,7 @@ workflow registry (`openeo.workflows`), and feature collections are bound with t
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from open_climate_service.automation.service import (
     _feature_versions,
@@ -119,6 +119,28 @@ def _type_problem(name: str, schema: dict[str, Any], value: Any) -> str | None:
     if isinstance(expected, str) and expected in checks and not checks[expected](value):
         return f"'{name}' must be a non-empty {expected}" if expected == "string" else f"'{name}' must be {expected}"
     return None
+
+
+def inputs(reference: WorkflowReference) -> list[tuple[Literal["dataset", "features"], str, str]]:
+    """``(kind, id, parameter)`` for each dataset and feature collection the reference binds.
+
+    Read from the arguments and the workflow's declared parameters without binding, so a
+    pipeline whose workflow no longer binds still shows what it reads. A dataset is a
+    ``collection-id`` argument; a feature collection is a ``from_features`` reference anywhere
+    in an argument. A workflow that is gone declares nothing, so only its collections show.
+    """
+    record = workflow_registry.get_workflow(reference.id)
+    declared = {str(p["name"]): p for p in parameters(record)} if record is not None else {}
+    found: list[tuple[Literal["dataset", "features"], str, str]] = []
+    for name, value in reference.arguments.items():
+        if isinstance(value, str) and _schema(declared.get(name, {})).get("subtype") == COLLECTION_ID:
+            found.append(("dataset", value, name))
+            continue
+        try:
+            found.extend(("features", collection_id, name) for collection_id in _iter_feature_references(value))
+        except ValueError:
+            continue
+    return found
 
 
 def bind(reference: WorkflowReference) -> BoundWorkflow:

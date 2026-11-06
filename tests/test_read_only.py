@@ -38,7 +38,9 @@ _MUTATING_ROUTES = [
     ("DELETE", "/schedules/sync/{dataset_id}"),
     ("POST", "/schedules/sync/{dataset_id}/delete"),
     ("POST", "/pipelines"),
-    ("POST", "/pipelines/{pipeline_id}"),
+    ("POST", "/pipelines/new"),
+    ("PUT", "/pipelines/{pipeline_id}"),
+    ("POST", "/pipelines/{pipeline_id}/edit"),
     ("DELETE", "/pipelines/{pipeline_id}"),
     ("POST", "/pipelines/{pipeline_id}/delete"),
     ("POST", "/pipelines/{pipeline_id}/validate"),
@@ -96,8 +98,14 @@ def read_only() -> Iterator[None]:
 
 @pytest.fixture
 def ro_client(read_only: None) -> Generator[TestClient, None, None]:
+    from open_climate_service.jobs.service import reset_job_service
+    from open_climate_service.openeo.jobs import reset_openeo_job_service
+
     with TestClient(app) as client:
         yield client
+    # The lifespan shuts the job services down; later tests in this process need live ones.
+    reset_job_service()
+    reset_openeo_job_service()
 
 
 # --- the policy as a pure function ---------------------------------------------------

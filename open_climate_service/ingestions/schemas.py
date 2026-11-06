@@ -454,6 +454,9 @@ class ArtifactProvenance(BaseModel):
     output_snapshot_id: str | None = Field(
         default=None, description="Id of the Icechunk snapshot the producing job committed."
     )
+    ocs_version: str | None = Field(
+        default=None, description="Version of Open Climate Service that ran the producing job."
+    )
     execution: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -693,11 +696,48 @@ class DatasetVersionRecord(BaseModel):
     )
 
 
+class DatasetInput(BaseModel):
+    """One dataset a workflow-produced dataset was computed from, as the producing job read it."""
+
+    dataset_id: str = Field(description="Id of the input dataset.")
+    source_dataset_id: str | None = Field(
+        default=None, description="Data source the input was itself derived from, when it was."
+    )
+    artifact_id: str | None = Field(default=None, description="Artifact the producing job read.")
+    snapshot_id: str | None = Field(default=None, description="Icechunk snapshot the producing job read.")
+    current_snapshot_id: str | None = Field(
+        default=None, description="Snapshot the input is at now, when it is an Icechunk store."
+    )
+    changed: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the input has been updated since the producing job read it. None when that "
+            "cannot be told: the job did not record what it read, the input has no snapshots (a "
+            "feature collection), or it is no longer published."
+        ),
+    )
+    href: str = Field(description="Relative API path of the input dataset.")
+
+
+class DatasetProvenance(BaseModel):
+    """How a workflow-produced dataset was made. The production time is the dataset's `last_updated`."""
+
+    producer_job_id: str = Field(description="Id of the openEO job whose save_result produced the dataset.")
+    producer_job_href: str = Field(description="Relative API path of the producing job.")
+    process_sha256: str | None = Field(default=None, description="Digest of the process graph the job ran.")
+    ocs_version: str | None = Field(default=None, description="Version of Open Climate Service that ran the job.")
+    output_snapshot_id: str | None = Field(default=None, description="Icechunk snapshot the job committed.")
+    inputs: list[DatasetInput] = Field(default_factory=list, description="Datasets the job read.")
+
+
 class DatasetDetailRecord(DatasetRecord):
     """Detailed native FastAPI view of a managed dataset."""
 
     versions: list[DatasetVersionRecord] = Field(
         description="Slim version history derived from internal artifact records."
+    )
+    provenance: DatasetProvenance | None = Field(
+        default=None, description="How the dataset was produced, for one produced by a workflow; None when ingested."
     )
 
 

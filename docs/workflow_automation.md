@@ -160,6 +160,14 @@ pipeline on a derived dataset needs nothing special.
   snapshot the job committed. The artifact records it under `provenance`, with the producing
   job and the execution evidence (process digest and input artifacts, source datasets and input
   snapshots); its logical `version` stays empty unless OCS releases the dataset.
+- **Provenance is shown, and so is an input that has moved on.** `GET /datasets/{id}` returns
+  it under `provenance`: the producing job, the process digest, the OCS version that ran it and
+  each input with the snapshot the job read. An input is `changed` when what `load_collection`
+  would read now is another artifact or another snapshot, so a dataset computed before its
+  input's last sync says so; the dataset page shows the same. The STAC collection links each
+  input as `derived_from` and names this instance as its `processor` provider, which carries the
+  processing time and OCS version. Nothing recomputes it: running the workflow again records new
+  provenance, and the earlier job stays.
 
 The job records its intent before writing, marks the publication `committing` at the
 cancellation gate just before the commit, and writes the outcome and event together after

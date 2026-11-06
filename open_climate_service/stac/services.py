@@ -53,6 +53,7 @@ PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/sche
 RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
 WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
+PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
@@ -237,6 +238,16 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
                 "title": licence.name or licence.identifier or "Licence",
             }
         )
+    for recorded in ingestion_services.recorded_inputs(artifact):
+        input_id = str(recorded["collection_id"])
+        template_links.append(
+            {
+                "rel": "derived_from",
+                "href": absolute_url(request, f"/stac/collections/{path_segment(input_id)}"),
+                "type": "application/json",
+                "title": input_id,
+            }
+        )
     collection_payload["links"] = template_links
     assets = collection_payload.setdefault("assets", {})
     zarr_from_xstac = assets.get("zarr", {}) if isinstance(assets, dict) else {}
@@ -288,6 +299,11 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
         )
     collection_payload["license"] = template.license
     providers = _build_providers(source_dataset)
+    if artifact.provenance is not None:
+        providers.append(_processor_provider(artifact, request))
+        collection_payload["stac_extensions"] = sorted(
+            {*collection_payload.get("stac_extensions", []), PROCESSING_EXTENSION}
+        )
     if providers:
         collection_payload["providers"] = providers
     _remove_helper_variables(collection_payload)
@@ -595,6 +611,23 @@ def _collection_description(dataset_id: str, artifact: ArtifactRecord, source_da
         return description.strip()
     logger.debug("Dataset %s declares no description; using the generated one", dataset_id)
     return f"Published GeoZarr dataset for {artifact.dataset_name}"
+
+
+def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str, Any]:
+    """This instance as the `processor` of a workflow-produced collection.
+
+    The processing extension accepts its fields on a Collection only under a producer or
+    processor provider, an asset, or summaries; at the root they do not validate.
+    """
+    provider: dict[str, Any] = {
+        "name": _get_catalog_title(),
+        "roles": ["processor"],
+        "url": absolute_url(request, "/"),
+        "processing:datetime": artifact.created_at.isoformat().replace("+00:00", "Z"),
+    }
+    if artifact.provenance is not None and artifact.provenance.ocs_version is not None:
+        provider["processing:software"] = {"open-climate-service": artifact.provenance.ocs_version}
+    return provider
 
 
 def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:
