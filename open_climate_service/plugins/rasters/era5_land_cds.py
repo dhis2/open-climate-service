@@ -207,7 +207,7 @@ class ERA5LandCDSDailyFromHourlyPlugin(ERA5LandCDSHourlyPlugin):
         return daily
 
 
-class ERA5LandCDSZarrDailyRelHumPlugin(BaseDatasetPlugin):
+class ERA5LandCDSDailyRelHumPlugin(BaseDatasetPlugin):
     """Daily relative humidity from hourly ERA5-Land 2 m temperature and dewpoint.
 
     RH is computed for each hour before the daily reduction: saturation vapour pressure is
@@ -231,12 +231,13 @@ class ERA5LandCDSZarrDailyRelHumPlugin(BaseDatasetPlugin):
             )
         self.temporal_aggregation = temporal_aggregation
         # Both inputs stay in Kelvin; the two caches share the configured budget.
-        self._temperature = ERA5LandCDSZarrHourlyPlugin(variable="t2m", max_cache_bytes=max_cache_bytes // 2)
-        self._dewpoint = ERA5LandCDSZarrHourlyPlugin(variable="d2m", max_cache_bytes=max_cache_bytes // 2)
+        self._temperature = ERA5LandCDSHourlyPlugin(variable="t2m", max_cache_bytes=max_cache_bytes // 2)
+        self._dewpoint = ERA5LandCDSHourlyPlugin(variable="d2m", max_cache_bytes=max_cache_bytes // 2)
 
     async def periods(self, start: str, end: str) -> list[str]:
+        # Offer a day only once its 23:00 hour is published; neither input is accumulated.
         cutoff = await asyncio.to_thread(self._temperature._fetch_cutoff)
-        return daily_period_ids(start=start, end=end, cutoff=cutoff)
+        return daily_period_ids(start=start, end=end, cutoff=cutoff - timedelta(hours=23))
 
     def fetch_period(self, period_id: str, bbox: list[float], **kwargs: Any) -> xr.Dataset:
         start = np.datetime64(period_id, "D").astype("datetime64[ns]")

@@ -102,7 +102,7 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  sync:\n"
         "    kind: temporal\n"
         "  ingestion:\n"
-        "    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin\n",
+        "    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)

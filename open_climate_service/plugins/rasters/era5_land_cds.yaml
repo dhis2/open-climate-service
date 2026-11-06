@@ -134,7 +134,7 @@
       begin: "1950-01-02"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyFromHourlyPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
       variable: d2m
       temporal_aggregation: mean
@@ -219,7 +219,7 @@
       begin: "1950-01-02"
       resolution: P1D
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSZarrDailyRelHumPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyRelHumPlugin
     params:
       temporal_aggregation: mean
   units: "%"
