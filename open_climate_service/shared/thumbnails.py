@@ -25,6 +25,7 @@ from typing import Any
 
 from open_climate_service import config as api_config
 from open_climate_service.shared.classes import class_colors, classification_from_template
+from open_climate_service.shared.display import display_midpoint
 
 # The longest side is rendered at this size and the other follows, so the aspect ratio is
 # never distorted. Every thumbnail therefore has the same longest side whatever the store's
@@ -254,26 +255,6 @@ def render_png(
 _STRETCH_PERCENTILES = (2.0, 98.0)
 
 
-def declared_midpoint(declared: Any) -> float | None:
-    """Zero when *declared* is a display range symmetric about it, else None.
-
-    A template that declares ``[-5, 5]`` or ``[-30, 30]`` is saying the quantity diverges
-    about zero — an anomaly, or a temperature in Celsius where zero is freezing — and pairs
-    that range with a diverging colormap. One that declares ``[0, 20]`` or ``[0, 4000]`` is
-    saying the opposite. Across the Nepal and Norway instances that split is exact, so the
-    declaration is a better signal than a hardcoded list of diverging colormap names: it also
-    gets ``copernicus_dem_elevation`` right, which pairs the diverging ``Spectral_r`` with a
-    ``[0, 4000]`` range and must *not* be centred.
-    """
-    if not isinstance(declared, (list, tuple)) or len(declared) != 2:
-        return None
-    try:
-        low, high = float(declared[0]), float(declared[1])
-    except (TypeError, ValueError):
-        return None
-    return 0.0 if low < 0.0 and high == -low else None
-
-
 def stretch_range(data: Any, *, midpoint: float | None = None) -> tuple[float, float] | None:
     """The value range a thumbnail should span for *data*, or None if there is nothing to show.
 
@@ -366,7 +347,7 @@ def write_dataset_thumbnail(
 
         display = dataset.get("display")
         display = display if isinstance(display, dict) else {}
-        clim = stretch_range(chosen.values, midpoint=declared_midpoint(display.get("range")))
+        clim = stretch_range(chosen.values, midpoint=display_midpoint(display))
         if clim is None:
             logger.warning("Every value in the slice chosen for '%s' is missing; no thumbnail", dataset_id)
             return None

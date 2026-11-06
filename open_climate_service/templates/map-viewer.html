@@ -743,6 +743,7 @@
           ? classColormap(classes, colors)
           : {
               cm: buildColormap(renders.colormap_name ?? "viridis"),
+              // No rescale until the dataset has a declared or measured range.
               clim: renders.rescale?.[0] ?? [0, 100],
             };
         const fillValue = renders.nodata ?? null;

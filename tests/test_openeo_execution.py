@@ -1919,8 +1919,8 @@ def test_persist_result_auto_registers_missing_template(
     assert template["variable"] == "pop_change"
     assert template["period_type"] == "yearly"
     assert template["units"] == "people"
-    assert template["display"]["colormap"] == "RdBu"
-    assert template["display"]["range"] == [-1.0, 1.0]
+    # Centred on zero, with no range of its own: the published dataset's statistics give it one.
+    assert template["display"] == {"colormap": "RdBu", "midpoint": 0.0}
 
     record, publish_flag = registered[0]
     assert record.dataset_id == "worldpop_population_change_autogen"
@@ -2359,4 +2359,22 @@ def test_derived_anomaly_colormap_runs_the_way_the_variable_is_read(units: str, 
 
     display = _derive_display_config(ds, "value", "derived_anomaly", {}, None, "Anomaly")
 
-    assert display["colormap"] == expected_colormap
+    assert display == {"colormap": expected_colormap, "midpoint": 0.0}
+
+
+def test_a_derived_output_inherits_how_its_source_is_read_but_not_its_range() -> None:
+    """A monthly total of daily rainfall seldom spans its source's 0-20 mm; the store's own
+    statistics give the range, while the colormap, midpoint and nodata still apply."""
+    from open_climate_service.openeo.jobs import _derive_display_config
+
+    ds = xr.Dataset({"value": xr.DataArray(np.array([[0.0, 310.0]], dtype=np.float32), dims=("y", "x"))})
+    source = {"display": {"colormap": "blues", "range": [0.0, 20.0], "midpoint": 5.0, "nodata": -9999.0}}
+
+    assert _derive_display_config(ds, "value", "precip_monthly", {}, source, None) == {
+        "colormap": "blues",
+        "midpoint": 5.0,
+        "nodata": -9999.0,
+    }
+    # A range the job declares is still kept.
+    declared = _derive_display_config(ds, "value", "precip_monthly", {"range": [0, 400]}, source, None)
+    assert declared["range"] == [0.0, 400.0]
