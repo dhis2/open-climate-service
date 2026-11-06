@@ -299,7 +299,7 @@ Relative humidity from daily means is an estimate. Saturation vapour pressure is
 | `variable` | Variable/band name of the published dataset, e.g. `rh` |
 | `temporal_extent` | Range `[start, end]` |
 
-Both inputs must be on the same grid and time axis, and their data sources must declare temperature units: they are converted to Kelvin from the declared units, and an input without units is refused. For ERA5-Land, Open Climate Service ships the static template `era5land_relative_humidity_daily_estimated`; any other `output_dataset_id` is auto-registered, taking `%` from the result and the rest of its metadata from the dewpoint dataset. Re-run the workflow over the new range after the inputs sync to keep it current.
+Both inputs must be on the same grid and time axis, and their data sources must declare temperature units: they are converted to Kelvin from the declared units, and an input without units is refused. The output dataset is auto-registered on the first run, taking `%` from the result and the rest of its metadata from the dewpoint dataset. Each run replaces the whole published dataset, so keep it current by re-running the workflow over the full range, from the original start to the new end, after the inputs sync.
 
 ### Example
 
