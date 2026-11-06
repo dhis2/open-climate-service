@@ -149,10 +149,10 @@ _store_locks_mutex = threading.Lock()
 _consolidated_metadata_cache: dict[str, dict[str, object]] = {}
 _MAX_CONSOLIDATED_CACHE_ENTRIES = 512
 
-# Published raster artifacts for the store routes: (records.json identity, dataset_id → artifact).
-# A map view requests hundreds of chunks, and resolving the dataset from scratch reads, validates
-# and path-resolves every record on the instance each time. Invalidated when records.json changes.
-_store_artifacts_cache: tuple[tuple[str, int, int], dict[str, "ArtifactRecord"]] | None = None
+# Published raster artifacts for the store routes; see `_latest_published_raster_artifacts_cached`.
+_store_artifacts_cache: tuple[tuple[str, int, int, int], dict[str, "ArtifactRecord"]] | None = None
+# Record writes made by this process, so the cache never misses one of them.
+_records_write_count = 0
 
 
 @dataclass(frozen=True)
@@ -2133,16 +2133,19 @@ def serve_icechunk_file(dataset_id: str, file_path: str) -> FileResponse:
 def _latest_published_raster_artifacts_cached() -> dict[str, ArtifactRecord]:
     """Return `latest_published_raster_artifacts_by_dataset()`, recomputed only when records.json changes.
 
-    Every record write replaces records.json, so its path, modification time and size identify
-    the records the result was computed from. A store deleted from disk without a record change
-    stays in the result until the next write; serving it then fails as a missing path.
+    A map view requests hundreds of chunks, and resolving the dataset from scratch reads, validates
+    and path-resolves every record on the instance each time. Record writes rewrite records.json in
+    place, so the cache is keyed on its path, modification time and size, which catches writes by
+    other processes, and on this process's write count, which catches writes the modification time
+    cannot tell apart where it is coarse. A store deleted from disk without a record change stays in
+    the result until the next write; serving it then fails as a missing path.
     """
     global _store_artifacts_cache
     try:
         stat = ARTIFACTS_INDEX_PATH.stat()
     except OSError:
         return latest_published_raster_artifacts_by_dataset()
-    key = (str(ARTIFACTS_INDEX_PATH), stat.st_mtime_ns, stat.st_size)
+    key = (str(ARTIFACTS_INDEX_PATH), stat.st_mtime_ns, stat.st_size, _records_write_count)
     if _store_artifacts_cache is not None and _store_artifacts_cache[0] == key:
         return _store_artifacts_cache[1]
     artifacts = latest_published_raster_artifacts_by_dataset()
@@ -2468,8 +2471,10 @@ def _load_records() -> list[ArtifactRecord]:
 
 
 def _save_records(records: list[ArtifactRecord]) -> None:
+    global _records_write_count
     ensure_store()
     ARTIFACTS_INDEX_PATH.write_text(_encode_records(records), encoding="utf-8")
+    _records_write_count += 1
 
 
 def _store_artifact_record(record: ArtifactRecord) -> ArtifactRecord:
@@ -2577,6 +2582,7 @@ def _refresh_recorded_size(store_path: Path) -> None:
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
     """Apply a read-modify-write mutation under an exclusive file lock."""
+    global _records_write_count
     ensure_store()
     with ARTIFACTS_INDEX_PATH.open("a+", encoding="utf-8") as handle:
         portalocker.lock(handle, portalocker.LOCK_EX)
@@ -2589,6 +2595,7 @@ def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) 
         handle.write(_encode_records(records))
         handle.flush()
         os.fsync(handle.fileno())
+        _records_write_count += 1
         portalocker.unlock(handle)
         return result
 

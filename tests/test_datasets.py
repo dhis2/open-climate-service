@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -401,6 +402,37 @@ def test_zarr_route_loads_records_only_when_they_change(tmp_path: Path, monkeypa
     assert isinstance(after_write, services.Response)
     assert after_write.body == b"second"
     assert loads == 2
+
+
+def test_zarr_route_sees_a_record_write_the_modification_time_misses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
+    monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
+    artifacts = []
+    for name in ("store", "other"):
+        store_path = tmp_path / f"{name}.zarr"
+        store_path.mkdir()
+        (store_path / "chunk.bin").write_bytes(name.encode())
+        artifact = _artifact(artifact_id="a")
+        artifact.format = ArtifactFormat.ZARR
+        artifact.path = str(store_path)
+        artifact.asset_paths = [str(store_path)]
+        artifacts.append(artifact)
+    services._save_records([artifacts[0]])
+    first = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "chunk.bin")
+    before = services.ARTIFACTS_INDEX_PATH.stat()
+
+    services._save_records([artifacts[1]])
+    # A coarse clock: the second write gets the first one's modification time, at the same size.
+    os.utime(services.ARTIFACTS_INDEX_PATH, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert services.ARTIFACTS_INDEX_PATH.stat().st_size == before.st_size
+    second = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "chunk.bin")
+
+    assert isinstance(first, services.Response)
+    assert isinstance(second, services.Response)
+    assert (first.body, second.body) == (b"store", b"other")
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:
