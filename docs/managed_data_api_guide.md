@@ -580,26 +580,28 @@ curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?collection=districts
 curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?format=csv"
 ```
 
-Each row names its `collection_id`, `feature_id`, `period` (the start date), `value`, `unit`,
-and, for computed rows, the `reducer`, the `weights` dataset and `coverage`, the share of the unit
-with valid cells. A value per class (people per hazard class, say) has a `class`; other rows have
-none. A missing value is `null`, or an empty cell in CSV, never 0.
+Each row names its `collection_id`, `feature_id`, its period, `value`, `unit`, and, for computed
+rows, the `reducer`, the `weights` dataset and `coverage`, the share of the unit with valid cells. A
+value per class (people per hazard class, say) has a `class`; other rows have none. A missing value
+is `null`, or an empty cell in CSV, never 0.
 
-A table dataset has one period type, shown as `period_type` on `/datasets`: whether `period` starts
-a day, a month or a year. Rows with another period type are refused, and each stored Parquet file
-carries it in its metadata as `ocs:period_type`, for readers of the files themselves. `period` is
-always the first day of the period: January 2026 is `2026-01-01`, an ISO week its Monday, a dekad
-the 1st, 11th or 21st. A row dated otherwise, such as a month labelled by its last day the way
-`aggregate_temporal_period` labels it, is stored at its period's start. Each row in the API also
-has a `period_label` naming the period the way raster datasets name theirs (`2026-01`, `2026-W01`,
-`2026-Q2`, `2026`), and the dataset's extent on `/datasets` uses the same labels. The label is for
-reading only: filters and the stored files use the date.
+A period is given three ways: `period` names it as raster datasets name theirs (`2026-01`,
+`2026-W01`, `2026-Q2`, `2026`; a day or a dekad by its date), and `period_start` and `period_end`
+are its first and last day (`2026-01-01` and `2026-01-31` for January 2026, a Monday and a Sunday
+for an ISO week). Only `period_start` is stored; the other two follow from it and the dataset's
+period type, shown as `period_type` on `/datasets`. The dataset's extent there uses the `period`
+names.
+
+A table dataset has one period type. Rows with another period type are refused, and each stored
+Parquet file carries it in its metadata as `ocs:period_type`, for readers of the files themselves. A
+row dated other than on its period's first day, such as a month labelled by its last day the way
+`aggregate_temporal_period` labels it, is stored at its period's start.
 
 Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
 the latest row for each feature, period, class, reducer and weights. Add `history=true` for every
 row ever written.
 
-Filters: `collection`, `start` and `end` (inclusive period starts), `reducer` and `weights`. Only
+Filters: `collection`, `start` and `end` (inclusive bounds on `period_start`), `reducer` and `weights`. Only
 published table datasets are served.
 
 A pipeline with the `table` destination keeps its workflow's value per feature and period as a

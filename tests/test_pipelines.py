@@ -3345,7 +3345,7 @@ def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
         assert client.post("/pipelines", json=_TABLE_SPEC).status_code == 201
         dry = client.post("/pipelines/rain-to-table/dry-run", json={"start": "2025-01-01", "end": "2025-02-28"}).json()
         assert dry["error"] is None and dry["values"] == 4, dry
-        assert dry["periods"] == ["2025-01-01", "2025-02-01"]
+        assert dry["periods"] == ["2025-01", "2025-02"]
         assert dry["report"]["outcome"] == "dry_run"
         assert dry["sample"][0]["feature"] == {"value": _OU[0], "label": "Bo"}
         assert dry["sample"][0]["reducer"] == "mean"
@@ -3370,10 +3370,10 @@ def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
 
         first = current()
         assert [(feature, period) for feature, period, _ in first] == [
-            (_OU[0], "2025-01-01"),
-            (_OU[0], "2025-02-01"),
-            (_OU[1], "2025-01-01"),
-            (_OU[1], "2025-02-01"),
+            (_OU[0], "2025-01"),
+            (_OU[0], "2025-02"),
+            (_OU[1], "2025-01"),
+            (_OU[1], "2025-02"),
         ]
         row = client.get("/tables/rain_districts/rows").json()["items"][0]
         assert row["feature_name"] == "Bo" and row["reducer"] == "mean" and row["collection_id"] == "districts"

@@ -56,7 +56,7 @@ def stores(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 def _row(feature_id: str, value: float | None, **extra: Any) -> dict[str, Any]:
-    return {"feature_id": feature_id, "period": "2026-01-01", "value": value, "reducer": "mean", **extra}
+    return {"feature_id": feature_id, "period_start": "2026-01-01", "value": value, "reducer": "mean", **extra}
 
 
 def _write(rows: list[dict[str, Any]], written_at: datetime = FIRST) -> Any:
@@ -83,20 +83,22 @@ def test_written_rows_are_listed_as_a_table_dataset_and_served_as_json_and_csv(c
     assert {"rel": "rows", "href": "/tables/precip_districts/rows", "title": "Table rows"} in table["links"]
 
     rows = client.get("/tables/precip_districts/rows").json()["items"]
-    assert [(row["feature_id"], row["value"], row["period"], row["period_label"]) for row in rows] == [
-        ("D1", 12.5, "2026-01-01", "2026-01"),
-        ("D2", None, "2026-01-01", "2026-01"),
+    assert [
+        (row["feature_id"], row["value"], row["period"], row["period_start"], row["period_end"]) for row in rows
+    ] == [
+        ("D1", 12.5, "2026-01", "2026-01-01", "2026-01-31"),
+        ("D2", None, "2026-01", "2026-01-01", "2026-01-31"),
     ]
-    assert list(rows[0])[4:6] == ["period", "period_label"]
+    assert list(rows[0])[4:7] == ["period", "period_start", "period_end"]
     assert rows[0]["collection_id"] == "districts"
     assert rows[0]["dataset_id"] == "precip_districts"
 
     response = client.get("/tables/precip_districts/rows", params={"format": "csv"})
     assert response.headers["content-type"].startswith("text/csv")
     parsed = list(csv.DictReader(io.StringIO(response.text)))
-    assert [(row["feature_id"], row["value"], row["period_label"]) for row in parsed] == [
-        ("D1", "12.5", "2026-01"),
-        ("D2", "", "2026-01"),
+    assert [(row["feature_id"], row["value"], row["period"], row["period_end"]) for row in parsed] == [
+        ("D1", "12.5", "2026-01", "2026-01-31"),
+        ("D2", "", "2026-01", "2026-01-31"),
     ]
 
 
@@ -127,7 +129,7 @@ def test_rows_are_filtered_by_collection_period_reducer_and_weights() -> None:
     _write(
         [
             _row("D1", 1.0),
-            _row("D1", 2.0, period="2026-02-01"),
+            _row("D1", 2.0, period_start="2026-02-01"),
             _row("D1", 3.0, reducer="max"),
             _row("D1", 4.0, weights="population"),
         ]
@@ -175,9 +177,9 @@ def test_a_failed_write_leaves_no_file(monkeypatch: pytest.MonkeyPatch, stores: 
     [
         (_row("D9", 1.0), "feature 'D9' is not in feature collection 'districts'"),
         (_row("D1", 0.0, coverage=0.0), "has coverage 0"),
-        ({"feature_id": "D1", "period": "2026-01-01"}, "missing required columns ['value']"),
+        ({"feature_id": "D1", "period_start": "2026-01-01"}, "missing required columns ['value']"),
         (_row("D1", 1.0, colour="red"), "unknown columns ['colour']"),
-        (_row("D1", 1.0, period="2026-01"), "period must be a date"),
+        (_row("D1", 1.0, period_start="2026-01"), "period_start must be a date"),
         (_row("D1", math.inf), "value must be finite"),
         (_row("D1", 1.0, coverage=1.5), "coverage must be between 0 and 1"),
         (_row("D1", 1.0, dataset_id="other"), "does not match"),
@@ -207,7 +209,7 @@ def test_checking_rows_returns_the_table_a_write_would_append_and_writes_nothing
         "collection_id": "districts",
         "dataset_id": "precip_districts",
         "feature_id": "D1",
-        "period": date(2026, 1, 1),
+        "period_start": date(2026, 1, 1),
         "value": 12.5,
         "coverage": 1.0,
         "reducer": "mean",
@@ -379,14 +381,14 @@ def test_a_destination_payload_for_another_period_type_is_rejected(stores: Path)
     ],
 )
 def test_a_period_is_stored_as_its_start(period_type: str | None, day: date, start: date) -> None:
-    assert store.period_start(day, period_type) == start
+    assert store.start_of_period(day, period_type) == start
 
 
 def test_a_month_labelled_by_its_last_day_is_the_same_value_as_its_first() -> None:
-    _write([_row("D1", 10.0, period="2026-01-31")], written_at=FIRST)
-    record = _write([_row("D1", 11.0, period="2026-01-01")], written_at=LATER)
+    _write([_row("D1", 10.0, period_start="2026-01-31")], written_at=FIRST)
+    record = _write([_row("D1", 11.0, period_start="2026-01-01")], written_at=LATER)
     current = store.read_rows(record).to_pylist()
-    assert [(row["period"], row["value"]) for row in current] == [(date(2026, 1, 1), 11.0)]
+    assert [(row["period_start"], row["value"]) for row in current] == [(date(2026, 1, 1), 11.0)]
 
 
 def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -452,12 +454,12 @@ def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkey
 
     # The source dataset is daily, as the pipeline compiled it; the result says it is monthly.
     rendered = plugin.render(result, plugin.validate_mapping({**_MAPPING, "period_type": "daily"}))
-    assert rendered.periods == ("2026-01-01", "2026-02-01")
+    assert rendered.periods == ("2026-01", "2026-02")
     plugin.send(rendered.content, "tables")
     record = ingestion_services.published_table_artifacts_by_dataset()["precip_districts"]
     assert record.period_type == "monthly"
     rows = store.read_rows(record).to_pylist()
-    assert {(row["period"], row["value"]) for row in rows if row["feature_id"] == "D1"} == {
+    assert {(row["period_start"], row["value"]) for row in rows if row["feature_id"] == "D1"} == {
         (date(2026, 1, 1), 31.0),
         (date(2026, 2, 1), 28.0),
     }
@@ -485,7 +487,7 @@ def test_an_empty_csv_still_names_every_column(client: TestClient) -> None:
     _write([_row("D1", 1.0)])
     response = client.get("/tables/precip_districts/rows", params={"format": "csv", "start": "2030-01-01"})
     header = response.text.splitlines()[0].split(",")
-    assert header[4:6] == ["period", "period_label"] and len(header) == len(store.SCHEMA.names) + 1
+    assert header[4:7] == ["period", "period_start", "period_end"] and len(header) == len(store.SCHEMA.names) + 2
 
 
 def test_a_filter_that_matches_nothing_returns_no_rows(client: TestClient) -> None:
@@ -493,3 +495,19 @@ def test_a_filter_that_matches_nothing_returns_no_rows(client: TestClient) -> No
     for history in ("false", "true"):
         response = client.get("/tables/precip_districts/rows", params={"start": "2030-01-01", "history": history})
         assert response.status_code == 200 and response.json()["items"] == []
+
+
+@pytest.mark.parametrize(
+    ("period_type", "start", "end"),
+    [
+        ("daily", date(2026, 1, 15), date(2026, 1, 15)),
+        ("weekly", date(2025, 12, 29), date(2026, 1, 4)),
+        ("dekadal", date(2026, 2, 21), date(2026, 2, 28)),
+        ("monthly", date(2024, 2, 1), date(2024, 2, 29)),
+        ("quarterly", date(2026, 10, 1), date(2026, 12, 31)),
+        ("yearly", date(2026, 1, 1), date(2026, 12, 31)),
+        (None, date(2026, 1, 1), None),
+    ],
+)
+def test_a_period_ends_on_its_last_day(period_type: str | None, start: date, end: date | None) -> None:
+    assert store.end_of_period(start, period_type) == end
