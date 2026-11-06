@@ -1,15 +1,17 @@
-# Export plugins and named mappings
+# Destination plugins and named mappings
 
-Named exports render a computed aggregate using a mapping in instance configuration.
-They work with synchronous `POST /result` and batch jobs. Rendering does not contact
-DHIS2, resolve a credential, fetch organisation units, or run another aggregation.
+A destination plugin renders a computed result and delivers it somewhere: the built-in
+`dhis2` plugin to a DHIS2 instance. A named destination in instance configuration binds a
+plugin to its mapping, and a pipeline or a workflow trigger delivers through it. Rendering
+works with synchronous `POST /result` and batch jobs, and does not contact DHIS2, resolve a
+credential, fetch organisation units, or run another aggregation; only delivery does.
 
 ## Render one series for DHIS2
 
-Add an export to the file referenced by `CLIMATE_SERVICE_CONFIG`:
+Add a destination to the file referenced by `CLIMATE_SERVICE_CONFIG`:
 
 ```yaml
-exports:
+destinations:
   - id: rainfall-monthly
     plugin: dhis2
     period_type: monthly
@@ -33,7 +35,7 @@ Pass the prepared aggregate to `save_result`:
   "arguments": {
     "data": {"from_node": "aggregate"},
     "format": "DHIS2JSON",
-    "options": {"export": "rainfall-monthly"}
+    "options": {"destination": "rainfall-monthly"}
   },
   "result": true
 }
@@ -41,12 +43,12 @@ Pass the prepared aggregate to `save_result`:
 
 This is a graph node; `aggregate` must be a preceding node in the full graph.
 The built-in `aggregate_to_dhis2_json` workflow wraps this aggregation and
-`save_result` call, taking the export ID as its `export` parameter. See
-[Importing data to DHIS2](importing_to_dhis2.md#automated-delivery-with-a-named-export).
-Named exports accept only the `export` option. Change the configured mapping to
+`save_result` call, taking the destination ID as its `destination` parameter. See
+[Importing data to DHIS2](importing_to_dhis2.md#automated-delivery-with-a-named-destination).
+Named destinations accept only the `destination` option. Change the configured mapping to
 change its destination or fields; per-request overrides are rejected. Hand-written
 `DHIS2JSON` graphs using `data_element_id`, `org_unit_field`, and `period_type`
-still render an ad-hoc payload without a named export, but that payload cannot be
+still render an ad-hoc payload without a named destination, but that payload cannot be
 delivered by the server.
 
 Each series mapping selects one value series. `select: {}` requires
@@ -54,7 +56,7 @@ an unambiguous value column. To select a variable from a result with several
 variables, use `select: {variable: precip}`. Additional dimensions such as
 quantile can be selected with `select: {variable: precip, quantile: 0.1}`;
 other dimensions, such as ensemble member, must be reduced upstream. Several datasets
-can be published through separate single-series exports; no merged cube is required.
+can be published through separate single-series destinations; no merged cube is required.
 
 The series may also specify `category_option_combo` and `attribute_option_combo`.
 When several series target the same data element, specify each combo consistently
@@ -77,7 +79,7 @@ The optional `dataset`, `org_units`, and `connection` references, and the option
 `aggregation` declaration (`mean`, `sum`, `min`, `max`, or `median`), describe
 intended input/delivery configuration. They do not trigger any work. Synchronous
 and batch renders check them against execution provenance where it contains an
-observation, and batch exports bind them to a manifest. The dataset must match an
+observation, and batch renders bind them to a manifest. The dataset must match an
 observed source. The aggregation is checked when exactly one spatial aggregation 
 process ran — either the built-in `aggregate_spatial` with a `reduce_by_method` reducer, 
 or the custom `aggregate_spatial_weighted` with a parsed reducer string, as the built-in 
@@ -90,25 +92,25 @@ is required for later server-side delivery. Use
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)
 for that binding.
 
-### The export's period must be reachable from the dataset's cadence
+### The destination's period must be reachable from the dataset's cadence
 
-An export exports what exists. `period_type` labels; it never aggregates, and neither does
-anything else on the export path. So the export has to say how its period relates to the
+A destination delivers what exists. `period_type` labels; it never aggregates, and neither does
+anything else on the destination path. So the destination has to say how its period relates to the
 dataset it declares, and OCS checks it twice: at startup, from the dataset template's
 `period_type`, and at render time, from the spacing of the data actually being exported.
 
-| Dataset cadence | Export `period_type` | Outcome |
+| Dataset cadence | Destination `period_type` | Outcome |
 | --- | --- | --- |
 | the same | the same | Pass-through. No `temporal_aggregation`; declaring one is refused. |
-| finer, and tiling the period | coarser | Exportable only after an explicit aggregation. `temporal_aggregation: sum \| mean \| min \| max` declares which, and the export verifies that it ran. |
+| finer, and tiling the period | coarser | Exportable only after an explicit aggregation. `temporal_aggregation: sum \| mean \| min \| max` declares which, and the destination verifies that it ran. |
 | anything else | | Refused, with the reason. |
 
-Producing the coarser data is openEO's job, not the export's, and there are two ways to do it.
+Producing the coarser data is openEO's job, not the destination's, and there are two ways to do it.
 Publish a derived dataset (`load_collection`, `aggregate_temporal_period`, `save_result` as
-Zarr with a `dataset_id`) and point the export at that dataset, which then needs no
-declaration at all. Or put `aggregate_temporal_period` in the graph that feeds the export and
+Zarr with a `dataset_id`) and point the destination at that dataset, which then needs no
+declaration at all. Or put `aggregate_temporal_period` in the graph that feeds the destination and
 declare its reducer as `temporal_aggregation`. The built-in org-unit workflows do neither:
-given a dataset finer than the export's period, they are refused.
+given a dataset finer than the destination's period, they are refused.
 
 A derived dataset is published by an openEO job, and that job records a `dataset.updated`
 event when the publication succeeds, so a workflow trigger or a pipeline listens for it the
@@ -122,12 +124,12 @@ tile arithmetically, but the standard process has no calendar-quarter period wit
 produce and record them. Nothing can be made finer than it is stored.
 
 `aggregate_dekads(period="week")` is a separate, day-overlap-weighted transformation rather
-than a tiling aggregation. Its weekly result can be exported ad hoc, or published as a derived
-weekly dataset and then used by a named export. A named weekly export declared directly against
+than a tiling aggregation. Its weekly result can be rendered ad hoc, or published as a derived
+weekly dataset and then used by a named destination. A named weekly destination declared directly against
 the original dekadal dataset is still refused at startup.
 
 ```yaml
-exports:
+destinations:
   - id: rainfall-monthly
     plugin: dhis2
     dataset: chirps3_precipitation_daily
@@ -141,7 +143,7 @@ exports:
 
 When the graph aggregates, a destination period counts only when every source period inside
 it is present. A sync that ends on the 14th does not produce that month: the job fails naming
-the period, unless the export says `incomplete_periods: drop`, in which case the period is
+the period, unless the destination says `incomplete_periods: drop`, in which case the period is
 left out and the rest is delivered. Execution provenance records each temporal aggregation
 (its period, reducer and incomplete periods), so a declared `temporal_aggregation` is verified
 against what ran, the way the spatial `aggregation` is. A derived dataset carries no such
@@ -151,50 +153,81 @@ A hand-written graph gets the same guard at `save_result`: a `period_type` coars
 result's spacing is refused with the `aggregate_temporal_period` step to add, instead of
 collapsing several values onto one DHIS2 key.
 
-## Write a render-only plugin
+## Write a destination plugin
 
-Export plugins implement the public `BaseExportPlugin` contract and expose an
-instance named `plugin` in each discoverable module:
+Destination plugins implement the public `BaseDestinationPlugin` contract and expose an
+instance named `plugin` in each discoverable module. Every plugin delivers: `validate_mapping`,
+`render` and `send` are all required, and a module whose plugin lacks one is skipped with a
+warning. This one writes a summary of each result to a folder:
 
 ```python
+import hashlib
 import json
+from datetime import UTC, datetime
+from pathlib import Path
 
-from open_climate_service.exports import BaseExportPlugin, RenderedExport
+from open_climate_service.destinations import BaseDestinationPlugin, RenderedPayload
+from open_climate_service.destinations.report import DeliveryOutcome, DeliveryReport
 
 
-class SummaryExport(BaseExportPlugin):
+class SummaryDestination(BaseDestinationPlugin):
     id = "summary"
     format = "SUMMARYJSON"
     extension = ".json"
     media_type = "application/json"
+    version = "1"
 
     def validate_mapping(self, mapping):
-        if mapping:
-            raise ValueError("Summary export does not accept mapping fields")
-        return {}
+        if set(mapping) - {"folder"}:
+            raise ValueError("Summary destination accepts only a folder")
+        return mapping
 
     def render(self, data, mapping):
         payload = {"variables": list(data.data_vars)}
-        return RenderedExport(json.dumps(payload).encode(), record_count=len(data.data_vars))
+        return RenderedPayload(json.dumps(payload).encode(), record_count=len(data.data_vars))
+
+    def target_binding(self, references):
+        return {"folder": "/srv/summaries"}
+
+    def delivery_target(self, binding):
+        return binding["folder"]
+
+    def send(self, payload, target, *, dry_run=False, context=None):
+        digest = hashlib.sha256(payload).hexdigest()
+        if not dry_run:
+            (Path(target) / f"{digest}.json").write_bytes(payload)
+        now = datetime.now(UTC).isoformat()
+        return DeliveryReport(
+            plugin_id=self.id,
+            dry_run=dry_run,
+            outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
+            payload_sha256=digest,
+            submitted=1,
+            imported=0 if dry_run else 1,
+            created_at=now,
+            finished_at=now,
+        )
 
 
-plugin = SummaryExport()
+plugin = SummaryDestination()
 ```
 
-Declare `exports: [{id: summary, plugin: summary}]` and use
-`save_result(format="SUMMARYJSON", options={"export": "summary"})`.
-The format is advertised in `GET /file_formats` with its `export` parameter.
+Declare `destinations: [{id: summary, plugin: summary}]`, render with
+`save_result(format="SUMMARYJSON", options={"destination": "summary"})` in a batch job, and
+deliver the saved payload with `POST /destinations/summary`. Destination formats are not listed
+in `GET /file_formats`: they are reached through a named destination, not chosen as an output
+format.
 
 `render` receives the computed result and the validated mapping. It returns bytes
 and non-negative `record_count` / `skipped_count` values. The framework owns file
-paths, persistence, and HTTP response metadata. Both methods must be pure: no
-network calls, credential resolution, file writes, or delivery. Keep invocation
-state local because plugin instances may be shared by concurrent jobs.
+paths, persistence, and HTTP response metadata. `render` and `validate_mapping` must be pure:
+no network calls, credential resolution or file writes. Only `send` has effects. Keep
+invocation state local because plugin instances may be shared by concurrent jobs.
 
-For an installed package, put the module in `<package>/exports/` and include
+For an installed package, put the module in `<package>/destinations/` and include
 `__init__.py`. Use the same `open_climate_service.plugins` entry point as other
-[installable plugins](installable_plugins.md). No separate export entry point is
-needed. For an instance, put it in `plugins_dir/exports/`; relative helper imports
+[installable plugins](installable_plugins.md). No separate destination entry point is
+needed. For an instance, put it in `plugins_dir/destinations/`; relative helper imports
 are supported. Prefix helper filenames with `_` so discovery skips them.
 
 Precedence is built-in, then installed packages, then local instance plugins,
@@ -210,20 +243,20 @@ Python code and must be trusted by the deployment.
 
 ## Act as a pipeline destination
 
-A [pipeline](web_interface.md#the-pipeline-pages-pipelines) delivers through an export
-plugin, and never interprets the destination's settings itself. A plugin becomes a pipeline
-destination by overriding these optional hooks of `BaseExportPlugin`:
+A [pipeline](web_interface.md#the-pipeline-pages-pipelines) delivers through a destination
+plugin, and never interprets the plugin's settings itself. A plugin is offered to pipelines by
+overriding these optional hooks of `BaseDestinationPlugin`:
 
 | Hook | Purpose |
 |---|---|
-| `destination_settings_schema()` | JSON Schema of the settings; drives the pipeline form. Returning `None` (the default) means "not a destination". |
+| `destination_settings_schema()` | JSON Schema of the settings; drives the pipeline form. Returning `None` (the default) keeps the plugin out of the pipeline form. |
 | `pipeline_settings_form()` | Optional structured presentation metadata for the plugin's pipeline settings: display title and description, sections, field order, labels, help text and widget hints. Returning `None` keeps schema-derived defaults. |
 | `lookup_options(lookup, settings, query)` | The choices the destination offers for a `lookup` field as the form types, from the settings entered so far. May contact the destination; raise `ValueError` naming what is missing. |
 | `lookup_labels(lookup, settings, values)` | How stored lookup values read at the destination, by value. Called at validation; the labels are kept with the result so pages never wait for the destination. |
-| `export_definition(settings, context)` | Compile the settings into an export definition (mapping plus `dataset`/`connection` references), resolved like a configured named export. Pure; raise `ValueError` for bad settings. |
+| `destination_definition(settings, context)` | Compile the settings into a destination definition (mapping plus `dataset`/`connection` references), resolved like a configured named destination. Pure; raise `ValueError` for bad settings. |
 | `check_destination(settings, context)` | Destination-side checks run on save, re-check and going live, returned as `DestinationCheck`s. May contact the destination. |
 | `preview(content, settings, context, labels, limit)` | A few rendered records for the dry-run summary. A cell may be `{"value", "label"}` so an identifier shows by name. `labels` are the names `lookup_labels` resolved at the last validation, so the destination need not be asked again: the DHIS2 plugin names data elements from them, asks DHIS2 only for any missing, and names organisation units from the bound feature collection's id and name columns. |
-| `target_binding(references)` | Credential-free identity of the target the export's references name. Recorded in each saved export's manifest and compared before delivery, so a moved target is refused. Default: the `connection` reference as a named instance connection, `{connection_id, url_sha256}`. |
+| `target_binding(references)` | Credential-free identity of the target the destination's references name. Recorded in each saved payload's manifest and compared before delivery, so a moved target is refused. Default: the `connection` reference as a named instance connection, `{connection_id, url_sha256}`. |
 | `delivery_target(binding)` | What `send` receives for that binding, for both a delivery and a pipeline dry run. Default: the named connection's id. |
 | `redelivery_safe` | `True` when sending the same payload twice leaves the destination as sending it once (an upsert). Only then may an operator send a pipeline delivery again after an unconfirmed outcome. DHIS2 sets it. |
 | `supports_dry_run` | `True` when `send(dry_run=True)` has the destination validate without storing. Without it a pipeline dry run only renders. |
@@ -232,9 +265,9 @@ The target hooks apply to every delivery, not only pipelines. The defaults keep 
 existing delivery plugins rely on, including DHIS2: `send` receives a named connection's id. A
 plugin delivering anywhere else, a database or a file store, overrides both hooks.
 
-`context` is a `DestinationContext`: the pipeline's export id, the datasets its workflow binds
+`context` is a `DestinationContext`: the pipeline's destination id, the datasets its workflow binds
 (id, variable, cadence) and the feature collections it binds. The built-in DHIS2 plugin
-implements all of them in `open_climate_service/exports/dhis2_destination.py`.
+implements all of them in `open_climate_service/destinations/dhis2_destination.py`.
 
 ### Configure the plugin's pipeline settings
 
@@ -244,7 +277,7 @@ validation. `pipeline_settings_form()` only controls presentation. It returns
 overrides:
 
 ```python
-from open_climate_service.exports import (
+from open_climate_service.destinations import (
     PipelineSettingsForm,
     SettingsFormField,
     SettingsFormSection,
@@ -335,15 +368,15 @@ alone do not prove aggregation semantics or per-output lineage.
 The delivery-input validator accepts only completed jobs with intact payloads and
 manifests whose mapping, plugin version, target, references, and process graph still
 match. It holds a cross-process lease that prevents job update, rerun, or deletion
-while a delivery worker consumes the bytes. Older named-export assets remain
+while a delivery worker consumes the bytes. Older named-destination assets remain
 downloadable but are not eligible for automatic delivery.
 
-## Deliver a saved export
+## Deliver a saved payload
 
-Configure `connection` on the export, then submit a completed source job:
+Configure `connection` on the destination, then submit a completed source job:
 
 ```http
-POST /exports/rainfall-monthly
+POST /destinations/rainfall-monthly
 Idempotency-Key: rainfall-job-123-validation
 Content-Type: application/json
 
@@ -355,7 +388,7 @@ source job also links to that delivery. Inspect `report.outcome`, which distingu
 success, dry-run validation, partial imports, rejection, cancellation and unknown
 remote outcomes. A dry run can be rejected; its counts describe validation rather
 than saved writes. Use a new idempotency key to request the actual import with
-`dry_run: false`. Reports are scoped to `/exports/{export_id}/jobs/{delivery_job_id}`.
+`dry_run: false`. Reports are scoped to `/destinations/{destination_id}/jobs/{delivery_job_id}`.
 
 Reservations are persisted before jobs are enqueued. Repeating a key returns the
 original job; changing its source, manifest or mode is a conflict. After a crash
@@ -369,7 +402,7 @@ intent is saved before POST; completed chunks are reused on recovery. An uncerta
 POST without a task ID is reported as unknown and is never automatically resent.
 Known async tasks are polled through the DHIS2 `DATAVALUE_IMPORT` task summaries
 endpoint. Corrupt or incompatible checkpoints stop recovery. Imports for the same
-export are serialized; different exports may still overlap in their destination
+destination are serialized; different destinations may still overlap in their destination
 keys, so operators must coordinate those mappings. `submitted` counts attempted
 values, including uncertain writes, rather than the full planned payload.
 

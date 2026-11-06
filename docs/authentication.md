@@ -45,7 +45,7 @@ Every method and path belongs to exactly one tier, listed in one table in the co
 | --- | --- |
 | public | STAC, Zarr and Icechunk reads, PMTiles, thumbnails, `GET /datasets`, data sources, features, processes, workflows (`GET /process_graphs`), openEO capabilities, `/credentials/*`, the HTML pages, the API reference |
 | authenticated | `POST /result`, batch jobs (`POST /jobs`, starting, listing and deleting them), storing and deleting workflows (`PUT` and `DELETE /process_graphs`) |
-| operator | ingestion, sync, feature refresh, schedules, pipelines, export delivery, every `/manage` route |
+| operator | ingestion, sync, feature refresh, schedules, pipelines, destination delivery, every `/manage` route |
 
 Built-in and plugin workflows stay visible to everyone. A workflow stored through the API belongs
 to its owner and is listed only to its owner and to operators. A stored workflow cannot take the id

@@ -1,4 +1,4 @@
-"""Operator delivery routes for named exports.
+"""Operator delivery routes for named destinations.
 
 These routes are deliberately closed in read-only mode (see ``read_only.py``):
 delivery exposes server-held credentials to an operation with external effects.
@@ -11,15 +11,15 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from open_climate_service.exports.delivery import submit_delivery
-from open_climate_service.exports.report import ExportReport
+from open_climate_service.destinations.delivery import submit_delivery
+from open_climate_service.destinations.report import DeliveryReport
 from open_climate_service.jobs.service import get_job_service
 
-router = APIRouter(tags=["Exports"])
+router = APIRouter(tags=["Destinations"])
 
 
 class DeliveryRequest(BaseModel):
-    """Request body for POST /exports/{export_id}."""
+    """Request body for POST /destinations/{destination_id}."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -31,31 +31,31 @@ class DeliveryAccepted(BaseModel):
     """Accepted delivery job plus links to its status and report."""
 
     delivery_job_id: str
-    export_id: str
+    destination_id: str
     dry_run: bool
     reused: bool
     status_url: str
     report_url: str
 
 
-@router.post("/{export_id}", status_code=202, response_model=DeliveryAccepted)
+@router.post("/{destination_id}", status_code=202, response_model=DeliveryAccepted)
 def deliver_export(
-    export_id: str,
+    destination_id: str,
     body: DeliveryRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> DeliveryAccepted:
-    """Queue delivery of a completed source job's saved export payload.
+    """Queue delivery of a completed source job's saved payload.
 
     Reusing an idempotency key with identical content returns the existing
     delivery; different content is a conflict.
     """
     if not idempotency_key or not idempotency_key.strip():
         raise HTTPException(status_code=400, detail="An Idempotency-Key header is required")
-    delivery_job_id, reused = submit_delivery(export_id, body.job_id, body.dry_run, idempotency_key.strip())
-    status_url = f"/exports/{export_id}/jobs/{delivery_job_id}"
+    delivery_job_id, reused = submit_delivery(destination_id, body.job_id, body.dry_run, idempotency_key.strip())
+    status_url = f"/destinations/{destination_id}/jobs/{delivery_job_id}"
     return DeliveryAccepted(
         delivery_job_id=delivery_job_id,
-        export_id=export_id,
+        destination_id=destination_id,
         dry_run=body.dry_run,
         reused=reused,
         status_url=status_url,
@@ -63,21 +63,21 @@ def deliver_export(
     )
 
 
-@router.get("/{export_id}/jobs/{delivery_job_id}")
-def get_delivery_job(export_id: str, delivery_job_id: str) -> dict[str, Any]:
-    """Return one delivery job's status and, when finished, its export report."""
+@router.get("/{destination_id}/jobs/{delivery_job_id}")
+def get_delivery_job(destination_id: str, delivery_job_id: str) -> dict[str, Any]:
+    """Return one delivery job's status and, when finished, its delivery report."""
     record = get_job_service().get_job_or_404(delivery_job_id)
-    if record.process_id != f"export:{export_id}" or record.request.get("export_id") != export_id:
-        raise HTTPException(status_code=404, detail="Delivery job not found for this export")
-    report: ExportReport | None = None
+    if record.process_id != f"destination:{destination_id}" or record.request.get("destination_id") != destination_id:
+        raise HTTPException(status_code=404, detail="Delivery job not found for this destination")
+    report: DeliveryReport | None = None
     if isinstance(record.result, dict):
         try:
-            report = ExportReport.model_validate(record.result)
+            report = DeliveryReport.model_validate(record.result)
         except Exception:
             report = None
     return {
         "delivery_job_id": record.job_id,
-        "export_id": export_id,
+        "destination_id": destination_id,
         "status": record.status,
         "created_at": record.created_at.isoformat(),
         "finished_at": record.finished_at.isoformat() if record.finished_at else None,

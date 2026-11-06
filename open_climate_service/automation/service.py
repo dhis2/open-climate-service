@@ -78,7 +78,7 @@ def _delivery_mode(dry_run: bool) -> str:
 
 
 def _load_delivery_activations() -> dict[str, dict[str, str]]:
-    """Return ``{trigger_id: {"export", "mode", "activated_at"}}``, tolerating a missing or corrupt file.
+    """Return ``{trigger_id: {"destination", "mode", "activated_at"}}``, tolerating a missing or corrupt file.
 
     A lost or incomplete entry is re-stamped at the next start, which delivers nothing finished
     before it: the safe reading, since pushing history is the failure this boundary prevents.
@@ -94,7 +94,7 @@ def _load_delivery_activations() -> dict[str, dict[str, str]]:
         return {}
     if not isinstance(payload, dict):
         return {}
-    fields = ("export", "mode", "activated_at")
+    fields = ("destination", "mode", "activated_at")
     return {
         key: {field: value[field] for field in fields}
         for key, value in payload.items()
@@ -123,8 +123,8 @@ def _save_delivery_activations(activations: dict[str, dict[str, str]]) -> None:
 def _sync_delivery_activations(config: AutomationConfig) -> dict[str, dict[str, str]]:
     """Stamp new delivery steps, forget removed ones, and return the boundaries now in force.
 
-    A trigger gains a boundary when it first delivers, or changes its export or its mode.
-    The mode matters as much as the export: a job that finished under ``dry_run: true`` and
+    A trigger gains a boundary when it first delivers, or changes its destination or its mode.
+    The mode matters as much as the destination: a job that finished under ``dry_run: true`` and
     was never delivered must not be imported live after switching to ``dry_run: false``.
     Removing ``deliver`` drops the boundary, so adding it back later does not deliver the
     jobs that finished in between.
@@ -135,7 +135,7 @@ def _sync_delivery_activations(config: AutomationConfig) -> dict[str, dict[str, 
     for trigger in config.workflow_triggers:
         if trigger.deliver is None:
             continue
-        binding = {"export": trigger.deliver.export, "mode": _delivery_mode(trigger.deliver.dry_run)}
+        binding = {"destination": trigger.deliver.destination, "mode": _delivery_mode(trigger.deliver.dry_run)}
         existing = current.get(trigger.id)
         if existing is not None and all(existing[key] == value for key, value in binding.items()):
             wanted[trigger.id] = existing
@@ -170,7 +170,7 @@ def _delivery_steps(config: AutomationConfig, activations: dict[str, dict[str, s
         if (
             trigger.deliver is None
             or activation is None
-            or activation["export"] != trigger.deliver.export
+            or activation["destination"] != trigger.deliver.destination
             or activation["mode"] != _delivery_mode(trigger.deliver.dry_run)
         ):
             continue
@@ -189,17 +189,17 @@ def _finished_after(record: OpenEOJobRecord, activated_at: datetime) -> bool:
     return record.finished_at is not None and _as_utc(record.finished_at) >= activated_at
 
 
-def delivery_idempotency_key(job_id: str, export_id: str, dry_run: bool) -> str:
-    """Deterministic key: one delivery per triggered job, export, and mode.
+def delivery_idempotency_key(job_id: str, destination_id: str, dry_run: bool) -> str:
+    """Deterministic key: one delivery per triggered job, destination, and mode.
 
     The mode is part of the key because a key reused with a different ``dry_run`` is a
     conflict, and switching a trigger from dry run to live must not collide with earlier
     dry-run deliveries.
     """
-    return f"auto:{job_id}:{export_id}:{_delivery_mode(dry_run)}"
+    return f"auto:{job_id}:{destination_id}:{_delivery_mode(dry_run)}"
 
 
-def _set_delivery_error(job_id: str, export_id: str, message: str | None) -> None:
+def _set_delivery_error(job_id: str, destination_id: str, message: str | None) -> None:
     """Expose the latest automatic-delivery submission error on the source job."""
     now = utc_now()
 
@@ -209,7 +209,7 @@ def _set_delivery_error(job_id: str, export_id: str, message: str | None) -> Non
             usage.pop("delivery_error", None)
         else:
             usage["delivery_error"] = {
-                "export_id": export_id,
+                "destination_id": destination_id,
                 "message": message,
                 "failed_at": now.isoformat(),
             }
@@ -224,25 +224,25 @@ def _set_delivery_error(job_id: str, export_id: str, message: str | None) -> Non
 
 def _validate_deliveries(config: AutomationConfig) -> None:
     """Refuse a delivery step that could only fail per job, naming its trigger."""
-    from open_climate_service.exports.dhis2 import get_connection_config
-    from open_climate_service.exports.service import resolve_named_export
+    from open_climate_service.destinations.dhis2 import get_connection_config
+    from open_climate_service.destinations.service import resolve_named_destination
 
     deliveries = [(trigger, trigger.deliver) for trigger in config.workflow_triggers if trigger.deliver is not None]
     for trigger, delivery in deliveries:
-        export_id = delivery.export
-        prefix = f"Workflow trigger {trigger.id!r} delivers export {export_id!r}"
-        workflow_export = trigger.arguments.get("export")
-        if isinstance(workflow_export, str) and workflow_export != export_id:
+        destination_id = delivery.destination
+        prefix = f"Workflow trigger {trigger.id!r} delivers to destination {destination_id!r}"
+        workflow_export = trigger.arguments.get("destination")
+        if isinstance(workflow_export, str) and workflow_export != destination_id:
             raise ValueError(
-                f"{prefix}, but arguments.export is {workflow_export!r}; "
-                "the workflow and delivery must use the same named export"
+                f"{prefix}, but arguments.destination is {workflow_export!r}; "
+                "the workflow and delivery must use the same named destination"
             )
         try:
-            resolved = resolve_named_export("DHIS2JSON", {"export": export_id})
+            resolved = resolve_named_destination("DHIS2JSON", {"destination": destination_id})
         except ValueError as exc:
             raise ValueError(f"{prefix}, which is invalid: {exc}") from None
         if resolved.plugin.id != "dhis2":
-            raise ValueError(f"{prefix}, whose plugin is {resolved.plugin.id!r}; only dhis2 exports deliver")
+            raise ValueError(f"{prefix}, whose plugin is {resolved.plugin.id!r}; only dhis2 destinations deliver")
         connection = resolved.references.get("connection")
         if connection is None:
             raise ValueError(f"{prefix}, which has no DHIS2 connection")
@@ -621,7 +621,7 @@ class WorkflowAutomationService:
         step = self._active_step(record)
         if step is None:
             return None
-        return {"export": step.delivery.export, "mode": _delivery_mode(step.delivery.dry_run)}
+        return {"destination": step.delivery.destination, "mode": _delivery_mode(step.delivery.dry_run)}
 
     def on_job_finished(self, record: OpenEOJobRecord) -> None:
         """Submit the delivery for a triggered job that just finished, when its trigger asks."""
@@ -633,7 +633,7 @@ class WorkflowAutomationService:
         """Submit deliveries missed while the process was down.
 
         Covers a process killed after a job finished and before its delivery was submitted.
-        A job whose source record already lists a delivery for the export is skipped, so
+        A job whose source record already lists a delivery for the destination is skipped, so
         earlier dry-run deliveries are not repeated live after ``dry_run`` is switched off.
         The deterministic idempotency key makes a double submission harmless.
         """
@@ -657,15 +657,15 @@ class WorkflowAutomationService:
     def _due_step(self, record: OpenEOJobRecord) -> _DeliveryStep | None:
         """Return the step a finished job still owes, or None.
 
-        The job must have recorded this exact export and mode when it finished, and must not
-        already list a delivery for the export. The second check covers a re-run: its delivery
+        The job must have recorded this exact destination and mode when it finished, and must not
+        already list a delivery for the destination. The second check covers a re-run: its delivery
         links survive, so a job delivered as a dry run is not imported live after the switch.
         """
         step = self._active_step(record)
         if step is None:
             return None
-        expected = {"export": step.delivery.export, "mode": _delivery_mode(step.delivery.dry_run)}
-        if record.delivery_due != expected or _lists_delivery(record, step.delivery.export):
+        expected = {"destination": step.delivery.destination, "mode": _delivery_mode(step.delivery.dry_run)}
+        if record.delivery_due != expected or _lists_delivery(record, step.delivery.destination):
             return None
         return step
 
@@ -673,43 +673,43 @@ class WorkflowAutomationService:
         """Submit one delivery, logging rather than raising so siblings still run."""
         from fastapi import HTTPException
 
-        from open_climate_service.exports.delivery import submit_delivery
+        from open_climate_service.destinations.delivery import submit_delivery
 
-        export_id = delivery.export
+        destination_id = delivery.destination
         dry_run = delivery.dry_run
         try:
             delivery_job_id, reused = submit_delivery(
-                export_id,
+                destination_id,
                 record.id,
                 dry_run,
-                delivery_idempotency_key(record.id, export_id, dry_run),
+                delivery_idempotency_key(record.id, destination_id, dry_run),
             )
         except HTTPException as exc:
-            _set_delivery_error(record.id, export_id, str(exc.detail))
-            # Verification refusals (changed export, missing manifest, re-run source) are
+            _set_delivery_error(record.id, destination_id, str(exc.detail))
+            # Verification refusals (changed destination, missing manifest, re-run source) are
             # operator-actionable configuration states, not crashes.
             logger.warning(
-                "Workflow trigger %s could not deliver job %s to export %s: %s",
+                "Workflow trigger %s could not deliver job %s to destination %s: %s",
                 trigger_id,
                 record.id,
-                export_id,
+                destination_id,
                 exc.detail,
             )
             return
         except Exception as exc:
-            _set_delivery_error(record.id, export_id, f"{type(exc).__name__}: {exc}")
+            _set_delivery_error(record.id, destination_id, f"{type(exc).__name__}: {exc}")
             logger.exception(
-                "Workflow trigger %s failed to deliver job %s to export %s", trigger_id, record.id, export_id
+                "Workflow trigger %s failed to deliver job %s to destination %s", trigger_id, record.id, destination_id
             )
             return
-        _set_delivery_error(record.id, export_id, None)
+        _set_delivery_error(record.id, destination_id, None)
         if not reused:
             logger.info(
-                "Submitted %s delivery %s of job %s to export %s",
+                "Submitted %s delivery %s of job %s to destination %s",
                 "dry-run" if dry_run else "live",
                 delivery_job_id,
                 record.id,
-                export_id,
+                destination_id,
             )
 
     def _submit_safely(self, trigger: WorkflowTrigger, event: JobEvent, service: OpenEOJobService) -> None:
@@ -762,10 +762,10 @@ class WorkflowAutomationService:
             )
 
 
-def _lists_delivery(record: OpenEOJobRecord, export_id: str) -> bool:
+def _lists_delivery(record: OpenEOJobRecord, destination_id: str) -> bool:
     deliveries = (record.usage or {}).get("deliveries")
     return isinstance(deliveries, list) and any(
-        isinstance(item, dict) and item.get("export_id") == export_id for item in deliveries
+        isinstance(item, dict) and item.get("destination_id") == destination_id for item in deliveries
     )
 
 

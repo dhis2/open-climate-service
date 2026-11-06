@@ -143,7 +143,7 @@ restarting OCS. If a change cannot be applied, the page shows why.
 ### The pipeline pages (`/pipelines`)
 
 For a new setup that runs a workflow on a dataset and delivers the result, use a pipeline. The
-older [workflow triggers](workflow_automation.md) and the named `exports` in
+older [workflow triggers](workflow_automation.md) and the named `destinations` in
 `climate-service.yaml` keep working for existing configurations, and react to the same dataset
 updates, but are due to be retired in favour of pipelines.
 
@@ -151,7 +151,7 @@ A **workflow** is a reusable, parameterized sequence of processes that defines h
 transformed or analyzed. A **pipeline** is a managed configuration that connects one workflow to
 its inputs and a destination, governing when it runs, how results are delivered, and how
 execution is monitored. The pipeline holds no processing of its own: it names a registered
-workflow and binds its arguments, names an export plugin as its destination with that plugin's
+workflow and binds its arguments, names an destination plugin as its destination with that plugin's
 settings, and sets a delivery mode and policy. Several pipelines can use the same workflow with
 different arguments, destinations and policies.
 
@@ -196,8 +196,8 @@ Of the built-in workflows only `aggregate_by_features` meets it: the `aggregate_
 save their own result, and the climate normal, anomaly, change and dekad workflows write a
 managed dataset. The create form lists only the workflows that meet the contract.
 
-The destination's settings belong to the export plugin. The plugin validates them, compiles
-them into the named export the pipeline's results are saved and delivered through, and runs its
+The destination's settings belong to the destination plugin. The plugin validates them, compiles
+them into the named destination the pipeline's results are saved and delivered through, and runs its
 own destination checks. For DHIS2 these are the connection, the data element and data set UIDs,
 that the dataset's cadence is a DHIS2 period, that the organisation units come from a DHIS2
 collection fetched over the same connection, and, when a data set is declared, its period type,
@@ -228,11 +228,11 @@ again** for a failed run, and a source dataset update for a pipeline whose polic
 The run is stored with its
 interval, trigger, workflow arguments, bindings and deterministic job id before the job is
 created, then submitted as an openEO batch job of the workflow saved through the pipeline's
-export. The workflow is frozen into that graph: the call, and any workflow it calls, is inlined
+destination. The workflow is frozen into that graph: the call, and any workflow it calls, is inlined
 from the registry as it was when the run was submitted, with declared defaults applied, so a
 queued or retried job runs the definition that was approved even if the workflow is edited
 meanwhile. When the job finishes, its result is delivered through the same delivery path as
-`POST /exports/{id}`, under the run's idempotency key, so a repeated completion or a restart does
+`POST /destinations/{id}`, under the run's idempotency key, so a repeated completion or a restart does
 not deliver twice.
 
 Each run moves through these states; the page shows them and the action each needs:
@@ -244,15 +244,15 @@ Each run moves through these states; the page shows them and the action each nee
 | job `error`, `canceled`, deleted | the job ended without a result (the job service already retried transient failures) | terminal: **Run again** |
 | delivery `awaiting` | the job is running, or a transient hand-off failure is being retried | handed off when the job finishes; retried automatically, up to 5 attempts, always under the same idempotency key |
 | delivery `held` | the pipeline was paused, or a live result waits for the pipeline to be live with the same approved bindings | released automatically on resume once eligible; **Deliver** for a held dry run |
-| delivery `failed` | the hand-off was refused (a changed export, a missing result) or its attempts ran out | **Deliver** retries it under the same key, so nothing is sent twice |
+| delivery `failed` | the hand-off was refused (a changed destination, a missing result) or its attempts ran out | **Deliver** retries it under the same key, so nothing is sent twice |
 | delivery `submitted` | handed to the delivery framework, not yet delivered | the delivery job's outcome is recorded on the run: `delivered` (or `validated` for a dry run) confirms it; `partial` (conflicts), `rejected`, `unknown` (no answer after sending, or the delivery job's record is gone), `failed` and `cancelled` need an operator: **Send again** where that is safe, or **Checked at the destination**, which records `acknowledged` and sends nothing |
 
 OCS recovers the automatic states at startup and every 15 minutes: it submits pending runs,
 hands off finished jobs whose completion was missed, records jobs that ended without a result,
 retries transient hand-off failures, and releases held deliveries that have become eligible.
 A failure is permanent when repeating it can only fail the same way: an HTTP 4xx refusal (a
-changed export, a missing result, a reused key) or an invalid value. A 408, 425 or 429, a
-conflict that only says the job's result or the export is busy right now, and any other error
+changed destination, a missing result, a reused key) or an invalid value. A 408, 425 or 429, a
+conflict that only says the job's result or the destination is busy right now, and any other error
 (the store, a lock, the network) are retried within the bound.
 
 Retries never send twice. A hand-off is retried under the run's one idempotency key, which the
@@ -296,7 +296,7 @@ write as the run an update starts. What happens to an update:
   bindings;
 - **not run, and listed**: the pipeline refused it (invalid, or changed since it was validated:
   re-check, then run its interval by hand), it names no interval, starting its run failed for a
-  reason that cannot pass (a missing feature collection, an unresolvable export), a transient
+  reason that cannot pass (a missing feature collection, an unresolvable destination), a transient
   failure persisted over 5 attempts, it arrived while the pipeline was paused, or it arrived after
   the checkpoint had passed its time. The page lists these with their interval under **Updates
   not run**; none is run later by itself. The list is bounded to the 50 most recent: it is a
@@ -334,13 +334,13 @@ ones once the pipeline is live again, approved for the bindings they were comput
 does not replay the updates that arrived while paused; run their interval by hand. A scheduled
 release time is not implemented yet and is not accepted.
 
-A pipeline's export id is its own id, unique across the pipelines and the `exports` in
+A pipeline's destination id is its own id, unique across the pipelines and the `destinations` in
 `climate-service.yaml`. An id configured in both is refused, when the pipeline is validated and
-again when the export is resolved, rather than one silently winning. Pipeline records are kept
+again when the destination is resolved, rather than one silently winning. Pipeline records are kept
 under `<data_dir>/pipelines`; every change is a locked read-modify-write, and an edit names the
 revision it was based on, so a stale edit is refused rather than overwriting a newer one. A
 check, dry run or mode switch computed while the pipeline changed is refused too, and only a
-validation of the current revision publishes the pipeline's export. The run history keeps the
+validation of the current revision publishes the pipeline's named destination. The run history keeps the
 newest 50 runs, and every older run until it is delivered or run again: a run that is pending,
 running, held, failed or ended without a result stays, whatever its age. A run's process graph is
 kept only until its job holds it.

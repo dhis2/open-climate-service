@@ -122,12 +122,16 @@ def file_formats() -> dict[str, Any]:
             "title": "DHIS2 JSON",
             "description": (
                 "DHIS2 import-ready JSON dataValues envelope for aggregated org-unit results. "
-                "Pass the save_result option 'export' to render a configured named export, which "
-                "can be delivered to DHIS2; or pass ad-hoc options such as data_element_id, "
+                "Pass the save_result option 'destination' to render through a configured DHIS2 "
+                "destination, which can then deliver it; or pass ad-hoc options such as data_element_id, "
                 "org_unit_field, and period_type for a download-only payload."
             ),
             "gis_data_types": ["table", "vector"],
             "parameters": {
+                "destination": {
+                    "type": "string",
+                    "description": "Id of a configured DHIS2 destination; use it without mapping overrides.",
+                },
                 "data_element_id": {"type": "string"},
                 "org_unit_field": {"type": "string"},
                 "period_field": {"type": "string", "default": "t"},
@@ -137,21 +141,8 @@ def file_formats() -> dict[str, Any]:
             "links": [],
         },
     }
-    from open_climate_service.exports.registry import load_export_plugins
-
-    for plugin in load_export_plugins().values():
-        if plugin.format not in output_formats:
-            output_formats[plugin.format] = {
-                "title": plugin.format,
-                "description": "Pure export renderer; requires a configured export ID in save_result options.",
-                "gis_data_types": ["table"],
-                "parameters": {},
-                "links": [],
-            }
-        output_formats[plugin.format]["parameters"]["export"] = {
-            "type": "string",
-            "description": "Named export mapping; use this option without per-request mapping overrides.",
-        }
+    # Destination plugins are not listed: they deliver a pipeline's or a trigger's result, and
+    # are not output formats a process graph chooses.
     return {
         "input": {},
         "output": output_formats,
@@ -400,9 +391,9 @@ def download_result_file(job_id: str, filename: str) -> FileResponse:
 
     suffix = path.suffix.lower()
     media_type = _RESULT_MEDIA_TYPES.get(suffix, "application/octet-stream")
-    from open_climate_service.exports.service import read_export_metadata
+    from open_climate_service.destinations.service import read_payload_metadata
 
-    metadata = read_export_metadata(path)
+    metadata = read_payload_metadata(path)
     if metadata is not None:
         media_type = metadata["media_type"]
     return FileResponse(str(path), media_type=media_type, filename=filename)
@@ -482,7 +473,7 @@ def execute_synchronous(
         provenance = result.provenance
         result = result.data
 
-    # Named exporters expect an eager frame, matching the batch-job path.
+    # Named destinations expect an eager frame, matching the batch-job path.
     try:
         import dask_geopandas
 
@@ -491,11 +482,11 @@ def execute_synchronous(
     except ImportError:
         pass
 
-    if "export" in options:
-        from open_climate_service.exports.service import render_named_export
+    if "destination" in options:
+        from open_climate_service.destinations.service import render_named_destination
 
         try:
-            plugin, rendered = render_named_export(result, fmt, options, provenance=provenance)
+            plugin, rendered = render_named_destination(result, fmt, options, provenance=provenance)
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Response(content=rendered.content, media_type=plugin.media_type)

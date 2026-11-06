@@ -1,4 +1,4 @@
-"""Versioned export manifests and atomic publication of file generations."""
+"""Versioned delivery manifests and atomic publication of file generations."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from open_climate_service.exports.base import BaseExportPlugin
+from open_climate_service.destinations.base import BaseDestinationPlugin
 from open_climate_service.shared.provenance import json_digest
 
 
@@ -31,12 +31,12 @@ class PluginIdentity(_Model):
     extension: str
 
 
-class ExportManifest(_Model):
+class DeliveryManifest(_Model):
     """A saved payload bound to its source job, mapping, and optional target."""
 
     schema_version: Literal[1] = 1
     source_job_id: str
-    export_id: str
+    destination_id: str
     created_at: str
     filename: str = Field(pattern=r"^export-[0-9a-f]{32}\.[a-z0-9]+$")
     payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -48,17 +48,17 @@ class ExportManifest(_Model):
     mapping: dict[str, Any]
     mapping_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     references: dict[str, str]
-    # The plugin's credential-free target identity (`BaseExportPlugin.target_binding`).
+    # The plugin's credential-free target identity (`BaseDestinationPlugin.target_binding`).
     target: dict[str, str] | None
     provenance: dict[str, Any]
 
 
 def validate_public_mapping(value: Any) -> None:
-    """Require JSON-compatible, non-secret literal configuration for export metadata."""
+    """Require JSON-compatible, non-secret literal configuration for payload metadata."""
     if isinstance(value, dict):
         for key, child in value.items():
             if not isinstance(key, str):
-                raise ValueError("Export mapping keys must be strings")
+                raise ValueError("Destination mapping keys must be strings")
             if key.lower().replace("-", "_") in {
                 "token",
                 "password",
@@ -68,21 +68,21 @@ def validate_public_mapping(value: Any) -> None:
                 "api_key",
                 "access_token",
             }:
-                raise ValueError("Export mappings must not contain credentials; use connection references")
+                raise ValueError("Destination mappings must not contain credentials; use connection references")
             validate_public_mapping(child)
     elif isinstance(value, (list, tuple)):
         for child in value:
             validate_public_mapping(child)
     elif isinstance(value, str) and "${" in value:
-        raise ValueError("Export mappings must be literal; environment interpolation is not supported")
+        raise ValueError("Destination mappings must be literal; environment interpolation is not supported")
     # Canonical serialization also rejects unsupported types and NaN/Infinity.
     try:
         json_digest(value)
     except (ValueError, TypeError):
-        raise ValueError("Export mappings must contain finite JSON values") from None
+        raise ValueError("Destination mappings must contain finite JSON values") from None
 
 
-def plugin_identity(plugin: BaseExportPlugin) -> PluginIdentity:
+def plugin_identity(plugin: BaseDestinationPlugin) -> PluginIdentity:
     """Capture the renderer descriptor before calling its implementation."""
     cls = type(plugin)
     return PluginIdentity(
@@ -98,13 +98,13 @@ def plugin_identity(plugin: BaseExportPlugin) -> PluginIdentity:
 def named_connection_binding(references: dict[str, str]) -> dict[str, str] | None:
     """Bind a ``connection`` reference to a named instance connection: its id and a URL digest.
 
-    The default target of `BaseExportPlugin.target_binding`. Named connections are configured
+    The default target of `BaseDestinationPlugin.target_binding`. Named connections are configured
     under ``dhis2_connections``, the only kind of named connection the instance declares.
     """
     connection_id = references.get("connection")
     if connection_id is None:
         return None
-    from open_climate_service.exports.dhis2 import get_connection_config
+    from open_climate_service.destinations.dhis2 import get_connection_config
 
     parts = urlsplit(get_connection_config(connection_id).url)
     hostname = parts.hostname or ""
@@ -117,8 +117,8 @@ def named_connection_binding(references: dict[str, str]) -> dict[str, str] | Non
     return {"connection_id": connection_id, "url_sha256": hashlib.sha256(canonical.encode()).hexdigest()}
 
 
-def target_binding(plugin: BaseExportPlugin, references: dict[str, str]) -> dict[str, str] | None:
-    """The plugin's credential-free identity of the target an export's references name, or None.
+def target_binding(plugin: BaseDestinationPlugin, references: dict[str, str]) -> dict[str, str] | None:
+    """The plugin's credential-free identity of the target a destination's references name, or None.
 
     Stored in the manifest and compared again before delivery, so a target that moved is
     refused. What a target is belongs to the plugin; the framework only stores and compares it.
@@ -129,7 +129,7 @@ def target_binding(plugin: BaseExportPlugin, references: dict[str, str]) -> dict
         not isinstance(binding, dict)  # pyright: ignore[reportUnnecessaryIsInstance]
         or not all(isinstance(k, str) and isinstance(v, str) for k, v in binding.items())  # pyright: ignore[reportUnnecessaryIsInstance]
     ):
-        raise TypeError("Export plugin target_binding() must return a mapping of strings or None")
+        raise TypeError("Destination plugin target_binding() must return a mapping of strings or None")
     if binding is not None:
         validate_public_mapping(binding)
     return binding
@@ -151,7 +151,7 @@ def atomic_write(path: Path, content: bytes) -> None:
             Path(temporary).unlink(missing_ok=True)
 
 
-def publish_manifest(directory: Path, manifest: ExportManifest, payload: bytes) -> str:
+def publish_manifest(directory: Path, manifest: DeliveryManifest, payload: bytes) -> str:
     """Commit a fresh generation by replacing the metadata pointer last.
 
     Failed generations may leave unreferenced files, but never overwrite a

@@ -4,7 +4,7 @@ Assembled from what OCS already records, so it needs no configuration of its own
 
 - a sync schedule keeps a dataset current from its data source;
 - a workflow trigger runs when a dataset updates, reads further datasets and feature
-  collections, and publishes a dataset or delivers through a named export;
+  collections, and publishes a dataset or delivers through a named destination;
 - a pipeline runs when its input dataset updates (or by hand) and delivers to a destination.
 
 The graph is configuration, not history: what is set up to run, with the latest run of each
@@ -356,11 +356,11 @@ def assemble_graph(
         if deliver is not None:
             destination = b.node(
                 GraphNode(
-                    id=f"destination:export:{deliver.export}",
+                    id=f"destination:{deliver.destination}",
                     kind="destination",
-                    label=deliver.export,
-                    ref=deliver.export,
-                    meta=["Named export", "Dry run" if deliver.dry_run else "Live"],
+                    label=deliver.destination,
+                    ref=deliver.destination,
+                    meta=["Named destination", "Dry run" if deliver.dry_run else "Live"],
                 )
             )
             b.edge(workflow_node, destination, "delivers")

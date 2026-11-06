@@ -14,12 +14,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from open_climate_service import config
-from open_climate_service.exports import ExportReport
-from open_climate_service.exports.delivery import deliver_named_export, submit_delivery
-from open_climate_service.exports.delivery_input import lease_export_input
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin, build_dhis2_report
-from open_climate_service.exports.report import ExportOutcome
-from open_climate_service.exports.service import write_named_export
+from open_climate_service.destinations import DeliveryReport
+from open_climate_service.destinations.delivery import deliver_named_destination, submit_delivery
+from open_climate_service.destinations.delivery_input import lease_delivery_input
+from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin, build_dhis2_report
+from open_climate_service.destinations.report import DeliveryOutcome
+from open_climate_service.destinations.service import write_named_destination
 from open_climate_service.jobs import service as job_service_module
 from open_climate_service.jobs import store as native_store
 from open_climate_service.jobs.models import JobRecord, JobStatus
@@ -43,7 +43,7 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
         config,
         "_cache",
         {
-            "exports": [
+            "destinations": [
                 {
                     "id": "rain",
                     "plugin": "dhis2",
@@ -58,7 +58,7 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
     monkeypatch.delenv("TEST_TOKEN", raising=False)
     directory = tmp_path / "openeo_jobs" / "source" / "results"
     directory.mkdir(parents=True)
-    path = write_named_export(_data(), directory, "DHIS2JSON", {"export": "rain"}, job_id="source")
+    path = write_named_destination(_data(), directory, "DHIS2JSON", {"destination": "rain"}, job_id="source")
     openeo_jobs.store_create_job(
         OpenEOJobRecord(
             id="source",
@@ -76,19 +76,19 @@ def fake_send(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
 
     def send(
-        self: Dhis2ExportPlugin,
+        self: Dhis2DestinationPlugin,
         payload: bytes,
         target: Any,
         *,
         dry_run: bool = False,
         context: Any = None,
-    ) -> ExportReport:
+    ) -> DeliveryReport:
         calls.append({"payload": payload, "target": target, "dry_run": dry_run, "context": context})
-        return ExportReport(
+        return DeliveryReport(
             plugin_id=self.id,
             connection_id=target,
             dry_run=dry_run,
-            outcome=ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS,
+            outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
             message="accepted",
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             submitted=len(payload),
@@ -97,7 +97,7 @@ def fake_send(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             finished_at=utc_now().isoformat(),
         )
 
-    monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "send", send)
     return calls
 
 
@@ -105,45 +105,45 @@ def test_build_dhis2_report_outcomes() -> None:
     base: dict[str, Any] = dict(plugin_id="dhis2", connection_id="hmis", payload_sha256="a" * 64, submitted=2)
     created = "2026-01-01T00:00:00+00:00"
 
-    def build(status_code: int, summary: dict[str, Any]) -> ExportReport:
+    def build(status_code: int, summary: dict[str, Any]) -> DeliveryReport:
         return build_dhis2_report(status_code, summary, dry_run=False, created_at=created, **base)
 
     success = build(200, {"status": "SUCCESS", "importCount": {"imported": 2}})
-    assert success.outcome == ExportOutcome.SUCCESS
+    assert success.outcome == DeliveryOutcome.SUCCESS
     assert (success.imported, success.updated, success.ignored, success.deleted) == (2, 0, 0, 0)
 
     partial = build(200, {"status": "WARNING", "conflicts": [{"object": "value"}]})
-    assert partial.outcome == ExportOutcome.PARTIAL
+    assert partial.outcome == DeliveryOutcome.PARTIAL
 
     string_conflict = build(200, {"status": "WARNING", "conflicts": ["data element not found"]})
-    assert string_conflict.outcome == ExportOutcome.PARTIAL
+    assert string_conflict.outcome == DeliveryOutcome.PARTIAL
     assert string_conflict.conflicts == []
 
     rejected = build(200, {"status": "ERROR", "message": "no such data element"})
-    assert rejected.outcome == ExportOutcome.REJECTED
+    assert rejected.outcome == DeliveryOutcome.REJECTED
 
     partial_http = build(
         409,
         {"status": "WARNING", "importCount": {"imported": 999}, "conflicts": [{"object": "value"}]},
     )
-    assert partial_http.outcome == ExportOutcome.PARTIAL
+    assert partial_http.outcome == DeliveryOutcome.PARTIAL
     assert partial_http.imported == 999
 
     http_rejected = build(400, {"message": "bad request"})
-    assert http_rejected.outcome == ExportOutcome.REJECTED
+    assert http_rejected.outcome == DeliveryOutcome.REJECTED
 
     dry = build_dhis2_report(200, {"status": "SUCCESS"}, dry_run=True, created_at=created, **base)
-    assert dry.outcome == ExportOutcome.DRY_RUN
+    assert dry.outcome == DeliveryOutcome.DRY_RUN
 
     unknown = build(200, {"unexpected": True})
-    assert unknown.outcome == ExportOutcome.UNKNOWN
+    assert unknown.outcome == DeliveryOutcome.UNKNOWN
 
 
 def test_deliver_named_export_calls_plugin_send(saved: Path, fake_send: list[dict[str, Any]]) -> None:
-    with lease_export_input("rain", "source") as verified:
+    with lease_delivery_input("rain", "source") as verified:
         digest = json_digest(verified.manifest.model_dump(mode="json"))
-    report = deliver_named_export("rain", "source", dry_run=True, expected_manifest_sha256=digest)
-    assert report["outcome"] == ExportOutcome.DRY_RUN
+    report = deliver_named_destination("rain", "source", dry_run=True, expected_manifest_sha256=digest)
+    assert report["outcome"] == DeliveryOutcome.DRY_RUN
     assert len(fake_send) == 1
     assert fake_send[0]["target"] == "hmis"
     assert fake_send[0]["dry_run"] is True
@@ -154,31 +154,31 @@ def test_deliver_named_export_raises_job_cancelled_when_cancelled(saved: Path, m
     from open_climate_service.jobs.models import JobCancelledError
 
     def send(
-        self: Dhis2ExportPlugin,
+        self: Dhis2DestinationPlugin,
         payload: bytes,
         target: Any,
         *,
         dry_run: bool = False,
         context: Any = None,
-    ) -> ExportReport:
-        return ExportReport(
+    ) -> DeliveryReport:
+        return DeliveryReport(
             plugin_id=self.id,
             connection_id=target,
             dry_run=dry_run,
-            outcome=ExportOutcome.CANCELLED,
+            outcome=DeliveryOutcome.CANCELLED,
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             submitted=len(payload),
             created_at=utc_now().isoformat(),
             finished_at=utc_now().isoformat(),
         )
 
-    monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
-    with lease_export_input("rain", "source") as verified:
+    monkeypatch.setattr(Dhis2DestinationPlugin, "send", send)
+    with lease_delivery_input("rain", "source") as verified:
         digest = json_digest(verified.manifest.model_dump(mode="json"))
     with pytest.raises(JobCancelledError) as exc_info:
-        deliver_named_export("rain", "source", dry_run=False, expected_manifest_sha256=digest)
+        deliver_named_destination("rain", "source", dry_run=False, expected_manifest_sha256=digest)
     assert exc_info.value.result is not None
-    assert exc_info.value.result["outcome"] == ExportOutcome.CANCELLED
+    assert exc_info.value.result["outcome"] == DeliveryOutcome.CANCELLED
 
 
 def test_submit_delivery_deduplicates_by_idempotency_key(saved: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,8 +201,8 @@ def test_submit_delivery_deduplicates_by_idempotency_key(saved: Path, monkeypatc
     second, reused = submit_delivery("rain", "source", dry_run=False, idempotency_key="key-1")
     assert (second, reused) == (first, True)
     assert len(submitted) == 1
-    assert submitted[0]["label"] == "export:rain"
-    assert submitted[0]["request"]["export_id"] == "rain"
+    assert submitted[0]["label"] == "destination:rain"
+    assert submitted[0]["request"]["destination_id"] == "rain"
     assert submitted[0]["request"]["job_id"] == "source"
     assert submitted[0]["request"]["dry_run"] is False
     assert submitted[0]["request"]["expected_manifest_sha256"]
@@ -214,7 +214,7 @@ def test_submit_delivery_conflicts_on_reused_key_with_different_content(
     class FakeService:
         def submit_callable_job(self: Any, **kwargs: Any) -> JobRecord:
             return JobRecord(
-                job_id="delivery-1", process_id="export:rain", status=JobStatus.ACCEPTED, created_at=utc_now()
+                job_id="delivery-1", process_id="destination:rain", status=JobStatus.ACCEPTED, created_at=utc_now()
             )
 
     monkeypatch.setattr(job_service_module, "get_job_service", lambda: FakeService())
@@ -227,26 +227,26 @@ def test_submit_delivery_conflicts_on_reused_key_with_different_content(
 
 def test_delivery_route_end_to_end(saved: Path, fake_send: list[dict[str, Any]], client: TestClient) -> None:
     response = client.post(
-        "/exports/rain",
+        "/destinations/rain",
         json={"job_id": "source", "dry_run": False},
         headers={"Idempotency-Key": "e2e-key"},
     )
     assert response.status_code == 202
     body = response.json()
     assert body["delivery_job_id"]
-    assert body["status_url"] == f"/exports/rain/jobs/{body['delivery_job_id']}"
+    assert body["status_url"] == f"/destinations/rain/jobs/{body['delivery_job_id']}"
     assert body["reused"] is False
 
     service = job_service_module.get_job_service()
     record = _await_terminal(service, body["delivery_job_id"])
     assert record.status == JobStatus.SUCCESSFUL
     assert isinstance(record.result, dict)
-    assert record.result["outcome"] == ExportOutcome.SUCCESS
+    assert record.result["outcome"] == DeliveryOutcome.SUCCESS
     assert len(fake_send) == 1
 
     detail = client.get(body["status_url"])
     assert detail.status_code == 200
-    assert detail.json()["report"]["outcome"] == ExportOutcome.SUCCESS
+    assert detail.json()["report"]["outcome"] == DeliveryOutcome.SUCCESS
 
     # The source openEO job advertises the delivery.
     linked = openeo_jobs.store_get_job("source")
@@ -257,7 +257,7 @@ def test_delivery_route_end_to_end(saved: Path, fake_send: list[dict[str, Any]],
 
     # Reusing the same key returns the existing delivery without a second send.
     again = client.post(
-        "/exports/rain",
+        "/destinations/rain",
         json={"job_id": "source", "dry_run": False},
         headers={"Idempotency-Key": "e2e-key"},
     )
@@ -270,7 +270,7 @@ def test_delivery_route_end_to_end(saved: Path, fake_send: list[dict[str, Any]],
 def test_delivery_route_requires_idempotency_key(
     saved: Path, fake_send: list[dict[str, Any]], client: TestClient
 ) -> None:
-    response = client.post("/exports/rain", json={"job_id": "source"})
+    response = client.post("/destinations/rain", json={"job_id": "source"})
     assert response.status_code == 400
     assert "Idempotency-Key" in response.json()["detail"]
 
@@ -278,7 +278,7 @@ def test_delivery_route_requires_idempotency_key(
 def test_delivery_route_refused_in_read_only(saved: Path, fake_send: list[dict[str, Any]], client: TestClient) -> None:
     config.get_config()["read_only"] = True
     response = client.post(
-        "/exports/rain",
+        "/destinations/rain",
         json={"job_id": "source"},
         headers={"Idempotency-Key": "ro-key"},
     )
@@ -299,13 +299,15 @@ def _await_terminal(service: Any, job_id: str, timeout: float = 5.0) -> JobRecor
 @pytest.mark.parametrize(
     "status_code,summary,outcome",
     [
-        (400, {"status": "ERROR"}, ExportOutcome.REJECTED),
-        (200, {"status": "ERROR"}, ExportOutcome.REJECTED),
-        (200, {"status": "WARNING", "conflicts": [{"object": "bad"}]}, ExportOutcome.PARTIAL),
-        (200, {}, ExportOutcome.UNKNOWN),
+        (400, {"status": "ERROR"}, DeliveryOutcome.REJECTED),
+        (200, {"status": "ERROR"}, DeliveryOutcome.REJECTED),
+        (200, {"status": "WARNING", "conflicts": [{"object": "bad"}]}, DeliveryOutcome.PARTIAL),
+        (200, {}, DeliveryOutcome.UNKNOWN),
     ],
 )
-def test_dry_run_preserves_rejection_and_uncertainty(status_code: int, summary: dict[str, Any], outcome: ExportOutcome):
+def test_dry_run_preserves_rejection_and_uncertainty(
+    status_code: int, summary: dict[str, Any], outcome: DeliveryOutcome
+):
     report = build_dhis2_report(
         status_code,
         summary,
@@ -325,7 +327,7 @@ def test_concurrent_submissions_reserve_before_enqueue(
 ):
     from concurrent.futures import ThreadPoolExecutor
 
-    from open_climate_service.exports.reservations import find_delivery
+    from open_climate_service.destinations.reservations import find_delivery
 
     service = job_service_module.get_job_service()
     original = service.submit_callable_job
@@ -348,7 +350,7 @@ def test_concurrent_submissions_reserve_before_enqueue(
 def test_retry_repairs_reservation_after_enqueue_failure(
     saved: Path, fake_send: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ):
-    from open_climate_service.exports.reservations import find_delivery
+    from open_climate_service.destinations.reservations import find_delivery
 
     service = job_service_module.get_job_service()
     original = service.submit_callable_job
@@ -384,7 +386,7 @@ def test_queued_delivery_rejects_replaced_source(saved: Path, fake_send: list[di
     service = job_service_module.JobService(executor=PausedExecutor())
     job_service_module._job_service = service
     job_id, _ = submit_delivery("rain", "source", False, "frozen")
-    path = write_named_export(_data(), saved.parent, "DHIS2JSON", {"export": "rain"}, job_id="source")
+    path = write_named_destination(_data(), saved.parent, "DHIS2JSON", {"destination": "rain"}, job_id="source")
     openeo_jobs.store_update_job("source", lambda r: r.model_copy(update={"usage": {"output_path": path}}))
     with pytest.raises(HTTPException, match="different delivery content"):
         submit_delivery("rain", "source", False, "frozen")
@@ -396,4 +398,4 @@ def test_queued_delivery_rejects_replaced_source(saved: Path, fake_send: list[di
 def test_delivery_report_requires_matching_export(saved: Path, fake_send: list[dict[str, Any]], client: TestClient):
     job_id, _ = submit_delivery("rain", "source", False, "report-binding")
     _await_terminal(job_service_module.get_job_service(), job_id)
-    assert client.get(f"/exports/other/jobs/{job_id}").status_code == 404
+    assert client.get(f"/destinations/other/jobs/{job_id}").status_code == 404

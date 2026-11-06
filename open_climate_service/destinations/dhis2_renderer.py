@@ -1,4 +1,4 @@
-"""DHIS2 rendering for named single- and multi-series export mappings."""
+"""DHIS2 rendering for named single- and multi-series destination mappings."""
 
 from __future__ import annotations
 
@@ -10,17 +10,17 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
-from open_climate_service.exports.base import (
-    BaseExportPlugin,
+from open_climate_service.destinations.base import (
+    BaseDestinationPlugin,
     DeliveryContext,
     DestinationCheck,
     DestinationContext,
     LookupOption,
     PipelineSettingsForm,
-    RenderedExport,
+    RenderedPayload,
 )
-from open_climate_service.exports.report import ExportOutcome, ExportReport, merge_chunk_reports
-from open_climate_service.exports.tabular import (
+from open_climate_service.destinations.report import DeliveryOutcome, DeliveryReport, merge_chunk_reports
+from open_climate_service.shared.tabular import (
     _is_nullish,
     _normalise_period_type,
     _to_dhis2_period_string,
@@ -46,7 +46,7 @@ def _is_retryable_transport_error(exc: BaseException) -> bool:
     return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol))
 
 
-class Dhis2ExportPlugin(BaseExportPlugin):
+class Dhis2DestinationPlugin(BaseDestinationPlugin):
     """Map prepared aggregate series to DHIS2 data elements."""
 
     id = "dhis2"
@@ -54,7 +54,6 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     extension = ".json"
     media_type = "application/json"
     version = "1"
-    supports_delivery = True
     supports_dry_run = True
     # CREATE_AND_UPDATE imports overwrite the same data values; a repeat does not add any.
     redelivery_safe = True
@@ -68,32 +67,32 @@ class Dhis2ExportPlugin(BaseExportPlugin):
     # Pipeline destination hooks; the DHIS2 specifics live in `dhis2_destination`.
 
     def destination_settings_schema(self) -> dict[str, Any] | None:
-        from open_climate_service.exports import dhis2_destination
+        from open_climate_service.destinations import dhis2_destination
 
         return dhis2_destination.settings_schema()
 
     def pipeline_settings_form(self) -> PipelineSettingsForm | None:
-        from open_climate_service.exports import dhis2_destination
+        from open_climate_service.destinations import dhis2_destination
 
         return dhis2_destination.pipeline_settings_form()
 
-    def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
-        from open_climate_service.exports import dhis2_destination
+    def destination_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
+        from open_climate_service.destinations import dhis2_destination
 
-        return dhis2_destination.export_definition(settings, context)
+        return dhis2_destination.destination_definition(settings, context)
 
     def check_destination(self, settings: dict[str, Any], context: DestinationContext) -> list[DestinationCheck]:
-        from open_climate_service.exports import dhis2_destination
+        from open_climate_service.destinations import dhis2_destination
 
         return dhis2_destination.check_destination(settings, context)
 
     def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
-        from open_climate_service.exports import dhis2_destination
+        from open_climate_service.destinations import dhis2_destination
 
         return dhis2_destination.lookup_options(lookup, settings, query)
 
     def lookup_labels(self, lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
-        from open_climate_service.exports import dhis2_destination
+        from open_climate_service.destinations import dhis2_destination
 
         return dhis2_destination.lookup_labels(lookup, settings, values)
 
@@ -105,7 +104,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         labels: Mapping[str, Mapping[str, str]] | None = None,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        from open_climate_service.exports import dhis2_destination
+        from open_climate_service.destinations import dhis2_destination
 
         return dhis2_destination.preview(content, settings, context, labels, limit)
 
@@ -163,11 +162,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         if "aggregation" in mapping and mapping["aggregation"] not in ("mean", "sum", "min", "max", "median"):
             raise ValueError("aggregation must be mean, sum, min, max, or median; it declares upstream computation")
         # Whether the dataset's cadence requires or forbids these is decided where the dataset
-        # is known, in `exports.service.check_cadence_declaration`; here only the vocabulary.
+        # is known, in `destinations.service.check_cadence_declaration`; here only the vocabulary.
         if "temporal_aggregation" in mapping and mapping["temporal_aggregation"] not in ("mean", "sum", "min", "max"):
             raise ValueError(
                 "temporal_aggregation must be mean, sum, min, or max; it declares how source periods "
-                "are combined into the export's period_type"
+                "are combined into the destination's period_type"
             )
         if "incomplete_periods" in mapping and mapping["incomplete_periods"] not in ("reject", "drop"):
             raise ValueError("incomplete_periods must be reject (the default) or drop")
@@ -183,7 +182,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                     )
         return {**mapping, "period_type": kind, "series": validated_series}
 
-    def render(self, data: Any, mapping: dict[str, Any]) -> RenderedExport:
+    def render(self, data: Any, mapping: dict[str, Any]) -> RenderedPayload:
         import numpy as np
 
         entries = mapping["series"]
@@ -267,7 +266,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 periods.add(period)
                 record_count += 1
 
-        return RenderedExport(
+        return RenderedPayload(
             content=json.dumps({"dataValues": data_values}, allow_nan=False).encode(),
             record_count=record_count,
             skipped_count=skipped_count,
@@ -371,7 +370,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         *,
         dry_run: bool = False,
         context: DeliveryContext | None = None,
-    ) -> ExportReport:
+    ) -> DeliveryReport:
         """POST the rendered dataValueSet in resumable chunks and reconcile each.
 
         Chunking, checkpointing, and response interpretation stay inside the
@@ -382,7 +381,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         import hashlib
         from contextlib import closing
 
-        from open_climate_service.exports.dhis2 import get_connection
+        from open_climate_service.destinations.dhis2 import get_connection
         from open_climate_service.shared.time import utc_now
 
         if not isinstance(target, str) or not target.strip():
@@ -398,7 +397,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         values = body["dataValues"]
         chunks = self._chunk_values(values)
 
-        reports: list[ExportReport] = []
+        reports: list[DeliveryReport] = []
         cancelled_early = False
         terminal_message: str | None = None
         with closing(get_connection(target)) as client:
@@ -417,10 +416,10 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 )
                 reports.append(chunk_report)
                 if context is not None:
-                    context.report_progress(index + 1, len(chunks), "Delivering export chunks")
+                    context.report_progress(index + 1, len(chunks), "Delivering chunks")
                 # A rejected chunk is a hard stop: later chunks would fail for the
                 # same reason, and it must remain visible in the merged report.
-                if chunk_report.outcome == ExportOutcome.REJECTED:
+                if chunk_report.outcome == DeliveryOutcome.REJECTED:
                     terminal_message = chunk_report.message
                     break
 
@@ -457,7 +456,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         dry_run: bool,
         created_at: str,
         context: DeliveryContext | None,
-    ) -> ExportReport:
+    ) -> DeliveryReport:
         import hashlib
 
         chunk_payload = json.dumps({"dataValues": chunk_values}, allow_nan=False, separators=(",", ":")).encode()
@@ -466,7 +465,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         if checkpoint is not None:
             if checkpoint.connection_id != target or checkpoint.dry_run != dry_run:
                 raise ValueError("Delivery checkpoint target or mode changed")
-            if checkpoint.outcome == ExportOutcome.UNKNOWN and checkpoint.remote_task_ids:
+            if checkpoint.outcome == DeliveryOutcome.UNKNOWN and checkpoint.remote_task_ids:
                 checkpoint = self._poll_task(
                     client,
                     checkpoint.remote_task_ids[0],
@@ -485,11 +484,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             context,
             index,
             digest,
-            ExportReport(
+            DeliveryReport(
                 plugin_id=self.id,
                 connection_id=target,
                 dry_run=dry_run,
-                outcome=ExportOutcome.UNKNOWN,
+                outcome=DeliveryOutcome.UNKNOWN,
                 payload_sha256=digest,
                 submitted=len(chunk_values),
                 created_at=created_at,
@@ -512,11 +511,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             # preceding chunks remain visible in the merged delivery report.
             from open_climate_service.shared.time import utc_now
 
-            report = ExportReport(
+            report = DeliveryReport(
                 plugin_id=self.id,
                 connection_id=target,
                 dry_run=dry_run,
-                outcome=ExportOutcome.REJECTED,
+                outcome=DeliveryOutcome.REJECTED,
                 message=f"Connection failed before submission: {exc}",
                 payload_sha256=digest,
                 submitted=0,
@@ -528,7 +527,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         self._save_chunk_checkpoint(context, index, digest, report)
         return report
 
-    def _load_chunk_checkpoint(self, context: DeliveryContext | None, index: int, digest: str) -> ExportReport | None:
+    def _load_chunk_checkpoint(self, context: DeliveryContext | None, index: int, digest: str) -> DeliveryReport | None:
         """Restore a chunk from its checkpoint, or None to send it fresh."""
         if context is None:
             return None
@@ -539,7 +538,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         if not isinstance(state, dict) or state.get("digest") != digest:  # pyright: ignore[reportUnnecessaryIsInstance]
             raise ValueError("Delivery checkpoint is corrupt or chunk boundaries changed; refusing to resend")
         if state.get("status") == "completed":
-            report = ExportReport.model_validate(state.get("report"))
+            report = DeliveryReport.model_validate(state.get("report"))
             if report.payload_sha256 != digest or report.plugin_id != self.id:
                 raise ValueError("Delivery checkpoint report does not match the chunk")
             return report
@@ -548,11 +547,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             # Do not replay; record the uncertainty so the overall report is honest.
             from open_climate_service.shared.time import utc_now
 
-            return ExportReport(
+            return DeliveryReport(
                 plugin_id=self.id,
                 connection_id=state.get("connection_id"),
                 dry_run=bool(state.get("dry_run")),
-                outcome=ExportOutcome.UNKNOWN,
+                outcome=DeliveryOutcome.UNKNOWN,
                 message="Previously submitted; the import result could not be reconciled",
                 payload_sha256=digest,
                 submitted=int(state.get("submitted") or 0),
@@ -571,13 +570,13 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         context: DeliveryContext | None,
         index: int,
         digest: str,
-        report: ExportReport,
+        report: DeliveryReport,
         *,
         status: str | None = None,
     ) -> None:
         if context is None:
             return
-        status = status or ("submitted_unknown" if report.outcome == ExportOutcome.UNKNOWN else "completed")
+        status = status or ("submitted_unknown" if report.outcome == DeliveryOutcome.UNKNOWN else "completed")
         context.save_checkpoint(
             self._chunk_checkpoint_key(index),
             {
@@ -608,7 +607,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         chunk_sha256: str,
         context: DeliveryContext | None = None,
         index: int = 0,
-    ) -> ExportReport:
+    ) -> DeliveryReport:
         """POST one bounded chunk and reconcile its response, polling async tasks."""
         from open_climate_service.shared.time import utc_now
 
@@ -641,11 +640,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
             # The POST may have reached DHIS2 before failing (e.g. timeout).
             # Record an unknown outcome rather than fabricating a rejection, and
             # never auto-replay this chunk.
-            return ExportReport(
+            return DeliveryReport(
                 plugin_id=self.id,
                 connection_id=target,
                 dry_run=dry_run,
-                outcome=ExportOutcome.UNKNOWN,
+                outcome=DeliveryOutcome.UNKNOWN,
                 message=f"Transport error before the import result could be read: {type(exc).__name__}",
                 payload_sha256=chunk_sha256,
                 submitted=submitted,
@@ -658,11 +657,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         task_id = self._remote_task_id(summary)
         if self._is_async_acceptance(status_code, summary):
             if task_id is None:
-                return ExportReport(
+                return DeliveryReport(
                     plugin_id=self.id,
                     connection_id=target,
                     dry_run=dry_run,
-                    outcome=ExportOutcome.UNKNOWN,
+                    outcome=DeliveryOutcome.UNKNOWN,
                     message="Async import accepted without a reconcilable remote task ID",
                     payload_sha256=chunk_sha256,
                     submitted=submitted,
@@ -673,11 +672,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 context,
                 index,
                 chunk_sha256,
-                ExportReport(
+                DeliveryReport(
                     plugin_id=self.id,
                     connection_id=target,
                     dry_run=dry_run,
-                    outcome=ExportOutcome.UNKNOWN,
+                    outcome=DeliveryOutcome.UNKNOWN,
                     payload_sha256=chunk_sha256,
                     submitted=submitted,
                     remote_task_ids=[task_id],
@@ -718,7 +717,7 @@ class Dhis2ExportPlugin(BaseExportPlugin):
         payload_sha256: str,
         created_at: str,
         context: DeliveryContext | None = None,
-    ) -> ExportReport:
+    ) -> DeliveryReport:
         """Poll a submitted async import task with bounded backoff.
 
         The first status check happens immediately after acceptance; the backoff
@@ -756,11 +755,11 @@ class Dhis2ExportPlugin(BaseExportPlugin):
                 time.sleep(min(30.0, self.poll_backoff_base * (2**attempt)))
 
         # The task never reached a terminal state within the poll budget.
-        return ExportReport(
+        return DeliveryReport(
             plugin_id=self.id,
             connection_id=target,
             dry_run=dry_run,
-            outcome=ExportOutcome.UNKNOWN,
+            outcome=DeliveryOutcome.UNKNOWN,
             message=f"Async import task '{task_id}' did not reach a terminal state",
             payload_sha256=payload_sha256,
             submitted=submitted,
@@ -805,8 +804,8 @@ def build_dhis2_report(
     payload_sha256: str,
     submitted: int,
     created_at: str,
-) -> ExportReport:
-    """Translate a DHIS2 dataValueSets import response into an ExportReport."""
+) -> DeliveryReport:
+    """Translate a DHIS2 dataValueSets import response into an DeliveryReport."""
     from open_climate_service.shared.time import utc_now
 
     finished_at = utc_now().isoformat()
@@ -849,16 +848,16 @@ def build_dhis2_report(
     # successful import as HTTP 409 with status WARNING and real importCount
     # figures. Only fall back to the HTTP code when no summary status is present.
     if status in {"ERROR", "FAILED"}:
-        return ExportReport(outcome=ExportOutcome.REJECTED, message=message, **base)
+        return DeliveryReport(outcome=DeliveryOutcome.REJECTED, message=message, **base)
     if status == "WARNING" or conflicts:
-        return ExportReport(outcome=ExportOutcome.PARTIAL, message=message, **base)
+        return DeliveryReport(outcome=DeliveryOutcome.PARTIAL, message=message, **base)
     if status == "SUCCESS":
-        outcome = ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS
-        return ExportReport(outcome=outcome, message=message, **base)
+        outcome = DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS
+        return DeliveryReport(outcome=outcome, message=message, **base)
     if not 200 <= status_code < 300:
-        return ExportReport(outcome=ExportOutcome.REJECTED, message=message or f"HTTP {status_code}", **base)
+        return DeliveryReport(outcome=DeliveryOutcome.REJECTED, message=message or f"HTTP {status_code}", **base)
     # A 2xx without a recognizable import summary cannot be trusted as success.
-    return ExportReport(outcome=ExportOutcome.UNKNOWN, message="Unrecognized import summary", **base)
+    return DeliveryReport(outcome=DeliveryOutcome.UNKNOWN, message="Unrecognized import summary", **base)
 
 
 def _extract_import_summary(summary: dict[str, Any]) -> dict[str, Any]:

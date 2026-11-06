@@ -1496,7 +1496,7 @@ _API_GROUP_NOTES = {
     "Extent": "The area this instance covers.",
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
     "Automation": "How schedules, workflow triggers and pipelines connect, with each step's latest status.",
-    "Exports": "Deliver an export to its destination, and follow the delivery job.",
+    "Destinations": "Deliver an export to its destination, and follow the delivery job.",
     "Pipelines": "Run a reusable workflow over bound inputs and deliver its result: save, dry-run, run, pause.",
     "System": "Health, version and the landing page's JSON form.",
 }
@@ -2193,7 +2193,11 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         arguments=arguments,
         settings=json.dumps(spec.destination.settings, indent=2),
         settings_items=settings_items,
-        export=json.dumps(validation.export, indent=2) if validation and validation.export else None,
+        definition=(
+            json.dumps(validation.destination_definition, indent=2)
+            if validation and validation.destination_definition
+            else None
+        ),
         created_at=record.created_at,
         automation_since=record.automation_since,
         validation=validation,

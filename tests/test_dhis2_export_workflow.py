@@ -1,4 +1,4 @@
-"""CLIM-1216: the built-in DHIS2 aggregation workflow produces a deliverable named export."""
+"""CLIM-1216: the built-in DHIS2 aggregation workflow produces a deliverable named destination."""
 
 from __future__ import annotations
 
@@ -17,11 +17,11 @@ from fastapi.testclient import TestClient
 from openeo_pg_parser_networkx.process_registry import Process
 
 from open_climate_service import config
-from open_climate_service.exports import ExportReport
-from open_climate_service.exports.delivery_input import lease_export_input
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-from open_climate_service.exports.report import ExportOutcome
-from open_climate_service.exports.service import check_execution_declarations, resolve_named_export
+from open_climate_service.destinations import DeliveryReport
+from open_climate_service.destinations.delivery_input import lease_delivery_input
+from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+from open_climate_service.destinations.report import DeliveryOutcome
+from open_climate_service.destinations.service import check_execution_declarations, resolve_named_destination
 from open_climate_service.jobs import service as job_service_module
 from open_climate_service.jobs import store as native_store
 from open_climate_service.jobs.models import JobRecord, JobStatus
@@ -76,7 +76,7 @@ def _process(
         "dataset_id": "rain_monthly",
         "temporal_extent": ["2025-01-01", "2025-02-28"],
         "geometries": geometries,
-        "export": export,
+        "destination": export,
     }
     if method is not None:
         arguments["method"] = method
@@ -93,7 +93,7 @@ def _process(
 
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[openeo_jobs.OpenEOJobService]:
-    """An instance with one bound named export and a mocked dataset source."""
+    """An instance with one bound named destination and a mocked dataset source."""
     monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
@@ -103,7 +103,7 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[openeo
         config,
         "_cache",
         {
-            "exports": [
+            "destinations": [
                 {
                     "id": "rain-monthly",
                     "plugin": "dhis2",
@@ -154,19 +154,19 @@ def fake_send(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
 
     def send(
-        self: Dhis2ExportPlugin,
+        self: Dhis2DestinationPlugin,
         payload: bytes,
         target: Any,
         *,
         dry_run: bool = False,
         context: Any = None,
-    ) -> ExportReport:
+    ) -> DeliveryReport:
         calls.append({"payload": payload, "target": target, "dry_run": dry_run})
-        return ExportReport(
+        return DeliveryReport(
             plugin_id=self.id,
             connection_id=target,
             dry_run=dry_run,
-            outcome=ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS,
+            outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
             message="validated",
             payload_sha256=hashlib.sha256(payload).hexdigest(),
             submitted=4,
@@ -175,7 +175,7 @@ def fake_send(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             finished_at=utc_now().isoformat(),
         )
 
-    monkeypatch.setattr(Dhis2ExportPlugin, "send", send)
+    monkeypatch.setattr(Dhis2DestinationPlugin, "send", send)
     return calls
 
 
@@ -184,21 +184,21 @@ def test_workflow_is_builtin_and_takes_only_an_export_id() -> None:
     assert workflow is not None
     names = {parameter["name"] for parameter in workflow.parameters or []}
     # Instance-specific mapping lives in configuration, not in workflow parameters.
-    assert names == {"dataset_id", "temporal_extent", "geometries", "export", "method"}
+    assert names == {"dataset_id", "temporal_extent", "geometries", "destination", "method"}
     save = workflow.process_graph["save"]["arguments"]
     assert save["format"] == "DHIS2JSON"
-    assert save["options"] == {"export": {"from_parameter": "export"}}
+    assert save["options"] == {"destination": {"from_parameter": "destination"}}
 
 
 def test_workflow_job_produces_verified_delivery_input(instance: openeo_jobs.OpenEOJobService) -> None:
     record = _run(instance, "agg-job", _process(_geometries()))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
 
-    with lease_export_input("rain-monthly", "agg-job") as verified:
+    with lease_delivery_input("rain-monthly", "agg-job") as verified:
         manifest = verified.manifest
         payload = json.loads(verified.content)
 
-    assert manifest.export_id == "rain-monthly"
+    assert manifest.destination_id == "rain-monthly"
     assert manifest.source_job_id == "agg-job"
     assert manifest.target is not None
     assert manifest.references == {"dataset": "rain_monthly", "connection": "hmis"}
@@ -221,7 +221,7 @@ def test_workflow_export_submits_dry_run_delivery(
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
 
     response = client.post(
-        "/exports/rain-monthly",
+        "/destinations/rain-monthly",
         json={"job_id": "agg-job", "dry_run": True},
         headers={"Idempotency-Key": "agg-job-dry-run"},
     )
@@ -229,7 +229,7 @@ def test_workflow_export_submits_dry_run_delivery(
     delivery = _await_terminal(response.json()["delivery_job_id"])
     assert delivery.status == JobStatus.SUCCESSFUL, delivery.error
     assert isinstance(delivery.result, dict)
-    assert delivery.result["outcome"] == ExportOutcome.DRY_RUN
+    assert delivery.result["outcome"] == DeliveryOutcome.DRY_RUN
     assert len(fake_send) == 1
     assert fake_send[0]["dry_run"] is True
     assert fake_send[0]["target"] == "hmis"
@@ -249,21 +249,21 @@ def test_workflow_rejects_method_contradicting_the_export(instance: openeo_jobs.
     record = _run(instance, "agg-job", _process(_geometries(), method="sum"))
     assert record.status == OpenEOJobStatus.ERROR
     assert record.error_message is not None
-    assert "Declared export aggregation 'mean' does not match the executed spatial aggregation 'sum'" in (
+    assert "Declared destination aggregation 'mean' does not match the executed spatial aggregation 'sum'" in (
         record.error_message
     )
 
 
 def test_workflow_accepts_median_declared_by_the_export(instance: openeo_jobs.OpenEOJobService) -> None:
-    config.get_config()["exports"][0]["aggregation"] = "median"
+    config.get_config()["destinations"][0]["aggregation"] = "median"
     record = _run(instance, "agg-job", _process(_geometries(), method="median"))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
-    with lease_export_input("rain-monthly", "agg-job") as verified:
+    with lease_delivery_input("rain-monthly", "agg-job") as verified:
         assert verified.manifest.provenance["spatial_aggregations"] == ["median"]
 
 
 def test_undeclared_aggregation_accepts_any_method(instance: openeo_jobs.OpenEOJobService) -> None:
-    del config.get_config()["exports"][0]["aggregation"]
+    del config.get_config()["destinations"][0]["aggregation"]
     record = _run(instance, "agg-job", _process(_geometries(), method="max"))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
 
@@ -271,7 +271,7 @@ def test_undeclared_aggregation_accepts_any_method(instance: openeo_jobs.OpenEOJ
 def test_workflow_rejects_unknown_export(instance: openeo_jobs.OpenEOJobService) -> None:
     record = _run(instance, "agg-job", _process(_geometries(), export="missing"))
     assert record.status == OpenEOJobStatus.ERROR
-    assert record.error_message is not None and "Unknown export 'missing'" in record.error_message
+    assert record.error_message is not None and "Unknown destination 'missing'" in record.error_message
 
 
 def test_named_export_detection_expands_called_workflows() -> None:
@@ -280,7 +280,7 @@ def test_named_export_detection_expands_called_workflows() -> None:
         "inner": {
             "save": {
                 "process_id": "save_result",
-                "arguments": {"format": "DHIS2JSON", "options": {"export": {"from_parameter": "export"}}},
+                "arguments": {"format": "DHIS2JSON", "options": {"destination": {"from_parameter": "destination"}}},
                 "result": True,
             }
         },
@@ -299,7 +299,7 @@ def test_named_export_detection_expands_called_workflows() -> None:
 
 
 def test_ad_hoc_dhis2_json_graph_remains_supported(instance: openeo_jobs.OpenEOJobService) -> None:
-    """The documented escape hatch: legacy save_result options, no named export."""
+    """The documented escape hatch: legacy save_result options, no named destination."""
     graph = {
         "process_graph": {
             "load": {
@@ -366,7 +366,7 @@ def test_manifest_lists_unattributable_aggregation_as_missing(observed: list[str
 def test_aggregation_is_checked_only_when_attributable(
     instance: openeo_jobs.OpenEOJobService, observed: list[str | None], rejected: bool
 ) -> None:
-    resolved = resolve_named_export("DHIS2JSON", {"export": "rain-monthly"})
+    resolved = resolve_named_destination("DHIS2JSON", {"destination": "rain-monthly"})
     provenance = {"sources": [], "spatial_aggregations": observed}
     if rejected:
         with pytest.raises(ValueError, match="does not match the executed spatial aggregation"):

@@ -20,7 +20,7 @@ from .conftest import MountedClientFactory
 _MUTATING_ROUTES = [
     ("POST", "/ingestions"),
     ("DELETE", "/ingestions/jobs/{job_id}"),
-    ("POST", "/exports/{export_id}"),
+    ("POST", "/destinations/{destination_id}"),
     ("POST", "/features/{collection_id}/refresh"),
     ("POST", "/jobs"),
     ("PATCH", "/jobs/{job_id}"),
@@ -138,8 +138,8 @@ def test_policy_closes_batch_jobs_for_reads_too() -> None:
 
 def test_policy_closes_export_delivery_for_reads_too() -> None:
     """Delivery exposes server credentials, so status and reports are closed too."""
-    assert is_blocked("GET", "/exports")
-    assert is_blocked("GET", "/exports/rainfall-monthly/jobs/abc")
+    assert is_blocked("GET", "/destinations")
+    assert is_blocked("GET", "/destinations/rainfall-monthly/jobs/abc")
 
 
 @pytest.mark.parametrize("path", _PUBLIC_READS)

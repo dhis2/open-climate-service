@@ -84,10 +84,10 @@
             {% else %}
             <pre class="config-code"><code>{{ settings }}</code></pre>
             {% endif %}
-            {% if export %}
-            <h4>Export definition</h4>
-            <p class="note">Compiled by the destination plugin at the last validation. Runs save, and deliveries send, through this export, named after the pipeline.</p>
-            <pre class="config-code"><code>{{ export }}</code></pre>
+            {% if definition %}
+            <h4>Destination definition</h4>
+            <p class="note">Compiled by the destination plugin at the last validation. Runs save, and deliveries send, through this named destination, named after the pipeline.</p>
+            <pre class="config-code"><code>{{ definition }}</code></pre>
             {% endif %}
             </div>
           </details>
@@ -214,7 +214,7 @@
 
           <section class="panel" id="runs" aria-labelledby="runs-title">
             <h3 id="runs-title">Runs</h3>
-            <p class="note">Every run of the pipeline, by hand or after an update, executes its workflow over an explicit interval as a batch job, saves the result through the pipeline's export, and delivers it when the job finishes. A live run needs the pipeline to be live.</p>
+            <p class="note">Every run of the pipeline, by hand or after an update, executes its workflow over an explicit interval as a batch job, saves the result through the pipeline's destination, and delivers it when the job finishes. A live run needs the pipeline to be live.</p>
             {% if runs %}
             <div class="table-wrap">
               <table>

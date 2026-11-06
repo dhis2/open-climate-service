@@ -11,8 +11,8 @@ from uuid import uuid4
 import pytest
 
 from open_climate_service import plugin_discovery
-from open_climate_service.exports import ExportOutcome, ExportReport, merge_chunk_reports
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+from open_climate_service.destinations import DeliveryOutcome, DeliveryReport, merge_chunk_reports
+from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
 
 
 class FakeResponse:
@@ -82,8 +82,8 @@ def _payload(values: list[dict[str, Any]]) -> bytes:
     return json.dumps({"dataValues": values}).encode()
 
 
-def _plugin(**attrs: Any) -> Dhis2ExportPlugin:
-    plugin = Dhis2ExportPlugin()
+def _plugin(**attrs: Any) -> Dhis2DestinationPlugin:
+    plugin = Dhis2DestinationPlugin()
     for key, value in attrs.items():
         setattr(plugin, key, value)
     return plugin
@@ -95,13 +95,13 @@ def _chunk_digest(chunk_values: list[dict[str, Any]]) -> str:
 
 
 def _success_report(
-    plugin: Dhis2ExportPlugin, *, submitted: int, imported: int, payload_sha256: str, created_at: str
-) -> ExportReport:
-    return ExportReport(
+    plugin: Dhis2DestinationPlugin, *, submitted: int, imported: int, payload_sha256: str, created_at: str
+) -> DeliveryReport:
+    return DeliveryReport(
         plugin_id=plugin.id,
         connection_id="hmis",
         dry_run=False,
-        outcome=ExportOutcome.SUCCESS,
+        outcome=DeliveryOutcome.SUCCESS,
         payload_sha256=payload_sha256,
         submitted=submitted,
         imported=imported,
@@ -113,8 +113,8 @@ def _success_report(
 def test_merge_chunk_reports_precedence() -> None:
     now = "2026-01-01T00:00:00+00:00"
 
-    def report(outcome: ExportOutcome) -> ExportReport:
-        return ExportReport(
+    def report(outcome: DeliveryOutcome) -> DeliveryReport:
+        return DeliveryReport(
             plugin_id="dhis2",
             connection_id="hmis",
             dry_run=False,
@@ -126,7 +126,7 @@ def test_merge_chunk_reports_precedence() -> None:
         )
 
     merged = merge_chunk_reports(
-        [report(ExportOutcome.SUCCESS), report(ExportOutcome.PARTIAL), report(ExportOutcome.UNKNOWN)],
+        [report(DeliveryOutcome.SUCCESS), report(DeliveryOutcome.PARTIAL), report(DeliveryOutcome.UNKNOWN)],
         plugin_id="dhis2",
         connection_id="hmis",
         dry_run=False,
@@ -135,13 +135,13 @@ def test_merge_chunk_reports_precedence() -> None:
         finished_at=now,
         submitted=3,
     )
-    assert merged.outcome == ExportOutcome.UNKNOWN
+    assert merged.outcome == DeliveryOutcome.UNKNOWN
     assert merged.chunks == 3
     assert merged.attempts == 3
     assert merged.submitted == 3
 
     cancelled = merge_chunk_reports(
-        [report(ExportOutcome.SUCCESS)],
+        [report(DeliveryOutcome.SUCCESS)],
         plugin_id="dhis2",
         connection_id="hmis",
         dry_run=False,
@@ -151,7 +151,7 @@ def test_merge_chunk_reports_precedence() -> None:
         submitted=5,
         cancelled_early=True,
     )
-    assert cancelled.outcome == ExportOutcome.CANCELLED
+    assert cancelled.outcome == DeliveryOutcome.CANCELLED
 
     dry = merge_chunk_reports(
         [],
@@ -162,11 +162,11 @@ def test_merge_chunk_reports_precedence() -> None:
         created_at=now,
         finished_at=now,
     )
-    assert dry.outcome == ExportOutcome.DRY_RUN
+    assert dry.outcome == DeliveryOutcome.DRY_RUN
 
 
 def test_send_splits_large_payload_into_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=2, poll_backoff_base=0.0, max_poll_attempts=1)
     values = _values(5)
@@ -181,14 +181,14 @@ def test_send_splits_large_payload_into_chunks(monkeypatch: pytest.MonkeyPatch) 
     report = plugin.send(_payload(values), "hmis")
 
     assert len(client.posts) == 3
-    assert report.outcome == ExportOutcome.SUCCESS
+    assert report.outcome == DeliveryOutcome.SUCCESS
     assert report.chunks == 3
     assert report.submitted == 5
     assert report.imported == 5
 
 
 def test_send_reuses_completed_checkpoint_and_skips_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=2, poll_backoff_base=0.0, max_poll_attempts=1)
     values = _values(5)
@@ -226,14 +226,14 @@ def test_send_reuses_completed_checkpoint_and_skips_unknown(monkeypatch: pytest.
     # Chunk 0 was reused, chunk 1 was not re-sent (unknown), only chunk 2 went out.
     assert len(client.posts) == 1
     assert client.posts[0]["json"]["dataValues"] == values[4:5]
-    assert report.outcome == ExportOutcome.UNKNOWN
+    assert report.outcome == DeliveryOutcome.UNKNOWN
     assert report.chunks == 3
     assert report.imported == 3  # chunk 0 (2) + chunk 2 (1)
     assert report.submitted == 5
 
 
 def test_send_stops_when_cancellation_requested(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=2, poll_backoff_base=0.0, max_poll_attempts=1)
     values = _values(5)
@@ -250,14 +250,14 @@ def test_send_stops_when_cancellation_requested(monkeypatch: pytest.MonkeyPatch)
 
     report = plugin.send(_payload(values), "hmis", context=context)
 
-    assert report.outcome == ExportOutcome.CANCELLED
+    assert report.outcome == DeliveryOutcome.CANCELLED
     assert len(client.posts) == 1
     assert report.submitted == 2
     assert report.imported == 2
 
 
 def test_send_records_unknown_on_transport_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000)
     values = _values(3)
@@ -271,7 +271,7 @@ def test_send_records_unknown_on_transport_timeout(monkeypatch: pytest.MonkeyPat
 
     report = plugin.send(_payload(values), "hmis")
 
-    assert report.outcome == ExportOutcome.UNKNOWN
+    assert report.outcome == DeliveryOutcome.UNKNOWN
     assert report.remote_task_ids == []
     assert report.submitted == 3
 
@@ -280,7 +280,7 @@ def test_send_records_unknown_on_transport_timeout(monkeypatch: pytest.MonkeyPat
 def test_send_reports_pre_submission_connection_failure(monkeypatch: pytest.MonkeyPatch, error_type: str) -> None:
     import httpx
 
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000)
     values = _values(1001)
@@ -299,12 +299,12 @@ def test_send_reports_pre_submission_connection_failure(monkeypatch: pytest.Monk
     context = FakeContext()
     report = plugin.send(_payload(values), "hmis", context=context)
 
-    assert report.outcome == ExportOutcome.REJECTED
+    assert report.outcome == DeliveryOutcome.REJECTED
     assert report.chunks == 2
     assert report.submitted == 1000
     assert report.imported == 1000
     assert "Connection failed before submission" in str(report.message)
-    assert context.checkpoints["chunk:1"]["report"]["outcome"] == ExportOutcome.REJECTED
+    assert context.checkpoints["chunk:1"]["report"]["outcome"] == DeliveryOutcome.REJECTED
     assert context.checkpoints["chunk:1"]["status"] == "retryable_failed"
 
     client.post_handler = lambda path, json, params: FakeResponse(
@@ -312,7 +312,7 @@ def test_send_reports_pre_submission_connection_failure(monkeypatch: pytest.Monk
     )
     resumed = plugin.send(_payload(values), "hmis", context=context)
 
-    assert resumed.outcome == ExportOutcome.SUCCESS
+    assert resumed.outcome == DeliveryOutcome.SUCCESS
     assert resumed.imported == 1001
     assert len(client.posts) == 3
 
@@ -322,7 +322,7 @@ def test_send_keeps_unknown_checkpoint_on_ambiguous_requests_connection_error(
 ) -> None:
     import requests
 
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000)
     client = FakeClient()
@@ -336,12 +336,12 @@ def test_send_keeps_unknown_checkpoint_on_ambiguous_requests_connection_error(
     context = FakeContext()
     report = plugin.send(_payload(_values(3)), "hmis", context=context)
 
-    assert report.outcome == ExportOutcome.UNKNOWN
-    assert context.checkpoints["chunk:0"]["report"]["outcome"] == ExportOutcome.UNKNOWN
+    assert report.outcome == DeliveryOutcome.UNKNOWN
+    assert context.checkpoints["chunk:0"]["report"]["outcome"] == DeliveryOutcome.UNKNOWN
 
 
 def test_send_polls_async_import_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000, poll_backoff_base=0.0, max_poll_attempts=5)
     values = _values(2)
@@ -362,14 +362,14 @@ def test_send_polls_async_import_task(monkeypatch: pytest.MonkeyPatch) -> None:
 
     report = plugin.send(_payload(values), "hmis")
 
-    assert report.outcome == ExportOutcome.SUCCESS
+    assert report.outcome == DeliveryOutcome.SUCCESS
     assert report.remote_task_ids == ["task-1"]
     assert len(client.posts) == 1
     assert len(client.gets) >= 2
 
 
 def test_send_poll_budget_exhaustion_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_climate_service.destinations import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000, poll_backoff_base=0.0, max_poll_attempts=3)
     values = _values(1)
@@ -381,17 +381,17 @@ def test_send_poll_budget_exhaustion_is_unknown(monkeypatch: pytest.MonkeyPatch)
 
     report = plugin.send(_payload(values), "hmis")
 
-    assert report.outcome == ExportOutcome.UNKNOWN
+    assert report.outcome == DeliveryOutcome.UNKNOWN
     assert report.remote_task_ids == ["task-1"]
 
 
 def _install_delivery_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     name = "chunky_export_" + uuid4().hex
     package = tmp_path / name
-    (package / "exports").mkdir(parents=True)
+    (package / "destinations").mkdir(parents=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "exports" / "__init__.py").write_text("", encoding="utf-8")
-    (package / "exports" / "chunky.py").write_text(_EXTERNAL_DELIVERY_SOURCE, encoding="utf-8")
+    (package / "destinations" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "destinations" / "chunky.py").write_text(_EXTERNAL_DELIVERY_SOURCE, encoding="utf-8")
     metadata = tmp_path / f"{name}-1.0.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n", encoding="utf-8")
@@ -405,28 +405,27 @@ _EXTERNAL_DELIVERY_SOURCE = """
 import datetime as dt
 import hashlib
 
-from open_climate_service.exports import (
-    BaseExportPlugin,
-    RenderedExport,
-    ExportOutcome,
-    ExportReport,
+from open_climate_service.destinations import (
+    BaseDestinationPlugin,
+    RenderedPayload,
+    DeliveryOutcome,
+    DeliveryReport,
     merge_chunk_reports,
 )
 
 
-class ChunkedDelivery(BaseExportPlugin):
+class ChunkedDelivery(BaseDestinationPlugin):
     id = "chunky"
     format = "CHUNKY"
     extension = ".chunky"
     media_type = "application/x-chunky"
     version = "1"
-    supports_delivery = True
 
     def validate_mapping(self, mapping):
         return mapping
 
     def render(self, data, mapping):
-        return RenderedExport(data.encode() if isinstance(data, str) else b"rendered", 1)
+        return RenderedPayload(data.encode() if isinstance(data, str) else b"rendered", 1)
 
     def send(self, payload, target, *, dry_run=False, context=None):
         chunk_size = 3
@@ -439,14 +438,14 @@ class ChunkedDelivery(BaseExportPlugin):
             digest = hashlib.sha256(chunk).hexdigest()
             checkpoint = context.load_checkpoint(key) if context is not None else None
             if isinstance(checkpoint, dict) and checkpoint.get("digest") == digest and checkpoint.get("report"):
-                reports.append(ExportReport.model_validate(checkpoint["report"]))
+                reports.append(DeliveryReport.model_validate(checkpoint["report"]))
                 continue
             now = dt.datetime.now(dt.timezone.utc).isoformat()
-            reports.append(ExportReport(
+            reports.append(DeliveryReport(
                 plugin_id=self.id,
                 connection_id=target,
                 dry_run=dry_run,
-                outcome=ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS,
+                outcome=DeliveryOutcome.DRY_RUN if dry_run else DeliveryOutcome.SUCCESS,
                 payload_sha256=digest,
                 submitted=len(chunk),
                 imported=len(chunk),
@@ -475,21 +474,20 @@ plugin = ChunkedDelivery()
 
 def test_third_party_delivery_plugin_uses_only_public_apis(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from open_climate_service import config
-    from open_climate_service.exports.registry import load_export_plugins
-    from open_climate_service.exports.service import render_named_export
+    from open_climate_service.destinations.registry import load_destination_plugins
+    from open_climate_service.destinations.service import render_named_destination
 
     _install_delivery_fixture(tmp_path, monkeypatch)
-    config.get_config()["exports"] = [{"id": "chunky", "plugin": "chunky"}]
-    plugin = load_export_plugins()["chunky"]
-    assert plugin.supports_delivery is True
+    config.get_config()["destinations"] = [{"id": "chunky", "plugin": "chunky"}]
+    plugin = load_destination_plugins()["chunky"]
 
-    _, rendered = render_named_export("hello world", "CHUNKY", {"export": "chunky"})
+    _, rendered = render_named_destination("hello world", "CHUNKY", {"destination": "chunky"})
 
     context = FakeContext()
     report = plugin.send(rendered.content, "some-target", context=context)
 
-    assert isinstance(report, ExportReport)
-    assert report.outcome == ExportOutcome.SUCCESS
+    assert isinstance(report, DeliveryReport)
+    assert report.outcome == DeliveryOutcome.SUCCESS
     assert report.chunks == 4  # "hello world" (11 bytes) in chunks of 3
     assert report.imported == 11
     assert report.submitted == 11
@@ -499,12 +497,12 @@ def test_third_party_delivery_plugin_uses_only_public_apis(monkeypatch: pytest.M
     # A second run over the same context resumes from checkpoints without work.
     context.progress.clear()
     again = plugin.send(rendered.content, "some-target", context=context)
-    assert again.outcome == ExportOutcome.SUCCESS
+    assert again.outcome == DeliveryOutcome.SUCCESS
     assert again.imported == 11
 
 
 def test_restart_after_remote_acceptance_does_not_resend(monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.exports import dhis2
+    from open_climate_service.destinations import dhis2
 
     plugin = _plugin(poll_backoff_base=0)
     client = FakeClient()
@@ -520,7 +518,7 @@ def test_restart_after_remote_acceptance_does_not_resend(monkeypatch: pytest.Mon
         plugin.send(payload, "hmis", context=context)
     client.post_handler = lambda *args: pytest.fail("Uncertain chunk must not be resent")
     report = plugin.send(payload, "hmis", context=context)
-    assert report.outcome == ExportOutcome.UNKNOWN
+    assert report.outcome == DeliveryOutcome.UNKNOWN
     assert len(client.posts) == 1
 
 
@@ -533,7 +531,7 @@ def test_restart_after_remote_acceptance_does_not_resend(monkeypatch: pytest.Mon
     ],
 )
 def test_corrupt_checkpoint_refuses_resubmission(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]):
-    from open_climate_service.exports import dhis2
+    from open_climate_service.destinations import dhis2
 
     values = _values(1)
     client = FakeClient()
@@ -546,7 +544,7 @@ def test_corrupt_checkpoint_refuses_resubmission(monkeypatch: pytest.MonkeyPatch
 
 
 def test_nested_async_task_is_checkpointed_and_polled_on_restart(monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.exports import dhis2
+    from open_climate_service.destinations import dhis2
 
     plugin = _plugin(max_poll_attempts=1, poll_backoff_base=0)
     client = FakeClient()
@@ -560,17 +558,17 @@ def test_nested_async_task_is_checkpointed_and_polled_on_restart(monkeypatch: py
     monkeypatch.setattr(dhis2, "get_connection", lambda _: client)
     payload = _payload(_values(1))
     first = plugin.send(payload, "hmis", context=context)
-    assert first.outcome == ExportOutcome.UNKNOWN
+    assert first.outcome == DeliveryOutcome.UNKNOWN
     assert context.checkpoints["chunk:0"]["remote_task_ids"] == ["task1"]
     client.get_handler = lambda _: {"status": "SUCCESS", "importCount": {"imported": 1}}
     second = plugin.send(payload, "hmis", context=context)
-    assert second.outcome == ExportOutcome.SUCCESS
+    assert second.outcome == DeliveryOutcome.SUCCESS
     assert len(client.posts) == 1
     assert client.gets == ["/api/system/taskSummaries/DATAVALUE_IMPORT/task1"] * 2
 
 
-@pytest.mark.parametrize("status_code,outcome", [(200, ExportOutcome.SUCCESS), (409, ExportOutcome.REJECTED)])
-def test_pinned_client_response_contract(monkeypatch: pytest.MonkeyPatch, status_code: int, outcome: ExportOutcome):
+@pytest.mark.parametrize("status_code,outcome", [(200, DeliveryOutcome.SUCCESS), (409, DeliveryOutcome.REJECTED)])
+def test_pinned_client_response_contract(monkeypatch: pytest.MonkeyPatch, status_code: int, outcome: DeliveryOutcome):
     import httpx
 
     from open_climate_service import config
@@ -637,15 +635,15 @@ def test_warning_summary_is_partial_not_rejected(monkeypatch: pytest.MonkeyPatch
     original = httpx.Client
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: original(**kwargs, transport=httpx.MockTransport(handler)))
     report = _plugin(max_chunk_size=1000).send(_payload(_values(1)), "hmis")
-    assert report.outcome == ExportOutcome.PARTIAL
+    assert report.outcome == DeliveryOutcome.PARTIAL
     assert report.imported == 999
 
 
 def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from open_climate_service import config
-    from open_climate_service.exports.delivery import deliver_named_export
-    from open_climate_service.exports.delivery_input import lease_export_input
-    from open_climate_service.exports.service import write_named_export
+    from open_climate_service.destinations.delivery import deliver_named_destination
+    from open_climate_service.destinations.delivery_input import lease_delivery_input
+    from open_climate_service.destinations.service import write_named_destination
     from open_climate_service.openeo import jobs
     from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
     from open_climate_service.shared.provenance import json_digest
@@ -654,13 +652,13 @@ def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.Monk
     _install_delivery_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(jobs, "_JOBS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path)
-    config.get_config()["exports"] = [{"id": "chunky", "plugin": "chunky", "connection": "hmis"}]
+    config.get_config()["destinations"] = [{"id": "chunky", "plugin": "chunky", "connection": "hmis"}]
     config.get_config()["dhis2_connections"] = [
         {"id": "hmis", "url": "https://example.org", "token_env": "UNSET_TEST_TOKEN"},
     ]
     directory = tmp_path / "jobs" / "source" / "results"
     directory.mkdir(parents=True)
-    path = write_named_export("hello", directory, "CHUNKY", {"export": "chunky"}, job_id="source")
+    path = write_named_destination("hello", directory, "CHUNKY", {"destination": "chunky"}, job_id="source")
     jobs.store_create_job(
         OpenEOJobRecord(
             id="source",
@@ -669,8 +667,8 @@ def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.Monk
             usage={"output_path": path},
         )
     )
-    with lease_export_input("chunky", "source") as verified:
+    with lease_delivery_input("chunky", "source") as verified:
         digest = json_digest(verified.manifest.model_dump(mode="json"))
-    report = deliver_named_export("chunky", "source", expected_manifest_sha256=digest)
+    report = deliver_named_destination("chunky", "source", expected_manifest_sha256=digest)
     assert report["outcome"] == "success"
     assert report["imported"] == 5

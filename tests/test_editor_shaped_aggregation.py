@@ -137,7 +137,7 @@ def test_a_named_export_refuses_a_spatial_method_it_does_not_declare(
 ) -> None:
     """`rain-monthly` declares `aggregation: mean`; a graph that sums is refused, not exported."""
     graph = _graph("aggregate_spatial", _SUM_CALLBACK)
-    graph["process_graph"]["save"]["arguments"]["options"] = {"export": "rain-monthly"}
+    graph["process_graph"]["save"]["arguments"]["options"] = {"destination": "rain-monthly"}
     record = _run(instance, "core-sum-named", graph)
 
     assert record.status == OpenEOJobStatus.ERROR

@@ -24,8 +24,8 @@ pytest.importorskip("xvec")
 from openeo_pg_parser_networkx.process_registry import Process  # noqa: E402
 from shapely.geometry import box  # noqa: E402
 
-from open_climate_service.exports.delivery_input import lease_export_input  # noqa: E402
-from open_climate_service.exports.service import render_named_export  # noqa: E402
+from open_climate_service.destinations.delivery_input import lease_delivery_input  # noqa: E402
+from open_climate_service.destinations.service import render_named_destination  # noqa: E402
 from open_climate_service.openeo import execution  # noqa: E402
 from open_climate_service.openeo import jobs as openeo_jobs  # noqa: E402
 from open_climate_service.openeo.schemas import OpenEOJobStatus  # noqa: E402
@@ -132,7 +132,7 @@ def test_a_named_dhis2_export_reads_the_feature_ids(instance: openeo_jobs.OpenEO
     record = _run(instance, "named", _process(_geometries()))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
 
-    with lease_export_input("rain-monthly", "named") as verified:
+    with lease_delivery_input("rain-monthly", "named") as verified:
         values = json.loads(verified.content)["dataValues"]
 
     assert {value["orgUnit"] for value in values} == {_OU_A, _OU_B}
@@ -154,7 +154,7 @@ def test_a_named_dhis2_export_reads_ids_beside_shape_labels(instance: openeo_job
     )
     cube = attach_feature_ids(cube.xvec.set_geom_indexes("geometry", crs=4326), [_OU_A, _OU_B], "geometry")
 
-    _, rendered = render_named_export(cube, "DHIS2JSON", {"export": "rain-monthly"})
+    _, rendered = render_named_destination(cube, "DHIS2JSON", {"destination": "rain-monthly"})
 
     values = json.loads(rendered.content)["dataValues"]
     assert {value["orgUnit"] for value in values} == {_OU_A, _OU_B}

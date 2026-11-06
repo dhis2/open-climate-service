@@ -12,7 +12,7 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from open_climate_service.exports.base import PipelineSettingsForm
+from open_climate_service.destinations.base import PipelineSettingsForm
 from open_climate_service.pipelines.workflow import COLLECTION_ID, GEOJSON, TEMPORAL_INTERVAL
 
 _SCALARS = {"string", "integer", "number", "boolean"}

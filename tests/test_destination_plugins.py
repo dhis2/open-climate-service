@@ -1,4 +1,4 @@
-"""Named export rendering, plugin discovery, and openEO integration."""
+"""Named destination rendering, plugin discovery, and openEO integration."""
 
 import json
 from pathlib import Path
@@ -12,9 +12,9 @@ import xarray as xr
 from fastapi.testclient import TestClient
 
 from open_climate_service import config, plugin_discovery
-from open_climate_service.exports import RenderedExport
-from open_climate_service.exports.registry import load_export_plugins
-from open_climate_service.exports.service import render_named_export
+from open_climate_service.destinations import RenderedPayload
+from open_climate_service.destinations.registry import load_destination_plugins
+from open_climate_service.destinations.service import render_named_destination
 from open_climate_service.openeo.execution import SaveResultEnvelope
 from open_climate_service.openeo.jobs import (
     OpenEOJobService,
@@ -34,7 +34,7 @@ def definition(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "period_type": "monthly",
         "series": [{"select": {}, "data_element": "BXgDHhPdFVU"}],
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [definition]})
+    monkeypatch.setattr(config, "_cache", {"destinations": [definition]})
     return definition
 
 
@@ -42,8 +42,8 @@ def _frame(**overrides: Any) -> pd.DataFrame:
     return pd.DataFrame({"geometry": ["DiszpKrYNg8"], "t": ["202501"], "precip": [0.0]} | overrides)
 
 
-def _render(data: Any) -> RenderedExport:
-    return render_named_export(data, "DHIS2JSON", {"export": "rainfall"})[1]
+def _render(data: Any) -> RenderedPayload:
+    return render_named_destination(data, "DHIS2JSON", {"destination": "rainfall"})[1]
 
 
 def test_single_series_matches_legacy_without_resolving_credentials(definition: dict[str, Any]):
@@ -135,21 +135,21 @@ def test_mapping_is_not_mutated_and_request_cannot_override_it(definition: dict[
     _render(_frame())
     assert json.dumps(definition) == original
     with pytest.raises(ValueError, match="only"):
-        render_named_export(_frame(), "DHIS2JSON", {"export": "rainfall", "data_element_id": "OtherElemen"})
+        render_named_destination(_frame(), "DHIS2JSON", {"destination": "rainfall", "data_element_id": "OtherElemen"})
     with pytest.raises(ValueError, match="requires format"):
-        render_named_export(_frame(), "CHAPCSV", {"export": "rainfall"})
+        render_named_destination(_frame(), "CHAPCSV", {"destination": "rainfall"})
 
 
 def test_duplicate_export_ids_fail(definition: dict[str, Any]):
-    config.get_config()["exports"].append(definition.copy())
-    with pytest.raises(ValueError, match="Duplicate export ID"):
+    config.get_config()["destinations"].append(definition.copy())
+    with pytest.raises(ValueError, match="Duplicate destination ID"):
         _render(_frame())
 
 
 def _plugin_source(marker: str) -> str:
     return (
-        "from open_climate_service.exports import BaseExportPlugin, RenderedExport\n"
-        "class ExampleExport(BaseExportPlugin):\n"
+        "from open_climate_service.destinations import BaseDestinationPlugin, RenderedPayload\n"
+        "class ExampleDestination(BaseDestinationPlugin):\n"
         "    id = 'example'\n"
         "    format = 'EXAMPLE'\n"
         "    extension = '.example'\n"
@@ -157,18 +157,20 @@ def _plugin_source(marker: str) -> str:
         "    def validate_mapping(self, mapping):\n"
         "        return mapping\n"
         "    def render(self, data, mapping):\n"
-        f"        return RenderedExport({marker!r}.encode(), 1)\n"
-        "plugin = ExampleExport()\n"
+        f"        return RenderedPayload({marker!r}.encode(), 1)\n"
+        "    def send(self, payload, target, *, dry_run=False, context=None):\n"
+        "        raise RuntimeError('not delivered in these tests')\n"
+        "plugin = ExampleDestination()\n"
     )
 
 
 def _install_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     name = "example_export_" + uuid4().hex
     package = tmp_path / name
-    (package / "exports").mkdir(parents=True)
+    (package / "destinations").mkdir(parents=True)
     (package / "__init__.py").write_text("")
-    (package / "exports" / "__init__.py").write_text("")
-    (package / "exports" / "example.py").write_text(_plugin_source("installed"))
+    (package / "destinations" / "__init__.py").write_text("")
+    (package / "destinations" / "example.py").write_text(_plugin_source("installed"))
     metadata = tmp_path / f"{name}-1.0.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n")
@@ -182,25 +184,38 @@ def test_installed_plugin_discovery_and_instance_precedence(
     definition: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     _install_fixture(tmp_path, monkeypatch)
-    plugin = load_export_plugins()["example"]
+    plugin = load_destination_plugins()["example"]
     assert plugin.render(None, {}).content == b"installed"
-    local = tmp_path / "instance" / "exports"
+    local = tmp_path / "instance" / "destinations"
     local.mkdir(parents=True)
     (local / "_helper.py").write_text("MARKER = 'local'\n")
     (local / "example.py").write_text(
         "from ._helper import MARKER\n" + _plugin_source("local").replace("'local'.encode()", "MARKER.encode()")
     )
     config.get_config()["plugins_dir"] = str(local.parent)
-    assert load_export_plugins()["example"].render(None, {}).content == b"local"
+    assert load_destination_plugins()["example"].render(None, {}).content == b"local"
 
 
 def test_broken_plugin_is_skipped(definition: dict[str, Any], tmp_path: Path):
-    local = tmp_path / "exports"
+    local = tmp_path / "destinations"
     local.mkdir()
     (local / "broken.py").write_text("plugin = object()\n")
     config.get_config()["plugins_dir"] = str(tmp_path)
-    plugins = load_export_plugins()
+    plugins = load_destination_plugins()
     assert set(plugins) == {"dhis2"}
+
+
+def test_a_render_only_plugin_is_not_a_destination_and_is_skipped(definition: dict[str, Any], tmp_path: Path):
+    local = tmp_path / "destinations"
+    local.mkdir()
+    render_only = _plugin_source("local").replace(
+        "    def send(self, payload, target, *, dry_run=False, context=None):\n"
+        "        raise RuntimeError('not delivered in these tests')\n",
+        "",
+    )
+    (local / "example.py").write_text(render_only)
+    config.get_config()["plugins_dir"] = str(tmp_path)
+    assert set(load_destination_plugins()) == {"dhis2"}
 
 
 def test_sync_and_batch_external_export(
@@ -209,10 +224,11 @@ def test_sync_and_batch_external_export(
     _install_fixture(tmp_path, monkeypatch)
     definition.clear()
     definition.update(id="rainfall", plugin="example")
-    envelope = SaveResultEnvelope(_frame(), "EXAMPLE", {"export": "rainfall"})
+    envelope = SaveResultEnvelope(_frame(), "EXAMPLE", {"destination": "rainfall"})
     monkeypatch.setattr("open_climate_service.openeo.execution.run_process_graph", lambda *args: envelope)
+    # A destination is not an output format a process graph chooses.
     formats = client.get("/file_formats").json()["output"]
-    assert "export" in formats["EXAMPLE"]["parameters"]
+    assert "EXAMPLE" not in formats and "destination" in formats["DHIS2JSON"]["parameters"]
     response = client.post("/result", json={"process_graph": {}})
     assert response.status_code == 200
     assert response.content == b"installed"
@@ -238,7 +254,7 @@ def test_sync_and_batch_external_export(
     # Historical asset metadata does not depend on the current plugin definition.
     assets = _result_assets(record)
     assert "manifest" in assets
-    config.get_config()["exports"] = []
+    config.get_config()["destinations"] = []
     assert _result_assets(record) == assets
 
 
@@ -246,7 +262,7 @@ def test_sync_named_dhis2_in_read_only_mode(
     definition: dict[str, Any], monkeypatch: pytest.MonkeyPatch, client: TestClient
 ):
     config.get_config()["read_only"] = True
-    envelope = SaveResultEnvelope(_frame(), "DHIS2JSON", {"export": "rainfall"})
+    envelope = SaveResultEnvelope(_frame(), "DHIS2JSON", {"destination": "rainfall"})
     monkeypatch.setattr("open_climate_service.openeo.execution.run_process_graph", lambda *args: envelope)
     response = client.post("/result", json={"process_graph": {}})
     assert response.status_code == 200

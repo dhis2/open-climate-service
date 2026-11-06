@@ -62,12 +62,12 @@ def test_processes_do_not_lose_updates_across_atomic_replacement(tmp_path: Path,
 
 def test_failed_replace_preserves_reservations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from open_climate_service import config
-    from open_climate_service.exports.reservations import find_delivery, reserve_delivery, submission_lock
+    from open_climate_service.destinations.reservations import find_delivery, reserve_delivery, submission_lock
     from open_climate_service.shared import persistence
 
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path)
     arguments: dict[str, Any] = dict(
-        delivery_job_id="job", export_id="rain", source_job_id="source", dry_run=False, fingerprint="a"
+        delivery_job_id="job", destination_id="rain", source_job_id="source", dry_run=False, fingerprint="a"
     )
     with submission_lock():
         reserve_delivery("first", **arguments)

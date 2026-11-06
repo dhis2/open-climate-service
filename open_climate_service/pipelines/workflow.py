@@ -221,14 +221,14 @@ def build_process(
     start: str,
     end: str,
     save_format: str,
-    export_id: str,
+    destination_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The process graph for one run, and the arguments it resolved.
 
     The workflow is called as one node, then frozen: the call, and any workflow it calls, is
     inlined from the registry as of now, with declared defaults applied. A queued or retried
     job therefore runs the definition that was approved, even if the workflow is edited
-    meanwhile. The result is saved through the pipeline's named export in the destination
+    meanwhile. The result is saved through the pipeline's named destination in the destination
     plugin's format. Feature references are pinned to the collection version current now.
     """
     versions = _feature_versions(reference.arguments)
@@ -243,7 +243,7 @@ def build_process(
             "arguments": {
                 "data": {"from_node": WORKFLOW_NODE},
                 "format": save_format,
-                "options": {"export": export_id},
+                "options": {"destination": destination_id},
             },
             "result": True,
         },

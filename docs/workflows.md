@@ -69,7 +69,7 @@ Open Climate Service ships with ready-to-use workflows for aggregating **any pub
 
 | Workflow | Output |
 |---|---|
-| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a [named export](export_plugins.md), with a delivery manifest |
+| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a [named destination](destination_plugins.md), with a delivery manifest |
 | `aggregate_to_chap_csv` | CHAP wide CSV (`time_period`, `location`, one column per variable) |
 | `aggregate_by_features` | The aggregated vector cube itself, saved by the caller; the workflow [pipelines](web_interface.md#the-pipeline-pages-pipelines) use |
 
@@ -82,27 +82,27 @@ The first two run `load_collection → aggregate_spatial_weighted → save_resul
 | `dataset_id` | both | — | Published GeoZarr collection to aggregate (see `/datasets`) |
 | `temporal_extent` | both | — | `[start, end]` ISO-8601 dates |
 | `geometries` | both | — | GeoJSON `FeatureCollection`; each feature's `id` is the org unit / location |
-| `export` | DHIS2 only | — | ID of a named DHIS2 export in the instance configuration |
+| `destination` | DHIS2 only | — | ID of a named DHIS2 destination in the instance configuration |
 | `method` | both | `mean` | Spatial aggregation method: `mean`, `min`, `max`, `sum`, or `median` |
 | `period_type` | CHAP only | `month` | Period type used to format each time step: `day`, `week`, `month`, `quarter`, `year` |
 
-The DHIS2 workflow takes no data element or period type. The named export supplies
+The DHIS2 workflow takes no data element or period type. The named destination supplies
 the data element mapping, period type, and DHIS2 connection, so the workflow stays
-the same on every instance. When the export declares `aggregation`, the workflow's
+the same on every instance. When the destination declares `aggregation`, the workflow's
 `method` must match it or the run fails.
 
 > The period type **formats** each native time step into a DHIS2 period; it never aggregates in
-> time, and neither do these workflows. The dataset must already be at the period you export:
-> a daily dataset behind a monthly export is refused, not resampled. Derive the monthly dataset
+> time, and neither do these workflows. The dataset must already be at the period you deliver:
+> a daily dataset behind a monthly destination is refused, not resampled. Derive the monthly dataset
 > first, with `aggregate_temporal_period` in a graph that publishes it, or write a graph of your
 > own with that step before `save_result`. See
-> [the export's period must be reachable](export_plugins.md#the-exports-period-must-be-reachable-from-the-datasets-cadence).
+> [the destination's period must be reachable](destination_plugins.md#the-destinations-period-must-be-reachable-from-the-datasets-cadence).
 
 ### Example
 
 Mean monthly precipitation per district, as DHIS2 data values. The instance
-declares the `rainfall-monthly` export as shown in
-[Importing data to DHIS2](importing_to_dhis2.md#1-configure-a-named-export):
+declares the `rainfall-monthly` destination as shown in
+[Importing data to DHIS2](importing_to_dhis2.md#1-configure-a-named-destination):
 
 ```json
 {
@@ -114,7 +114,7 @@ declares the `rainfall-monthly` export as shown in
           "dataset_id": "era5land_precipitation_monthly",
           "temporal_extent": ["2025-01-01", "2025-12-31"],
           "geometries": { "type": "FeatureCollection", "features": [ "...org units..." ] },
-          "export": "rainfall-monthly",
+          "destination": "rainfall-monthly",
           "method": "mean"
         },
         "result": true
@@ -126,12 +126,12 @@ declares the `rainfall-monthly` export as shown in
 
 Submit it to `POST /result` to get the `dataValueSet` back directly. Submit it to
 `POST /jobs` for a saved result with a delivery manifest, which can then be delivered
-through `POST /exports/{export_id}`. For CHAP CSV, call `aggregate_to_chap_csv` with
-`period_type` in place of `export`.
+through `POST /destinations/{destination_id}`. For CHAP CSV, call `aggregate_to_chap_csv` with
+`period_type` in place of `destination`.
 
-To render a DHIS2 payload without a named export, write the graph yourself and pass
+To render a DHIS2 payload without a named destination, write the graph yourself and pass
 `data_element_id`, `org_unit_field`, and `period_type` to `save_result`. See
-[Ad-hoc DHIS2 JSON](importing_to_dhis2.md#ad-hoc-dhis2-json-without-a-named-export).
+[Ad-hoc DHIS2 JSON](importing_to_dhis2.md#ad-hoc-dhis2-json-without-a-named-destination).
 
 ---
 

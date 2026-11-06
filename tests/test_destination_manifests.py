@@ -12,9 +12,9 @@ import xarray as xr
 from fastapi import HTTPException
 
 from open_climate_service import config
-from open_climate_service.exports.delivery_input import lease_export_input
-from open_climate_service.exports.manifest import ExportManifest
-from open_climate_service.exports.service import write_named_export
+from open_climate_service.destinations.delivery_input import lease_delivery_input
+from open_climate_service.destinations.manifest import DeliveryManifest
+from open_climate_service.destinations.service import write_named_destination
 from open_climate_service.ingestions.schemas import ArtifactFormat
 from open_climate_service.openeo import jobs
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus, OpenEOJobUpdate
@@ -39,7 +39,7 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         config,
         "_cache",
         {
-            "exports": [
+            "destinations": [
                 {
                     "id": "rain",
                     "plugin": "dhis2",
@@ -54,7 +54,7 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.delenv("TEST_TOKEN", raising=False)
     directory = tmp_path / "jobs" / "source" / "results"
     directory.mkdir(parents=True)
-    path = write_named_export(_data(), directory, "DHIS2JSON", {"export": "rain"}, job_id="source")
+    path = write_named_destination(_data(), directory, "DHIS2JSON", {"destination": "rain"}, job_id="source")
     jobs.store_create_job(
         OpenEOJobRecord(
             id="source",
@@ -66,9 +66,9 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return Path(path)
 
 
-def _manifest(path: Path) -> ExportManifest:
+def _manifest(path: Path) -> DeliveryManifest:
     metadata = json.loads((path.parent / ".export.json").read_text())
-    return ExportManifest.model_validate_json((path.parent / metadata["manifest"]).read_bytes())
+    return DeliveryManifest.model_validate_json((path.parent / metadata["manifest"]).read_bytes())
 
 
 def test_manifest_records_exact_bytes_counts_and_missing_evidence(saved: Path):
@@ -80,7 +80,7 @@ def test_manifest_records_exact_bytes_counts_and_missing_evidence(saved: Path):
     assert manifest.periods == ["202501"]
     assert manifest.provenance["missing"] == ["execution_provenance"]
     assert manifest.plugin.version == "1"
-    with lease_export_input("rain", "source") as verified:
+    with lease_delivery_input("rain", "source") as verified:
         assert verified.content == saved.read_bytes()
         assert verified.manifest == manifest
 
@@ -88,7 +88,7 @@ def test_manifest_records_exact_bytes_counts_and_missing_evidence(saved: Path):
 def test_rotation_and_url_normalization_do_not_invalidate_binding(saved: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TEST_TOKEN", "rotated-secret")
     config.get_config()["dhis2_connections"][0]["url"] = "https://HMIS.EXAMPLE.ORG:443/dhis/"
-    with lease_export_input("rain", "source") as verified:
+    with lease_delivery_input("rain", "source") as verified:
         serialized = verified.manifest.model_dump_json()
         assert "rotated-secret" not in serialized
         assert "TEST_TOKEN" not in serialized
@@ -97,7 +97,7 @@ def test_rotation_and_url_normalization_do_not_invalidate_binding(saved: Path, m
 
 @pytest.mark.parametrize("change", ["mapping", "target", "connection", "version", "reference", "process"])
 def test_changed_bindings_are_conflicts(saved: Path, monkeypatch: pytest.MonkeyPatch, change: str):
-    definition = config.get_config()["exports"][0]
+    definition = config.get_config()["destinations"][0]
     if change == "mapping":
         definition["series"][0]["data_element"] = "Ix2HsbDMLea"
     elif change == "target":
@@ -107,14 +107,14 @@ def test_changed_bindings_are_conflicts(saved: Path, monkeypatch: pytest.MonkeyP
     elif change == "reference":
         definition["dataset"] = "other"
     elif change == "version":
-        monkeypatch.setattr("open_climate_service.exports.dhis2_renderer.Dhis2ExportPlugin.version", "2")
+        monkeypatch.setattr("open_climate_service.destinations.dhis2_renderer.Dhis2DestinationPlugin.version", "2")
     else:
         # Construct a fresh manifest with the original graph digest, then change the job graph.
-        path = write_named_export(
+        path = write_named_destination(
             _data(),
             saved.parent,
             "DHIS2JSON",
-            {"export": "rain"},
+            {"destination": "rain"},
             job_id="source",
             provenance={"process_sha256": json_digest({}), "sources": []},
         )
@@ -128,7 +128,7 @@ def test_changed_bindings_are_conflicts(saved: Path, monkeypatch: pytest.MonkeyP
             ),
         )
     with pytest.raises(HTTPException) as error:
-        with lease_export_input("rain", "source"):
+        with lease_delivery_input("rain", "source"):
             pytest.fail("Changed export must not be accepted")
     assert error.value.status_code == 409
 
@@ -166,7 +166,7 @@ def test_corrupt_missing_and_legacy_assets_are_rejected(saved: Path, change: str
             metadata["manifest_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
             metadata_path.write_text(json.dumps(metadata))
     with pytest.raises(HTTPException) as error:
-        with lease_export_input("rain", "source"):
+        with lease_delivery_input("rain", "source"):
             pytest.fail("Invalid export must not be accepted")
     assert error.value.status_code == 409
 
@@ -175,14 +175,14 @@ def test_corrupt_missing_and_legacy_assets_are_rejected(saved: Path, change: str
 def test_only_finished_jobs_are_eligible(saved: Path, status: OpenEOJobStatus):
     jobs.store_update_job("source", lambda record: record.model_copy(update={"status": status}))
     with pytest.raises(HTTPException, match="409"):
-        with lease_export_input("rain", "source"):
+        with lease_delivery_input("rain", "source"):
             pytest.fail("Incomplete job must not be accepted")
 
 
 def test_wrong_export_and_missing_job(saved: Path):
     for export, job_id, status in [("other", "source", 409), ("rain", "missing", 404)]:
         with pytest.raises(HTTPException) as error:
-            with lease_export_input(export, job_id):
+            with lease_delivery_input(export, job_id):
                 pytest.fail("Wrong source binding must not be accepted")
         assert error.value.status_code == status
 
@@ -191,7 +191,7 @@ def test_lease_blocks_mutation_and_releases_after_exception(saved: Path):
     service = jobs.OpenEOJobService()
     try:
         with pytest.raises(RuntimeError, match="consumer failed"):
-            with lease_export_input("rain", "source"):
+            with lease_delivery_input("rain", "source"):
                 for operation in (
                     lambda: service.delete_job("source"),
                     lambda: service.start_job("source"),
@@ -208,7 +208,7 @@ def test_lease_blocks_mutation_and_releases_after_exception(saved: Path):
 
 
 def test_failed_publication_keeps_previous_generation(saved: Path, monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.exports import manifest as module
+    from open_climate_service.destinations import manifest as module
 
     original = module.atomic_write
     old_metadata = (saved.parent / ".export.json").read_bytes()
@@ -220,19 +220,19 @@ def test_failed_publication_keeps_previous_generation(saved: Path, monkeypatch: 
 
     monkeypatch.setattr(module, "atomic_write", fail_manifest)
     with pytest.raises(OSError, match="simulated"):
-        write_named_export(_data(), saved.parent, "DHIS2JSON", {"export": "rain"}, job_id="source")
+        write_named_destination(_data(), saved.parent, "DHIS2JSON", {"destination": "rain"}, job_id="source")
     assert (saved.parent / ".export.json").read_bytes() == old_metadata
-    with lease_export_input("rain", "source") as verified:
+    with lease_delivery_input("rain", "source") as verified:
         assert verified.content == saved.read_bytes()
 
 
 def test_unbound_export_remains_downloadable_but_cannot_be_delivered(saved: Path):
-    del config.get_config()["exports"][0]["connection"]
-    path = write_named_export(_data(), saved.parent, "DHIS2JSON", {"export": "rain"}, job_id="source")
+    del config.get_config()["destinations"][0]["connection"]
+    path = write_named_destination(_data(), saved.parent, "DHIS2JSON", {"destination": "rain"}, job_id="source")
     jobs.store_update_job("source", lambda record: record.model_copy(update={"usage": {"output_path": path}}))
     assert _manifest(Path(path)).target is None
     with pytest.raises(HTTPException, match="without a delivery target"):
-        with lease_export_input("rain", "source"):
+        with lease_delivery_input("rain", "source"):
             pytest.fail("Unbound export must not be accepted")
 
 
@@ -278,7 +278,7 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
         def to_callable(self: Any, registry: Any):
             def execute():
                 execution._load_collection_impl("managed-rain")
-                return execution.SaveResultEnvelope(_data(), "DHIS2JSON", {"export": "rain"})
+                return execution.SaveResultEnvelope(_data(), "DHIS2JSON", {"destination": "rain"})
 
             return execute
 
@@ -289,7 +289,7 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
 
 def test_export_environment_interpolation_rejected_before_caching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     path = tmp_path / "config.yaml"
-    path.write_text("exports:\n  - id: rain\n    plugin: dhis2\n    data_element: ${SECRET}\n")
+    path.write_text("destinations:\n  - id: rain\n    plugin: dhis2\n    data_element: ${SECRET}\n")
     monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(path))
     monkeypatch.setenv("SECRET", "secret: [invalid yaml")
     with pytest.raises(ValueError, match="literal"):

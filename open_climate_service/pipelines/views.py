@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from open_climate_service.exports.base import BaseExportPlugin
+from open_climate_service.destinations.base import BaseDestinationPlugin
 from open_climate_service.openeo import workflows as workflow_registry
 from open_climate_service.pipelines import runner, service
 from open_climate_service.pipelines import workflow as workflow_binding
@@ -38,7 +38,7 @@ class Names:
 
 
 def destination_settings(
-    plugin: BaseExportPlugin, settings: dict[str, Any], labels: dict[str, dict[str, str]]
+    plugin: BaseDestinationPlugin, settings: dict[str, Any], labels: dict[str, dict[str, str]]
 ) -> list[DestinationSetting]:
     """The settings as the plugin's form names them, each looked-up value with the label it resolved to."""
 

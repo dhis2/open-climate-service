@@ -12,7 +12,7 @@ from open_climate_service.shared.persistence import atomic_json, index_lock
 
 
 def _reservations_path() -> Path:
-    return api_config.get_data_root() / "exports" / "delivery_reservations.json"
+    return api_config.get_data_root() / "destinations" / "delivery_reservations.json"
 
 
 def _load() -> dict[str, dict[str, object]]:
@@ -41,7 +41,7 @@ def reserve_delivery(
     idempotency_key: str,
     *,
     delivery_job_id: str,
-    export_id: str,
+    destination_id: str,
     source_job_id: str,
     dry_run: bool,
     fingerprint: str,
@@ -54,7 +54,7 @@ def reserve_delivery(
         raise ValueError("Delivery reservation already exists")
     records[idempotency_key] = {
         "delivery_job_id": delivery_job_id,
-        "export_id": export_id,
+        "destination_id": destination_id,
         "source_job_id": source_job_id,
         "dry_run": dry_run,
         "fingerprint": fingerprint,

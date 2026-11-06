@@ -52,25 +52,25 @@ def _load_config() -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"CLIMATE_SERVICE_CONFIG not found: {path}")
     text = path.read_text(encoding="utf-8")
-    # Named connections and export mappings are validated as literal definitions.
+    # Named connections and destination mappings are validated as literal definitions.
     # Reject environment interpolation inside only these two blocks before
     # substitution, so a secret that happens to contain YAML syntax can never
     # break parsing or be cached, while existing interpolation elsewhere (for
     # example bbox: [${MINX}, ${MINY}]) keeps working.
-    for block in ("dhis2_connections", "exports"):
+    for block in ("dhis2_connections", "destinations"):
         if _block_uses_interpolation(text, block):
             raise ValueError(f"{block} does not support environment interpolation; use literal values")
     loaded = yaml.safe_load(_substitute_env_vars(text))
     if loaded is not None and not isinstance(loaded, dict):
         raise ValueError(f"CLIMATE_SERVICE_CONFIG must be a YAML mapping at the top level: {path}")
     if loaded is not None and "dhis2_connections" in loaded:
-        from open_climate_service.exports.dhis2_config import parse_connections
+        from open_climate_service.destinations.dhis2_config import parse_connections
 
         parse_connections(loaded["dhis2_connections"])
-    if loaded is not None and "exports" in loaded:
-        from open_climate_service.exports.manifest import validate_public_mapping
+    if loaded is not None and "destinations" in loaded:
+        from open_climate_service.destinations.manifest import validate_public_mapping
 
-        validate_public_mapping(loaded["exports"])
+        validate_public_mapping(loaded["destinations"])
     _cache = dict(loaded or {})
     return _cache
 
@@ -78,7 +78,7 @@ def _load_config() -> dict[str, Any]:
 def _block_uses_interpolation(text: str, key: str) -> bool:
     """Return True when the top-level ``key`` block contains ``${...}`` tokens.
 
-    Interpolation is disallowed inside ``dhis2_connections`` and ``exports``
+    Interpolation is disallowed inside ``dhis2_connections`` and ``destinations``
     because those definitions are validated as literals and a substituted secret
     must never be cached. The scan stops at the next top-level key, so
     interpolation in other blocks remains supported.

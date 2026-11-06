@@ -256,11 +256,11 @@ def test_chap_export_still_finds_its_value_columns() -> None:
 
 
 def test_every_renderer_excludes_the_same_non_value_columns() -> None:
-    """The named-export plugin picks its value column by elimination too, from its own copy of
+    """The named-destination plugin picks its value column by elimination too, from its own copy of
     the list. Three copies drifted apart once already, so the CHAP path accepted a cube the
     DHIS2JSON path refused. One shared set, one test."""
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.tabular import _build_dhis2_json_payload
+    from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+    from open_climate_service.shared.tabular import _build_dhis2_json_payload
 
     frame = _result().to_dataframe().reset_index()
     options = {
@@ -270,7 +270,7 @@ def test_every_renderer_excludes_the_same_non_value_columns() -> None:
         "period_type": "daily",
     }
 
-    assert Dhis2ExportPlugin._candidate_value_fields(frame, None, "geometry", "time") == ["t2m"]
+    assert Dhis2DestinationPlugin._candidate_value_fields(frame, None, "geometry", "time") == ["t2m"]
     payload = _build_dhis2_json_payload(frame, options)
     assert payload["dataValues"], "the plugin renderer refused a cube the CHAP path accepts"
 
@@ -288,7 +288,7 @@ _NAMED_DHIS2_EXPORT = {
     "process_graph": {
         "save": {
             "process_id": "save_result",
-            "arguments": {"format": "DHIS2JSON", "options": {"export": "rainfall"}},
+            "arguments": {"format": "DHIS2JSON", "options": {"destination": "rainfall"}},
             "result": True,
         }
     }

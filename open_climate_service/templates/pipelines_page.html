@@ -107,7 +107,7 @@
           {% if not workflows %}
           <p class="note">No registered workflow can run in a pipeline: it needs a temporal-interval parameter and must return data rather than save it.</p>
           {% elif not destinations %}
-          <p class="note">No export plugin is a pipeline destination.</p>
+          <p class="note">No destination plugin is a pipeline destination.</p>
           {% else %}
           <form method="get" action="{{ mount }}/pipelines/{% if editing %}{{ editing }}/edit{% else %}new{% endif %}" class="form-grid pipeline-select">
             <div class="field field-wide">
@@ -139,7 +139,7 @@
                 <div class="field">
                   <label for="p-id">Id</label>
                   <input type="text" id="p-id" name="id" required pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="{{ draft.id or editing or '' }}" {% if editing %}readonly{% endif %} />
-                  <span class="hint">Letters, digits, underscores or hyphens. Also the id of the export its results are saved through.</span>
+                  <span class="hint">Letters, digits, underscores or hyphens. Also the id of the named destination its results are saved through.</span>
                 </div>
                 <div class="field">
                   <label for="p-name">Name</label>

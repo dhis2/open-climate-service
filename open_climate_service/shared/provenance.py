@@ -264,7 +264,7 @@ def _has_named_dhis2_export(
             if (
                 str(arguments.get("format", "")).upper() == "DHIS2JSON"
                 and isinstance(options, dict)
-                and "export" in options
+                and "destination" in options
             ):
                 return True
         if isinstance(process_id, str) and process_id not in expanded:

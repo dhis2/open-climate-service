@@ -125,7 +125,7 @@ def install_validation(record: PipelineRecord, validation: ValidationResult, *, 
     """Store a validation on the record, refusing one computed for a revision that has since changed.
 
     Validation runs outside the lock (it may contact the destination), so the record can move
-    on meanwhile; installing the old verdict would publish an export for a spec it never saw.
+    on meanwhile; installing the old verdict would publish a destination for a spec it never saw.
     """
     if record.revision != judged_revision:
         raise StaleRevision(
