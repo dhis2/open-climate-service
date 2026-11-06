@@ -179,9 +179,36 @@ def test_a_failed_write_leaves_no_file(monkeypatch: pytest.MonkeyPatch, stores: 
     ],
 )
 def test_a_refused_row_writes_nothing(row: dict[str, Any], message: str, stores: Path) -> None:
-    with pytest.raises(ValueError, match=message.replace("[", r"\[").replace("]", r"\]")):
+    pattern = message.replace("[", r"\[").replace("]", r"\]")
+    with pytest.raises(ValueError, match=pattern):
         _write([_row("D2", 5.0), row])
+    # A dry run gets the same verdict.
+    with pytest.raises(ValueError, match=pattern):
+        store.check_rows(dataset_id="precip_districts", collection_id="districts", rows=[_row("D2", 5.0), row])
     assert not (stores / "precip_districts").exists()
+    assert "precip_districts" not in ingestion_services.group_datasets()
+
+
+def test_checking_rows_returns_the_table_a_write_would_append_and_writes_nothing(stores: Path) -> None:
+    table = store.check_rows(
+        dataset_id="precip_districts",
+        collection_id="districts",
+        rows=[_row("D1", 12.5, coverage=1.0)],
+        written_at=FIRST,
+    )
+    assert table.schema == store.SCHEMA
+    assert table.to_pylist()[0] | {"written_at": None} == {
+        **dict.fromkeys(store.SCHEMA.names),
+        "collection_id": "districts",
+        "dataset_id": "precip_districts",
+        "feature_id": "D1",
+        "period": date(2026, 1, 1),
+        "value": 12.5,
+        "coverage": 1.0,
+        "reducer": "mean",
+    }
+    assert table.column("written_at").to_pylist() == [FIRST]
+    assert not stores.exists()
     assert "precip_districts" not in ingestion_services.group_datasets()
 
 
