@@ -592,6 +592,24 @@ row ever written.
 Filters: `collection`, `start` and `end` (inclusive period starts), `reducer` and `weights`. Only
 published table datasets are served.
 
+A pipeline with the `table` destination keeps its workflow's value per feature and period as a
+table dataset, created on its first delivery. With `policy: on_update`, a revised source period
+is computed again and written as new rows, which become the current values:
+
+```yaml
+workflow:
+  id: aggregate_by_features
+  arguments: { dataset_id: chirps3_precipitation_monthly, geometries: { from_features: districts }, method: mean }
+destination:
+  plugin: table
+  settings: { dataset_id: chirps3_precipitation_monthly_districts, name: Monthly precipitation by district }
+delivery: { policy: on_update }
+```
+
+The rows take the dataset's period type and units, the feature names of the collection, and the
+`reducer` the aggregation used. A dry run shows the first rows and checks them against the store
+without writing.
+
 ## 13. `/sync`
 
 `/sync` advances an existing managed dataset from its latest local coverage toward a requested upstream period.

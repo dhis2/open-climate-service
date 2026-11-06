@@ -202,7 +202,7 @@ def test_broken_plugin_is_skipped(definition: dict[str, Any], tmp_path: Path):
     (local / "broken.py").write_text("plugin = object()\n")
     config.get_config()["plugins_dir"] = str(tmp_path)
     plugins = load_destination_plugins()
-    assert set(plugins) == {"dhis2"}
+    assert set(plugins) == {"dhis2", "table"}
 
 
 def test_a_render_only_plugin_is_not_a_destination_and_is_skipped(definition: dict[str, Any], tmp_path: Path):
@@ -215,7 +215,7 @@ def test_a_render_only_plugin_is_not_a_destination_and_is_skipped(definition: di
     )
     (local / "example.py").write_text(render_only)
     config.get_config()["plugins_dir"] = str(tmp_path)
-    assert set(load_destination_plugins()) == {"dhis2"}
+    assert set(load_destination_plugins()) == {"dhis2", "table"}
 
 
 def test_sync_and_batch_external_export(

@@ -19,9 +19,11 @@ logger = logging.getLogger(__name__)
 def load_destination_plugins() -> dict[str, BaseDestinationPlugin]:
     """Load renderers in precedence order, skipping broken plugins."""
     from open_climate_service.destinations.dhis2_renderer import Dhis2DestinationPlugin
+    from open_climate_service.destinations.table import TableDestinationPlugin
 
-    builtin = Dhis2DestinationPlugin()
-    found: dict[str, BaseDestinationPlugin] = {builtin.id: builtin}
+    found: dict[str, BaseDestinationPlugin] = {
+        builtin.id: builtin for builtin in (Dhis2DestinationPlugin(), TableDestinationPlugin())
+    }
     for _, package, resource in sorted(plugin_discovery.iter_plugin_subdirs("destinations"), key=lambda item: item[:2]):
         for file in sorted(resource.iterdir(), key=lambda item: item.name):
             if file.name.endswith(".py") and not file.name.startswith("_"):

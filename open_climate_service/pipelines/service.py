@@ -71,6 +71,7 @@ def destination_context(spec: PipelineSpec, bound: BoundWorkflow) -> Destination
                 id=dataset_id,
                 variable=getattr(dataset, "variable", None),
                 cadence=getattr(dataset, "period_type", None),
+                units=getattr(dataset, "units", None),
             )
         )
     return DestinationContext(

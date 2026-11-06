@@ -239,3 +239,91 @@ def test_the_dataset_pages_render_a_table_dataset(client: TestClient) -> None:
     assert client.get("/datasets/precip_districts").json()["itemType"] == "table"
     assert client.get("/datasets/precip_districts", params={"f": "html"}).status_code == 200
     assert client.get("/", headers={"Accept": "text/html"}).status_code == 200
+
+
+# --- the `table` pipeline destination (CLIM-1554) -------------------------------------------
+
+
+def _cube(values: list[float], reducer: str | None = "mean") -> Any:
+    import numpy as np
+    import xarray as xr
+
+    from open_climate_service.shared.vectors import SPATIAL_REDUCER_ATTR
+
+    cube = xr.DataArray(
+        np.array(values, dtype="float64").reshape(1, 2),
+        dims=("t", "geometry"),
+        coords={"t": np.array(["2026-01-01"], dtype="datetime64[ns]"), "feature_id": ("geometry", ["D1", "D2"])},
+        name="tp",
+    )
+    if reducer:
+        cube.attrs[SPATIAL_REDUCER_ATTR] = reducer
+    return cube
+
+
+_MAPPING = {"dataset_id": "precip_districts", "collection_id": "districts", "name": "Precipitation", "unit": "mm"}
+
+
+def test_the_destination_renders_rows_and_delivers_them_through_the_writer() -> None:
+    from open_climate_service.destinations.table import plugin
+
+    rendered = plugin.render(_cube([1.5, math.nan]), plugin.validate_mapping(dict(_MAPPING)))
+    assert rendered.record_count == 2 and rendered.periods == ("2026-01-01",)
+
+    report = plugin.send(rendered.content, "tables")
+    assert report.outcome == "success" and report.imported == 2
+    record = ingestion_services.published_table_artifacts_by_dataset()["precip_districts"]
+    assert record.dataset_name == "Precipitation"
+    rows = store.read_rows(record).to_pylist()
+    assert [(row["feature_id"], row["value"], row["reducer"], row["unit"]) for row in rows] == [
+        ("D1", 1.5, "mean", "mm"),
+        ("D2", None, "mean", "mm"),
+    ]
+
+    # Sent again, as an operator may after an unconfirmed delivery: nothing new in current or history.
+    assert plugin.send(rendered.content, "tables").outcome == "success"
+    assert len(store.read_rows(record, history=True)) == 2
+
+
+def test_a_dry_run_send_checks_without_writing_and_a_refusal_is_a_rejected_report(
+    stores: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.destinations.table import plugin
+
+    rendered = plugin.render(_cube([1.0, 2.0]), plugin.validate_mapping(dict(_MAPPING)))
+    assert plugin.send(rendered.content, "tables", dry_run=True).outcome == "dry_run"
+    assert not stores.exists()
+
+    # The collection loses a feature between render and delivery: the writer refuses, and says why.
+    monkeypatch.setattr(store, "_collection_feature_ids", lambda collection_id: {"D1"})
+    report = plugin.send(rendered.content, "tables")
+    assert report.outcome == "rejected" and report.imported == 0 and report.ignored == 2
+    assert report.message is not None and "feature 'D2' is not in feature collection" in report.message
+    assert not stores.exists()
+
+
+def test_the_destination_refuses_a_result_with_more_than_one_value_per_feature_and_period() -> None:
+    from open_climate_service.destinations.table import plugin
+
+    cube = _cube([1.0, 2.0]).to_dataset()
+    cube["other"] = cube["tp"] * 2
+    with pytest.raises(ValueError, match="one value per feature and period"):
+        plugin.render(cube, plugin.validate_mapping(dict(_MAPPING)))
+
+
+def test_destination_checks_name_a_held_dataset_id_and_a_missing_collection() -> None:
+    from open_climate_service.destinations.base import DestinationContext
+    from open_climate_service.destinations.table import plugin
+
+    context = DestinationContext(destination_id="p", datasets=(), feature_collections=("regions",))
+    checks = {check.id: check for check in plugin.check_destination({"dataset_id": "districts"}, context)}
+    assert (
+        checks["table_dataset"].status == "fail" and "held by a geoparquet dataset" in checks["table_dataset"].message
+    )
+    assert checks["feature_collection"].status == "fail" and "'regions'" in checks["feature_collection"].message
+
+    context = DestinationContext(destination_id="p", datasets=(), feature_collections=("districts",))
+    checks = {check.id: check for check in plugin.check_destination({"dataset_id": "precip_districts"}, context)}
+    assert {check.status for check in checks.values()} == {"pass"}
+    bad = plugin.check_destination({"dataset_id": "no spaces"}, context)
+    assert [check.status for check in bad] == ["fail"]

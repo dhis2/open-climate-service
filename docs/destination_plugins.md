@@ -263,11 +263,13 @@ overriding these optional hooks of `BaseDestinationPlugin`:
 
 The target hooks apply to every delivery, not only pipelines. The defaults keep the contract
 existing delivery plugins rely on, including DHIS2: `send` receives a named connection's id. A
-plugin delivering anywhere else, a database or a file store, overrides both hooks.
+plugin delivering anywhere else, a database or a file store, overrides both hooks, as the
+built-in `table` destination does for this instance's own table store.
 
 `context` is a `DestinationContext`: the pipeline's destination id, the datasets its workflow binds
-(id, variable, cadence) and the feature collections it binds. The built-in DHIS2 plugin
-implements all of them in `open_climate_service/destinations/dhis2_destination.py`.
+(id, variable, cadence, units) and the feature collections it binds. The built-in DHIS2 plugin
+implements all of them in `open_climate_service/destinations/dhis2_destination.py`; the `table`
+destination, which keeps the result as a table dataset, in `open_climate_service/destinations/table.py`.
 
 ### Configure the plugin's pipeline settings
 
