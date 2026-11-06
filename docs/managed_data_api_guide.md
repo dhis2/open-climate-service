@@ -587,7 +587,10 @@ none. A missing value is `null`, or an empty cell in CSV, never 0.
 
 A table dataset has one period type, shown as `period_type` on `/datasets`: whether `period` starts
 a day, a month or a year. Rows with another period type are refused, and each stored Parquet file
-carries it in its metadata as `ocs:period_type`, for readers of the files themselves.
+carries it in its metadata as `ocs:period_type`, for readers of the files themselves. `period` is
+always the first day of the period: January 2026 is `2026-01-01`, an ISO week its Monday, a dekad
+the 1st, 11th or 21st. A row dated otherwise, such as a month labelled by its last day the way
+`aggregate_temporal_period` labels it, is stored at its period's start.
 
 Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
 the latest row for each feature, period, class, reducer and weights. Add `history=true` for every

@@ -359,3 +359,100 @@ def test_a_destination_payload_for_another_period_type_is_rejected(stores: Path)
     _write([_row("D1", 1.0)])  # monthly
     with pytest.raises(ValueError, match="is monthly; it cannot take daily rows"):
         plugin.render(_cube([1.0, 2.0]), plugin.validate_mapping({**_MAPPING, "period_type": "daily"}))
+
+
+@pytest.mark.parametrize(
+    ("period_type", "day", "start"),
+    [
+        ("daily", date(2025, 1, 31), date(2025, 1, 31)),
+        ("weekly", date(2025, 1, 5), date(2024, 12, 30)),  # a Sunday label is the ISO week from Monday
+        ("dekadal", date(2025, 1, 20), date(2025, 1, 11)),
+        ("monthly", date(2025, 1, 31), date(2025, 1, 1)),
+        ("quarterly", date(2025, 6, 30), date(2025, 4, 1)),
+        ("yearly", date(2025, 12, 31), date(2025, 1, 1)),
+        (None, date(2025, 1, 31), date(2025, 1, 31)),
+    ],
+)
+def test_a_period_is_stored_as_its_start(period_type: str | None, day: date, start: date) -> None:
+    assert store.period_start(day, period_type) == start
+
+
+def test_a_month_labelled_by_its_last_day_is_the_same_value_as_its_first() -> None:
+    _write([_row("D1", 10.0, period="2026-01-31")], written_at=FIRST)
+    record = _write([_row("D1", 11.0, period="2026-01-01")], written_at=LATER)
+    current = store.read_rows(record).to_pylist()
+    assert [(row["period"], row["value"]) for row in current] == [(date(2026, 1, 1), 11.0)]
+
+
+def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real temporal and spatial aggregation: pandas labels each month by its last day."""
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+    from openeo_pg_parser_networkx.process_registry import Process
+
+    from open_climate_service.exports.table import plugin
+    from open_climate_service.openeo import execution
+    from open_climate_service.shared.provenance import record_source
+    from open_climate_service.shared.time import stamp_cadence
+
+    days = pd.date_range("2026-01-01", "2026-02-28", freq="D")
+
+    def load_collection(id: str | None = None, **_: Any) -> xr.DataArray:
+        record_source(str(id), type("Artifact", (), {"artifact_id": "a", "source_dataset_id": id, "path": None})())
+        cube = xr.DataArray(
+            np.ones((len(days), 2, 2)),
+            dims=("t", "y", "x"),
+            coords={"t": days.values, "y": [-0.5, -1.5], "x": [30.5, 31.5]},
+            name="precip",
+        ).rio.write_crs("EPSG:4326")
+        return stamp_cadence(cube, "daily")
+
+    mocked = execution._RegistryOverlay(
+        execution._build_process_registry(), {"load_collection": Process(spec={}, implementation=load_collection)}
+    )
+    monkeypatch.setattr(execution, "_build_process_registry", lambda: mocked)
+    collection = {
+        "type": "FeatureCollection",
+        "features": [{**_box("D1", 30, -2), "id": "D1"}, {**_box("D2", 31, -1), "id": "D2"}],
+    }
+    graph = {
+        "process_graph": {
+            "load": {"process_id": "load_collection", "arguments": {"id": "rain_daily"}},
+            "monthly": {
+                "process_id": "aggregate_temporal_period",
+                "arguments": {
+                    "data": {"from_node": "load"},
+                    "period": "month",
+                    "reducer": {
+                        "process_graph": {
+                            "r": {
+                                "process_id": "sum",
+                                "arguments": {"data": {"from_parameter": "data"}},
+                                "result": True,
+                            }
+                        }
+                    },
+                },
+            },
+            "zonal": {
+                "process_id": "aggregate_spatial_weighted",
+                "arguments": {"data": {"from_node": "monthly"}, "geometries": collection, "reducer": "mean"},
+                "result": True,
+            },
+        }
+    }
+    result = execution.run_process_graph(graph)
+    assert [str(value)[:10] for value in result["t"].values] == ["2026-01-31", "2026-02-28"]
+
+    # The source dataset is daily, as the pipeline compiled it; the result says it is monthly.
+    rendered = plugin.render(result, plugin.validate_mapping({**_MAPPING, "period_type": "daily"}))
+    assert rendered.periods == ("2026-01-01", "2026-02-01")
+    plugin.send(rendered.content, "tables")
+    record = ingestion_services.published_table_artifacts_by_dataset()["precip_districts"]
+    assert record.period_type == "monthly"
+    rows = store.read_rows(record).to_pylist()
+    assert {(row["period"], row["value"]) for row in rows if row["feature_id"] == "D1"} == {
+        (date(2026, 1, 1), 31.0),
+        (date(2026, 2, 1), 28.0),
+    }

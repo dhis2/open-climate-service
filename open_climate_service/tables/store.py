@@ -157,7 +157,8 @@ def check_rows(
     a raster or feature collection already holds is refused, so the two never share a listing.
 
     A dataset has one period type, the first one written. A *period_type* that differs from it is
-    refused; None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`).
+    refused; None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`), and each
+    `period` is stored as the start of the period that contains it (`period_start`).
     """
     _require_id(dataset_id, "table dataset")
     _require_id(collection_id, "feature collection")
@@ -173,6 +174,7 @@ def check_rows(
             raise ValueError(
                 f"row {index}: feature '{clean['feature_id']}' is not in feature collection '{collection_id}'"
             )
+        clean["period"] = period_start(clean["period"], period_type)
         clean["written_at"] = stamp
         key = tuple(clean.get(name) for name in KEY)
         if key in seen:
@@ -359,6 +361,28 @@ def _validated_row(row: object, *, index: int, dataset_id: str, collection_id: s
         if row.get(name) is not None and not isinstance(row[name], str):
             raise ValueError(f"row {index}: {name} must be a string")
     return clean
+
+
+def period_start(day: date, period_type: str | None) -> date:
+    """The first day of the *period_type* period that contains *day*; *day* itself for any other.
+
+    Producers label a period by different days: pandas resampling dates a month by its last day
+    and a week by its Sunday, while OCS stores date them by their first. Storing the start keeps
+    one key per period, so a revision replaces a value rather than standing beside it.
+    """
+    from open_climate_service.shared.time import dekad_start
+
+    if period_type == "weekly":
+        return day - timedelta(days=day.weekday())
+    if period_type == "dekadal":
+        return dekad_start(day)
+    if period_type == "monthly":
+        return day.replace(day=1)
+    if period_type == "quarterly":
+        return day.replace(month=3 * ((day.month - 1) // 3) + 1, day=1)
+    if period_type == "yearly":
+        return day.replace(month=1, day=1)
+    return day
 
 
 def _period(value: object, *, index: int) -> date:

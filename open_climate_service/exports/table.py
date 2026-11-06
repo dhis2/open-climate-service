@@ -196,8 +196,11 @@ class TableExportPlugin(BaseExportPlugin):
         import pyarrow.parquet as pq
 
         from open_climate_service.features.services import feature_names
+        from open_climate_service.shared.time import cadence_of
         from open_climate_service.tables import store
 
+        # The result's own cadence: a graph that aggregates in time makes it coarser than its source.
+        period_type = cadence_of(data) or mapping.get("period_type")
         frame, reducer = _frame(data)
         id_field, value_field = _fields(frame)
         names = feature_names(mapping["collection_id"])
@@ -216,7 +219,7 @@ class TableExportPlugin(BaseExportPlugin):
             dataset_id=mapping["dataset_id"],
             collection_id=mapping["collection_id"],
             rows=rows,
-            period_type=mapping.get("period_type"),
+            period_type=period_type,
             written_at=datetime.now(UTC),
         )
         # The store's metadata carries the period type; the payload adds the dataset name.
