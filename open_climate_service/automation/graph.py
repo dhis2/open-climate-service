@@ -286,17 +286,15 @@ def _features_node(collection_id: str, feature_names: Mapping[str, str]) -> Grap
     )
 
 
-def _pipeline_inputs(record: Any, datasets: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    """The datasets and feature collections a pipeline's workflow binds."""
-    try:
-        from open_climate_service.pipelines.workflow import bind
+def _pipeline_inputs(record: Any) -> tuple[list[str], list[str]]:
+    """The datasets and feature collections a pipeline reads, by the rule its API resource uses."""
+    from open_climate_service.pipelines.workflow import inputs
 
-        bound = bind(record.spec.workflow)
-        return list(bound.dataset_ids), list(bound.feature_collections)
-    except Exception:
-        # A pipeline whose workflow no longer binds still shows, with what its arguments name.
-        arguments = record.spec.workflow.arguments
-        return list(dict.fromkeys(_literal_datasets(arguments, datasets))), list(_feature_refs(arguments))
+    found = inputs(record.spec.workflow)
+    return (
+        list(dict.fromkeys(input_id for kind, input_id, _ in found if kind == "dataset")),
+        list(dict.fromkeys(input_id for kind, input_id, _ in found if kind == "features")),
+    )
 
 
 def assemble_graph(
@@ -381,7 +379,7 @@ def assemble_graph(
                 href=f"/workflows/{spec.workflow.id}",
             )
         )
-        dataset_ids, collection_ids = _pipeline_inputs(record, datasets)
+        dataset_ids, collection_ids = _pipeline_inputs(record)
         drive: EdgeKind = "updates" if spec.delivery.policy == "on_update" else "input"
         for dataset_id in dataset_ids:
             b.edge(

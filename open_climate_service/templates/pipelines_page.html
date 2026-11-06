@@ -129,7 +129,7 @@
             </div>
           </form>
 
-          <form method="post" action="{{ mount }}/pipelines{% if editing %}/{{ editing }}{% endif %}" class="pipeline-form" data-lookup-url="{{ mount }}/pipelines/lookups/{{ destination.id }}">
+          <form method="post" action="{{ mount }}/pipelines/{% if editing %}{{ editing }}/edit{% else %}new{% endif %}" class="pipeline-form" data-lookup-url="{{ mount }}/pipelines/lookups/{{ destination.id }}">
             <input type="hidden" name="workflow" value="{{ workflow.id }}" />
             <input type="hidden" name="destination" value="{{ destination.id }}" />
             {% if editing %}<input type="hidden" name="revision" value="{{ revision or '' }}" />{% endif %}
