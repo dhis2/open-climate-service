@@ -3,13 +3,14 @@ import os
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters import copdem30
-from open_climate_service.plugins.rasters.copdem30 import CopDEM30Plugin
+from open_climate_service.plugins.rasters import copdem
+from open_climate_service.plugins.rasters.copdem import CopDEMPlugin
 
 _TEST_BBOX = [28.7, -2.9, 28.8, -2.8]
 
 
-def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("product", ["GLO-30", "GLO-90"])
+def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyPatch, product: str) -> None:
     """A static dataset (CLIM-1448): the source grid comes back as (y, x), clipped and renamed."""
     import numpy as np
 
@@ -18,26 +19,38 @@ def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyP
     source = xr.Dataset(
         {"dsm": (("lat", "lon"), np.ones((lat.size, lon.size), dtype="float32"))}, {"lat": lat, "lon": lon}
     )
-    monkeypatch.setattr(copdem30.xr, "open_dataset", lambda *args, **kwargs: source)
+    opened: list[str] = []
 
-    ds = CopDEM30Plugin().fetch(bbox=_TEST_BBOX)
+    def open_dataset(url: str, **_: object) -> xr.Dataset:
+        opened.append(url)
+        return source
 
+    monkeypatch.setattr(copdem.xr, "open_dataset", open_dataset)
+
+    ds = CopDEMPlugin(product=product).fetch(bbox=_TEST_BBOX)
+
+    assert opened == [f"https://data.earthdatahub.destine.eu/copernicus-dem/{product}-v1.zarr"]
     assert set(ds["elevation"].dims) == {"y", "x"} and "t" not in ds.coords
     assert float(ds.x.min()) >= _TEST_BBOX[0] - 0.05 and float(ds.x.max()) <= _TEST_BBOX[2] + 0.05
 
 
-@pytest.fixture
-def elevation_data():
+def test_an_unknown_product_is_refused() -> None:
+    with pytest.raises(ValueError, match="GLO-60"):
+        CopDEMPlugin(product="GLO-60")
+
+
+@pytest.fixture(params=["GLO-30", "GLO-90"])
+def elevation_data(request: pytest.FixtureRequest):
     # hacky check for TEST_INTEGRATIONS flag for integration tests that should only be run manually
     if not os.getenv("TEST_INTEGRATIONS"):
         pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
 
-    plugin = CopDEM30Plugin()
+    plugin = CopDEMPlugin(product=request.param)
     ds = plugin.fetch(bbox=_TEST_BBOX)
     return ds
 
 
-def test_copdem30_dims_and_values(elevation_data: xr.Dataset):
+def test_copdem_dims_and_values(elevation_data: xr.Dataset):
     assert isinstance(elevation_data, xr.Dataset)
 
     assert set(elevation_data.dims) == {"y", "x"}
