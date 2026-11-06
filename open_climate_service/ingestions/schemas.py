@@ -37,6 +37,12 @@ class ArtifactFormat(StrEnum):
     datacube, while STAC admits it in CLIM-1069 — together with the collection document and
     the `table` extension, so the catalogue never advertises a child it cannot serve.
     """
+    PARQUET = "parquet"
+    """A table dataset: values per feature and period, appended as Parquet files (CLIM-1553).
+
+    The record's `path` is the dataset's folder, holding one folder per feature collection of
+    immutable files, which `tables.store` writes and reads. Neither catalogue describes it yet.
+    """
 
 
 class DatasetItemType(StrEnum):
@@ -52,6 +58,7 @@ class DatasetItemType(StrEnum):
 
     FEATURE = "feature"
     COVERAGE = "coverage"
+    TABLE = "table"
 
 
 class PublicationStatus(StrEnum):
@@ -554,6 +561,11 @@ class ArtifactRecord(BaseModel):
                 # collection a time column or a version, neither of which is a raster period.
                 raise ValueError("a geoparquet artifact has no period axis, so it declares no period_type")
             return self
+        if self.format == ArtifactFormat.PARQUET:
+            # Rows carry their own unit and reducer; a table names no raster variable.
+            if self.features is not None or self.variable is not None or self.variables:
+                raise ValueError("a parquet artifact is a table of rows, with no feature detail or raster variable")
+            return self
         if self.features is not None:
             raise ValueError(f"a {self.format} artifact is a raster and must not carry feature detail")
         if self.variable is None or not self.variable.strip():
@@ -640,10 +652,10 @@ class DatasetRecord(BaseModel):
         serialization_alias="itemType",
         description=(
             "What this dataset holds: 'feature' for a feature collection, 'coverage' for a "
-            "raster. The one field that lets a client filter a listing without a request per "
-            "row — `format` sits on the nested version record, which only the detail endpoint "
-            "returns. Spelled in OGC API - Features' camelCase because the name is borrowed "
-            "from that specification rather than invented here."
+            "raster, 'table' for values per feature and period. The one field that lets a client "
+            "filter a listing without a request per row — `format` sits on the nested version "
+            "record, which only the detail endpoint returns. Spelled in OGC API - Features' "
+            "camelCase because the name is borrowed from that specification rather than invented here."
         ),
     )
     variable: str | None = Field(

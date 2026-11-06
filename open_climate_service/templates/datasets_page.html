@@ -78,6 +78,7 @@
                 <div class="meta">
                   <span class="chip chip-{{ ds.status }}">{{ ds.status }}</span>
                   {% if ds.kind == "vector" %}<span class="chip">Vector</span>{% endif %}
+                  {% if ds.kind == "table" %}<span class="chip">Table</span>{% endif %}
                   {% if ds.period_type %}<span class="chip">{{ ds.period_type }}</span>{% endif %}
                   {% if ds.coverage %}<span class="chip">{{ ds.coverage }}</span>{% endif %}
                   {% if ds.units %}<span class="chip">{{ ds.units }}</span>{% endif %}
