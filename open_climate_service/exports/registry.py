@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 def load_export_plugins() -> dict[str, BaseExportPlugin]:
     """Load renderers in precedence order, skipping broken plugins."""
     from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_climate_service.exports.table import TableExportPlugin
 
-    builtin = Dhis2ExportPlugin()
-    found: dict[str, BaseExportPlugin] = {builtin.id: builtin}
+    found: dict[str, BaseExportPlugin] = {builtin.id: builtin for builtin in (Dhis2ExportPlugin(), TableExportPlugin())}
     for _, package, resource in sorted(plugin_discovery.iter_plugin_subdirs("exports"), key=lambda item: item[:2]):
         for file in sorted(resource.iterdir(), key=lambda item: item.name):
             if file.name.endswith(".py") and not file.name.startswith("_"):

@@ -145,10 +145,12 @@ def check_rows(
     columns are optional. `dataset_id` and `collection_id` come from the arguments, and a row
     that names others is refused. A missing value is None (NaN is read as None); a value with
     `coverage` 0 is refused, because a unit without valid cells has no value, and 0 would be
-    exported as a measurement. All rows share one `written_at`, now unless given.
+    exported as a measurement. All rows share one `written_at`, now unless given. A dataset id
+    a raster or feature collection already holds is refused, so the two never share a listing.
     """
     _require_id(dataset_id, "table dataset")
     _require_id(collection_id, "feature collection")
+    require_table_id(dataset_id)
     feature_ids = _collection_feature_ids(collection_id)
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
     columns: dict[str, list[Any]] = {name: [] for name in SCHEMA.names}
@@ -203,8 +205,8 @@ def read_rows(
     for condition in conditions:
         flt = condition if flt is None else flt & condition
     table = pds.dataset([str(path) for path in files], schema=SCHEMA, format="parquet").to_table(filter=flt)
-    if not history:
-        table = _current(table)
+    # A key written twice at the same `written_at` is one write delivered again; history lists it once.
+    table = _latest(table, KEY if not history else (*KEY, "written_at"))
     return table.sort_by(
         [
             ("collection_id", "ascending"),
@@ -215,12 +217,11 @@ def read_rows(
     )
 
 
-def _current(table: pa.Table) -> pa.Table:
-    """Keep the latest row per `KEY`. pandas, because its duplicate test treats NULL keys as equal."""
-    keys = table.select(list(KEY)).to_pandas()
-    keys["written_at"] = table.column("written_at").to_pandas()
-    keys["row"] = range(len(keys))
-    latest = keys.sort_values("written_at", kind="stable").drop_duplicates(subset=list(KEY), keep="last")
+def _latest(table: pa.Table, keys: tuple[str, ...]) -> pa.Table:
+    """Keep the latest row per *keys*. pandas, because its duplicate test treats NULL keys as equal."""
+    frame = table.select([*KEY, "written_at"]).to_pandas()
+    frame["row"] = range(len(frame))
+    latest = frame.sort_values("written_at", kind="stable").drop_duplicates(subset=list(keys), keep="last")
     return table.take(pa.array(sorted(latest["row"])))
 
 
@@ -379,6 +380,15 @@ def _utc(value: object, name: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise ValueError(f"{name} must be a timezone-aware datetime")
     return value.astimezone(UTC)
+
+
+def require_table_id(dataset_id: str) -> None:
+    """Refuse a dataset id that a raster or feature collection already holds."""
+    from open_climate_service.ingestions import services as ingestion_services
+
+    for record in ingestion_services.group_datasets().get(dataset_id, []):
+        if record.format != ArtifactFormat.PARQUET:
+            raise ValueError(f"dataset id '{dataset_id}' is held by a {record.format} dataset; choose another id")
 
 
 def _require_id(value: str, kind: str) -> None:

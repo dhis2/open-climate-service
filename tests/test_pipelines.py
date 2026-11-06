@@ -31,6 +31,7 @@ from open_climate_service.exports.base import (
     SettingsFormField,
     SettingsFormSection,
 )
+from open_climate_service.features.services import registered_collections as _registered_collections
 from open_climate_service.openeo import workflows as workflow_store
 from open_climate_service.pipelines import forms, runner, service, store
 from open_climate_service.pipelines import workflow as workflow_binding
@@ -721,7 +722,7 @@ def _only_drop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(export_service, "load_export_plugins", lambda: {"drop": plugin})
 
 
-def test_approval_digest_includes_plugin_identity_and_resolved_export(
+def test_approval_digest_includes_plugin_identity_and_resolved_destination(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import open_climate_service.exports.registry as registry
@@ -3214,6 +3215,166 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         assert client.delete(polled["links"]["job"]).status_code == 204
         after = client.get(polled["links"]["self"]).json()
         assert after["status"] == "succeeded" and after["links"]["job"] is None, after
+    finally:
+        job_service.shutdown()
+        job_service_module.reset_job_service()
+
+
+_TABLE_SPEC: dict[str, Any] = {
+    **_SPEC,
+    "id": "rain-to-table",
+    "name": "Rain by district",
+    "destination": {"plugin": "table", "settings": {"dataset_id": "rain_districts", "name": "Rain by district"}},
+}
+
+
+def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The built-in workflow through the real job service into the table store, read back over /tables (CLIM-1554).
+
+    Only data and feature loading are stubbed. The dry run writes nothing; a live run writes one
+    row per feature and period; a dataset update with revised values adds rows that become current.
+    """
+    from openeo_pg_parser_networkx.process_registry import Process
+
+    from open_climate_service.features import services as feature_services
+    from open_climate_service.features import store as feature_store
+    from open_climate_service.ingestions import services as ingestion_services
+    from open_climate_service.jobs import service as job_service_module
+    from open_climate_service.jobs.models import JobStatus
+    from open_climate_service.openeo import execution
+    from open_climate_service.openeo import jobs as openeo_jobs
+    from open_climate_service.shared.provenance import record_source
+
+    # A real registered collection and record index, so the rows are checked against its ids.
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", tmp_path / "data" / "artifacts")
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", tmp_path / "data" / "artifacts" / "records.json")
+    monkeypatch.setattr(feature_services, "registered_collections", _registered_collections)
+    geometries = [_box(0.5, 0.5, 2.5, 2.5), _box(3.5, 2.5, 5.5, 4.5)]
+    collection = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "properties": {"code": ou, "name": name}, "geometry": geometry}
+            for ou, name, geometry in zip(_OU, ("Bo", "Bombali"), geometries, strict=True)
+        ],
+    }
+    path, _count, geometry_column = feature_store.write_feature_collection(
+        dataset_id="districts", features=collection, id_property="code"
+    )
+    ingestion_services.create_feature_artifact(
+        template={"id": "districts", "name": "Districts", "id_property": "code"},
+        features=collection,
+        store_path=path,
+        crs=feature_store.WGS84,
+        primary_geometry=geometry_column,
+    )
+
+    scale = [1.0]
+
+    def load_collection(id: str | None = None, temporal_extent: Any = None, **_: Any) -> xr.DataArray:
+        record_source(str(id), SimpleNamespace(artifact_id="artifact-1", source_dataset_id=id, path=None))
+        values = np.arange(2 * 4 * 5, dtype="float32").reshape(2, 4, 5) * scale[0]
+        return xr.DataArray(
+            values,
+            dims=("t", "y", "x"),
+            coords={
+                "t": np.array(["2025-01-01", "2025-02-01"], dtype="datetime64[ns]"),
+                "y": [1.0, 2.0, 3.0, 4.0],
+                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            },
+            name="tp",
+        )
+
+    def load_features(id: str, version: str | None = None, **_: Any) -> dict[str, Any]:
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "id": ou, "geometry": geometry}
+                for ou, geometry in zip(_OU, geometries, strict=True)
+            ],
+        }
+
+    mocked = execution._RegistryOverlay(
+        execution._build_process_registry(),
+        {
+            "load_collection": Process(spec={}, implementation=load_collection),
+            "load_features": Process(spec={}, implementation=load_features),
+        },
+    )
+    monkeypatch.setattr(execution, "_build_process_registry", lambda: mocked)
+    job_service = openeo_jobs.OpenEOJobService()
+    monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: job_service)
+    job_service.set_finished_listener(runner.on_job_finished)
+    native = job_service_module.get_job_service()
+    deadline = time.monotonic() + 30
+
+    def current() -> list[tuple[str, str, float]]:
+        rows = client.get("/tables/rain_districts/rows").json()["items"]
+        return [(row["feature_id"], row["period"], row["value"]) for row in rows]
+
+    try:
+        assert client.post("/pipelines", json=_TABLE_SPEC).status_code == 201
+        dry = client.post("/pipelines/rain-to-table/dry-run", json={"start": "2025-01-01", "end": "2025-02-28"}).json()
+        assert dry["error"] is None and dry["values"] == 4, dry
+        assert dry["periods"] == ["2025-01-01", "2025-02-01"]
+        assert dry["report"]["outcome"] == "dry_run"
+        assert dry["sample"][0]["feature"] == {"value": _OU[0], "label": "Bo"}
+        assert dry["sample"][0]["reducer"] == "mean"
+        # A dry run writes nothing.
+        assert not (tmp_path / "data" / "tables").exists()
+        assert "rain_districts" not in ingestion_services.group_datasets()
+        assert client.get("/tables/rain_districts/rows").status_code == 404
+
+        assert (
+            client.post("/pipelines/rain-to-table/mode/live", headers={"Accept": "application/json"}).status_code == 200
+        )
+        run = client.post(
+            "/pipelines/rain-to-table/runs", json={"start": "2025-01-01", "end": "2025-02-28", "mode": "live"}
+        )
+        assert run.status_code == 202, run.text
+        polled = run.json()
+        while polled["status"] not in {"succeeded", "needs_attention", "failed", "canceled"}:
+            assert time.monotonic() < deadline, polled
+            time.sleep(0.05)
+            polled = client.get(run.headers["Location"]).json()
+        assert polled["status"] == "succeeded" and polled["delivery_result"] == "delivered", polled
+
+        first = current()
+        assert [(feature, period) for feature, period, _ in first] == [
+            (_OU[0], "2025-01-01"),
+            (_OU[0], "2025-02-01"),
+            (_OU[1], "2025-01-01"),
+            (_OU[1], "2025-02-01"),
+        ]
+        row = client.get("/tables/rain_districts/rows").json()["items"][0]
+        assert row["feature_name"] == "Bo" and row["reducer"] == "mean" and row["collection_id"] == "districts"
+        listed = client.get("/datasets/rain_districts").json()
+        assert listed["itemType"] == "table" and listed["dataset_name"] == "Rain by district"
+        assert listed["period_type"] == "monthly"
+
+        # The source is revised: the update runs the pipeline again, and the revised values are current.
+        scale[0] = 10.0
+        runner.consume([_update_event("evt-revised")])
+        automatic = None
+        while time.monotonic() < deadline:
+            record = store.get_record("rain-to-table")
+            automatic = next((run for run in record.runs if run.event_id == "evt-revised"), None) if record else None
+            if automatic is not None and automatic.delivery_job_id:
+                break
+            time.sleep(0.05)
+        assert automatic is not None and automatic.delivery_job_id is not None, automatic
+        delivery = native.get_job_or_404(automatic.delivery_job_id)
+        while delivery.status not in {JobStatus.SUCCESSFUL, JobStatus.FAILED, JobStatus.CANCELLED}:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+            delivery = native.get_job_or_404(automatic.delivery_job_id)
+        assert delivery.status == JobStatus.SUCCESSFUL, delivery.error
+
+        revised = current()
+        assert [value for _, _, value in revised] == [value * 10 for _, _, value in first]
+        history = client.get("/tables/rain_districts/rows", params={"history": "true"}).json()["items"]
+        assert len(history) == 8
     finally:
         job_service.shutdown()
         job_service_module.reset_job_service()

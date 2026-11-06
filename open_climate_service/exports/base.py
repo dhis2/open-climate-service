@@ -15,6 +15,7 @@ class PipelineDataset:
     id: str
     variable: str | None
     cadence: str | None
+    units: str | None = None
 
 
 @dataclass(frozen=True)
