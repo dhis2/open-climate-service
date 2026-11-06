@@ -449,8 +449,9 @@ The following parameters control how the datasets are displayed visually and in 
 | `display.nodata`   | No       | No-data / fill value                                                                                                                |
 
 A colormap name is matched case-insensitively, and `_r` reverses it (`blues`, `rdbu_r`, `terrain`).
-Where no named colormap fits, list two or more colours, spread evenly from the low end of
-`display.range` to the high end:
+Where no named colormap fits, list two or more hex colours (`#rgb` or `#rrggbb`), spread
+evenly from the low end of `display.range` to the high end. An alpha (`#rrggbbaa`) is ignored
+and the colour drawn opaque; transparency is set by `display.nodata`.
 
 ```yaml
 display:

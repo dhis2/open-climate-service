@@ -18,6 +18,7 @@ geometry instead, to the same path, size and publishing rules.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +44,8 @@ THUMBNAIL_LONG_SIDE_PIXELS = 1024
 
 _DEFAULT_COLORMAP = "viridis"
 
+_HEX_COLOUR = re.compile(r"#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})")
+
 
 def thumbnails_dir() -> Path:
     """Directory holding published thumbnails, one per dataset id."""
@@ -62,27 +65,25 @@ def resolve_colormap(spec: object) -> Any:
     here, so they cannot disagree.
 
     ``spec`` is a matplotlib colormap name, matched **case-insensitively** with the ``_r``
-    reversed suffix, or a list of two or more colours spread evenly from the low end of the
-    display range to the high end. Case-insensitive because the templates were first written
-    for chroma-js, which matches that way: ``blues``, ``rdbu_r`` and ``reds`` all raise when
-    passed to matplotlib as written.
+    reversed suffix, or a list of two or more hex colours spread evenly from the low end of the
+    display range to the high end. Hex only, and any alpha dropped, because the STAC render
+    hints publish opaque hex: a colour written another way, or a transparent one, would draw
+    differently in the thumbnail than in the map viewer. Case-insensitive because
+    the templates were first written for chroma-js, which matches that way: ``blues``,
+    ``rdbu_r`` and ``reds`` all raise when passed to matplotlib as written.
 
     An unresolvable spec falls back to the default rather than raising. A thumbnail in the
     wrong colours is worth more than no thumbnail, and this must never be able to fail a
     render on its own.
     """
     from matplotlib import colormaps
-    from matplotlib.colors import LinearSegmentedColormap, to_rgba_array
+    from matplotlib.colors import LinearSegmentedColormap, to_rgb
 
     if isinstance(spec, list | tuple):
-        # Parsed here because `from_list` defers it to the first lookup, past this fallback.
-        try:
-            colors = to_rgba_array(list(spec))
-        except ValueError:
+        colors = list(spec)
+        if len(colors) < 2 or not all(isinstance(c, str) and _HEX_COLOUR.fullmatch(c) for c in colors):
             return colormaps[_DEFAULT_COLORMAP]
-        if len(colors) < 2:
-            return colormaps[_DEFAULT_COLORMAP]
-        return LinearSegmentedColormap.from_list("custom", colors)
+        return LinearSegmentedColormap.from_list("custom", [to_rgb(c) for c in colors])
     requested = spec.strip() if isinstance(spec, str) else ""
     if requested:
         try:

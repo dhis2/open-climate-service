@@ -424,6 +424,8 @@ def test_every_built_in_template_colormap_resolves_to_itself() -> None:
 def test_a_list_of_colours_is_a_ramp_through_them() -> None:
     stops = colormap_stops(["#000000", "#ff0000", "#ffffff"])
     assert (len(stops), stops[0], stops[-1]) == (256, "#000000", "#ffffff")
+    # An alpha is dropped, since the STAC render hints publish opaque hex.
+    assert colormap_stops(["#ff000040", "#00f8"], count=2) == ["#ff0000", "#0000ff"]
     assert colormap_stops("terrain", count=2) == [to_hex(colormaps["terrain"](0.0)), to_hex(colormaps["terrain"](1.0))]
 
 
@@ -432,6 +434,9 @@ def test_an_unknown_colormap_falls_back_instead_of_raising() -> None:
     assert resolve_colormap(None).name == "viridis"
     assert resolve_colormap(["#000000"]).name == "viridis"
     assert resolve_colormap(["not-a-colour", "#ffffff"]).name == "viridis"
+    # Hex only, the form the STAC render hints publish.
+    assert resolve_colormap(["red", "#ffffff"]).name == "viridis"
+    assert resolve_colormap([[1, 0, 0], [0, 0, 1]]).name == "viridis"
     assert resolve_colormap([]).name == "viridis"
 
 
