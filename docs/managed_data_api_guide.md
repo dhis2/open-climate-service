@@ -35,13 +35,12 @@ Operational note:
 - `GET /features/{collection_id}/data.parquet`
 - `GET /features/{collection_id}/data.pmtiles`
 - `GET /features/{collection_id}/styles/default.json`
-- `GET /stac`
-- `GET /stac/catalog.json`
-- `GET /stac/collections/{dataset_id}`
+- `GET /stac/catalog.json` (`/stac` redirects here)
+- `GET /stac/{dataset_id}/collection.json` (`/stac/{dataset_id}/collection.json` redirects here)
 - `GET /stac/README.md`
 - `GET /stac/AGENTS.md`
-- `GET /stac/collections/{dataset_id}/README.md`
-- `GET /stac/collections/{dataset_id}/AGENTS.md`
+- `GET /stac/{dataset_id}/README.md` (feature collections)
+- `GET /stac/{dataset_id}/AGENTS.md` (feature collections)
 - `GET /zarr/{dataset_id}`
 - `GET /zarr/{dataset_id}/{relative_path}`
 - `GET /icechunk/{dataset_id}/{path}`
@@ -157,7 +156,7 @@ Example response:
         "title": "Zarr store"
       },
       {
-        "href": "/stac/collections/chirps3_precipitation_daily",
+        "href": "/stac/chirps3_precipitation_daily/collection.json",
         "rel": "stac",
         "title": "STAC collection"
       }
@@ -439,14 +438,14 @@ STAC examples:
 
 ```bash
 curl -s "http://127.0.0.1:9000/stac/catalog.json" | jq
-curl -s "http://127.0.0.1:9000/stac/collections/chirps3_precipitation_daily" | jq
+curl -s "http://127.0.0.1:9000/stac/chirps3_precipitation_daily/collection.json" | jq
 ```
 
 What this means:
 
 - `/stac` is the public STAC discovery surface for published datasets, raster and vector alike
 - native FastAPI no longer exposes `/collections`
-- dataset responses include `/stac/collections/{dataset_id}`
+- dataset responses include `/stac/{dataset_id}/collection.json`
 
 ### Raster and feature collections are described differently
 
@@ -721,7 +720,7 @@ Expected:
 
 ```bash
 curl -s "http://127.0.0.1:9000/datasets/chirps3_precipitation_daily" | jq
-curl -s "http://127.0.0.1:9000/stac/collections/chirps3_precipitation_daily" | jq
+curl -s "http://127.0.0.1:9000/stac/chirps3_precipitation_daily/collection.json" | jq
 curl -s "http://127.0.0.1:9000/zarr/chirps3_precipitation_daily" | jq
 ```
 

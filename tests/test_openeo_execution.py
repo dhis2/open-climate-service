@@ -468,7 +468,7 @@ def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyP
         lambda: {"my_aggregate": object()},
     )
     published = _result_assets(_record("managed://my_aggregate"))
-    assert published["stac"]["href"] == "/stac/collections/my_aggregate"
+    assert published["stac"]["href"] == "/stac/my_aggregate/collection.json"
 
 
 def _store_finished_job(job_id: str) -> None:

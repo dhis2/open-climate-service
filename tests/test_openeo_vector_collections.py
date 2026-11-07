@@ -127,7 +127,11 @@ def test_the_collection_document_describes_a_vector_cube(client: TestClient, reg
     assert {column["name"] for column in collection["table:columns"]} >= {"code"}
     assert "cube:variables" not in collection
     assert collection["extent"]["temporal"]["interval"] == [[None, None]]
-    assert all("/stac/collections" not in link["href"] for link in collection["links"])
+    # The openEO copy names itself, and its relative links are resolved against the STAC document.
+    links = {link["rel"]: link["href"] for link in collection["links"]}
+    assert links["self"].endswith("/collections/regions")
+    assert links["describedby"].endswith("/stac/regions/README.md")
+    assert all("/collection.json" not in link["href"] for link in collection["links"])
 
 
 def test_the_listing_and_the_detail_route_agree(client: TestClient, regions: ArtifactRecord) -> None:
