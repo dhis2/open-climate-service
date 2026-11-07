@@ -314,6 +314,28 @@ def _service_on(http: httpx.Client, base_url: str = "http://testserver") -> Clim
     return service
 
 
+def _service_on_app(client: TestClient) -> ClimateService:
+    """The client over a real ``httpx.Client``, answered by the app.
+
+    ``TestClient`` is built on ``httpx2`` when that is installed (the MCP SDK brings it), and
+    the client catches ``httpx`` errors, so the app is reached through a transport instead.
+    """
+
+    def forward(request: httpx.Request) -> httpx.Response:
+        content_type = request.headers.get("content-type")
+        answer = client.request(
+            request.method,
+            str(request.url),
+            content=request.content,
+            headers={"content-type": content_type} if content_type else None,
+        )
+        return httpx.Response(
+            answer.status_code, headers={"content-type": answer.headers.get("content-type", "")}, content=answer.content
+        )
+
+    return _service_on(httpx.Client(transport=httpx.MockTransport(forward)))
+
+
 def _service_replying(status_code: int, **response: Any) -> ClimateService:
     transport = httpx.MockTransport(lambda request: httpx.Response(status_code, **response))
     return _service_on(httpx.Client(transport=transport), "http://ocs.example")
@@ -321,7 +343,7 @@ def _service_replying(status_code: int, **response: Any) -> ClimateService:
 
 def test_an_unknown_collection_names_what_was_missing(client: TestClient) -> None:
     """The case from the review: a wrong dataset id in a process graph."""
-    service = _service_on(client)
+    service = _service_on_app(client)
     graph = {
         "load": {
             "process_id": "load_collection",
@@ -339,7 +361,7 @@ def test_an_unknown_collection_names_what_was_missing(client: TestClient) -> Non
 
 def test_open_dataset_names_the_missing_collection(client: TestClient) -> None:
     with pytest.raises(httpx.HTTPStatusError, match="STAC collection 'missing' not found"):
-        _service_on(client).open_dataset("missing")
+        _service_on_app(client).open_dataset("missing")
 
 
 def test_an_openeo_error_message_reaches_the_caller() -> None:

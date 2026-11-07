@@ -271,3 +271,18 @@ def is_read_only() -> bool:
             "Quoted values like 'false' are strings, not booleans."
         )
     return raw
+
+
+def is_mcp_enabled() -> bool:
+    """Return True when the instance serves its MCP endpoint at `/mcp` (CLIM-851).
+
+    Set ``mcp: true`` in climate-service.yaml. Off by default while the tools settle. Read per
+    request like `read_only`, so it can be flipped without rebuilding the app.
+    """
+    raw = get_config().get("mcp", False)
+    if not isinstance(raw, bool):
+        raise ValueError(
+            f"mcp in CLIMATE_SERVICE_CONFIG must be true or false, got {type(raw).__name__}. "
+            "Quoted values like 'false' are strings, not booleans."
+        )
+    return raw
