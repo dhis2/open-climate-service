@@ -938,7 +938,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     def shown() -> tuple[dict[str, Any], str, dict[str, Any]]:
         detail = client.get(f"/datasets/{_DATASET}").json()["provenance"]
         page = client.get(f"/datasets/{_DATASET}", headers={"Accept": "text/html"}).text
-        return detail, page, client.get(f"/stac/collections/{_DATASET}").json()
+        return detail, page, client.get(f"/stac/{_DATASET}/collection.json").json()
 
     detail, page, collection = shown()
     # One input, though the graph read it twice; only ids leave the execution evidence.
@@ -972,8 +972,8 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     assert 'href="/jobs/job-1"' in page and f'href="/datasets/{source}"' in page
     assert "updated since" not in page
     assert [link["href"] for link in collection["links"] if link["rel"] == "derived_from"] == [
-        f"http://testserver/stac/collections/{source}",
-        "http://testserver/stac/collections/districts",
+        f"http://testserver/stac/{source}/collection.json",
+        "http://testserver/stac/districts/collection.json",
     ]
     schema = json.loads((Path(__file__).parent / "data" / "stac_processing_v1.2.0.json").read_text())
     jsonschema.validate(collection, schema)

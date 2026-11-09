@@ -252,7 +252,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
         template_links.append(
             {
                 "rel": "derived_from",
-                "href": absolute_url(request, f"/stac/collections/{path_segment(input_id)}"),
+                "href": absolute_url(request, collection_path(input_id)),
                 "type": "application/json",
                 "title": input_id,
             }
