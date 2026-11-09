@@ -11,11 +11,13 @@ A 500 says the server broke and invites a retry. Nothing was broken: the templat
 the request was well formed, it just named a dataset with no upstream.
 """
 
+import re
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from open_climate_service.data_registry.recipes import producing_workflow
 from open_climate_service.data_registry.services import datasets as registry
 from open_climate_service.ingestions import services as ingestion_services
 
@@ -166,13 +168,29 @@ def test_every_built_in_derived_template_names_a_built_in_workflow() -> None:
     derived = [t for t in registry._load_builtin_datasets() if not registry.is_ingestable(t)]
 
     assert derived, "the built-in catalogue has derived templates"
-    unlinked = {t["id"]: t.get("produced_by") for t in derived if t.get("produced_by") not in workflow_ids}
+    unlinked = {t["id"]: t.get("produced_by") for t in derived if producing_workflow(t) not in workflow_ids}
     assert unlinked == {}
 
 
-@pytest.mark.parametrize("value", ["", "  ", " climate_normal", 3, ["climate_normal"]])
-def test_a_malformed_produced_by_is_refused(value: object) -> None:
-    with pytest.raises(ValueError, match="invalid produced_by"):
+_ANOMALY = {"observed_dataset_id": "rain", "normal_dataset_id": "rain_normal", "variable": "tp"}
+
+
+@pytest.mark.parametrize(
+    ("value", "problem"),
+    [
+        *((value, "invalid produced_by") for value in ("", "  ", " climate_normal", 3, ["climate_normal"])),
+        ({"workflow": "climate_anomaly", "inputs": {}}, "unknown keys"),
+        ({"arguments": _ANOMALY}, "produced_by.workflow"),
+        ({"workflow": "climate_anomaly", "arguments": ["tp"]}, "mapping of parameter names"),
+        ({"workflow": "climate_anomaly", "arguments": {"output_dataset_id": "x"}}, "always the template's own id"),
+        ({"workflow": "climate_anomaly", "arguments": _ANOMALY, "refresh_on": "rain"}, "name one of its"),
+        ({"workflow": "climate_anomaly", "arguments": {"o": 3}, "refresh_on": "o"}, "hold a dataset id"),
+        ({"workflow": "climate_anomaly", "arguments": {"o": " rain"}, "refresh_on": "o"}, "hold a dataset id"),
+        ({"workflow": "climate_anomaly", "arguments": {"o": "t"}, "refresh_on": "o"}, "refresh itself"),
+    ],
+)
+def test_a_malformed_produced_by_is_refused(value: object, problem: str) -> None:
+    with pytest.raises(ValueError, match=re.escape(problem)):
         registry._validate_dataset_template(
             _template(sync={"kind": "static"}, produced_by=value, license="CC-BY-4.0"),
             source="derived.yaml",
