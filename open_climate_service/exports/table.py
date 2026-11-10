@@ -30,6 +30,9 @@ from open_climate_service.shared.urls import SEGMENT_SAFE_ID_PATTERN
 from open_climate_service.shared.vectors import GEOMETRY_FIELD, SPATIAL_REDUCER_ATTR
 
 _PERIOD_FIELD = "t"
+# The class dimension of a per-class result, as aggregate_spatial_classes names it, and its labels.
+_CLASS_FIELD = "class"
+_CLASS_LABEL_FIELD = "class_label"
 _MAPPING_FIELDS = ("dataset_id", "collection_id", "name", "period_type", "unit")
 # Dataset-level facts travel in the Parquet footer, so `send` needs nothing but the payload.
 _NAME_KEY = b"ocs:dataset_name"
@@ -214,6 +217,7 @@ class TableExportPlugin(BaseExportPlugin):
                 "feature_id": str(record[id_field]),
                 "feature_name": names.get(str(record[id_field])),
                 "period_start": _period(record[_PERIOD_FIELD]),
+                "class": str(record[_CLASS_FIELD]) if _CLASS_FIELD in record else None,
                 "value": _value(record[value_field]),
                 "reducer": reducer,
                 "unit": mapping.get("unit"),
@@ -342,7 +346,7 @@ def _fields(frame: Any) -> tuple[str, str]:
     id_field = feature_id_field(frame, GEOMETRY_FIELD)
     if id_field not in frame.columns or _PERIOD_FIELD not in frame.columns:
         raise ValueError("a table destination needs a result with feature ids and a time dimension 't'")
-    excluded = non_value_fields(frame) | {id_field, _PERIOD_FIELD}
+    excluded = non_value_fields(frame) | {id_field, _PERIOD_FIELD, _CLASS_FIELD, _CLASS_LABEL_FIELD}
     values = [str(column) for column in frame.columns if str(column) not in excluded]
     if len(values) != 1:
         raise ValueError(

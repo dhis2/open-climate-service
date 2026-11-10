@@ -318,6 +318,47 @@ def test_the_destination_refuses_a_result_with_more_than_one_value_per_feature_a
         plugin.render(cube, plugin.validate_mapping(dict(_MAPPING)))
 
 
+def test_a_per_class_result_is_one_row_per_feature_period_and_class() -> None:
+    """A real aggregate_spatial_classes result: the class codes go to the `class` column."""
+    import numpy as np
+    import xarray as xr
+
+    from open_climate_service.exports.table import plugin
+    from open_climate_service.plugins.processes.aggregate_spatial_classes import aggregate_spatial_classes
+    from open_climate_service.shared.classes import cf_flag_attrs, classification_from_template
+
+    classes = classification_from_template(
+        {"id": "heat", "classes": [{"value": 0, "label": "None"}, {"value": 1, "label": "Danger"}]}
+    )
+    assert classes is not None
+    # West column class 0, east column class 1, on both days.
+    levels = xr.DataArray(
+        np.array([[[0, 1], [0, 1]]] * 2, dtype="float64"),
+        dims=("t", "y", "x"),
+        coords={
+            "t": np.array(["2026-01-01", "2026-01-02"], dtype="datetime64[ns]"),
+            "y": [-0.5, -1.5],
+            "x": [30.5, 31.5],
+        },
+        name="level",
+        attrs=cf_flag_attrs(classes),
+    ).rio.write_crs("EPSG:4326")
+    collection = {
+        "type": "FeatureCollection",
+        "features": [{**_box("D1", 30, -2), "id": "D1"}, {**_box("D2", 31, -1), "id": "D2"}],
+    }
+    result = aggregate_spatial_classes(levels, collection, "share")
+
+    rendered = plugin.render(result, plugin.validate_mapping({**_MAPPING, "period_type": "daily"}))
+    plugin.send(rendered.content, "tables")
+    record = ingestion_services.published_table_artifacts_by_dataset()["precip_districts"]
+    rows = store.read_rows(record).to_pylist()
+    assert len(rows) == 2 * 2 * 2
+    first_day = [row for row in rows if row["period_start"] == date(2026, 1, 1)]
+    shares = {(row["feature_id"], row["class"]): row["value"] for row in first_day}
+    assert shares[("D1", "0")] == pytest.approx(1.0) and shares[("D1", "1")] == pytest.approx(0.0)
+
+
 def test_destination_checks_name_a_held_dataset_id_and_a_missing_collection() -> None:
     from open_climate_service.exports.base import DestinationContext
     from open_climate_service.exports.table import plugin
