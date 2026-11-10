@@ -3246,6 +3246,7 @@ def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
     from open_climate_service.openeo import execution
     from open_climate_service.openeo import jobs as openeo_jobs
     from open_climate_service.shared.provenance import record_source
+    from open_climate_service.shared.time import stamp_cadence
 
     # A real registered collection and record index, so the rows are checked against its ids.
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", tmp_path / "data" / "artifacts")
@@ -3275,7 +3276,7 @@ def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
     def load_collection(id: str | None = None, temporal_extent: Any = None, **_: Any) -> xr.DataArray:
         record_source(str(id), SimpleNamespace(artifact_id="artifact-1", source_dataset_id=id, path=None))
         values = np.arange(2 * 4 * 5, dtype="float32").reshape(2, 4, 5) * scale[0]
-        return xr.DataArray(
+        cube = xr.DataArray(
             values,
             dims=("t", "y", "x"),
             coords={
@@ -3285,6 +3286,8 @@ def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
             },
             name="tp",
         )
+        # As the real load_collection stamps the dataset's cadence.
+        return stamp_cadence(cube, "monthly")
 
     def load_features(id: str, version: str | None = None, **_: Any) -> dict[str, Any]:
         return {

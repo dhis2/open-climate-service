@@ -95,11 +95,12 @@ class TableExportPlugin(BaseExportPlugin):
                 f"{len(context.feature_collections)}"
             )
         source = context.datasets[0] if len(context.datasets) == 1 else None
+        # No period_type: the period is the result's own cadence, which a temporal aggregation
+        # makes coarser than the source's, so the source's cadence would be wrong to declare.
         definition = {
             "dataset_id": parsed.dataset_id,
             "collection_id": context.feature_collections[0],
             "name": parsed.name,
-            "period_type": source.cadence if source else None,
             "unit": source.units if source else None,
         }
         return {key: value for key, value in definition.items() if value is not None}

@@ -403,12 +403,18 @@ def test_a_month_labelled_by_its_last_day_is_the_same_value_as_its_first() -> No
 
 
 def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real temporal and spatial aggregation: pandas labels each month by its last day."""
+    """The real temporal and spatial aggregation, rendered the way a pipeline renders its result.
+
+    pandas labels each month by its last day. The export is compiled from a daily source, so the
+    shared export checks must not hold the monthly result to the source's cadence.
+    """
     import numpy as np
     import pandas as pd
     import xarray as xr
     from openeo_pg_parser_networkx.process_registry import Process
 
+    from open_climate_service.exports.base import DestinationContext, PipelineDataset
+    from open_climate_service.exports.service import render_resolved_export, resolve_export_definition
     from open_climate_service.exports.table import plugin
     from open_climate_service.openeo import execution
     from open_climate_service.shared.provenance import record_source
@@ -456,15 +462,24 @@ def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkey
             "zonal": {
                 "process_id": "aggregate_spatial_weighted",
                 "arguments": {"data": {"from_node": "monthly"}, "geometries": collection, "reducer": "mean"},
+            },
+            "save": {
+                "process_id": "save_result",
+                "arguments": {"data": {"from_node": "zonal"}, "format": plugin.format},
                 "result": True,
             },
         }
     }
-    result = execution.run_process_graph(graph)
-    assert [str(value)[:10] for value in result["t"].values] == ["2026-01-31", "2026-02-28"]
+    envelope = execution.run_process_graph(graph)
+    assert [str(value)[:10] for value in envelope.data["t"].values] == ["2026-01-31", "2026-02-28"]
 
-    # The source dataset is daily, as the pipeline compiled it; the result says it is monthly.
-    rendered = plugin.render(result, plugin.validate_mapping({**_MAPPING, "period_type": "daily"}))
+    # Compiled as a pipeline compiles it, from a daily source; the result says it is monthly.
+    context = DestinationContext(
+        export_id="p", datasets=(PipelineDataset("rain_daily", "precip", "daily"),), feature_collections=("districts",)
+    )
+    definition = plugin.export_definition({"dataset_id": "precip_districts", "name": "Precipitation"}, context)
+    resolved = resolve_export_definition({"id": "p", "plugin": plugin.id, **definition})
+    rendered = render_resolved_export(envelope.data, resolved, provenance=envelope.provenance)
     assert rendered.periods == ("2026-01", "2026-02")
     plugin.send(rendered.content, "tables")
     record = ingestion_services.published_table_artifacts_by_dataset()["precip_districts"]

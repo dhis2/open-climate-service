@@ -284,6 +284,9 @@ def _check_temporal_declaration(resolved: ResolvedExport, provenance: dict[str, 
         raise ValueError("Export provenance temporal_aggregations must be a list of mappings")
     observed = cast(list[dict[str, Any]], observed_value)
     destination = resolved.mapping.get("period_type")
+    if destination is None:
+        # No period declared, as for a table export, which takes its period from the result.
+        return
     declared = resolved.mapping.get("temporal_aggregation")
     producing = [entry for entry in observed if entry.get("period") == destination]
     if declared is not None:
