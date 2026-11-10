@@ -99,7 +99,8 @@ class _State(BaseModel):
     health: dict[str, _Health] = Field(default_factory=dict)
     queue: list[_Queued] = Field(default_factory=list)
     decided: set[str] = Field(default_factory=set)
-    abandoned: set[str] = Field(default_factory=set)
+    abandoned: dict[str, str] = Field(default_factory=dict)
+    """Per automation, the failure given up on, whose ending must not be posted either."""
 
 
 def _path() -> Path:
@@ -170,6 +171,7 @@ def _reconcile(state: _State, events: list[JobEvent]) -> None:
     ``decided`` keeps transitions idempotent after their notification leaves the queue.
     """
     health: dict[str, bool] = {}
+    opened: dict[str, str] = {}  # per automation, the failure that started its current episode
     latest: dict[str, _Health] = {}
     for event in sorted(events, key=lambda item: (_utc(item.time), item.event_id)):
         time = _utc(event.time)
@@ -182,9 +184,12 @@ def _reconcile(state: _State, events: list[JobEvent]) -> None:
         if failed == was_failing:
             continue
         key = _event_key(event)
-        if not failed and event.source in state.abandoned:
-            # The receiver never got this episode's failure, so it must not get its ending.
-            state.abandoned.discard(event.source)
+        if failed:
+            opened[event.source] = event.event_id
+        elif state.abandoned.get(event.source) == opened.get(event.source):
+            # The receiver never got this episode's failure, so it must not get its ending. The
+            # ending of an earlier, posted episode is replayed too, and must not clear it.
+            del state.abandoned[event.source]
             state.decided.add(key)
             continue
         if key in state.decided:
@@ -304,7 +309,7 @@ def _settle(state: _State, claimed: _Queued, accepted: bool, now: datetime) -> N
         if item.attempts >= _MAX_ATTEMPTS:
             logger.error("Dropping notification %s after %d attempts", item.event_id, item.attempts)
             if item.payload.get("status") == "failed":
-                state.abandoned.add(item.source)
+                state.abandoned[item.source] = item.event_id
                 kept = [queued for queued in kept if queued.source != item.source]
             continue
         item.next_attempt_at = now + timedelta(minutes=min(60, 2**item.attempts))

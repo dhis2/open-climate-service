@@ -110,26 +110,43 @@ def test_a_stale_sender_cannot_settle_another_senders_claim(clock: _Clock) -> No
 
 
 def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_its_recovery(
-    clock: _Clock, webhook: WebhookReceiver
+    clock: _Clock, webhook: WebhookReceiver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Every decision replays the whole log, so an earlier episode's posted recovery is seen
+    again after the next failure is dropped, and must not count as that failure's ending."""
+    from open_climate_service.jobs import events as job_events
+
+    log: list[JobEvent] = []
+    monkeypatch.setattr(job_events, "persisted_events", lambda: list(log))
+
+    def outcome(automation: str, number: int, *, failed: bool) -> None:
+        log.append(_outcome(automation, number, clock, failed=failed))
+        notifications.consume([log[-1]])
+
+    outcome("rain", 1, failed=True)
+    outcome("rain", 2, failed=False)  # an earlier episode, posted in full
     webhook.refused = {"rain"}
-    notifications.consume([_outcome("rain", 1, clock, failed=True)])
-    notifications.consume([_outcome("heat", 1, clock, failed=True)])
+    outcome("rain", 3, failed=True)
+    outcome("heat", 1, failed=True)
     for _ in range(notifications._MAX_ATTEMPTS - 1):
         clock.now += timedelta(hours=2)
         notifications.replay()
     webhook.refused = set()
-    notifications.consume([_outcome("rain", 2, clock, failed=False)])  # never told it failed
-    notifications.consume([_outcome("rain", 3, clock, failed=True)])  # a new episode
+    outcome("rain", 4, failed=False)  # never told it failed
+    outcome("rain", 5, failed=True)  # a new episode
+    outcome("rain", 6, failed=False)
 
     posted = [(status, body["id"], body["status"]) for status, _, body in webhook.posts]
     assert posted == [
+        (200, "rain", "failed"),
+        (200, "rain", "recovered"),
         (503, "rain", "failed"),
         (200, "heat", "failed"),
         *[(503, "rain", "failed")] * (notifications._MAX_ATTEMPTS - 1),
         (200, "rain", "failed"),
+        (200, "rain", "recovered"),
     ]
-    assert webhook.posts[-1][1] == "rain-run-3:0"
+    assert [key for _, key, _ in webhook.posts[-2:]] == ["rain-run-5:0", "rain-run-6:0"]
     assert notifications._read(clock.now).queue == []
 
 
