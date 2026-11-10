@@ -48,6 +48,9 @@ class FakeClient:
 
 
 class FakeContext:
+    source_job_id: str | None = None
+    source_provenance: dict[str, Any] | None = None
+
     def __init__(self: Any) -> None:
         self.checkpoints: dict[str, Any] = {}
         self.progress: list[tuple[Any, Any, Any]] = []

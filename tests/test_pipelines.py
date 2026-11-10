@@ -82,6 +82,7 @@ def _dataset(period_type: str = "monthly", published: bool = True, dataset_id: s
         dataset_name="Rain, monthly",
         variable="tp",
         period_type=period_type,
+        units="mm",
         item_type="coverage",
         extent=SimpleNamespace(temporal=SimpleNamespace(start="2025-01", end="2025-02")),
         publication=SimpleNamespace(status="published" if published else "unpublished"),
@@ -3354,7 +3355,11 @@ def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
         assert row["feature_name"] == "Bo" and row["reducer"] == "mean" and row["collection_id"] == "districts"
         listed = client.get("/datasets/rain_districts").json()
         assert listed["itemType"] == "table" and listed["dataset_name"] == "Rain by district"
-        assert listed["period_type"] == "monthly"
+        assert listed["period_type"] == "monthly" and listed["units"] == "mm"
+        # The record names the run that computed the rows, its graph and the dataset it read.
+        produced = listed["provenance"]
+        assert produced["producer_job_id"] == polled["job_id"], produced
+        assert produced["process_sha256"] and [item["dataset_id"] for item in produced["inputs"]] == ["rain_monthly"]
 
         # The source is revised: the update runs the pipeline again, and the revised values are current.
         scale[0] = 10.0

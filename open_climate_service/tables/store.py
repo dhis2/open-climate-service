@@ -33,6 +33,7 @@ from open_climate_service import config as api_config
 from open_climate_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
+    ArtifactProvenance,
     ArtifactRecord,
     ArtifactRequestScope,
     CoverageSpatial,
@@ -107,12 +108,14 @@ def write_rows(
     dataset_name: str | None = None,
     period_type: str | None = None,
     written_at: datetime | None = None,
+    provenance: ArtifactProvenance | None = None,
     publish: bool = True,
 ) -> ArtifactRecord:
     """Check *rows* with `check_rows`, append them as one file and register the dataset.
 
-    Raises ValueError before anything is written when any row is refused. *publish* applies to a
-    new dataset; a later write replaces the dataset's record and keeps its publication.
+    Raises ValueError before anything is written when any row is refused. *provenance* is how
+    the rows were produced, for computed rows; the record keeps the latest write's. *publish*
+    applies to a new dataset; a later write replaces the dataset's record and keeps its publication.
     """
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
 
@@ -128,6 +131,7 @@ def write_rows(
             existing = _existing_record(dataset_id)
             period_type = period_type or (existing.period_type if existing else None)
             files = [*(existing.asset_paths if existing else []), str(written)]
+            units = set(table.column("unit").drop_null().to_pylist())
             record = ArtifactRecord(
                 artifact_id=str(uuid4()),
                 dataset_id=dataset_id,
@@ -136,10 +140,12 @@ def write_rows(
                 format=ArtifactFormat.PARQUET,
                 path=str(_dataset_root(dataset_id)),
                 asset_paths=files,
+                units=units.pop() if len(units) == 1 else (existing.units if existing else None),
                 size_bytes=sum(Path(file).stat().st_size for file in files),
                 request_scope=ArtifactRequestScope(),
                 coverage=_coverage(files, period_type),
                 created_at=datetime.now(UTC),
+                provenance=provenance or (existing.provenance if existing else None),
             )
             return ingestion_services.register_artifact_record(record, publish=publish)
         except BaseException:

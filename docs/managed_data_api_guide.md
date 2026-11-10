@@ -625,6 +625,10 @@ aggregation used. A per-class result, from `aggregate_spatial_classes`, gives on
 with the class code in `class`. A dry run shows the first rows and checks them against the store
 without writing.
 
+`/datasets/{dataset_id}` shows the table's `units` and, under `provenance`, the job that computed
+its latest rows, that job's process graph digest and the datasets it read, as for any dataset a
+workflow produced.
+
 ## 13. `/sync`
 
 `/sync` advances an existing managed dataset from its latest local coverage toward a requested upstream period.

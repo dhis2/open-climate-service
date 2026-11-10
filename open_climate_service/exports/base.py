@@ -121,6 +121,11 @@ class DeliveryContext(Protocol):
     with a no-op implementation so their delivery code works standalone.
     """
 
+    source_job_id: str | None
+    """The job whose saved result is delivered; None when ``send`` runs standalone."""
+    source_provenance: dict[str, Any] | None
+    """That job's execution evidence from its export manifest: process graph digest, observed sources."""
+
     def report_progress(self, done: int | None = None, total: int | None = None, message: str | None = None) -> None:
         """Persist coarse progress (e.g. chunks sent) for one delivery job."""
         ...

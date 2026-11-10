@@ -32,7 +32,11 @@ class JobDeliveryContext:
         is_cancel_requested: Any = None,
         save_cursor: Any = None,
         load_cursor: Any = None,
+        source_job_id: str | None = None,
+        source_provenance: dict[str, Any] | None = None,
     ) -> None:
+        self.source_job_id = source_job_id
+        self.source_provenance = source_provenance
         self._on_progress = on_progress
         self._is_cancel_requested = is_cancel_requested
         self._save_cursor = save_cursor
@@ -88,12 +92,6 @@ def deliver_named_export(
     """
     if on_progress is not None:
         on_progress(0, 1, "Delivering export")
-    context = JobDeliveryContext(
-        on_progress=on_progress,
-        is_cancel_requested=is_cancel_requested,
-        save_cursor=save_cursor,
-        load_cursor=load_cursor,
-    )
     # Serialize imports for this export even when they use different source jobs.
     # Acquisition is non-blocking: a second delivery for the same export must fail
     # fast rather than pin a worker thread for the full send.
@@ -105,6 +103,14 @@ def deliver_named_export(
         ):
             if expected_manifest_sha256 is None or _manifest_digest(verified) != expected_manifest_sha256:
                 raise ValueError("Source export changed or submission lacks a frozen manifest; submit a new delivery")
+            context = JobDeliveryContext(
+                on_progress=on_progress,
+                is_cancel_requested=is_cancel_requested,
+                save_cursor=save_cursor,
+                load_cursor=load_cursor,
+                source_job_id=job_id,
+                source_provenance=verified.manifest.provenance,
+            )
             report = _deliver(verified, export_id, dry_run, context)
     except AlreadyLocked:
         from open_climate_service.exports.retention import ResourceBusy

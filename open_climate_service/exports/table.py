@@ -25,6 +25,7 @@ from open_climate_service.exports.base import (
     SettingsFormField,
 )
 from open_climate_service.exports.report import ExportOutcome, ExportReport
+from open_climate_service.ingestions.schemas import ArtifactProvenance
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.urls import SEGMENT_SAFE_ID_PATTERN
 from open_climate_service.shared.vectors import GEOMETRY_FIELD, SPATIAL_REDUCER_ATTR
@@ -275,7 +276,9 @@ class TableExportPlugin(BaseExportPlugin):
             if dry_run:
                 store.check_rows(**arguments, period_type=period_type)
             else:
-                store.write_rows(**arguments, dataset_name=name, period_type=period_type)
+                store.write_rows(
+                    **arguments, dataset_name=name, period_type=period_type, provenance=_provenance(context)
+                )
         except ValueError as exc:
             outcome, message = ExportOutcome.REJECTED, str(exc)
         accepted = len(rows) if outcome is not ExportOutcome.REJECTED else 0
@@ -291,6 +294,17 @@ class TableExportPlugin(BaseExportPlugin):
             created_at=created_at,
             finished_at=datetime.now(UTC).isoformat(),
         )
+
+
+def _provenance(context: DeliveryContext | None) -> ArtifactProvenance | None:
+    """How the delivered rows were produced: the job that computed them and its execution evidence."""
+    from open_climate_service import __version__
+
+    if context is None or context.source_job_id is None:
+        return None
+    return ArtifactProvenance(
+        producer_job_id=context.source_job_id, execution=context.source_provenance, ocs_version=__version__
+    )
 
 
 def _parse_settings(settings: dict[str, Any]) -> TableDestinationSettings:

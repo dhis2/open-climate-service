@@ -2881,7 +2881,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         item_type=_item_type_for(latest),
         variable=latest.variable,
         period_type=_dataset_period_type(latest, source_dataset),
-        units=_as_optional_str(source_dataset.get("units")),
+        units=_as_optional_str(source_dataset.get("units")) or latest.units,
         resolution=_as_optional_str(source_dataset.get("resolution")),
         source=_template_source(source_dataset),
         source_url=_as_optional_str(source_dataset.get("source_url")),

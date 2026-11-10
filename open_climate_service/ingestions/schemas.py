@@ -513,6 +513,13 @@ class ArtifactRecord(BaseModel):
         ),
     )
     variables: list[str] = Field(default_factory=list)
+    units: str | None = Field(
+        default=None,
+        description=(
+            "Units of a table dataset's values, from its rows. None for a raster or a feature "
+            "collection, whose units come from its template."
+        ),
+    )
     request_scope: ArtifactRequestScope
     coverage: ArtifactCoverage
     created_at: datetime
