@@ -222,7 +222,7 @@ def _payload(event: JobEvent) -> dict[str, Any]:
     else:
         text = f"{subject} succeeded again"
     payload: dict[str, Any] = {
-        "type": notification,
+        "status": notification,
         "event": event.event_id,
         "time": _utc(event.time).isoformat(),
         "automation": automation,
@@ -303,7 +303,7 @@ def _settle(state: _State, claimed: _Queued, accepted: bool, now: datetime) -> N
         item.attempts += 1
         if item.attempts >= _MAX_ATTEMPTS:
             logger.error("Dropping notification %s after %d attempts", item.event_id, item.attempts)
-            if item.payload.get("type") == "failed":
+            if item.payload.get("status") == "failed":
                 state.abandoned.add(item.source)
                 kept = [queued for queued in kept if queued.source != item.source]
             continue

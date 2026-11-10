@@ -2241,7 +2241,7 @@ def test_a_failing_pipeline_posts_once_and_again_when_it_recovers_or_is_resolved
         event.type.removeprefix("automation.") for event in persisted_events() if event.type.startswith("automation.")
     ]
     assert outcomes == ["failed", "succeeded", "failed", "succeeded", "failed", "resolved"]
-    assert [(status, body["type"]) for status, _, body in webhook.posts] == [
+    assert [(status, body["status"]) for status, _, body in webhook.posts] == [
         (200, "failed"),
         (503, "recovered"),
         (200, "recovered"),

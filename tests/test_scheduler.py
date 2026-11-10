@@ -382,6 +382,9 @@ def test_check_error_is_retained_without_escaping() -> None:
         "stage": "job",
         "message": result.message,
     }
+    # The same failure at the next check is the one job, not another a day.
+    assert service.check_now(_schedule()).job_id == result.job_id
+    assert len(native_store.list_job_records()) == 1
 
 
 def test_schedules_endpoint_is_read_only_status(client: TestClient) -> None:

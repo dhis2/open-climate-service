@@ -81,7 +81,7 @@ def test_replay_reconstructs_transitions_when_an_older_failure_appears_late(
     monkeypatch.setattr(job_events, "persisted_events", lambda: [failure, success])
     notifications.replay()
 
-    assert [(body["type"], key) for _, key, body in webhook.posts] == [
+    assert [(body["status"], key) for _, key, body in webhook.posts] == [
         ("failed", failure.event_id),
         ("recovered", success.event_id),
     ]
@@ -92,7 +92,7 @@ def test_a_stale_sender_cannot_settle_another_senders_claim(clock: _Clock) -> No
     current = notifications._Queued(
         event_id="rain-run-1:0",
         source=source,
-        payload={"type": "failed"},
+        payload={"status": "failed"},
         next_attempt_at=clock.now,
         claimed_until=clock.now + timedelta(minutes=2),
         claim_id="new-sender",
@@ -122,7 +122,7 @@ def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_i
     notifications.consume([_outcome("rain", 2, clock, failed=False)])  # never told it failed
     notifications.consume([_outcome("rain", 3, clock, failed=True)])  # a new episode
 
-    posted = [(status, body["id"], body["type"]) for status, _, body in webhook.posts]
+    posted = [(status, body["id"], body["status"]) for status, _, body in webhook.posts]
     assert posted == [
         (503, "rain", "failed"),
         (200, "heat", "failed"),

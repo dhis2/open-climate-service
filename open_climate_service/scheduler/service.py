@@ -325,6 +325,18 @@ class SchedulerService:
                 self._remember(self._report(result))
 
     def _report(self, result: CheckResult) -> CheckResult:
+        """Record a failed check as a failed job, unless it repeats the schedule's last failure.
+
+        A dataset that was never ingested fails the same way at every check; one job says so,
+        and the alert it raised already links to it.
+        """
+        previous = self._last_results.get(result.schedule_id)
+        if (
+            previous is not None
+            and previous.job_id is not None
+            and (previous.outcome, previous.message) == (result.outcome, result.message)
+        ):
+            return result.model_copy(update={"job_id": previous.job_id})
         try:
             return report_check_failure(result)
         except Exception:
