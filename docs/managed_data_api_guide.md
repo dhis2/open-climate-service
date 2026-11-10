@@ -618,8 +618,11 @@ destination:
 delivery: { policy: on_update }
 ```
 
-The rows take the dataset's period type and units, the feature names of the collection, and the
-`reducer` the aggregation used. A dry run shows the first rows and checks them against the store
+The rows take the period type of the workflow's result, so a workflow that aggregates daily data
+to months writes a monthly dataset, and a month the source does not fully cover is refused. They
+take the source dataset's units, the feature names of the collection, and the `reducer` the
+aggregation used. A per-class result, from `aggregate_spatial_classes`, gives one row per class,
+with the class code in `class`. A dry run shows the first rows and checks them against the store
 without writing.
 
 ## 13. `/sync`
