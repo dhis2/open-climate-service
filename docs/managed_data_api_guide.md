@@ -35,8 +35,8 @@ Operational note:
 - `GET /features/{collection_id}/data.parquet`
 - `GET /features/{collection_id}/data.pmtiles`
 - `GET /features/{collection_id}/styles/default.json`
-- `GET /stac/catalog.json` (`/stac` redirects here)
-- `GET /stac/{dataset_id}/collection.json` (`/stac/{dataset_id}/collection.json` redirects here)
+- `GET /stac/catalog.json`
+- `GET /stac/{dataset_id}/collection.json`
 - `GET /stac/README.md`
 - `GET /stac/AGENTS.md`
 - `GET /stac/{dataset_id}/README.md` (feature collections)
