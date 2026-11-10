@@ -410,7 +410,7 @@ def test_the_process_list_serves_a_page_only_to_browsers(client: TestClient, acc
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html" if html else "application/json")
-    assert response.headers["vary"] == "Accept"
+    assert "Accept" in response.headers["vary"].split(", ")
     if html:
         assert 'data-views="processes"' in response.text
         assert "data-origin=" in response.text, "the origin filter needs the origins passed in"

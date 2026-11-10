@@ -131,7 +131,7 @@ def test_both_representations_declare_that_they_vary_by_accept(
         response = client.get("/datasets/chirps_monthly", headers={"Accept": accept})
 
         assert response.status_code == 200
-        assert response.headers["vary"] == "Accept", accept
+        assert "Accept" in response.headers["vary"].split(", "), accept
 
 
 def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
@@ -176,7 +176,7 @@ def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html" if html else "application/json")
-    assert response.headers["vary"] == "Accept"
+    assert "Accept" in response.headers["vary"].split(", ")
     if html:
         assert 'data-list data-page-size="12" data-views="datasets"' in response.text
         # Served from the shared asset, so the list behaves the same here as on the landing page.

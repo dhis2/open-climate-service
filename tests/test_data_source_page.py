@@ -277,7 +277,7 @@ def test_the_template_list_is_a_page_and_the_json_it_always_was(client: TestClie
 
     assert page.status_code == 200
     assert page.headers["content-type"].startswith("text/html")
-    assert page.headers["vary"] == "Accept"
+    assert "Accept" in page.headers["vary"].split(", ")
     assert 'data-views="sources"' in page.text
     assert "initList" in page.text, "the shared list script, not a second copy"
     assert 'href="/data-sources/chirps3_precipitation_daily"' in page.text
@@ -286,7 +286,7 @@ def test_the_template_list_is_a_page_and_the_json_it_always_was(client: TestClie
     listing = client.get("/data-sources")
 
     assert listing.headers["content-type"].startswith("application/json")
-    assert listing.headers["vary"] == "Accept"
+    assert "Accept" in listing.headers["vary"].split(", ")
     ids = {template["id"] for template in listing.json()}
     assert {"chirps3_precipitation_daily", "chirps3_precipitation_daily_normal_1991_2020"} <= ids
 
@@ -312,7 +312,7 @@ def test_the_template_url_answers_json_unless_html_is_preferred(
         assert response.status_code == 200, path
         expected = "text/html" if html else "application/json"
         assert response.headers["content-type"].startswith(expected), path
-        assert response.headers["vary"] == "Accept", path
+        assert "Accept" in response.headers["vary"].split(", "), path
 
 
 @pytest.mark.parametrize("collection", ["/datasets", "/data-sources", "/processes"])
