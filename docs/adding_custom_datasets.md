@@ -471,9 +471,7 @@ itself draws every colormap from 256 colours.
 
 `display.range` and `display.nodata` are published once, as the `statistics` (`minimum`,
 `maximum`) and `nodata` of the variable's entry in the `zarr` asset's `bands`, not in `renders`.
-That is where the Portolan Zarr profile looks for a display range, and where the map viewer reads
-it. It is the range you set, not one computed from the data, so it stays the same as data is
-added.
+It is the range you set, not one computed from the data, so it stays the same as data is added.
 
 ### Categorical datasets
 
