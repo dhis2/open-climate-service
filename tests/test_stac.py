@@ -292,6 +292,10 @@ def test_collection_uses_xstac_and_adds_expected_fields(
     assert "https://stac-extensions.github.io/cf/v1.0.0/schema.json" in payload["stac_extensions"]
     render = payload["renders"]["default"]
     assert render["rescale"] == [[0.0, 4500.0]]
+    # The same range as band statistics, named after the cube:variables key, for the Portolan
+    # Zarr profile (CLIM-1843).
+    assert payload["assets"]["zarr"]["bands"] == [{"name": "precip", "statistics": {"minimum": 0.0, "maximum": 4500.0}}]
+    assert {band["name"] for band in payload["assets"]["zarr"]["bands"]} <= set(payload["cube:variables"])
     assert list(render["colormap"]) == [str(i) for i in range(256)]
     assert (render["colormap"]["0"], render["colormap"]["255"]) == (first, last)
     # Only a name is passed on as a name; a list of colours has none to give.

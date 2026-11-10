@@ -468,6 +468,11 @@ block as a `colormap` of 256 colours keyed `0`-`255`, where `0` is the low end o
 only the colours, so it needs no colormap library and draws what the thumbnail shows. An unknown
 name or an invalid list falls back to `viridis`.
 
+`display.range` is also published as the `statistics` (`minimum`, `maximum`) of the variable's
+entry in the `zarr` asset's `bands`, with `display.nodata` as its `nodata`. That is where the
+Portolan Zarr profile looks for a display range. It is the range you set, not one computed from
+the data, so it stays the same as data is added.
+
 The STAC lists 256 colours rather than only the few you declared, because map tools that
 follow the STAC render convention (titiler, for one) need the full set to draw a smooth ramp.
 Given only a few, they colour only the pixels that hit those exact values and leave the rest

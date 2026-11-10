@@ -274,6 +274,9 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
         "roles": template_asset.get("roles"),
         "xarray:open_kwargs": xarray_open_kwargs,
     }
+    bands = _build_bands(artifact, source_dataset)
+    if bands is not None:
+        collection_payload["assets"]["zarr"]["bands"] = bands
     if thumbnail_href is not None:
         # `thumbnail` is a standardised STAC asset role, and a Collection may carry assets —
         # the spec recommends collection-level assets for exactly this shape, a standalone
@@ -1376,6 +1379,28 @@ def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> 
     # Units aren't duplicated here: they're published on the datacube-standard
     # ``cube:variables[<var>].unit``, which clients read instead.
     return {"default": render}
+
+
+def _build_bands(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """The display range as band statistics, where the Portolan Zarr profile looks for it.
+
+    The same authored range as the render's `rescale`, not a summary of the data, so it does not
+    move as data is appended. The render stays: it also carries the colormap (CLIM-1843).
+    """
+    display = source_dataset.get("display")
+    if not isinstance(display, dict):
+        return None
+    value_range = display.get("range")
+    if not isinstance(value_range, list) or len(value_range) != 2:
+        return None
+    band: dict[str, Any] = {
+        "name": artifact.variable,
+        "statistics": {"minimum": float(value_range[0]), "maximum": float(value_range[1])},
+    }
+    nodata = display.get("nodata")
+    if nodata is not None:
+        band["nodata"] = float(nodata)
+    return [band]
 
 
 def _zarr_consolidated_flag(artifact_path: str) -> bool | None:
