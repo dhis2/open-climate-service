@@ -77,8 +77,15 @@ def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch
             arguments={**_ANOMALY.arguments, "observed_dataset_id": "g"},
             refresh_on="observed_dataset_id",
         ),
+        Recipe(
+            output="i",
+            workflow="climate_anomaly",
+            arguments={**_ANOMALY.arguments, "observed_dataset_id": "j"},
+            refresh_on="observed_dataset_id",
+        ),
     ]
     monkeypatch.setattr(derivations, "_recipes", lambda: broken)
+    monkeypatch.setattr(derivations, "_trigger_edges", lambda: {("i", "j")})  # a trigger writes j after i
 
     with pytest.raises(ValueError) as refused:
         derivations.validate_recipes()
@@ -91,8 +98,7 @@ def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch
         "'d': missing argument(s) normal_dataset_id, variable",
         "'e': set 'temporal_extent': a recipe without refresh_on runs over a fixed range",
         "'f': leave 'temporal_extent' out",
-        "'g': its refresh_on chain leads back to itself",
-        "'h': its refresh_on chain leads back to itself",
+        *(f"'{output}': its updates lead back to itself" for output in ("g", "h", "i")),
     ):
         assert expected in message
 
@@ -239,6 +245,60 @@ def test_updates_handled_at_once_start_one_refresh(instance: _Instance, monkeypa
 
     assert not first.is_alive()
     assert len(instance.openeo.jobs) == 1
+
+
+def test_a_caller_held_before_the_lock_refreshes_the_update_that_arrived_meanwhile(
+    instance: _Instance, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The latest update is read under the lock: one read before it would submit A's shorter
+    range after B arrived, and publishing that would shrink the dataset's coverage."""
+    from contextlib import contextmanager
+
+    from open_climate_service.shared import persistence
+
+    instance.created.add("rain_anomaly")
+    waiting, release = threading.Event(), threading.Event()
+    lock = persistence.index_lock
+
+    @contextmanager
+    def held_back(path: Path) -> Any:
+        waiting.set()
+        assert release.wait(5)
+        with lock(path):
+            yield
+
+    monkeypatch.setattr(persistence, "index_lock", held_back)
+    instance.log.append(_update(1))
+    caller = threading.Thread(target=derivations.consume, args=([instance.log[-1]],))
+    caller.start()
+    assert waiting.wait(5)
+    instance.log.append(_update(2))
+    release.set()
+    caller.join(5)
+
+    assert not caller.is_alive()
+    [job] = instance.openeo.jobs.values()
+    assert job.process["process_graph"] == _graph("2026-02")
+
+
+def test_a_refresh_left_unstarted_waits_while_another_runs(instance: _Instance) -> None:
+    """A process that stopped between creating and starting a refresh leaves it CREATED; the
+    next reconciliation starts it, but not beside a refresh another process queued since."""
+    instance.created.add("rain_anomaly")
+    instance.log.append(_update(1))
+    start = instance.openeo.start_triggered_job
+    instance.openeo.start_triggered_job = lambda job_id: False  # stopped before starting it
+    derivations.reconcile()
+    [left] = instance.openeo.jobs.values()
+    instance.openeo.start_triggered_job = start
+    other = left.model_copy(update={"id": "queued-elsewhere", "status": OpenEOJobStatus.QUEUED})
+    instance.openeo.jobs[other.id] = other
+
+    derivations.reconcile()
+    assert instance.openeo.jobs[left.id].status == OpenEOJobStatus.CREATED
+    instance.openeo.set(other.id, OpenEOJobStatus.FINISHED)
+    derivations.reconcile()
+    assert instance.openeo.jobs[left.id].status == OpenEOJobStatus.QUEUED
 
 
 def test_one_failing_consumer_does_not_keep_events_from_the_others(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -105,41 +105,55 @@ def recipe_problems(recipe: Recipe) -> list[str]:
     return problems
 
 
-def _cycles(found: list[Recipe]) -> list[str]:
-    """The derived datasets whose ``refresh_on`` chain leads back to themselves."""
-    drives = {recipe.output: recipe.input for recipe in found if recipe.input is not None}
-    looped: set[str] = set()
-    for start in drives:
-        seen: list[str] = []
-        current = start
-        while current in drives and current not in seen:
-            seen.append(current)
-            current = drives[current]
-        if current in seen:
-            looped.update(seen[seen.index(current) :])
-    return sorted(looped)
+def _cycles(found: list[Recipe], triggers: set[tuple[str, str]]) -> list[str]:
+    """The recipe outputs whose updates lead back to themselves, through recipes or triggers.
+
+    ``triggers`` holds each workflow trigger's (input, output): the trigger side refuses its
+    own cycles, so only a loop that passes through a recipe is left to find here.
+    """
+    feeds: dict[str, set[str]] = {}
+    for source, output in {*triggers, *((r.input, r.output) for r in found if r.input is not None)}:
+        feeds.setdefault(source, set()).add(output)
+
+    def returns_to(start: str) -> bool:
+        seen: set[str] = set()
+        pending = list(feeds.get(start, ()))
+        while pending:
+            current = pending.pop()
+            if current == start:
+                return True
+            if current not in seen:
+                seen.add(current)
+                pending.extend(feeds.get(current, ()))
+        return False
+
+    return sorted({recipe.output for recipe in found if recipe.input is not None and returns_to(recipe.output)})
 
 
-def _trigger_outputs() -> set[str]:
-    """Datasets a workflow trigger writes, which no recipe may also produce. Goes with CLIM-1426."""
+def _trigger_edges() -> set[tuple[str, str]]:
+    """Each workflow trigger's (input, output) where the output is known. Goes with CLIM-1426."""
     from open_climate_service.automation.config import get_automation_config
     from open_climate_service.automation.service import _resolved_output_dataset
     from open_climate_service.openeo import workflows as workflow_registry
 
-    outputs: set[str] = set()
+    edges: set[tuple[str, str]] = set()
     for trigger in get_automation_config().workflow_triggers:
         workflow = workflow_registry.get_workflow(trigger.workflow_id)
         if workflow is not None and (output := _resolved_output_dataset(trigger, workflow)) is not None:
-            outputs.add(output)
-    return outputs
+            edges.add((trigger.on_update_of, output))
+    return edges
 
 
 def validate_recipes() -> None:
     """Refuse startup with every recipe that cannot run, loops, or competes with a trigger."""
     found = _recipes()
     problems = [f"'{recipe.output}': {problem}" for recipe in found for problem in recipe_problems(recipe)]
-    problems.extend(f"'{output}': its refresh_on chain leads back to itself" for output in _cycles(found))
-    contested = _trigger_outputs()
+    triggers = _trigger_edges()
+    problems.extend(
+        f"'{output}': its updates lead back to itself through recipes or workflow triggers"
+        for output in _cycles(found, triggers)
+    )
+    contested = {output for _, output in triggers}
     problems.extend(
         f"'{recipe.output}': a workflow trigger also writes it; remove one of the two"
         for recipe in found
@@ -175,28 +189,29 @@ def _exists(dataset_id: str) -> bool:
     return True
 
 
-def _refresh(recipe: Recipe, update: JobEvent | None) -> OpenEOJobRecord | None:
-    """Submit the refresh ``update``, the driving dataset's latest, calls for, if one is due; return it.
+def _refresh(recipe: Recipe) -> OpenEOJobRecord | None:
+    """Submit the refresh the driving dataset's latest update calls for, if one is due; return it.
 
-    Checking the jobs and creating the next one happen under one lock per derived dataset,
-    shared by every process on the data directory: two updates handled at once would otherwise
-    each find no refresh running and start two. An update persisted after the caller read the
-    log is handled by its own dispatch, or by the next reconciliation.
+    Reading the latest update, checking the jobs and creating the next one happen under one
+    lock per derived dataset, shared by every process on the data directory. Two updates
+    handled at once would otherwise each find no refresh running and start two, and an update
+    read before the lock could be older than one another caller already refreshed.
     """
     from open_climate_service.shared.persistence import index_lock
 
-    if update is None:
-        return None
     with index_lock(api_config.get_data_root() / "derivations" / recipe.output):
-        return _refresh_locked(recipe, update)
+        return _refresh_locked(recipe)
 
 
-def _refresh_locked(recipe: Recipe, update: JobEvent) -> OpenEOJobRecord | None:
+def _refresh_locked(recipe: Recipe) -> OpenEOJobRecord | None:
     from open_climate_service.openeo import workflows as workflow_registry
     from open_climate_service.openeo.jobs import get_openeo_job_service, store_list_jobs, triggered_job_id
     from open_climate_service.pipelines import workflow as binding
 
-    if not _exists(recipe.output):
+    if recipe.input is None or not _exists(recipe.output):
+        return None
+    update = _latest_updates().get(recipe.input)
+    if update is None:
         return None
     record = workflow_registry.get_workflow(recipe.workflow)
     if record is None:
@@ -210,13 +225,13 @@ def _refresh_locked(recipe: Recipe, update: JobEvent) -> OpenEOJobRecord | None:
     service = get_openeo_job_service()
     job_id = triggered_job_id(source, trigger_id(recipe.output))
     jobs = [job for job in store_list_jobs() if job.trigger_id == trigger_id(recipe.output)]
+    if any(job.status in _ACTIVE for job in jobs):
+        return None  # its completion reconciles against the newest update
     existing = next((job for job in jobs if job.id == job_id), None)
     if existing is not None:
         if existing.status == OpenEOJobStatus.CREATED:
             service.start_triggered_job(existing.id)  # created by a process that stopped before starting it
-        return None  # running, done, or failed and left for an operator
-    if any(job.status in _ACTIVE for job in jobs):
-        return None  # its completion reconciles against the newest update
+        return None  # done, or failed and left for an operator
     open_intervals = [name for name in binding.interval_parameters(snapshot) if name not in recipe.arguments]
     if len(open_intervals) != 1:
         # Checked at startup, but a workflow can be edited while OCS runs.
@@ -262,11 +277,9 @@ def _reconcile(only: set[str] | None = None) -> None:
         found = [recipe for recipe in found if recipe.input in only or recipe.output in only]
     if not found:
         return
-    updates = _latest_updates()  # one read of the log for every recipe
     for recipe in found:
-        assert recipe.input is not None
         try:
-            _refresh(recipe, updates.get(recipe.input))
+            _refresh(recipe)
         except Exception:
             logger.exception("Derived dataset %s could not be refreshed", recipe.output)
 
