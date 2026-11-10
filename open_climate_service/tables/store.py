@@ -2,9 +2,11 @@
 
 One folder per table dataset under `config.get_tables_root`, and one folder per feature
 collection inside it. Every write adds a new immutable file, written under a temporary name and
-renamed, so a reader lists either the files before a write or the files after it, never a
-partial one. Rows are never updated or deleted: a revised value is a new row with a later
-`written_at`, and the current value is the latest row per `KEY`.
+renamed. The dataset's record lists its committed files in `asset_paths`, and readers read only
+those: a file becomes part of the dataset when the record naming it is registered, so a reader
+sees the files before a write or after it, and a write whose record fails leaves nothing behind.
+Rows are never updated or deleted: a revised value is a new row with a later `written_at`, and
+the current value is the latest row per `KEY`.
 
 `write_rows` is the one writer. It validates rows against the feature collection they report
 on, appends them, and registers the dataset's record, which is what lists it under `/datasets`
@@ -36,7 +38,6 @@ from open_climate_service.ingestions.schemas import (
     CoverageSpatial,
     CoverageTemporal,
 )
-from open_climate_service.shared.storage_size import stored_bytes
 from open_climate_service.shared.urls import is_segment_safe_id
 
 SCHEMA = pa.schema(
@@ -110,7 +111,8 @@ def write_rows(
 ) -> ArtifactRecord:
     """Check *rows* with `check_rows`, append them as one file and register the dataset.
 
-    Raises ValueError before anything is written when any row is refused.
+    Raises ValueError before anything is written when any row is refused. *publish* applies to a
+    new dataset; a later write replaces the dataset's record and keeps its publication.
     """
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
 
@@ -121,22 +123,29 @@ def write_rows(
         table = check_rows(
             dataset_id=dataset_id, collection_id=collection_id, rows=rows, period_type=period_type, written_at=stamp
         )
-        _append(_dataset_root(dataset_id) / collection_id, table, stamp)
-        existing = _existing_record(dataset_id)
-        period_type = period_type or (existing.period_type if existing else None)
-        record = ArtifactRecord(
-            artifact_id=str(uuid4()),
-            dataset_id=dataset_id,
-            dataset_name=dataset_name or (existing.dataset_name if existing else dataset_id),
-            period_type=period_type,
-            format=ArtifactFormat.PARQUET,
-            path=str(_dataset_root(dataset_id)),
-            size_bytes=stored_bytes(_dataset_root(dataset_id)),
-            request_scope=ArtifactRequestScope(),
-            coverage=_coverage(dataset_id, period_type),
-            created_at=datetime.now(UTC),
-        )
-        return ingestion_services.register_artifact_record(record, publish=publish)
+        written = _append(_dataset_root(dataset_id) / collection_id, table, stamp)
+        try:
+            existing = _existing_record(dataset_id)
+            period_type = period_type or (existing.period_type if existing else None)
+            files = [*(existing.asset_paths if existing else []), str(written)]
+            record = ArtifactRecord(
+                artifact_id=str(uuid4()),
+                dataset_id=dataset_id,
+                dataset_name=dataset_name or (existing.dataset_name if existing else dataset_id),
+                period_type=period_type,
+                format=ArtifactFormat.PARQUET,
+                path=str(_dataset_root(dataset_id)),
+                asset_paths=files,
+                size_bytes=sum(Path(file).stat().st_size for file in files),
+                request_scope=ArtifactRequestScope(),
+                coverage=_coverage(files, period_type),
+                created_at=datetime.now(UTC),
+            )
+            return ingestion_services.register_artifact_record(record, publish=publish)
+        except BaseException:
+            # No record names the file, so no reader sees it; remove it rather than leave it.
+            written.unlink(missing_ok=True)
+            raise
 
 
 def check_rows(
@@ -205,7 +214,7 @@ def read_rows(
     on key columns, so filtering before picking the latest row per key gives the same answer as
     filtering after it. *start* and *end* bound `period_start`, inclusive.
     """
-    files = _files(Path(str(record.path)), collection_id)
+    files = _files(record, collection_id)
     if not files:
         return SCHEMA.empty_table()
     conditions = []
@@ -257,13 +266,14 @@ def _append(folder: Path, table: pa.Table, stamp: datetime) -> Path:
     return path
 
 
-def _files(root: Path, collection_id: str | None) -> list[Path]:
-    """The dataset's committed files, for one collection or all of them."""
+def _files(record: ArtifactRecord, collection_id: str | None) -> list[Path]:
+    """The files *record* commits, for one collection or all of them; never a file it does not name."""
+    files = [Path(file) for file in record.asset_paths]
     if collection_id is not None:
         if not is_segment_safe_id(collection_id):
             return []
-        return sorted((root / collection_id).glob("*.parquet"))
-    return sorted(root.glob("*/*.parquet"))
+        files = [file for file in files if file.parent.name == collection_id]
+    return sorted(files)
 
 
 def _dataset_root(dataset_id: str) -> Path:
@@ -281,21 +291,17 @@ def _existing_record(dataset_id: str) -> ArtifactRecord | None:
     return max(records, key=lambda record: record.created_at) if records else None
 
 
-def _coverage(dataset_id: str, period_type: str | None) -> ArtifactCoverage:
-    """The period range of every row stored, as period labels, and the extent of the collections they report on."""
+def _coverage(files: list[str], period_type: str | None) -> ArtifactCoverage:
+    """The period range of the rows in *files*, as period labels, and the extent of the collections they report on."""
     from open_climate_service.features.services import registered_collections
 
-    root = _dataset_root(dataset_id)
-    files = _files(root, None)
-    periods = pds.dataset([str(path) for path in files], schema=SCHEMA, format="parquet").to_table(
-        columns=["period_start"]
-    )
+    periods = pds.dataset(files, schema=SCHEMA, format="parquet").to_table(columns=["period_start"])
     dates = periods.column("period_start").unique().to_pylist()
     first, last = min(dates), max(dates)
     collections = registered_collections()
     boxes = [
         (record.coverage.spatial_wgs84 or record.coverage.spatial)
-        for folder in sorted(path.name for path in root.iterdir() if path.is_dir())
+        for folder in sorted({Path(file).parent.name for file in files})
         if (record := collections.get(folder)) is not None
     ]
     spatial = CoverageSpatial(

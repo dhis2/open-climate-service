@@ -156,10 +156,34 @@ def test_a_reader_during_a_write_sees_the_files_before_it(monkeypatch: pytest.Mo
         rename(source, target)
 
     monkeypatch.setattr(store.os, "replace", read_then_rename)
-    _write([_row("D1", 11.0)], written_at=LATER)
+    updated = _write([_row("D1", 11.0)], written_at=LATER)
 
     assert seen == [[10.0]]
-    assert store.read_rows(record, history=True).column("value").to_pylist() == [10.0, 11.0]
+    # The earlier record still names only its own file; the new one names both.
+    assert store.read_rows(record, history=True).column("value").to_pylist() == [10.0]
+    assert store.read_rows(updated, history=True).column("value").to_pylist() == [10.0, 11.0]
+
+
+def test_a_write_whose_record_fails_is_never_read(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, stores: Path
+) -> None:
+    """Readers follow the record, not the folder: an unrecorded file is not part of the dataset."""
+    _write([_row("D1", 1.0)])
+    files = sorted((stores / "precip_districts" / "districts").glob("*.parquet"))
+    seen: list[list[float]] = []
+
+    def fail(*_args: Any, **_kwargs: Any) -> None:
+        # The new file is on disk now; the published record must still serve the old rows only.
+        rows = client.get("/tables/precip_districts/rows").json()["items"]
+        seen.append([row["value"] for row in rows])
+        raise OSError("index unwritable")
+
+    monkeypatch.setattr(ingestion_services, "register_artifact_record", fail)
+    with pytest.raises(OSError):
+        _write([_row("D1", 2.0)], written_at=LATER)
+    assert seen == [[1.0]]
+    assert [row["value"] for row in client.get("/tables/precip_districts/rows").json()["items"]] == [1.0]
+    assert sorted((stores / "precip_districts" / "districts").glob("*.parquet")) == files
 
 
 def test_a_failed_write_leaves_no_file(monkeypatch: pytest.MonkeyPatch, stores: Path) -> None:
