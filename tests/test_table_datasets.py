@@ -402,11 +402,11 @@ def test_a_month_labelled_by_its_last_day_is_the_same_value_as_its_first() -> No
     assert [(row["period_start"], row["value"]) for row in current] == [(date(2026, 1, 1), 11.0)]
 
 
-def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real temporal and spatial aggregation, rendered the way a pipeline renders its result.
+def _render_daily_as_months(monkeypatch: pytest.MonkeyPatch, last_day: str) -> Any:
+    """Aggregate daily data from January 1 to *last_day* to months, and render it as a pipeline would.
 
-    pandas labels each month by its last day. The export is compiled from a daily source, so the
-    shared export checks must not hold the monthly result to the source's cadence.
+    The real temporal and spatial aggregation. The export is compiled from the daily source, as a
+    pipeline compiles it, while the result is monthly.
     """
     import numpy as np
     import pandas as pd
@@ -420,7 +420,7 @@ def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkey
     from open_climate_service.shared.provenance import record_source
     from open_climate_service.shared.time import stamp_cadence
 
-    days = pd.date_range("2026-01-01", "2026-02-28", freq="D")
+    days = pd.date_range("2026-01-01", last_day, freq="D")
 
     def load_collection(id: str | None = None, **_: Any) -> xr.DataArray:
         record_source(str(id), type("Artifact", (), {"artifact_id": "a", "source_dataset_id": id, "path": None})())
@@ -471,15 +471,19 @@ def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkey
         }
     }
     envelope = execution.run_process_graph(graph)
-    assert [str(value)[:10] for value in envelope.data["t"].values] == ["2026-01-31", "2026-02-28"]
-
-    # Compiled as a pipeline compiles it, from a daily source; the result says it is monthly.
     context = DestinationContext(
         export_id="p", datasets=(PipelineDataset("rain_daily", "precip", "daily"),), feature_collections=("districts",)
     )
     definition = plugin.export_definition({"dataset_id": "precip_districts", "name": "Precipitation"}, context)
     resolved = resolve_export_definition({"id": "p", "plugin": plugin.id, **definition})
-    rendered = render_resolved_export(envelope.data, resolved, provenance=envelope.provenance)
+    return render_resolved_export(envelope.data, resolved, provenance=envelope.provenance)
+
+
+def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pandas labels each month by its last day; the rows are stored at its first."""
+    from open_climate_service.exports.table import plugin
+
+    rendered = _render_daily_as_months(monkeypatch, "2026-02-28")
     assert rendered.periods == ("2026-01", "2026-02")
     plugin.send(rendered.content, "tables")
     record = ingestion_services.published_table_artifacts_by_dataset()["precip_districts"]
@@ -489,6 +493,12 @@ def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkey
         (date(2026, 1, 1), 31.0),
         (date(2026, 2, 1), 28.0),
     }
+
+
+def test_a_month_the_source_does_not_fully_cover_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The result's cadence is the export's period, so the completeness check holds it to whole months."""
+    with pytest.raises(ValueError, match="does not fully cover: 202602"):
+        _render_daily_as_months(monkeypatch, "2026-02-20")
 
 
 @pytest.mark.parametrize(

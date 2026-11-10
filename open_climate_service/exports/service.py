@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -225,9 +225,27 @@ def render_resolved_export(
     resolve their generated definition directly, but must still receive the exact cadence and
     incomplete-period checks applied to configured named exports.
     """
+    checked = with_result_period(data, resolved)
     if provenance is not None:
-        check_execution_declarations(resolved, provenance)
-    return _render(data, resolved, provenance)
+        check_execution_declarations(checked, provenance)
+    return _render(data, checked, provenance)
+
+
+def with_result_period(data: Any, resolved: ResolvedExport) -> ResolvedExport:
+    """*resolved* with the result's cadence as its period, for a plugin that takes its period from it.
+
+    A table export compiled from a daily source may receive a monthly result, so its period is
+    known only once the result is; the temporal and completeness checks then hold it to that.
+    For checking and rendering only: the declared export, which a delivery compares, is unchanged.
+    """
+    from open_climate_service.shared.time import cadence_of
+
+    if not resolved.plugin.period_from_result or resolved.mapping.get("period_type") is not None:
+        return resolved
+    cadence = cadence_of(data)
+    if cadence is None:
+        return resolved
+    return replace(resolved, mapping={**resolved.mapping, "period_type": cadence})
 
 
 def check_execution_declarations(resolved: ResolvedExport, provenance: dict[str, Any]) -> None:
@@ -285,7 +303,7 @@ def _check_temporal_declaration(resolved: ResolvedExport, provenance: dict[str, 
     observed = cast(list[dict[str, Any]], observed_value)
     destination = resolved.mapping.get("period_type")
     if destination is None:
-        # No period declared, as for a table export, which takes its period from the result.
+        # No period declared, and none known from the result: nothing to hold it to.
         return
     declared = resolved.mapping.get("temporal_aggregation")
     producing = [entry for entry in observed if entry.get("period") == destination]
@@ -534,8 +552,10 @@ def write_named_export(
         }
     )
     validate_public_mapping(evidence)
-    check_execution_declarations(resolved, evidence)
-    rendered = _render(data, resolved, evidence)
+    # Checked and rendered at the result's period; the manifest keeps the export as declared.
+    checked = with_result_period(data, resolved)
+    check_execution_declarations(checked, evidence)
+    rendered = _render(data, checked, evidence)
     manifest = ExportManifest(
         source_job_id=job_id,
         export_id=resolved.export_id,

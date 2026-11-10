@@ -161,6 +161,9 @@ class BaseExportPlugin(ABC):
     # True when sending the same payload twice leaves the destination as sending it once
     # (an upsert). Only then may an operator send a delivery again after an unconfirmed outcome.
     redelivery_safe: bool = False
+    # True when the plugin takes its period from the result's cadence rather than declaring one.
+    # The export's temporal checks then run against that cadence.
+    period_from_result: bool = False
 
     # --- delivery target hooks (delivery plugins) -----------------------------------------
 
