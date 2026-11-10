@@ -97,7 +97,7 @@ server = [
     # Rust kernel rejects it. 0.1.4 pins `topozarr-core==0.1.4` and adds a lockstep release
     # check (carbonplan/topozarr#28), so the pair can no longer be mismatched and OCS no longer
     # needs a `topozarr-core` pin of its own. Do not lower this floor.
-    "topozarr>=0.1.4,<0.2",
+    "topozarr>=0.1.4,<0.3",
     "rioxarray>=0.17",
     # Directly imported (shared/time.py, streaming, openeo). Capped to 2.x; pandas
     # 3.0 is a breaking major and not yet validated against this stack.
