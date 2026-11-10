@@ -1362,20 +1362,17 @@ def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> 
     value_range = display.get("range")
     if not isinstance(value_range, list) or len(value_range) != 2:
         return None
-    # The colours themselves, keyed 0-255 across `rescale` as the render extension and titiler
-    # read a custom colormap, so a client needs no colormap library that knows the name.
+    # Colour only: 256 colours keyed 0-255 from the low to the high end of the display range, so
+    # a client needs no colormap library that knows the name. The range and the no-data value are
+    # published once, on the zarr asset's band (`_build_bands`), and not repeated here.
     render: dict[str, Any] = {
         "title": artifact.dataset_name,
         "assets": ["zarr"],
-        "rescale": [[float(value_range[0]), float(value_range[1])]],
         "colormap": {str(i): color for i, color in enumerate(colormap_stops(colormap))},
         "open_climate_service:variable": artifact.variable,
     }
     if isinstance(colormap, str):
         render["colormap_name"] = colormap
-    nodata = display.get("nodata")
-    if nodata is not None:
-        render["nodata"] = float(nodata)
     # Units aren't duplicated here: they're published on the datacube-standard
     # ``cube:variables[<var>].unit``, which clients read instead.
     return {"default": render}
@@ -1384,8 +1381,9 @@ def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> 
 def _build_bands(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> list[dict[str, Any]] | None:
     """The display range as band statistics, where the Portolan Zarr profile looks for it.
 
-    The same authored range as the render's `rescale`, not a summary of the data, so it does not
-    move as data is appended. The render stays: it also carries the colormap (CLIM-1843).
+    The one place the range and the no-data value are published; the render carries only the
+    colours (CLIM-1843). It is the authored range, not a summary of the data, so it does not move
+    as data is appended.
     """
     display = source_dataset.get("display")
     if not isinstance(display, dict):

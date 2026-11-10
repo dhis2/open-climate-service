@@ -724,6 +724,14 @@
           return;
         }
 
+        const variable =
+          renders["open_climate_service:variable"] ??
+          Object.keys(collection["cube:variables"] ?? {})[0] ??
+          "data";
+        // The display range and no-data value live on the variable's band; the render holds
+        // only the colours (CLIM-1843).
+        const band = (zarr.bands ?? []).find((b) => b.name === variable) ?? {};
+        const range = band.statistics;
         const classes = zarr["classification:classes"] ?? [];
         const colors = classColors(classes);
         const { cm, clim } = classes.length
@@ -732,13 +740,9 @@
               // The server resolves the template's colormap to its colours, keyed 0-255, so the
               // viewer never looks a colormap name up itself.
               cm: renders.colormap ? Object.values(renders.colormap) : chroma.scale("viridis").colors(256),
-              clim: renders.rescale?.[0] ?? [0, 100],
+              clim: range ? [range.minimum, range.maximum] : [0, 100],
             };
-        const fillValue = renders.nodata ?? null;
-        const variable =
-          renders["open_climate_service:variable"] ??
-          Object.keys(collection["cube:variables"] ?? {})[0] ??
-          "data";
+        const fillValue = band.nodata ?? null;
 
         // Build a control state for every non-spatial dimension. The layer selector
         // must pin each one so the cube reduces to 2-D for rendering.

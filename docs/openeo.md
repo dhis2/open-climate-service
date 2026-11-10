@@ -226,7 +226,7 @@ The `format` argument of `save_result` controls what the server writes. `GET /fi
 | `ZARR`     | Zarr       | Raster          | Default. Zarr v3 directory store; served chunk-by-chunk                                |
 | `NETCDF`   | NetCDF     | Raster          | Raw float values — compatible with CDO, NCO, xarray, R                                 |
 | `GTIFF`    | GeoTIFF    | Raster          | Raw float values with embedded CRS — compatible with QGIS, GDAL                        |
-| `PNG`      | PNG        | Raster          | Styled image using the collection's colormap and rescale range; transparent background |
+| `PNG`      | PNG        | Raster          | Styled image using the dataset's colormap and display range; transparent background |
 | `CSV`      | CSV        | Raster / Vector | Tabular — ideal for time series and zonal statistics output                            |
 | `GEOJSON`  | GeoJSON    | Vector          | Default for `aggregate_spatial_weighted` results; one feature per geometry            |
 | `PARQUET`  | GeoParquet | Vector          | Columnar binary — efficient for large vector datasets                                  |

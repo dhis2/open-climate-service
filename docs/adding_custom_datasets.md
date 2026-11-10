@@ -463,21 +463,17 @@ display:
 
 The server resolves the colormap once, with matplotlib, and the thumbnail, the landing-page ramp
 and the map viewer all draw from that result. The STAC collection publishes it in its `renders`
-block as a `colormap` of 256 colours keyed `0`-`255`, where `0` is the low end of `rescale` and
-`255` the high end, and adds `colormap_name` when the template gives a name. The map viewer reads
-only the colours, so it needs no colormap library and draws what the thumbnail shows. An unknown
-name or an invalid list falls back to `viridis`.
+block as a `colormap` of 256 colours keyed `0`-`255`, from the low end of `display.range` to the
+high end, and adds `colormap_name` when the template gives a name. The map viewer reads only the
+colours, so it needs no colormap library and draws what the thumbnail shows. An unknown name or
+an invalid list falls back to `viridis`. Nothing changes in how the colormap looks: matplotlib
+itself draws every colormap from 256 colours.
 
-`display.range` is also published as the `statistics` (`minimum`, `maximum`) of the variable's
-entry in the `zarr` asset's `bands`, with `display.nodata` as its `nodata`. That is where the
-Portolan Zarr profile looks for a display range. It is the range you set, not one computed from
-the data, so it stays the same as data is added.
-
-The STAC lists 256 colours rather than only the few you declared, because map tools that
-follow the STAC render convention (titiler, for one) need the full set to draw a smooth ramp.
-Given only a few, they colour only the pixels that hit those exact values and leave the rest
-blank. Nothing changes in how the colormap looks: matplotlib itself draws every colormap from
-256 colours, so a named colormap appears in the map viewer exactly as it does in matplotlib.
+`display.range` and `display.nodata` are published once, as the `statistics` (`minimum`,
+`maximum`) and `nodata` of the variable's entry in the `zarr` asset's `bands`, not in `renders`.
+That is where the Portolan Zarr profile looks for a display range, and where the map viewer reads
+it. It is the range you set, not one computed from the data, so it stays the same as data is
+added.
 
 ### Categorical datasets
 
