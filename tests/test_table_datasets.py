@@ -360,6 +360,17 @@ def test_a_dataset_keeps_one_period_type_and_its_files_carry_it(stores: Path) ->
     assert ingestion_services.published_table_artifacts_by_dataset()["precip_districts"].period_type == "monthly"
 
 
+def test_an_untyped_dataset_takes_no_typed_rows(stores: Path) -> None:
+    """Its periods were stored as given, so typed rows would sit beside them under other keys."""
+    store.write_rows(
+        dataset_id="precip_districts", collection_id="districts", rows=[_row("D1", 1.0, period_start="2026-01-31")]
+    )
+    january = [_row("D1", 2.0)]
+    for attempt in (store.write_rows, store.check_rows):
+        with pytest.raises(ValueError, match="has no period type"):
+            attempt(dataset_id="precip_districts", collection_id="districts", rows=january, period_type="monthly")
+
+
 def test_a_destination_payload_for_another_period_type_is_rejected(stores: Path) -> None:
     from open_climate_service.exports.table import plugin
 

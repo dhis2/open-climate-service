@@ -461,6 +461,10 @@ def _dataset_period_type(dataset_id: str, period_type: str | None) -> str | None
     """The period type a write uses: the dataset's own, which *period_type* must not contradict."""
     existing = _existing_record(dataset_id)
     current = existing.period_type if existing else None
+    if existing is not None and current is None and period_type is not None:
+        # Its stored periods were never normalized to a period's start, so typed rows would not
+        # share their keys.
+        raise ValueError(f"table dataset '{dataset_id}' has no period type; it cannot take {period_type} rows")
     if period_type is not None and current is not None and period_type != current:
         raise ValueError(
             f"table dataset '{dataset_id}' is {current}; it cannot take {period_type} rows. "

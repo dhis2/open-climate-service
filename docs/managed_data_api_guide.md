@@ -592,7 +592,7 @@ for an ISO week). Only `period_start` is stored; the other two follow from it an
 period type, shown as `period_type` on `/datasets`. The dataset's extent there uses the `period`
 names.
 
-A table dataset has one period type. Rows with another period type are refused, and each stored
+A table dataset has one period type, or none, set by its first write. Rows with another period type are refused, and each stored
 Parquet file carries it in its metadata as `ocs:period_type`, for readers of the files themselves. A
 row dated other than on its period's first day, such as a month labelled by its last day the way
 `aggregate_temporal_period` labels it, is stored at its period's start.
