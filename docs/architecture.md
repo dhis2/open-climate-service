@@ -102,7 +102,8 @@ authorization are not yet implemented. Read-only mode is an HTTP access policy,
 not an identity or permissions system. Operational diagnostics such as job errors
 must not be treated as public merely because reading them does not mutate state.
 See [Read-only instances](instance_guide.md#read-only-instances) for the current
-deployment behavior.
+deployment behavior, and [Authentication and authorization](authentication.md) for
+the planned design.
 
 Schedule definitions come from the single `<data_dir>/schedules.json` store, whether
 prepared before startup or saved through the web interface or API. The instance-wide
@@ -156,7 +157,7 @@ Artifact (internal record)
 Managed dataset (public API)
     ├── /datasets/{id}         — native metadata
     ├── /zarr/{id}             — raw zarr store access
-    └── /stac/collections/{id} — STAC discovery
+    └── /stac/{id}/collection.json — STAC discovery
 ```
 
 The plugin owns source probing, period enumeration, and fetching one period as an `xarray.Dataset`. The framework owns job callbacks, artifact persistence, publication metadata, and all public API integration. Plugins do not need to know about Zarr conventions or STAC.
@@ -254,17 +255,19 @@ Responsibilities are split: the plugin knows the source; the orchestrator owns r
 Multiple YAML templates can reference the same plugin class and differentiate via `ingestion.params`. This is the intended pattern for sources that expose multiple variables:
 
 ```yaml
-# era5land_temperature_hourly.yaml
+# era5_land_cds.yaml: era5land_temperature_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: t2m
+    temporal_aggregation: mean
 
-# era5land_precipitation_hourly.yaml
+# era5_land_cds.yaml: era5land_precipitation_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: tp
+    temporal_aggregation: sum
 ```
 
 ### Named openEO process (`@process`)

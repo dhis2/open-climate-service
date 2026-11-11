@@ -7,6 +7,8 @@ handle, so the job record is left RUNNING exactly as a killed process leaves it.
 
 from __future__ import annotations
 
+import json
+import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -20,6 +22,7 @@ import xarray as xr
 from fastapi import HTTPException
 
 from open_climate_service.data_manager.services import downloader
+from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactStatistics, PublicationStatus
 from open_climate_service.jobs import store as native_store
@@ -899,6 +902,101 @@ def test_provenance_keeps_producer_inputs_and_the_output_snapshot_apart_from_the
     # Three identities, kept apart: the job, the logical artifact, the physical snapshot.
     assert artifact.version is None
     assert provenance.output_snapshot_id not in {artifact.artifact_id, "job-1"}
+
+
+def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
+    service: Any, received: list[JobEvent], monkeypatch: pytest.MonkeyPatch, client: Any
+) -> None:
+    import jsonschema
+
+    from open_climate_service import __version__
+    from open_climate_service import config as api_config
+    from tests.test_feature_store import _register
+    from tests.test_initial_ingestion_event import _Plugin
+
+    source = "chirps3_precipitation_daily"
+    plugin = _Plugin()
+    monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda *args, **kwargs: plugin)
+    monkeypatch.setattr("open_climate_service.shared.plugin_loader.instantiate_plugin", lambda *a, **k: plugin)
+    input_artifact = ingestion_services.create_artifact(
+        dataset=registry_datasets.get_dataset(source) or {},
+        start="2026-01-01",
+        end="2026-01-02",
+        bbox=[1.0, 2.0, 3.0, 4.0],
+        country_code=None,
+        overwrite=False,
+        publish=True,
+    )
+    read = openeo_jobs.store_head(Path(str(input_artifact.path)))
+    recorded = {**_EVIDENCE["sources"][0], "collection_id": source, "artifact_id": input_artifact.artifact_id}
+    # A feature collection keeps its artifact id when refreshed and has no snapshot to compare.
+    monkeypatch.setattr(api_config, "get_features_root", lambda: Path(str(input_artifact.path)).parent / "vectors")
+    boundaries = {"collection_id": "districts", "artifact_id": _register().artifact_id, "snapshot_id": None}
+    evidence = {**_EVIDENCE, "sources": [{**recorded, "snapshot_id": read}] * 2 + [boundaries]}
+    monkeypatch.setattr(sys.modules[__name__], "_EVIDENCE", evidence)
+    _job("job-1", 5.0, monkeypatch)
+    service._execute("job-1")
+
+    def shown() -> tuple[dict[str, Any], str, dict[str, Any]]:
+        detail = client.get(f"/datasets/{_DATASET}").json()["provenance"]
+        page = client.get(f"/datasets/{_DATASET}", headers={"Accept": "text/html"}).text
+        return detail, page, client.get(f"/stac/{_DATASET}/collection.json").json()
+
+    detail, page, collection = shown()
+    # One input, though the graph read it twice; only ids leave the execution evidence.
+    assert detail == {
+        "producer_job_id": "job-1",
+        "producer_job_href": "/jobs/job-1",
+        "process_sha256": "f" * 64,
+        "ocs_version": __version__,
+        "output_snapshot_id": _head(),
+        "inputs": [
+            {
+                "dataset_id": source,
+                "source_dataset_id": "chirps3_precipitation_daily",
+                "artifact_id": input_artifact.artifact_id,
+                "snapshot_id": read,
+                "current_snapshot_id": read,
+                "changed": False,
+                "href": f"/datasets/{source}",
+            },
+            {
+                "dataset_id": "districts",
+                "source_dataset_id": None,
+                "artifact_id": boundaries["artifact_id"],
+                "snapshot_id": None,
+                "current_snapshot_id": None,
+                "changed": None,
+                "href": "/datasets/districts",
+            },
+        ],
+    }
+    assert 'href="/jobs/job-1"' in page and f'href="/datasets/{source}"' in page
+    assert "updated since" not in page
+    assert [link["href"] for link in collection["links"] if link["rel"] == "derived_from"] == [
+        f"http://testserver/stac/{source}/collection.json",
+        "http://testserver/stac/districts/collection.json",
+    ]
+    # The openEO copy links the same inputs at their openEO collections, so following
+    # provenance from openEO stays in openEO.
+    openeo_collection = client.get(f"/collections/{_DATASET}").json()
+    assert [link["href"] for link in openeo_collection["links"] if link["rel"] == "derived_from"] == [
+        f"http://testserver/collections/{source}",
+        "http://testserver/collections/districts",
+    ]
+    schema = json.loads((Path(__file__).parent / "data" / "stac_processing_v1.2.0.json").read_text())
+    jsonschema.validate(collection, schema)
+    [processor] = [provider for provider in collection["providers"] if "processor" in provider["roles"]]
+    assert processor["processing:software"] == {"open-climate-service": __version__}
+    assert client.get(f"/datasets/{source}").json()["provenance"] is None
+
+    plugin.available.append("2026-01-03")
+    synced = client.post(f"/sync/{source}", json={"end": "2026-01-03", "publish": True})
+    assert synced.status_code == 200, synced.text
+    detail, page, _ = shown()
+    changed, _ = detail["inputs"]
+    assert changed["changed"] is True and changed["current_snapshot_id"] not in {None, read}
+    assert f"{source} has been updated since this dataset was produced" in page
 
 
 def test_the_writer_returns_the_committed_snapshot(tmp_path: Path) -> None:

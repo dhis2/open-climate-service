@@ -142,11 +142,14 @@ def test_every_builtin_licence_parses(path: str) -> None:
 # dropped attribution consistently.
 _REVIEWED_SOURCE_TERMS: dict[str, frozenset[str]] = {
     "chirps3.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
-    "era5_land.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "era5_land_cds.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "era5_land_edh.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
+    "era5_land_normals.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "era5_heat.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "esa_cci_lc.yaml": frozenset({ATTRIBUTION}),  # Licence to Use Copernicus Products
     "worldpop.yaml": frozenset({ATTRIBUTION}),  # CC BY 4.0
-    "copdem30.yaml": frozenset({ATTRIBUTION}),  # License to Use Copernicus DEM
+    "copdem.yaml": frozenset({ATTRIBUTION}),  # License to Use Copernicus DEM
+    "clms_ndvi.yaml": frozenset({ATTRIBUTION}),  # Copernicus Land Monitoring Service data policy
 }
 
 

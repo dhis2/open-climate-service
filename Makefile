@@ -27,7 +27,12 @@ fix: ## Autofix ruff lint and format issues
 	uv run ruff check --fix .
 	uv run ruff format .
 
-test: ## Run tests with pytest
+PYTEST_WORKERS ?= 2
+
+test: ## Run tests with pytest in parallel (PYTEST_WORKERS, default 2)
+	uv run pytest -n $(PYTEST_WORKERS) tests/
+
+test-serial: ## Run tests with pytest in one process, to diagnose a failure
 	uv run pytest tests/
 
 # Compose bind-mounts this into the container; a missing file would make Docker

@@ -17,6 +17,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import portalocker
 from fastapi import HTTPException
 
+from open_climate_service import __version__
 from open_climate_service import config as api_config
 from open_climate_service.exports.retention import result_lease
 from open_climate_service.exports.tabular import (
@@ -1512,7 +1513,7 @@ def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobReco
     if publication.state == "completed":
         return job
     planned = ArtifactRecord.model_validate(publication.record)
-    provenance = (planned.provenance or ArtifactProvenance(producer_job_id=job_id)).model_copy(
+    provenance = (planned.provenance or ArtifactProvenance(producer_job_id=job_id, ocs_version=__version__)).model_copy(
         update={"output_snapshot_id": snapshot_id}
     )
     record = planned.model_copy(
@@ -1769,7 +1770,11 @@ def _write_managed_zarr(
         publication=ArtifactPublication(),
         # The execution evidence as the graph produced it; the output snapshot is added once
         # the commit has landed.
-        provenance=ArtifactProvenance(producer_job_id=job_id, execution=provenance) if job_id is not None else None,
+        provenance=(
+            ArtifactProvenance(producer_job_id=job_id, execution=provenance, ocs_version=__version__)
+            if job_id is not None
+            else None
+        ),
     )
 
     # The same writer lock as ingestion and sync. Publishing into a store while one of those
@@ -2102,7 +2107,7 @@ def _derive_display_config(
     source_display = source_template.get("display") if isinstance(source_template, dict) else None
     display: dict[str, Any] = {}
 
-    if isinstance(explicit.get("colormap"), str):
+    if isinstance(explicit.get("colormap"), str | list):
         display["colormap"] = explicit["colormap"]
     if isinstance(explicit.get("range"), list) and len(explicit["range"]) == 2:
         display["range"] = [float(explicit["range"][0]), float(explicit["range"][1])]
@@ -2122,7 +2127,7 @@ def _derive_display_config(
         if isinstance(source_display, dict):
             colormap = source_display.get("colormap")
             nodata = source_display.get("nodata")
-            if "colormap" not in display and isinstance(colormap, str):
+            if "colormap" not in display and isinstance(colormap, str | list):
                 display["colormap"] = colormap
             if "midpoint" not in display and (midpoint := display_midpoint(source_display)) is not None:
                 display["midpoint"] = midpoint
@@ -2301,7 +2306,7 @@ def _result_assets(record: OpenEOJobRecord) -> dict[str, Any]:
             artifact = _ingestion_services.latest_published_raster_artifacts_by_dataset().get(dataset_id)
             if artifact is not None:
                 assets["stac"] = {
-                    "href": f"/stac/collections/{dataset_id}",
+                    "href": f"/stac/{dataset_id}/collection.json",
                     "type": "application/json",
                     "title": "STAC collection",
                     "roles": ["metadata"],

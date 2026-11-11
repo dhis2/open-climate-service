@@ -116,6 +116,9 @@ _KNOWN_NAMED_LICENCES: dict[str, frozenset[str]] = {
     "licence to use copernicus dem": frozenset({ATTRIBUTION}),
     # Free and open including commercial reuse, subject to the Notice's conditions.
     "copernicus sentinel data legal notice": frozenset({ATTRIBUTION}),
+    # "Full, open and free" access; users must "inform the public of the source", as
+    # "European Union's Copernicus Land Monitoring Service information".
+    "copernicus land monitoring service data policy": frozenset({ATTRIBUTION}),
     # NASA Earth science data carries no copyright and no use restrictions.
     "nasa earth science data": frozenset(),
 }

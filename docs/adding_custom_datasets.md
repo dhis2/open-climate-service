@@ -207,17 +207,19 @@ question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* i
 Multiple templates can share the same plugin class and differ only in `params`:
 
 ```yaml
-- id: era5land_temperature_hourly
+- id: era5land_temperature_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandHourlySingleBandPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
-      variable: 2m_temperature
+      variable: t2m
+      temporal_aggregation: mean
 
-- id: era5land_precipitation_hourly
+- id: era5land_precipitation_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipitationPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
-      variable: total_precipitation
+      variable: tp
+      temporal_aggregation: sum
 ```
 
 ### Static datasets without a time axis
@@ -441,16 +443,40 @@ keeps its own attributes:
 
 The following parameters control how the datasets are displayed visually and in text:
 
-| Field              | Required | Description                                                                                                                                                                                          |
-| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                                                                                               |
-| `display.colormap` | No       | Colormap name for map rendering (e.g. `blues`, `rdbu_r`). Defaults to `viridis`.                                                                                                                     |
-| `display.range`    | No       | `[min, max]` the colormap spans. Leave it out to use the minimum and maximum measured from the ingested dataset at each sync, which suit the instance's extent and period rather than a guess.        |
-| `display.midpoint` | No       | Value a measured range is centred on, made symmetric about it; a declared range is used as written. Set `0` for a diverging quantity such as an anomaly or a change.                                    |
-| `display.nodata`   | No       | No-data / fill value                                                                                                                                                                                 |
+| Field              | Required | Description                                                                                                                                                                                   |
+| ------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                                                                                        |
+| `display.colormap` | No       | A [matplotlib colormap](https://matplotlib.org/stable/gallery/color/colormap_reference.html) name, or a list of colours (see below). Defaults to `viridis`.                                   |
+| `display.range`    | No       | `[min, max]` the colormap spans. Leave it out to use the minimum and maximum measured from the ingested dataset at each sync, which suit the instance's extent and period rather than a guess. |
+| `display.midpoint` | No       | Value a measured range is centred on, made symmetric about it; a declared range is used as written. Set `0` for a diverging quantity such as an anomaly or a change.                         |
+| `display.nodata`   | No       | No-data / fill value                                                                                                                                                                          |
 
 The minimum and maximum are measured at the end of every sync. A dataset written before they were
 measured gets them in the background the next time the service starts.
+
+A colormap name is matched case-insensitively, and `_r` reverses it (`blues`, `rdbu_r`, `terrain`).
+Where no named colormap fits, list two or more hex colours (`#rgb` or `#rrggbb`), spread
+evenly from the low end of the display range to the high end. An alpha (`#rrggbbaa`) is ignored
+and the colour drawn opaque; transparency is set by `display.nodata`.
+
+```yaml
+display:
+  colormap: ["#1a9850", "#fee08b", "#a6611a", "#ffffff"]
+  range: [0, 4500]
+```
+
+The server resolves the colormap once, with matplotlib, and the thumbnail, the landing-page ramp
+and the map viewer all draw from that result. The STAC collection publishes it in its `renders`
+block as a `colormap` of 256 colours keyed `0`-`255`, where `0` is the low end of `rescale` and
+`255` the high end, and adds `colormap_name` when the template gives a name. The map viewer reads
+only the colours, so it needs no colormap library and draws what the thumbnail shows. An unknown
+name or an invalid list falls back to `viridis`.
+
+The STAC lists 256 colours rather than only the few you declared, because map tools that
+follow the STAC render convention (titiler, for one) need the full set to draw a smooth ramp.
+Given only a few, they colour only the pixels that hit those exact values and leave the rest
+blank. Nothing changes in how the colormap looks: matplotlib itself draws every colormap from
+256 colours, so a named colormap appears in the map viewer exactly as it does in matplotlib.
 
 ### Categorical datasets
 

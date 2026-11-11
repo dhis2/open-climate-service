@@ -346,13 +346,19 @@ running, held, failed or ended without a result stays, whatever its age. A run's
 kept only until its job holds it.
 
 **Delete** removes the pipeline and its run history after a confirmation; jobs and deliveries
-already made are kept. The API offers the same: `POST /pipelines` and `POST /pipelines/{id}` to
-save (with an optional `revision`), `DELETE /pipelines/{id}`, `POST /pipelines/{id}/validate`,
+already made are kept. The API offers the same: `POST /pipelines` to create and `PUT /pipelines/{id}`
+to change (with the `revision` it read), `DELETE /pipelines/{id}`, `POST /pipelines/{id}/validate`,
 `POST /pipelines/{id}/dry-run` and `POST /pipelines/{id}/runs` with `start` and `end` (and `mode`
 for a run), `POST /pipelines/{id}/runs/{run_id}/deliver`, `POST /pipelines/{id}/runs/{run_id}/redeliver`,
 `POST /pipelines/{id}/runs/{run_id}/retry`,
 `POST /pipelines/{id}/runs/{run_id}/acknowledge`,
-and `POST /pipelines/{id}/mode/{dry_run|live|paused}`.
+and `POST /pipelines/{id}/mode/{dry_run|live|paused}`. A pipeline read as JSON resolves what the
+page shows: the datasets and feature collections it reads with the parameter each fills, its
+workflow, its destination's settings as the plugin names them with the names looked up at the last
+validation, what starts a run, and its latest run; `GET /pipelines/{id}/runs` lists them all. Starting or retrying a run answers `202` with the
+run in the `Location` header: poll `GET /pipelines/{id}/runs/{run_id}` until its `status` is
+final, and follow its `links` to the workflow job and the delivery report. The API reference
+lists the statuses.
 
 ### The dataset page (`/datasets/{dataset_id}`)
 

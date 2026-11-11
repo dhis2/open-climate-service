@@ -236,21 +236,32 @@ def _licence_label(template: dict[str, Any]) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def _declared_colormap(display: object) -> str | tuple[str, ...] | None:
+    """A template's ``display.colormap``: a name, a tuple of colours, or None. Hashable, for the ramp cache."""
+    colormap = display.get("colormap") if isinstance(display, dict) else None
+    if isinstance(colormap, list):
+        return tuple(str(color) for color in colormap)
+    return colormap if isinstance(colormap, str) else None
+
+
+def _colormap_label(colormap: str | tuple[str, ...] | None) -> str:
+    """The colour scale as the pages name it: the colormap's name, or "Custom" for a list of colours."""
+    if isinstance(colormap, tuple):
+        return "Custom"
+    return colormap or ""
+
+
 @functools.lru_cache(maxsize=64)
-def _colormap_ramp(name: str | None) -> str:
+def _colormap_ramp(colormap: str | tuple[str, ...] | None) -> str:
     """A CSS gradient through a colormap, drawn where a dataset has no thumbnail yet.
 
     The same colormap the map viewer and the thumbnail use, so the placeholder already looks
     like the layer will. Cached: a landing page lists the same few colormaps many times, and
     resolving one imports matplotlib.
     """
-    from matplotlib.colors import to_hex
+    from open_climate_service.shared.thumbnails import colormap_stops
 
-    from open_climate_service.shared.thumbnails import resolve_colormap
-
-    colormap = resolve_colormap(name)
-    stops = ", ".join(to_hex(colormap(i / 4)) for i in range(5))
-    return f"linear-gradient(90deg, {stops})"
+    return f"linear-gradient(90deg, {', '.join(colormap_stops(colormap, count=5))})"
 
 
 def _range_label(display: dict[str, Any]) -> str:
@@ -292,8 +303,7 @@ def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, An
     """
     from open_climate_service.shared.thumbnails import thumbnail_path
 
-    display = (template or {}).get("display")
-    colormap = display.get("colormap") if isinstance(display, dict) else None
+    colormap = _declared_colormap((template or {}).get("display"))
     status = "published" if dataset.publication.status == "published" else "unpublished"
     try:
         has_thumbnail = thumbnail_path(dataset.dataset_id).is_file()
@@ -311,7 +321,7 @@ def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, An
         "coverage": _coverage_label(dataset.extent.temporal.start, dataset.extent.temporal.end, dataset.period_type),
         "status": status,
         "has_thumbnail": has_thumbnail,
-        "ramp": _colormap_ramp(colormap if isinstance(colormap, str) else None),
+        "ramp": _colormap_ramp(colormap),
         "kind": "vector" if dataset.item_type == "feature" else "raster",
     }
 
@@ -451,14 +461,29 @@ def _dataset_page_context(
         # Above the scale it describes, and above the bar below the list: the range is what makes
         # the colours mean anything, so it reads before the name of the ramp rather than after.
         ("Display range", "" if classes else range_label, None),
-        ("Colour scale", "" if classes else str(display.get("colormap") or ""), None),
+        ("Colour scale", "" if classes else _colormap_label(_declared_colormap(display)), None),
     ]
 
     def present(facts: list[Fact]) -> list[Fact]:
         return [fact for fact in facts if fact[1]]
 
+    provenance = record.provenance
+    provenance_facts: list[Fact] = []
+    if provenance is not None:
+        provenance_facts = [
+            ("Producing job", provenance.producer_job_id, provenance.producer_job_href),
+            *(
+                ("Input", f"{item.dataset_id} (updated since)" if item.changed else item.dataset_id, item.href)
+                for item in provenance.inputs
+            ),
+            ("Process graph digest", provenance.process_sha256 or "", None),
+            ("OCS version", provenance.ocs_version or "", None),
+        ]
+
     return {
         "dataset": summary,
+        "provenance_facts": present(provenance_facts),
+        "changed_inputs": [item.dataset_id for item in provenance.inputs if item.changed] if provenance else [],
         "classes": classes,
         # Static datasets and workflow outputs have no upstream to sync from; the console offers
         # the button for them and the planner answers "not syncable", which is noise here.
@@ -782,7 +807,7 @@ def _data_source_page_context(
         # Above the scale it describes, as on the dataset page: the range is what makes the
         # colours mean anything, so it reads before the name of the ramp rather than after.
         ("Display range", "" if classes else range_label, None),
-        ("Colour scale", "" if classes else str(display.get("colormap") or ""), None),
+        ("Colour scale", "" if classes else _colormap_label(_declared_colormap(display)), None),
     ]
 
     def present(facts: list[Fact]) -> list[Fact]:
@@ -794,7 +819,7 @@ def _data_source_page_context(
             "id": template["id"],
             "name": template.get("name") or template["id"],
             "provider": template.get("source") or "",
-            "ramp": _colormap_ramp(display.get("colormap") if isinstance(display.get("colormap"), str) else None),
+            "ramp": _colormap_ramp(_declared_colormap(display)),
         },
         "classes": classes,
         "paragraphs": _paragraphs(str(template.get("description") or "")),
@@ -2194,34 +2219,21 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
 
 
 def _settings_items(plugin: Any, settings: dict[str, Any], labels: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
-    """The destination settings as the form names them, each lookup value with the label it resolved to."""
-    from open_climate_service.pipelines import forms
-    from open_climate_service.pipelines.service import settings_fields
+    """The destination settings as `destination_settings` describes them, each value as the page shows it."""
+    from open_climate_service.pipelines.views import destination_settings
 
-    def cell(field: dict[str, Any], value: Any, path: str) -> dict[str, Any]:
-        text = json.dumps(value) if isinstance(value, (dict, list)) else "" if value is None else str(value)
-        return {"title": field["title"], "value": text, "label": labels.get(path, {}).get(text, "")}
+    def text(value: Any) -> str:
+        return json.dumps(value) if isinstance(value, (dict, list)) else "" if value is None else str(value)
 
-    items: list[dict[str, Any]] = []
-    for field in settings_fields(plugin):
-        if field["kind"] == "rows":
-            rows = [row for row in forms.setting_rows(settings, field) if row["existing"]]
-            items.append(
-                {
-                    "title": field["title"],
-                    "rows": [
-                        [
-                            cell(column, row["values"].get(column["name"]), f"{field['name']}.{column['name']}")
-                            for column in field["columns"]
-                            if row["values"].get(column["name"]) is not None
-                        ]
-                        for row in rows
-                    ],
-                }
-            )
-        elif settings.get(field["name"]) is not None:
-            items.append({**cell(field, settings.get(field["name"]), field["name"]), "rows": None})
-    return items
+    def cell(item: Any) -> dict[str, Any]:
+        return {"title": item.title, "value": text(item.value), "label": item.label or ""}
+
+    return [
+        {"title": item.title, "rows": [[cell(column) for column in row] for row in item.rows]}
+        if item.rows is not None
+        else {**cell(item), "rows": None}
+        for item in destination_settings(plugin, settings, labels)
+    ]
 
 
 def _pipeline_skipped_kept() -> int:

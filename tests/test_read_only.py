@@ -38,7 +38,9 @@ _MUTATING_ROUTES = [
     ("DELETE", "/schedules/sync/{dataset_id}"),
     ("POST", "/schedules/sync/{dataset_id}/delete"),
     ("POST", "/pipelines"),
-    ("POST", "/pipelines/{pipeline_id}"),
+    ("POST", "/pipelines/new"),
+    ("PUT", "/pipelines/{pipeline_id}"),
+    ("POST", "/pipelines/{pipeline_id}/edit"),
     ("DELETE", "/pipelines/{pipeline_id}"),
     ("POST", "/pipelines/{pipeline_id}/delete"),
     ("POST", "/pipelines/{pipeline_id}/validate"),
@@ -96,8 +98,14 @@ def read_only() -> Iterator[None]:
 
 @pytest.fixture
 def ro_client(read_only: None) -> Generator[TestClient, None, None]:
+    from open_climate_service.jobs.service import reset_job_service
+    from open_climate_service.openeo.jobs import reset_openeo_job_service
+
     with TestClient(app) as client:
         yield client
+    # The lifespan shuts the job services down; later tests in this process need live ones.
+    reset_job_service()
+    reset_openeo_job_service()
 
 
 # --- the policy as a pure function ---------------------------------------------------
@@ -142,7 +150,7 @@ def test_policy_allows_public_reads(path: str) -> None:
 def test_policy_allows_data_endpoints() -> None:
     assert not is_blocked("GET", "/zarr/some_dataset/zarr.json")
     assert not is_blocked("GET", "/icechunk/some_dataset/refs/branch.main/ref.json")
-    assert not is_blocked("GET", "/stac/collections/some_dataset")
+    assert not is_blocked("GET", "/stac/some_dataset/collection.json")
 
 
 def test_policy_never_blocks_cors_preflight() -> None:
@@ -337,7 +345,7 @@ def test_read_only_still_refuses_manage_under_a_mount_prefix(
 
     assert mounted.get("/manage").status_code == 403
     assert mounted.get("/jobs").status_code == 403
-    assert mounted.get("/stac").status_code == 200
+    assert mounted.get("/stac/catalog.json").status_code == 200
 
 
 def test_a_configured_base_url_path_cannot_bypass_read_only(read_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
