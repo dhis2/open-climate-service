@@ -42,8 +42,10 @@ from open_climate_service.ingestions.schemas import (
     CoverageTemporal,
     DatasetAccessLink,
     DatasetDetailRecord,
+    DatasetInput,
     DatasetItemType,
     DatasetListResponse,
+    DatasetProvenance,
     DatasetPublication,
     DatasetRecord,
     DatasetVersionRecord,
@@ -150,10 +152,10 @@ _store_locks_mutex = threading.Lock()
 _consolidated_metadata_cache: dict[str, dict[str, object]] = {}
 _MAX_CONSOLIDATED_CACHE_ENTRIES = 512
 
-# Icechunk artifact path cache: dataset_id → (records_mtime, artifact).
-# Avoids reading and deserializing the full artifact index on every chunk request
-# from the /icechunk/ endpoint.  Invalidated when records.json changes on disk.
-_icechunk_artifact_cache: dict[str, tuple[float, "ArtifactRecord"]] = {}
+# Published raster artifacts for the store routes; see `_latest_published_raster_artifacts_cached`.
+_store_artifacts_cache: tuple[tuple[str, int, int, int], dict[str, "ArtifactRecord"]] | None = None
+# Record writes made by this process, so the cache never misses one of them.
+_records_write_count = 0
 
 
 @dataclass(frozen=True)
@@ -2103,7 +2105,7 @@ def get_dataset_zarr_store_file_or_404(
     dataset_id: str, relative_path: str, range_header: str | None = None
 ) -> Response | dict[str, object]:
     """Serve a file, metadata document, or directory listing within a dataset Zarr store."""
-    artifact = latest_published_raster_artifacts_by_dataset().get(dataset_id)
+    artifact = _latest_published_raster_artifacts_cached().get(dataset_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
     if artifact.format == ArtifactFormat.ZARR:
@@ -2120,7 +2122,7 @@ def get_dataset_zarr_store_file_or_404(
 
 def serve_icechunk_file(dataset_id: str, file_path: str) -> FileResponse:
     """Serve a raw Icechunk store file for native SDK access via icechunk.http_storage()."""
-    artifact = _get_latest_published_icechunk_artifact_cached(dataset_id)
+    artifact = _get_latest_published_icechunk_artifact(dataset_id)
     store_root = Path(artifact.path or artifact.asset_paths[0]).resolve()
 
     full_path = (store_root / file_path).resolve()
@@ -2132,23 +2134,32 @@ def serve_icechunk_file(dataset_id: str, file_path: str) -> FileResponse:
     return FileResponse(full_path, media_type="application/octet-stream")
 
 
-def _get_latest_published_icechunk_artifact_cached(dataset_id: str) -> ArtifactRecord:
-    """Return the latest published Icechunk artifact, cached by records.json mtime."""
+def _latest_published_raster_artifacts_cached() -> dict[str, ArtifactRecord]:
+    """Return `latest_published_raster_artifacts_by_dataset()`, recomputed only when records.json changes.
+
+    A map view requests hundreds of chunks, and resolving the dataset from scratch reads, validates
+    and path-resolves every record on the instance each time. Record writes rewrite records.json in
+    place, so the cache is keyed on its path, modification time and size, which catches writes by
+    other processes, and on this process's write count, which catches writes the modification time
+    cannot tell apart where it is coarse. A store deleted from disk without a record change stays in
+    the result until the next write; serving it then fails as a missing path.
+    """
+    global _store_artifacts_cache
     try:
-        mtime = ARTIFACTS_INDEX_PATH.stat().st_mtime if ARTIFACTS_INDEX_PATH.exists() else 0.0
+        stat = ARTIFACTS_INDEX_PATH.stat()
     except OSError:
-        mtime = 0.0
-    cached = _icechunk_artifact_cache.get(dataset_id)
-    if cached is not None and cached[0] == mtime:
-        return cached[1]
-    artifact = _get_latest_published_icechunk_artifact(dataset_id)
-    _icechunk_artifact_cache[dataset_id] = (mtime, artifact)
-    return artifact
+        return latest_published_raster_artifacts_by_dataset()
+    key = (str(ARTIFACTS_INDEX_PATH), stat.st_mtime_ns, stat.st_size, _records_write_count)
+    if _store_artifacts_cache is not None and _store_artifacts_cache[0] == key:
+        return _store_artifacts_cache[1]
+    artifacts = latest_published_raster_artifacts_by_dataset()
+    _store_artifacts_cache = (key, artifacts)
+    return artifacts
 
 
 def _get_latest_published_icechunk_artifact(dataset_id: str) -> ArtifactRecord:
     """Return the latest published Icechunk artifact for dataset_id, or raise 404/409."""
-    artifacts = latest_published_raster_artifacts_by_dataset()
+    artifacts = _latest_published_raster_artifacts_cached()
     artifact = artifacts.get(dataset_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
@@ -2464,8 +2475,10 @@ def _load_records() -> list[ArtifactRecord]:
 
 
 def _save_records(records: list[ArtifactRecord]) -> None:
+    global _records_write_count
     ensure_store()
     ARTIFACTS_INDEX_PATH.write_text(_encode_records(records), encoding="utf-8")
+    _records_write_count += 1
 
 
 def _store_artifact_record(record: ArtifactRecord) -> ArtifactRecord:
@@ -2631,6 +2644,7 @@ def _fill_statistics(measured: ArtifactRecord, statistics: ArtifactStatistics) -
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
     """Apply a read-modify-write mutation under an exclusive file lock."""
+    global _records_write_count
     ensure_store()
     with ARTIFACTS_INDEX_PATH.open("a+", encoding="utf-8") as handle:
         portalocker.lock(handle, portalocker.LOCK_EX)
@@ -2643,6 +2657,7 @@ def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) 
         handle.write(_encode_records(records))
         handle.flush()
         os.fsync(handle.fileno())
+        _records_write_count += 1
         portalocker.unlock(handle)
         return result
 
@@ -2955,6 +2970,77 @@ def _build_dataset_detail_record(dataset_id: str, artifacts: list[ArtifactRecord
             )
             for artifact in ordered_artifacts
         ],
+        provenance=dataset_provenance(ordered_artifacts[0]),
+    )
+
+
+def recorded_inputs(record: ArtifactRecord) -> list[dict[str, str | None]]:
+    """The inputs the producing job read, once each: their dataset, source, artifact and snapshot ids.
+
+    Only these ids leave the recorded execution evidence, so nothing else it may hold is
+    published. A collection the graph loaded more than once is listed once.
+    """
+    execution = record.provenance.execution if record.provenance is not None else None
+    sources = execution.get("sources") if isinstance(execution, dict) else None
+    inputs: list[dict[str, str | None]] = []
+    for source in sources if isinstance(sources, list) else []:
+        if not isinstance(source, dict) or not isinstance(source.get("collection_id"), str):
+            continue
+        entry = {key: source.get(key) for key in ("collection_id", "source_dataset_id", "artifact_id", "snapshot_id")}
+        if entry not in inputs:
+            inputs.append(entry)
+    return inputs
+
+
+def dataset_provenance(record: ArtifactRecord) -> DatasetProvenance | None:
+    """How a workflow-produced artifact was made, and which of its inputs have changed since.
+
+    An input is compared with what `load_collection` would read now: a different artifact, or
+    another snapshot of the same Icechunk store, means it was re-ingested or synced since. An
+    input without snapshots, such as a feature collection, keeps its artifact id when refreshed,
+    so whether it changed cannot be told.
+    """
+    from open_climate_service.openeo.jobs import store_head
+
+    provenance = record.provenance
+    if provenance is None:
+        return None
+    execution = provenance.execution or {}
+    current_artifacts = openeo_collection_artifacts_by_dataset()
+    inputs: list[DatasetInput] = []
+    for recorded in recorded_inputs(record):
+        dataset_id = str(recorded["collection_id"])
+        current = current_artifacts.get(dataset_id)
+        current_snapshot = (
+            store_head(Path(current.path))
+            if current is not None and current.format == ArtifactFormat.ICECHUNK and current.path
+            else None
+        )
+        changed: bool | None = None
+        if current is not None and recorded["artifact_id"] is not None:
+            if recorded["artifact_id"] != current.artifact_id:
+                changed = True
+            elif recorded["snapshot_id"] is not None and current_snapshot is not None:
+                changed = recorded["snapshot_id"] != current_snapshot
+        inputs.append(
+            DatasetInput(
+                dataset_id=dataset_id,
+                source_dataset_id=recorded["source_dataset_id"],
+                artifact_id=recorded["artifact_id"],
+                snapshot_id=recorded["snapshot_id"],
+                current_snapshot_id=current_snapshot,
+                changed=changed,
+                href=f"/datasets/{_segment(dataset_id)}",
+            )
+        )
+    process_sha256 = execution.get("process_sha256")
+    return DatasetProvenance(
+        producer_job_id=provenance.producer_job_id,
+        producer_job_href=f"/jobs/{_segment(provenance.producer_job_id)}",
+        process_sha256=process_sha256 if isinstance(process_sha256, str) else None,
+        ocs_version=provenance.ocs_version,
+        output_snapshot_id=provenance.output_snapshot_id,
+        inputs=inputs,
     )
 
 
@@ -3020,7 +3106,7 @@ def _dataset_links(
     """Build the access links for a dataset, each keyed on the artifact its route resolves.
 
     Two different artifacts answer here, which is why `published` is separate from `latest`.
-    Every published-data route — `/zarr`, `/stac/collections`, `/features` — resolves the latest
+    Every published-data route — `/zarr`, `/stac`, `/features` — resolves the latest
     *published* artifact, so an ingest with `publish: false` over an already-published dataset
     leaves those routes serving the earlier record. Keying the links on `latest` instead made
     `/datasets` withhold links to collections STAC was still advertising: the newest artifact was
@@ -3037,7 +3123,7 @@ def _dataset_links(
     # catalogue link the catalogue itself does not serve, nor withholds one it does.
     if published is not None and published.format in CATALOGUED_FORMATS:
         links.append(
-            DatasetAccessLink(href=f"/stac/collections/{_segment(dataset_id)}", rel="stac", title="STAC collection")
+            DatasetAccessLink(href=f"/stac/{_segment(dataset_id)}/collection.json", rel="stac", title="STAC collection")
         )
     if published is not None and published.format == ArtifactFormat.GEOPARQUET:
         links.append(

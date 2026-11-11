@@ -21,13 +21,21 @@ from pydantic import ValidationError
 from open_climate_service import config as api_config
 from open_climate_service.scheduler import store
 from open_climate_service.scheduler.presets import cron_from_form
-from open_climate_service.scheduler.schemas import ScheduleListResponse, ScheduleStatus
+from open_climate_service.scheduler.schemas import (
+    ScheduleChange,
+    ScheduleCreate,
+    ScheduleLinks,
+    ScheduleListView,
+    ScheduleStatus,
+    ScheduleView,
+)
 from open_climate_service.scheduler.service import (
     get_scheduler_service,
     resolve_schedule_template,
     validate_schedule_target,
 )
 from open_climate_service.scheduler.store import ScheduleStoreUnreadable, StoredSchedule
+from open_climate_service.shared.api_errors import body_error, error_responses
 from open_climate_service.shared.urls import mount_prefix
 from open_climate_service.system.templates import wants_json
 
@@ -83,17 +91,20 @@ def _stored_or_404(dataset_id: str) -> StoredSchedule:
     return stored
 
 
-async def _body(request: Request) -> tuple[dict[str, Any], str | None]:
-    """A JSON body as is, or a form turned into the schedule shape, plus where a form returns to.
+async def _body(request: Request, model: type[ScheduleCreate | ScheduleChange]) -> tuple[dict[str, Any], str | None]:
+    """A JSON body held to ``model``, or a form turned into the schedule shape, plus where a form returns to.
 
     An unticked `enabled` checkbox is absent from a form post and means False. Publication
     is not an editable field in the form: on edit an omitted value keeps the saved setting.
     """
     if _json_request(request):
-        payload: Any = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Schedule body must be an object")
-        return {str(key): value for key, value in payload.items()}, None
+        try:
+            parsed = model.model_validate(await request.json())
+        except ValidationError as exc:
+            raise body_error(exc) from exc
+        except ValueError as exc:  # not JSON
+            raise HTTPException(status_code=400, detail=f"The body is not JSON: {exc}") from exc
+        return parsed.model_dump(exclude_unset=True), None
     form = await request.form()
     field = {key: str(value).strip() for key, value in form.items() if isinstance(value, str)}
     body: dict[str, Any] = {
@@ -194,9 +205,34 @@ def _after_change(request: Request, dataset_id: str, return_to: str | None, *, s
         )
     if _answer_json(request):
         status = service.schedule_for(dataset_id)
-        payload = status.model_dump(mode="json") if status is not None else {"dataset_id": dataset_id}
-        return JSONResponse(status_code=status_code, content=payload)
+        payload = _linked(request, status).model_dump(mode="json") if status is not None else {"dataset_id": dataset_id}
+        headers = {"Location": _href(request, dataset_id)} if status_code == 201 else None
+        return JSONResponse(status_code=status_code, content=payload, headers=headers)
     return _back(request, dataset_id, return_to)
+
+
+def _href(request: Request, dataset_id: str) -> str:
+    return f"{mount_prefix(request)}/schedules/sync/{dataset_id}"
+
+
+def _linked(request: Request, status: ScheduleStatus) -> ScheduleView:
+    """The status with links into this deployment, the last sync job's among them."""
+    mount = mount_prefix(request)
+    links = ScheduleLinks(
+        self=_href(request, status.dataset_id),
+        dataset=f"{mount}/datasets/{status.dataset_id}",
+        last_job=f"{mount}/ingestions/jobs/{status.last_job_id}" if status.last_job_id else None,
+    )
+    return ScheduleView(**status.model_dump(), links=links)
+
+
+def _body_schema(model: type[ScheduleCreate | ScheduleChange]) -> dict[str, Any]:
+    """OpenAPI for a body the route reads itself, so the dataset page's forms can post to the same route."""
+    return {"requestBody": {"required": True, "content": {"application/json": {"schema": model.model_json_schema()}}}}
+
+
+# Changes answer JSON clients with the schedule and a form with a redirect; OpenAPI shows the JSON.
+_SCHEDULE: dict[int | str, dict[str, Any]] = {200: {"model": ScheduleView, "description": "The schedule as it is now."}}
 
 
 async def _form_return_to(request: Request) -> str | None:
@@ -211,22 +247,47 @@ async def _form_return_to(request: Request) -> str | None:
 # --- routes ------------------------------------------------------------------------------------
 
 
-@router.get("", response_model=ScheduleListResponse, response_class=Response)
+@router.get(
+    "",
+    response_class=Response,
+    responses={200: {"model": ScheduleListView, "content": {"text/html": {"schema": {"type": "string"}}}}},
+)
 def list_schedules(request: Request) -> Response:
     """Everything on the clock with its runtime status, as JSON, or the Schedules page."""
     status = get_scheduler_service().status()
     if wants_json(request):
-        return JSONResponse(status.model_dump(mode="json"))
+        linked = ScheduleListView(
+            **status.model_dump(exclude={"schedules"}),
+            schedules=[_linked(request, item) for item in status.schedules],
+        )
+        return JSONResponse(linked.model_dump(mode="json"))
     from open_climate_service.system.templates import render_schedules_page
 
     return HTMLResponse(render_schedules_page(status, mount_prefix(request)))
 
 
-@router.post("/sync", response_class=Response)
+@router.post(
+    "/sync",
+    status_code=201,
+    response_class=Response,
+    openapi_extra=_body_schema(ScheduleCreate),
+    responses={
+        201: {
+            "model": ScheduleView,
+            "description": "Created and running; the schedule is at the Location header.",
+            "headers": {"Location": {"description": "The schedule", "schema": {"type": "string"}}},
+        },
+        **error_responses(400, 403, 409, 422, 503),
+    },
+)
 async def create_sync_schedule(request: Request) -> Response:
-    """Save a new sync schedule for a dataset and start running it."""
+    """Save a new sync schedule for a dataset and start running it.
+
+    A ``409`` either refuses a second schedule for the dataset, or reports that the schedule was
+    saved but the clock could not apply it (``stored: true, applied: false``).
+    """
     _require_writable()
-    body, return_to = await _body(request)
+    body, return_to = await _body(request, ScheduleCreate)
     if _form_request(request):
         body.setdefault("publish", False)
     dataset_id = str(body.get("dataset_id", ""))
@@ -243,16 +304,16 @@ async def create_sync_schedule(request: Request) -> Response:
     return _after_change(request, parsed.dataset_id, return_to, status_code=201)
 
 
-@router.get("/sync/{dataset_id}", response_model=ScheduleStatus)
-def get_sync_schedule(dataset_id: str) -> ScheduleStatus:
-    """One dataset's effective sync schedule and runtime status."""
-    return _status_or_404(dataset_id)
+@router.get("/sync/{dataset_id}", response_model=ScheduleView, responses=error_responses(404))
+def get_sync_schedule(request: Request, dataset_id: str) -> ScheduleView:
+    """One dataset's sync schedule and runtime status; ``links.last_job`` leads to the sync it last submitted."""
+    return _linked(request, _status_or_404(dataset_id))
 
 
 async def _update(request: Request, dataset_id: str) -> Response:
     _require_writable()
     existing = _stored_or_404(dataset_id)
-    body, return_to = await _body(request)
+    body, return_to = await _body(request, ScheduleChange)
     # JSON and form updates both preserve settings that were not offered by the caller.
     body = {**existing.model_dump(include=_EDITABLE), **body}
     body["dataset_id"] = dataset_id
@@ -269,7 +330,12 @@ async def _update(request: Request, dataset_id: str) -> Response:
     return _after_change(request, dataset_id, return_to)
 
 
-@router.put("/sync/{dataset_id}", response_class=Response)
+@router.put(
+    "/sync/{dataset_id}",
+    response_class=Response,
+    openapi_extra=_body_schema(ScheduleChange),
+    responses={**_SCHEDULE, **error_responses(400, 403, 404, 409, 422, 503)},
+)
 async def update_sync_schedule(request: Request, dataset_id: str) -> Response:
     """Change a stored sync schedule; settings left out of the body are kept."""
     return await _update(request, dataset_id)
@@ -281,7 +347,9 @@ async def save_sync_schedule_form(request: Request, dataset_id: str) -> Response
     return await _update(request, dataset_id)
 
 
-@router.post("/sync/{dataset_id}/pause", response_class=Response)
+@router.post(
+    "/sync/{dataset_id}/pause", response_class=Response, responses={**_SCHEDULE, **error_responses(403, 404, 409, 503)}
+)
 async def pause_sync_schedule(request: Request, dataset_id: str) -> Response:
     """Stop a stored sync schedule from firing without removing it."""
     _require_writable()
@@ -292,7 +360,9 @@ async def pause_sync_schedule(request: Request, dataset_id: str) -> Response:
     return _after_change(request, dataset_id, await _form_return_to(request))
 
 
-@router.post("/sync/{dataset_id}/resume", response_class=Response)
+@router.post(
+    "/sync/{dataset_id}/resume", response_class=Response, responses={**_SCHEDULE, **error_responses(403, 404, 409, 503)}
+)
 async def resume_sync_schedule(request: Request, dataset_id: str) -> Response:
     """Let a paused stored sync schedule fire again."""
     _require_writable()
@@ -303,7 +373,7 @@ async def resume_sync_schedule(request: Request, dataset_id: str) -> Response:
     return _after_change(request, dataset_id, await _form_return_to(request))
 
 
-@router.delete("/sync/{dataset_id}", status_code=204)
+@router.delete("/sync/{dataset_id}", status_code=204, responses=error_responses(403, 404, 409, 503))
 def delete_sync_schedule(dataset_id: str) -> Response:
     """Remove a stored sync schedule."""
     _require_writable()

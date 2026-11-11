@@ -104,6 +104,12 @@ def _daily_periods(start: str, end: str) -> list[str]:
     return [(first + timedelta(days=offset)).isoformat() for offset in range((last - first).days + 1)]
 
 
+@pytest.fixture
+def every_day_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CHIRPS3 has every day asked for, so planning is tested without its live availability lookup."""
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda _, start, end: _daily_periods(start, end))
+
+
 def test_sync_dataset_returns_up_to_date_when_no_new_period_is_due(monkeypatch: pytest.MonkeyPatch) -> None:
     dataset_id = "chirps3_precipitation_daily_sle"
     monkeypatch.setattr(
@@ -238,6 +244,7 @@ def test_sync_dataset_append_policy_falls_back_to_rematerialize_without_icechunk
 
 
 def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_dataset(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dataset_id = "chirps3_precipitation_daily_sle"
@@ -259,8 +266,6 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
             "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
     )
-    # Keep sync-policy coverage independent of CHIRPS3's live HEAD-based cutoff lookup.
-    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda _, start, end: _daily_periods(start, end))
 
     captured: dict[str, object] = {}
 
@@ -411,6 +416,7 @@ def test_plan_sync_for_plugin_backed_icechunk_normalizes_committed_period_before
 
 
 def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_without_store_path(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     latest = _artifact(
@@ -421,9 +427,6 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_without
     latest.format = ArtifactFormat.ICECHUNK
     latest.path = None
     latest.asset_paths = []
-
-    # This test covers the artifact-end fallback, not the source's live availability.
-    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda _, start, end: _daily_periods(start, end))
 
     read_calls: list[tuple[object, ...]] = []
 
@@ -450,6 +453,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_without
 
 
 def test_plan_sync_for_plugin_backed_icechunk_skips_non_local_store_path(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     latest = _artifact(
@@ -491,6 +495,7 @@ def test_plan_sync_for_plugin_backed_icechunk_skips_non_local_store_path(
 
 
 def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_windows_drive_letter_path(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Windows drive-letter paths (C:\...) are detected explicitly before urlparse
@@ -536,6 +541,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_win
 
 
 def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_file_uri_with_windows_path(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # file:///C:/... URIs are valid on Windows but not within any trusted storage
@@ -582,6 +588,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_fil
 
 
 def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_store_read_fails(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     latest = _artifact(
@@ -654,6 +661,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_co
 
 
 def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_untrusted_local_path(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     latest = _artifact(
@@ -689,6 +697,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_unt
 
 
 def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_relative_path(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     latest = _artifact(
@@ -723,6 +732,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_rel
 
 
 def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_committed_period_is_malformed(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     latest = _artifact(
@@ -759,6 +769,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_co
 
 
 def test_sync_dataset_append_policy_falls_back_for_plugin_backed_non_icechunk_artifact(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dataset_id = "chirps3_precipitation_daily_sle"
@@ -1851,6 +1862,7 @@ def test_maybe_build_pyramid_falls_back_on_build_error(tmp_path: Path, monkeypat
 
 
 def test_plan_sync_append_for_icechunk_artifact(
+    every_day_available: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:

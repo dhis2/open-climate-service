@@ -102,7 +102,8 @@ authorization are not yet implemented. Read-only mode is an HTTP access policy,
 not an identity or permissions system. Operational diagnostics such as job errors
 must not be treated as public merely because reading them does not mutate state.
 See [Read-only instances](instance_guide.md#read-only-instances) for the current
-deployment behavior.
+deployment behavior, and [Authentication and authorization](authentication.md) for
+the planned design.
 
 Schedule definitions come from the single `<data_dir>/schedules.json` store, whether
 prepared before startup or saved through the web interface or API. The instance-wide
@@ -156,7 +157,7 @@ Artifact (internal record)
 Managed dataset (public API)
     ├── /datasets/{id}         — native metadata
     ├── /zarr/{id}             — raw zarr store access
-    └── /stac/collections/{id} — STAC discovery
+    └── /stac/{id}/collection.json — STAC discovery
 ```
 
 The plugin owns source probing, period enumeration, and fetching one period as an `xarray.Dataset`. The framework owns job callbacks, artifact persistence, publication metadata, and all public API integration. Plugins do not need to know about Zarr conventions or STAC.
@@ -216,7 +217,10 @@ for failed work. An async sync that actually appends or rematerializes data reco
 `dataset.updated` event with the dataset, artifact, executed action, and previous/current coverage.
 An up-to-date sync records no event. Instance-configured workflow triggers consume these durable
 outcomes and submit existing openEO workflows. A deterministic job ID makes replay after restart
-idempotent. External notification remains a separate concern.
+idempotent. A scheduled sync job persists an `automation.failed` or `automation.succeeded` event
+with its final outcome, and a pipeline run one for each change it causes in the pipeline's health
+(`automation.resolved` when an operator acknowledged the failure). These drive the
+[failure alerts](scheduled_sync.md#failure-alerts).
 
 Jobs provide:
 
@@ -254,17 +258,19 @@ Responsibilities are split: the plugin knows the source; the orchestrator owns r
 Multiple YAML templates can reference the same plugin class and differentiate via `ingestion.params`. This is the intended pattern for sources that expose multiple variables:
 
 ```yaml
-# era5land_temperature_hourly.yaml
+# era5_land_cds.yaml: era5land_temperature_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: t2m
+    temporal_aggregation: mean
 
-# era5land_precipitation_hourly.yaml
+# era5_land_cds.yaml: era5land_precipitation_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: tp
+    temporal_aggregation: sum
 ```
 
 ### Named openEO process (`@process`)

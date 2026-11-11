@@ -409,6 +409,23 @@ def test_only_a_pipeline_that_reads_nothing_says_nothing_feeds_it(
     # Its workflow and destination are still drawn.
     assert 'data-id="workflow:pipeline:daily-temperature-to-dhis2"' in page
 
+    # A pipeline whose workflow is gone reads what the API says it reads: the collection it references,
+    # never a dataset guessed from an argument that happens to name one.
+    gone = PIPELINE.spec.workflow.model_copy(update={"id": "retired_workflow"})
+    orphaned = PIPELINE.model_copy(update={"spec": PIPELINE.spec.model_copy(update={"workflow": gone})})
+    monkeypatch.setattr(pipeline_store, "list_records", lambda: [orphaned])
+    monkeypatch.setattr(pipeline_store, "get_record", lambda pipeline_id: orphaned)
+    into_pipeline = {
+        e.source for e in _graph(client).edges if e.target == "workflow:pipeline:daily-temperature-to-dhis2"
+    }
+    assert into_pipeline == {"features:districts"}
+    inputs = client.get("/pipelines/daily-temperature-to-dhis2", headers={"Accept": "application/json"}).json()[
+        "inputs"
+    ]
+    assert {
+        f"{'dataset' if item['kind'] == 'dataset' else 'features'}:{item['id']}" for item in inputs
+    } == into_pipeline
+
 
 def test_an_unscheduled_dataset_upstream_of_a_trigger_keeps_its_data_source(
     client: TestClient, monkeypatch: pytest.MonkeyPatch

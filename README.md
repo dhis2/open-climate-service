@@ -55,8 +55,11 @@ uv run uvicorn open_climate_service.main:app --reload
 make sync   # install all dependencies (client + server + xarray)
 make run    # start the dev server with hot reload
 make lint   # ruff + mypy + pyright
-make test   # pytest
+make test   # pytest on 2 workers; PYTEST_WORKERS=4 for more
+make test-serial  # pytest in one process, to diagnose a failure
 ```
+
+Dependabot opens a weekly PR with the minor and patch updates of the Python dependencies, a separate PR for each major update, and one PR for GitHub Actions updates ([.github/dependabot.yml](.github/dependabot.yml)).
 
 ## License
 

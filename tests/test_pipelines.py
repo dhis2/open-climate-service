@@ -43,6 +43,8 @@ from open_climate_service.pipelines.schemas import (
     WorkflowReference,
 )
 
+from .conftest import MountedClientFactory, WebhookReceiver
+
 _OU = ["ImspTQPwCqd", "O6uvpzGd5pu"]
 _ELEMENT = "LeePHYkZwBk"
 _SETTINGS: dict[str, Any] = {"connection": "local", "data_set": "N63vVmt2uY0", "series": [{"data_element": _ELEMENT}]}
@@ -1281,7 +1283,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     assert "input[data-lookup]" in create_page.text, "the lookup script is on the form page"
     assert "lookup-value" not in create_page.text, "resolved names replace ids without showing an extra uid line"
 
-    created = client.post("/pipelines", data=_FORM, follow_redirects=False)
+    created = client.post("/pipelines/new", data=_FORM, follow_redirects=False)
     assert created.status_code == 303, created.text[:800]
     record = store.get_record("rain-to-dhis2")
     assert record is not None and record.validation is not None
@@ -1299,6 +1301,16 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     assert f'Rainfall total <span class="mono note">{_ELEMENT}</span>' in shown.text
     assert "Settings as JSON" in shown.text and "&#34;data_element&#34;: &#34;LeePHYkZwBk&#34;" in shown.text
     assert "<dt>Connection</dt>" in shown.text and '<span class="mono">local</span>' in shown.text
+    # Clients read the same resources the page names, described by the plugin, from the record alone.
+    destination = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["destination"]
+    assert destination["plugin"] == "dhis2" and destination["title"] == "DHIS2"
+    assert [(item["name"], item["value"], item["label"]) for item in destination["settings"][:2]] == [
+        ("connection", "local", None),
+        ("data_set", "N63vVmt2uY0", "OCS test"),
+    ]
+    assert destination["settings"][2]["rows"] == [
+        [{"name": "data_element", "title": "Data element", "value": _ELEMENT, "label": "Rainfall total", "rows": None}]
+    ]
 
     edit_page = client.get("/pipelines/rain-to-dhis2/edit", headers={"Accept": "text/html"})
     assert 'value="N63vVmt2uY0" data-lookup="data_sets" data-label="OCS test"' in edit_page.text
@@ -1365,7 +1377,7 @@ def test_page_creates_validates_and_shows_a_pipeline(client: TestClient, monkeyp
         assert f'name="{name}"' in create_page.text, name
     assert 'name="arg.temporal_extent"' in create_page.text and "Supplied by each run" in create_page.text
     assert '<option value="rain_monthly" selected>' in create_page.text
-    created = client.post("/pipelines", data=_FORM, follow_redirects=False)
+    created = client.post("/pipelines/new", data=_FORM, follow_redirects=False)
     assert created.status_code == 303, created.text[:800]
     assert created.headers["location"].endswith("/pipelines/rain-to-dhis2")
     stored = store.get_record("rain-to-dhis2")
@@ -1414,7 +1426,10 @@ def test_pipeline_list_never_exposes_a_pending_run_process(client: TestClient) -
     )
     store.update_record(record.spec.id, lambda current: setattr(current, "runs", record.runs))
     listed = client.get("/pipelines", headers={"Accept": "application/json"}).json()
-    assert "process" not in listed["items"][0]["runs"][0]
+    assert "runs" not in listed["items"][0] and listed["items"][0]["links"]["runs"] == "/pipelines/rain-to-dhis2/runs"
+    [run] = client.get("/pipelines/rain-to-dhis2/runs").json()["items"]
+    for shown in (listed["items"][0]["latest_run"], run):
+        assert "process" not in shown and "idempotency_key" not in shown
 
 
 def test_read_only_pipeline_pages_hide_create_and_edit_forms(
@@ -1460,7 +1475,7 @@ def test_detail_get_is_read_only_and_renders_stored_invalid_validation(
 
 def test_page_keeps_the_draft_on_a_bad_form(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _dhis2(monkeypatch)
-    response = client.post("/pipelines", data={**_FORM, "dest.series.0.data_element": "bad"})
+    response = client.post("/pipelines/new", data={**_FORM, "dest.series.0.data_element": "bad"})
     assert response.status_code == 400
     assert "data_element must be a DHIS2 UID" in response.text and 'value="rain-to-dhis2"' in response.text
     assert store.list_records() == []
@@ -1472,7 +1487,44 @@ def test_api_creates_dry_runs_and_switches_modes(
     _dhis2(monkeypatch)
     created = client.post("/pipelines", json=_SPEC)
     assert created.status_code == 201, created.text
-    assert created.json()["validation"]["export"]["id"] == "rain-to-dhis2" and created.json()["approved"] is False
+    view = created.json()
+    assert created.headers["Location"] == view["links"]["self"] == "/pipelines/rain-to-dhis2"
+    assert view["validation"]["export"]["id"] == "rain-to-dhis2" and view["approved"] is False
+    assert view["trigger"] == {"policy": "on_update", "datasets": ["rain_monthly"]}
+    assert [(item["kind"], item["id"], item["parameter"], item["href"]) for item in view["inputs"]] == [
+        ("dataset", "rain_monthly", "dataset_id", "/datasets/rain_monthly"),
+        ("features", "districts", "geometries", "/features/districts"),
+    ]
+    assert view["workflow"]["interval_parameter"] == "temporal_extent"
+    assert view["workflow"]["href"] == "/process_graphs/aggregate_by_features"
+    assert client.post("/pipelines", json={**_SPEC, "id": "other", "colour": "red"}).json()["detail"][0]["loc"] == [
+        "body",
+        "colour",
+    ]
+    # A spec read back is sent with the revision it was read at; its id cannot change.
+    read = {**view["spec"], "revision": view["revision"]}
+    for revision in (None, True, 0, -1):
+        refused = client.put("/pipelines/rain-to-dhis2", json={**read, "revision": revision})
+        assert refused.status_code == 422 and refused.json()["detail"][0]["loc"] == ["body", "revision"], revision
+    moved = client.put("/pipelines/rain-to-dhis2", json={**read, "id": "other"})
+    assert moved.status_code == 422 and "does not match" in moved.text
+    # Two clients read revision 1: the first change is saved, the second is refused rather than overwriting it.
+    first = client.put("/pipelines/rain-to-dhis2", json={**read, "name": "First"})
+    assert first.status_code == 200 and first.json()["revision"] == 2
+    second = client.put("/pipelines/rain-to-dhis2", json={**read, "name": "Second"})
+    assert second.status_code == 409 and "changed since revision 1" in second.text
+    assert store.get_record("rain-to-dhis2").spec.name == "First"  # type: ignore[union-attr]
+    operations = client.get("/openapi.json").json()["paths"]
+    for method, path, model in (
+        ("post", "/pipelines", "PipelineSpec"),
+        ("put", "/pipelines/{pipeline_id}", "PipelineChange"),
+    ):
+        operation = operations[path][method]
+        assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{model}"
+        }
+        assert {"403", "409", "422"} <= set(operation["responses"])
+    assert "post" not in operations["/pipelines/{pipeline_id}"]
     assert client.post("/pipelines", json=_SPEC).status_code == 409
     early = client.post("/pipelines/rain-to-dhis2/mode/live", headers={"Accept": "application/json"})
     assert early.status_code == 409 and "dry run" in early.text
@@ -1569,7 +1621,7 @@ def test_save_refuses_an_invalid_pipeline(client: TestClient, monkeypatch: pytes
     refused = client.post("/pipelines", json=_SPEC)
     assert refused.status_code == 422
     assert any(check["id"] == "dhis2_metadata" for check in refused.json()["detail"]["checks"]["checks"])
-    page = client.post("/pipelines", data=_FORM)
+    page = client.post("/pipelines/new", data=_FORM)
     assert page.status_code == 400 and "not saved" in page.text and "could not read" in page.text
     assert 'value="rain-to-dhis2"' in page.text
     assert store.list_records() == []
@@ -1583,9 +1635,9 @@ def test_edit_keeps_the_approval_only_for_the_same_bindings(
     _approve()
     form = client.get("/pipelines/rain-to-dhis2/edit", headers={"Accept": "text/html"})
     assert form.status_code == 200 and "Edit pipeline" in form.text and "readonly" in form.text
-    assert 'action="/pipelines/rain-to-dhis2"' in form.text and 'name="revision" value="1"' in form.text
+    assert 'action="/pipelines/rain-to-dhis2/edit"' in form.text and 'name="revision" value="1"' in form.text
 
-    renamed = client.post("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Renamed"})
+    renamed = client.put("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Renamed", "revision": 1})
     assert renamed.status_code == 200 and renamed.json()["approved"] is True
 
     import open_climate_service.exports.dhis2 as dhis2_module
@@ -1595,18 +1647,19 @@ def test_edit_keeps_the_approval_only_for_the_same_bindings(
     summed = {
         **_SPEC,
         "workflow": {**_SPEC["workflow"], "arguments": {**_SPEC["workflow"]["arguments"], "method": "sum"}},
+        "revision": 2,
     }
-    bad = client.post("/pipelines/rain-to-dhis2", json=summed)
+    bad = client.put("/pipelines/rain-to-dhis2", json=summed)
     assert bad.status_code == 422 and "dhis2_metadata" in bad.text
     kept = store.get_record("rain-to-dhis2")
     assert kept is not None and kept.spec.workflow.arguments["method"] == "mean" and service.approved(kept)
 
     monkeypatch.setattr(dhis2_module, "get_connection", good)
-    changed = client.post("/pipelines/rain-to-dhis2", json=summed)
+    changed = client.put("/pipelines/rain-to-dhis2", json=summed)
     assert changed.status_code == 200 and changed.json()["dry_run"] is None and changed.json()["approved"] is False
     saved = store.get_record("rain-to-dhis2")
     assert saved is not None and saved.spec.workflow.arguments["method"] == "sum" and saved.revision == 3
-    assert client.post("/pipelines/missing", json=_SPEC).status_code == 404
+    assert client.put("/pipelines/missing", json={**_SPEC, "revision": 1}).status_code == 404
 
 
 def test_a_stale_edit_is_refused_and_concurrent_run_state_is_kept(
@@ -1626,13 +1679,13 @@ def test_a_stale_edit_is_refused_and_concurrent_run_state_is_kept(
     # A run hand-off lands between the edit form being read and saved: the edit keeps it.
     store.update_record("rain-to-dhis2", _run_lands)
     saved = client.post(
-        "/pipelines/rain-to-dhis2", data={**_FORM, "name": "Renamed", "revision": "1"}, follow_redirects=False
+        "/pipelines/rain-to-dhis2/edit", data={**_FORM, "name": "Renamed", "revision": "1"}, follow_redirects=False
     )
     assert saved.status_code == 303, saved.text[:600]
     record = store.get_record("rain-to-dhis2")
     assert record is not None and record.spec.name == "Renamed" and [run.run_id for run in record.runs] == ["r1"]
 
-    stale = client.post("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Again", "revision": 1})
+    stale = client.put("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Again", "revision": 1})
     assert stale.status_code == 409 and "changed since revision 1" in stale.text
     assert store.get_record("rain-to-dhis2").spec.name == "Renamed"  # type: ignore[union-attr]
 
@@ -1734,9 +1787,10 @@ class _Deliveries(list[tuple[str, str, bool, str]]):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail=f"Job '{delivery_id}' not found")
-        from open_climate_service.jobs.models import JobStatus
+        from open_climate_service.jobs.models import JobError, JobStatus
 
-        return SimpleNamespace(status=JobStatus(status), result=result)
+        error = JobError(type="ExportError", message="DHIS2 refused the payload") if status == "failed" else None
+        return SimpleNamespace(status=JobStatus(status), result=result, error=error)
 
 
 @pytest.fixture
@@ -1763,6 +1817,7 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     openeo: _FakeOpenEO,
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
+    mounted_client_factory: MountedClientFactory,
 ) -> None:
     _dhis2(monkeypatch)
     _validated()
@@ -1770,11 +1825,19 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
         "/pipelines/rain-to-dhis2/runs", json={"start": "2025-01-01", "end": "2025-01-31", "mode": "live"}
     )
     assert live_too_early.status_code == 409 and "live" in live_too_early.text
-    assert client.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-01-01"}).status_code == 400
+    for body, field in (
+        ({"start": "2025-01-01"}, "end"),
+        ({"start": "2025-01-01", "end": "2025-01-31", "mode": "now"}, "mode"),
+        ({"start": "2025-01-01", "end": "2025-01-31", "until": "x"}, "until"),
+    ):
+        refused = client.post("/pipelines/rain-to-dhis2/runs", json=body)
+        assert refused.status_code == 422 and refused.json()["detail"][0]["loc"][-1] == field, refused.text
 
     submitted = client.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-01-01", "end": "2025-01-31"})
     assert submitted.status_code == 202, submitted.text
     run = submitted.json()
+    assert submitted.headers["Location"] == run["links"]["self"] == f"/pipelines/rain-to-dhis2/runs/{run['run_id']}"
+    assert run["links"]["job"] == f"/jobs/{run['job_id']}" and run["links"]["delivery"] is None
     assert run["mode"] == "dry_run" and run["submission"] == "submitted" and run["trigger"] == "manual"
     assert openeo.intents[0].submission == "pending" and openeo.intents[0].job_id == run["job_id"]
     assert openeo.started == [run["job_id"]]
@@ -1791,6 +1854,14 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     assert too_early.status_code == 409 and "not finished" in too_early.text
     assert client.post("/pipelines/rain-to-dhis2/runs/nope/deliver").status_code == 404
 
+    def polled() -> dict[str, Any]:
+        response = client.get(run["links"]["self"])
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert polled()["status"] == "running"
+    assert client.get("/pipelines/rain-to-dhis2/runs/nope").status_code == 404
+
     runner.on_job_finished(openeo.jobs[run["job_id"]])
     assert deliveries == []
     finished = openeo.finish(run["job_id"])
@@ -1798,6 +1869,13 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     runner.on_job_finished(finished)  # a repeated completion event
     key = f"pipeline:rain-to-dhis2:pipeline-run:{run['run_id']}:dry_run"
     assert deliveries == [("rain-to-dhis2", run["job_id"], True, key)]
+    deliveries.outcomes["delivery-1"] = ("running", None)
+    delivering = polled()
+    assert delivering["status"] == "delivering" and delivering["failure"] is None
+    assert delivering["links"]["delivery"] == "/exports/rain-to-dhis2/jobs/delivery-1"
+    del deliveries.outcomes["delivery-1"]
+    # Settled as soon as the delivery job is, before the run records it.
+    assert polled()["status"] == "succeeded" and polled()["delivery_result"] == "validated"
     stored = store.get_record("rain-to-dhis2")
     assert stored is not None and stored.runs[0].delivery == "submitted"
     assert stored.runs[0].delivery_status_url == "/exports/rain-to-dhis2/jobs/delivery-1"
@@ -1810,7 +1888,31 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     page = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "text/html"})
     assert page.status_code == 200 and "Run once" in page.text and run["job_id"][:8] in page.text
     as_json = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()
-    assert as_json["runs"][0]["job_status"] == "finished" and "process" not in as_json["runs"][0]
+    assert as_json["latest_run"]["run_id"] == run["run_id"] and as_json["latest_run"]["job_status"] == "finished"
+    assert [item["run_id"] for item in client.get(as_json["links"]["runs"]).json()["items"]] == [run["run_id"]]
+
+    # Behind a proxy prefix every link leads into OCS, as the Location header does.
+    mounted = mounted_client_factory("/ocs")
+    prefixed = mounted.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-02-01", "end": "2025-02-28"})
+    links = prefixed.json()["links"]
+    assert (
+        prefixed.headers["Location"]
+        == links["self"]
+        == f"/ocs/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
+    )
+    assert links["job"] == f"/ocs/jobs/{prefixed.json()['job_id']}"
+    listed = mounted.get("/pipelines/rain-to-dhis2/runs").json()["items"]
+    assert listed[1]["links"]["delivery"] == "/ocs/exports/rain-to-dhis2/jobs/delivery-1"
+    assert mounted.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["links"] == {
+        "self": "/ocs/pipelines/rain-to-dhis2",
+        "runs": "/ocs/pipelines/rain-to-dhis2/runs",
+    }
+    operation = client.get("/openapi.json").json()["paths"]["/pipelines/{pipeline_id}/runs"]["post"]
+    body = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert set(body["properties"]) == {"start", "end", "mode"} and set(body["required"]) == {"start", "end"}
+    assert {"202", "403", "404", "409"} <= set(operation["responses"])
+    dry_run = client.get("/openapi.json").json()["paths"]["/pipelines/{pipeline_id}/dry-run"]["post"]["responses"]
+    assert dry_run["200"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/DryRunResult"}
 
 
 def test_a_failed_hand_off_is_recorded_and_recoverable(
@@ -1832,6 +1934,9 @@ def test_a_failed_hand_off_is_recorded_and_recoverable(
     assert (
         stored is not None and stored.runs[0].delivery == "failed" and stored.runs[0].error == "No result for this job"
     )
+    polled = client.get(f"/pipelines/rain-to-dhis2/runs/{run.run_id}").json()
+    assert polled["status"] == "needs_attention"
+    assert polled["failure"] == {"stage": "delivery", "message": "No result for this job"}
 
     monkeypatch.setattr(delivery_module, "submit_delivery", lambda *args: ("delivery-9", False))
     delivered = client.post(
@@ -1883,6 +1988,9 @@ def test_a_permanent_submission_failure_is_not_retried_and_can_run_again(
     openeo.fail_create = ValueError("process.process_graph must be an object")
     failed = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
     assert failed.submission == "failed" and failed.submission_attempts == 1
+    polled = client.get(f"/pipelines/rain-to-dhis2/runs/{failed.run_id}").json()
+    assert polled["status"] == "failed" and polled["failure"]["stage"] == "submission"
+    assert polled["links"]["job"] is None
     openeo.fail_create = None
     runner.recover_runs()
     assert store.get_record("rain-to-dhis2").runs[0].submission == "failed"  # type: ignore[union-attr]
@@ -2047,6 +2155,8 @@ def test_redelivery_is_refused_where_a_repeat_could_duplicate(
     run = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
     runner.on_job_finished(openeo.finish(run.job_id))
     deliveries.outcomes["delivery-1"] = ("failed", None)
+    failure = runner.run_view("rain-to-dhis2", store.get_record("rain-to-dhis2").runs[0], "").failure  # type: ignore[union-attr]
+    assert failure is not None and failure.message == "DHIS2 refused the payload"
     with pytest.raises(runner.RunRefused, match="does not declare that a repeated delivery is harmless"):
         runner.deliver_run("rain-to-dhis2", run.run_id, operator=True, redeliver=True)
     assert len(deliveries) == 1
@@ -2085,6 +2195,76 @@ def test_handed_off_is_not_delivered_until_the_delivery_job_confirms(
     assert [runner._settled(by_id[run_id], superseded) for run_id in runs] == [True, False, False, False, False, False]
 
 
+def test_a_failing_pipeline_posts_once_and_again_when_it_recovers_or_is_resolved(
+    instance: None,
+    openeo: _FakeOpenEO,
+    deliveries: _Deliveries,
+    webhook: WebhookReceiver,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from open_climate_service.jobs.events import persisted_events
+    from open_climate_service.notifications import webhook as notifications
+
+    _dhis2(monkeypatch)
+    _validated()
+    monkeypatch.setattr(runner, "_event_consumer", notifications.consume)
+
+    def run(month: int, delivery: str) -> runner.PipelineRun:
+        interval = runner.RunContext(start=f"2025-0{month}-01", end=f"2025-0{month}-28")
+        started = runner.run_pipeline("rain-to-dhis2", interval)
+        runner.on_job_finished(openeo.finish(started.job_id))
+        if delivery == "failed":
+            deliveries.outcomes[f"delivery-{len(deliveries)}"] = ("failed", None)
+        runner.recover_runs()
+        return started
+
+    webhook.enabled = False
+    run(1, "failed")  # before notifications were configured: history, never posted
+    run(2, "successful")
+    webhook.enabled = True
+    notifications.replay()
+    failing = run(3, "failed")
+    run(4, "failed")  # still the same failure episode
+    webhook.status = 503
+    recovered = run(5, "successful")
+    webhook.status = 200
+    notifications.replay()  # the refused recovery is not due again yet
+    later = datetime.now(UTC) + timedelta(minutes=3)
+    monkeypatch.setattr(notifications, "utc_now", lambda: later)
+    notifications.replay()
+    older = run(6, "failed")
+    newer = run(7, "failed")
+    runner.acknowledge_delivery("rain-to-dhis2", older.run_id)  # the newer run still fails
+    runner.acknowledge_delivery("rain-to-dhis2", newer.run_id)
+
+    outcomes = [
+        event.type.removeprefix("automation.") for event in persisted_events() if event.type.startswith("automation.")
+    ]
+    assert outcomes == ["failed", "succeeded", "failed", "succeeded", "failed", "resolved"]
+    assert [(status, body["status"]) for status, _, body in webhook.posts] == [
+        (200, "failed"),
+        (503, "recovered"),
+        (200, "recovered"),
+        (200, "failed"),
+        (200, "resolved"),
+    ]
+    assert webhook.posts[-1][1] == f"{newer.run_id}:0"
+    assert webhook.posts[-1][2]["text"] == (
+        "Pipeline 'rain-to-dhis2' failure was acknowledged by an operator /pipelines/rain-to-dhis2"
+    )
+    (_, failure_key, failure), (_, first_key, _), (_, retry_key, recovery) = webhook.posts[:3]
+    assert failure_key == failure["event"] == f"{failing.run_id}:0"
+    assert first_key == retry_key == f"{recovered.run_id}:0"
+    assert failure["run"] == failing.run_id and failure["details"] == f"/pipelines/rain-to-dhis2/runs/{failing.run_id}"
+    assert (failure["automation"], failure["id"]) == ("pipeline", "rain-to-dhis2")
+    assert failure["link"] == "/pipelines/rain-to-dhis2"
+    assert (failure["stage"], failure["message"]) == ("delivery", "DHIS2 refused the payload")
+    assert failure["text"] == (
+        "Pipeline 'rain-to-dhis2' failed at delivery: DHIS2 refused the payload /pipelines/rain-to-dhis2"
+    )
+    assert recovery["text"] == "Pipeline 'rain-to-dhis2' succeeded again /pipelines/rain-to-dhis2"
+
+
 def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(
     client: TestClient,
     openeo: _FakeOpenEO,
@@ -2099,6 +2279,9 @@ def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(
     run = runner.run_pipeline("rain-to-dhis2", runner.RunContext(start="2025-01-01", end="2025-01-31"))
     runner.on_job_finished(openeo.finish(run.job_id))
     deliveries.outcomes["delivery-1"] = ("missing", None)
+    # Read as unknown before recovery records it, which a read-only instance never does.
+    polled = client.get(f"/pipelines/rain-to-dhis2/runs/{run.run_id}", headers=json_only).json()
+    assert polled["status"] == "needs_attention" and "no longer exists" in polled["failure"]["message"]
     runner.recover_runs()
     runner.recover_runs()  # resolved once, not polled or re-sent on every pass
     stored = store.get_record("rain-to-dhis2").runs[0]  # type: ignore[union-attr]
@@ -2628,7 +2811,7 @@ def test_changing_the_bindings_restarts_the_update_boundary(
     weekly_update = _update_event("evt-weekly", dataset_id="rain_weekly", when=datetime.now(UTC))
     runner.consume([weekly_update])  # not this pipeline's source yet
     arguments = {**_SPEC["workflow"]["arguments"], "dataset_id": "rain_weekly"}
-    edited = client.post(
+    edited = client.put(
         "/pipelines/rain-to-dhis2",
         json={
             **_SPEC,
@@ -2637,6 +2820,7 @@ def test_changing_the_bindings_restarts_the_update_boundary(
                 "plugin": "dhis2",
                 "settings": {"connection": "local", "series": [{"data_element": _ELEMENT}]},
             },
+            "revision": 1,
         },
     )
     assert edited.status_code == 200, edited.text
@@ -2976,7 +3160,6 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
     from open_climate_service.jobs.models import JobStatus
     from open_climate_service.openeo import execution
     from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.openeo.schemas import OpenEOJobStatus
     from open_climate_service.shared.provenance import record_source
     from open_climate_service.shared.time import utc_now
 
@@ -3050,26 +3233,17 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         )
         assert run.status_code == 202, run.text
         job_id = run.json()["job_id"]
+        # Polled as a client does: the run in the Location header until its status is final.
         deadline = time.monotonic() + 30
-        record = store.get_record("rain-to-dhis2")
-        while time.monotonic() < deadline:
-            record = store.get_record("rain-to-dhis2")
-            job = openeo_jobs.store_get_job(job_id)
-            assert job is None or job.status != OpenEOJobStatus.ERROR, job.error_message if job else None
-            if record is not None and record.runs[0].delivery_job_id:
-                break
+        polled = run.json()
+        while polled["status"] not in {"succeeded", "needs_attention", "failed", "canceled"}:
+            assert time.monotonic() < deadline, polled
             time.sleep(0.05)
-        assert record is not None and record.runs[0].delivery == "submitted", record.runs[0] if record else None
-        delivery_id = record.runs[0].delivery_job_id
-        assert delivery_id is not None
+            polled = client.get(run.headers["Location"]).json()
+        assert polled["status"] == "succeeded" and polled["delivery_result"] == "delivered", polled
+        assert client.get(polled["links"]["job"]).json()["status"] == "finished"
+        assert client.get(polled["links"]["delivery"]).status_code == 200
         native = job_service_module.get_job_service()
-        delivery = native.get_job_or_404(delivery_id)
-        while time.monotonic() < deadline:
-            delivery = native.get_job_or_404(delivery_id)
-            if delivery.status in {JobStatus.SUCCESSFUL, JobStatus.FAILED, JobStatus.CANCELLED}:
-                break
-            time.sleep(0.05)
-        assert delivery.status == JobStatus.SUCCESSFUL, delivery.error
         live = sent[-1]
         assert live["dry_run"] is False and live["target"] == "local"
         assert {value["orgUnit"] for value in live["payload"]["dataValues"]} == set(_OU)
@@ -3105,6 +3279,11 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         assert manual_manifest.mapping == automatic_manifest.mapping
         assert manual_manifest.references == automatic_manifest.references
         assert manual_manifest.target == automatic_manifest.target
+
+        # A delivered run stays delivered when its workflow job is deleted afterwards.
+        assert client.delete(polled["links"]["job"]).status_code == 204
+        after = client.get(polled["links"]["self"]).json()
+        assert after["status"] == "succeeded" and after["links"]["job"] is None, after
     finally:
         job_service.shutdown()
         job_service_module.reset_job_service()

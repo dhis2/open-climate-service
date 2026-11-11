@@ -1,0 +1,41 @@
+- id: clms_ndvi_v3_dekadal
+  name: NDVI (Copernicus CLMS V3, 300 m, dekadal)
+  short_name: NDVI
+  description: >-
+    Normalized Difference Vegetation Index, version 3 of the Copernicus Land Monitoring Service
+    product, at 300 m, worldwide, from 2014 onwards, one value per
+    dekad (days 1-10, 11-20 and 21 to the end of the month) drawing on the 30 days ending with
+    it, published a few days after the dekad ends. From PROBA-V until 2018 and
+    Sentinel-3 OLCI since. Dekads from December 2025 use one month of supporting data rather
+    than a year, so have more gaps in cloudy areas than the archive before them. Water, snow and
+    missing observations are left empty. Needs free Copernicus
+    Data Space Ecosystem S3 keys. Acknowledge as: Generated using European Union's Copernicus
+    Land Monitoring Service information; DOI: 10.2909/905223f4-2c3d-4cb6-ad8c-d6d065707465.
+  standard_name: normalized_difference_vegetation_index
+  variable: ndvi
+  period_type: dekadal
+  sync:
+    kind: temporal
+    execution: append
+  extents:
+    spatial:
+      bbox: [-180, -60, 180, 80]
+    temporal:
+      begin: "2014-01-01"
+  ingestion:
+    plugin: open_climate_service.plugins.rasters.clms_ndvi.CLMSNDVIDekadalPlugin
+  units: "1"
+  resolution: 300 m x 300 m
+  source: Copernicus Land Monitoring Service NDVI 300 m V3 (Copernicus Data Space Ecosystem)
+  source_url: https://land.copernicus.eu/en/products/vegetation/normalised-difference-vegetation-index-v3-0-300m
+  license:
+    name: Copernicus Land Monitoring Service data policy
+    url: https://land.copernicus.eu/en/data-policy
+  providers:
+    - name: Copernicus Land Monitoring Service
+      url: https://land.copernicus.eu/
+    - name: Copernicus Data Space Ecosystem
+      url: https://dataspace.copernicus.eu/
+  display:
+    colormap: YlGn
+    range: [0.0, 0.8]

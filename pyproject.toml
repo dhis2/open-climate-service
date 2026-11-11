@@ -221,7 +221,7 @@ module = ["license_expression"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*", "tylertoo", "tylertoo.*"]
+module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*", "tylertoo", "tylertoo.*", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pyright]
@@ -249,6 +249,7 @@ dev = [
     "pandas-stubs>=2.3,<3",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.16.6",
     "types-jsonschema>=4.23",
     "types-shapely>=2.1,<3",

@@ -9,8 +9,8 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from open_climate_service import config as api_config
-from open_climate_service.ingestions.job_submission import submit_sync_job
-from open_climate_service.jobs.models import JobStatus
+from open_climate_service.ingestions.job_submission import INGESTION_JOB_HREF_BASE, submit_sync_job
+from open_climate_service.jobs.models import JobError, JobStatus
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.scheduler.config import DatasetSyncSchedule
 from open_climate_service.shared.time import utc_now
@@ -42,12 +42,44 @@ class CheckResult(BaseModel):
     checked_at: datetime = Field(default_factory=utc_now)
 
 
-def _has_active_writer_job(dataset_id: str) -> bool:
-    return any(
-        record.process_id in _ACTIVE_WRITER_PROCESS_IDS
-        and record.status in _ACTIVE_JOB_STATUSES
-        and record.request.get("dataset_id") == dataset_id
-        for record in get_job_service().list_jobs().jobs
+_FAILED_CHECKS = frozenset({CheckOutcome.ERROR, CheckOutcome.NOT_MATERIALIZED})
+"""Check outcomes that are failures: the schedule cannot sync, and an operator must act."""
+
+
+def outcome_source(dataset_id: str) -> str:
+    """The source of the automation events a dataset's schedule reports its outcomes under."""
+    return f"/schedules/sync/{dataset_id}"
+
+
+def report_check_failure(result: CheckResult) -> CheckResult:
+    """Record a check that failed before any sync job existed as a failed job, and link it.
+
+    The failed job reports the failure through the same outcome event as a sync job that
+    failed, so it reaches the failure alerts; a check that did not fail is returned as it is.
+    """
+    if result.outcome not in _FAILED_CHECKS:
+        return result
+    job = get_job_service().record_failed_job(
+        label="scheduled-sync",
+        request={"dataset_id": result.dataset_id},
+        error=JobError(type=result.outcome.value, message=result.message),
+        outcome_source=outcome_source(result.dataset_id),
+        job_href_base=INGESTION_JOB_HREF_BASE,
+    )
+    return result.model_copy(update={"job_id": job.job_id})
+
+
+def _active_writer_job(dataset_id: str) -> str | None:
+    """The id of a job writing to the dataset now, if one is."""
+    return next(
+        (
+            record.job_id
+            for record in get_job_service().list_jobs().jobs
+            if record.process_id in _ACTIVE_WRITER_PROCESS_IDS
+            and record.status in _ACTIVE_JOB_STATUSES
+            and record.request.get("dataset_id") == dataset_id
+        ),
+        None,
     )
 
 
@@ -80,12 +112,14 @@ def enqueue_sync(schedule: DatasetSyncSchedule) -> CheckResult:
             message="Scheduler is disabled for a read-only instance",
         )
 
-    if _has_active_writer_job(schedule.dataset_id):
+    active_job_id = _active_writer_job(schedule.dataset_id)
+    if active_job_id is not None:
         return CheckResult(
             schedule_id=schedule.schedule_id,
             dataset_id=schedule.dataset_id,
             outcome=CheckOutcome.ALREADY_RUNNING,
             message="An active sync job already exists for this dataset",
+            job_id=active_job_id,
         )
 
     if not _dataset_is_materialized(schedule.dataset_id):
@@ -102,6 +136,7 @@ def enqueue_sync(schedule: DatasetSyncSchedule) -> CheckResult:
         publish=schedule.publish,
         label="scheduled-sync",
         max_attempts=schedule.max_attempts,
+        outcome_source=outcome_source(schedule.dataset_id),
     )
     return CheckResult(
         schedule_id=schedule.schedule_id,

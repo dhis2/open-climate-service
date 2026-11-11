@@ -682,6 +682,8 @@ def test_deleting_a_job_removes_its_execution_lease_file(
     lease_file = lease.with_suffix(lease.suffix + ".lock")
     assert lease_file.exists()
     _wait_for_no_worker(openeo, job_id)
+    # The dry-run delivery reads the job's results, and a job in use is not deleted.
+    _await_deliveries(1, timeout=30.0)
 
     openeo.delete_job(job_id)
 

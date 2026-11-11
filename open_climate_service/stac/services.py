@@ -34,7 +34,7 @@ from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
 from open_climate_service.shared.display import display_range
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.licences import DatasetLicence, parse_licence
-from open_climate_service.shared.thumbnails import thumbnail_path
+from open_climate_service.shared.thumbnails import colormap_stops, thumbnail_path
 from open_climate_service.shared.time import (
     Cadence,
     parse_period_string_to_datetime,
@@ -48,12 +48,21 @@ from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group
 CATALOG_DESCRIPTION = "Published datasets: rasters as GeoZarr stores and vector datasets as GeoParquet"
 STAC_VERSION = "1.1.0"
 MARKDOWN_MEDIA_TYPE = "text/markdown"
+CATALOG_PATH = "/stac/catalog.json"
+
+
+def collection_path(dataset_id: str) -> str:
+    """Where a collection's STAC document is served: `collection.json` in its own directory."""
+    return f"/stac/{path_segment(dataset_id)}/collection.json"
+
+
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
 PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
 RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
 WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
+PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
@@ -125,18 +134,19 @@ def _get_catalog_id() -> str:
 def build_catalog(request: Request) -> dict[str, object]:
     """Build the STAC catalog document."""
     self_href = self_url(request)
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    catalog_href = absolute_url(request, CATALOG_PATH)
     links = [
         {"rel": "self", "href": self_href, "type": "application/json"},
         {"rel": "root", "href": catalog_href, "type": "application/json"},
-        {"rel": "describedby", "href": absolute_url(request, "/stac/README.md"), "type": MARKDOWN_MEDIA_TYPE},
-        {"rel": "agents", "href": absolute_url(request, "/stac/AGENTS.md"), "type": MARKDOWN_MEDIA_TYPE},
+        # Relative, as Portolan requires of these two, so they resolve beside the document.
+        {"rel": "describedby", "href": "./README.md", "type": MARKDOWN_MEDIA_TYPE},
+        {"rel": "agents", "href": "./AGENTS.md", "type": MARKDOWN_MEDIA_TYPE},
     ]
     for dataset_id, artifact in _eligible_artifacts_by_dataset().items():
         links.append(
             {
                 "rel": "child",
-                "href": absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"),
+                "href": absolute_url(request, collection_path(dataset_id)),
                 "title": artifact.dataset_name,
                 "type": "application/json",
             }
@@ -182,8 +192,8 @@ def build_collection_for_artifact(dataset_id: str, artifact: ArtifactRecord, req
 def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
     """Build the STAC collection for a Zarr- or Icechunk-backed datacube."""
     source_dataset = registry_datasets.get_dataset(artifact.dataset_id) or {}
-    collection_href = absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}")
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    collection_href = absolute_url(request, collection_path(dataset_id))
+    catalog_href = absolute_url(request, CATALOG_PATH)
     dataset_href = absolute_url(request, f"/datasets/{path_segment(dataset_id)}")
     zarr_href = absolute_url(request, f"/zarr/{path_segment(dataset_id)}")
     # Only when the file is actually there: a collection that advertises a thumbnail a client
@@ -233,6 +243,16 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
                 "href": licence.url,
                 "type": "text/html",
                 "title": licence.name or licence.identifier or "Licence",
+            }
+        )
+    for recorded in ingestion_services.recorded_inputs(artifact):
+        input_id = str(recorded["collection_id"])
+        template_links.append(
+            {
+                "rel": "derived_from",
+                "href": absolute_url(request, collection_path(input_id)),
+                "type": "application/json",
+                "title": input_id,
             }
         )
     collection_payload["links"] = template_links
@@ -286,6 +306,11 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
         )
     collection_payload["license"] = template.license
     providers = _build_providers(source_dataset)
+    if artifact.provenance is not None:
+        providers.append(_processor_provider(artifact, request))
+        collection_payload["stac_extensions"] = sorted(
+            {*collection_payload.get("stac_extensions", []), PROCESSING_EXTENSION}
+        )
     if providers:
         collection_payload["providers"] = providers
     _remove_helper_variables(collection_payload)
@@ -502,11 +527,11 @@ def _add_feature_collection_links(
     names that one collection, so a `{version}` in `source_stac` is filled with the release this
     collection was read from, and the link is left out when there is no version to fill it.
     """
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    catalog_href = absolute_url(request, CATALOG_PATH)
     collection.clear_links()
     # Through `set_self_href`, not `add_link`: pystac emits the self link from that attribute,
     # and a rel="self" link added by hand is dropped by `to_dict`. STAC Browser navigates by it.
-    collection.set_self_href(absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"))
+    collection.set_self_href(absolute_url(request, collection_path(dataset_id)))
     collection.add_link(pystac.Link(rel="root", target=catalog_href, media_type="application/json"))
     collection.add_link(pystac.Link(rel="parent", target=catalog_href, media_type="application/json"))
     collection.add_link(
@@ -544,7 +569,7 @@ def _add_feature_collection_links(
         collection.add_link(
             pystac.Link(
                 rel=rel,
-                target=absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}/{name}"),
+                target=f"./{name}",
                 media_type=MARKDOWN_MEDIA_TYPE,
                 title=title,
             )
@@ -593,6 +618,23 @@ def _collection_description(dataset_id: str, artifact: ArtifactRecord, source_da
         return description.strip()
     logger.debug("Dataset %s declares no description; using the generated one", dataset_id)
     return f"Published GeoZarr dataset for {artifact.dataset_name}"
+
+
+def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str, Any]:
+    """This instance as the `processor` of a workflow-produced collection.
+
+    The processing extension accepts its fields on a Collection only under a producer or
+    processor provider, an asset, or summaries; at the root they do not validate.
+    """
+    provider: dict[str, Any] = {
+        "name": _get_catalog_title(),
+        "roles": ["processor"],
+        "url": absolute_url(request, "/"),
+        "processing:datetime": artifact.created_at.isoformat().replace("+00:00", "Z"),
+    }
+    if artifact.provenance is not None and artifact.provenance.ocs_version is not None:
+        provider["processing:software"] = {"open-climate-service": artifact.provenance.ocs_version}
+    return provider
 
 
 def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1310,13 +1352,17 @@ def _open_published_store(artifact: ArtifactRecord) -> xr.Dataset:
 def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> dict[str, Any]:
     display = source_dataset.get("display")
     display = display if isinstance(display, dict) else {}
-    colormap_name = display.get("colormap")
+    colormap = display.get("colormap")
+    # The colours themselves, keyed 0-255 across `rescale` as the render extension and titiler
+    # read a custom colormap, so a client needs no colormap library that knows the name.
     render: dict[str, Any] = {
         "title": artifact.dataset_name,
         "assets": ["zarr"],
-        "colormap_name": colormap_name if isinstance(colormap_name, str) else "viridis",
+        "colormap": {str(i): color for i, color in enumerate(colormap_stops(colormap))},
         "open_climate_service:variable": artifact.variable,
     }
+    if isinstance(colormap, str):
+        render["colormap_name"] = colormap
     # The one hint that needs data, so the only one left out without it: until a range is
     # declared or measured, the colormap, nodata and variable still hold.
     value_range = display_range(display, artifact.statistics)
