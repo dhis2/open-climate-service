@@ -688,10 +688,11 @@ def write_to_icechunk_store(
             _record_resampling_method(session.store, pyramid_method)
 
         # topozarr writes each level's `proj:`/`spatial:` attrs, its `spatial_ref` coordinate,
-        # and the level's affine in the root `multiscales.layout`. GDAL reads none of those.
-        # It places a level by the GDAL GeoTransform, taken here from the level's own layout
-        # entry (one copied from level 0 would place every overview at twice its true size),
-        # and finds its CRS only through a CF `grid_mapping` on the data array.
+        # and the level's affine in the root `multiscales.layout`. GDAL reads those only from
+        # consolidated metadata, which these stores do not have. So each level also gets the
+        # GDAL GeoTransform, taken from its own layout entry (one copied from level 0 would
+        # place every overview at twice its true size), and a CF `grid_mapping` on its data
+        # arrays, through which GDAL finds the CRS.
         root = zarr.open_group(session.store, mode="a")
         if geometry is not None:
             write_gdal_geotransform(root, geometry["transform"])

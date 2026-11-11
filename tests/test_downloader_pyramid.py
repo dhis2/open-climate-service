@@ -292,6 +292,6 @@ def test_pyramid_levels_carry_the_crs_definition_and_not_just_the_code(tmp_path:
         assert CRS.from_wkt(attrs["proj:wkt2"]) == CRS.from_epsg(27700), name
     # topozarr writes the level attrs with WKT2 only; the root also carries PROJJSON.
     assert CRS.from_json_dict(root.attrs["proj:projjson"]) == CRS.from_epsg(27700)
-    # GDAL finds a level's CRS only through the CF grid mapping on its data array.
+    # Without consolidated metadata, GDAL finds a level's CRS only through the CF grid mapping.
     for key in sorted(root.group_keys()):
         assert root[key]["v"].attrs["grid_mapping"] == "spatial_ref", key
