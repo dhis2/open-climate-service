@@ -83,6 +83,34 @@ def _uniform_chunks(ds: xr.Dataset) -> xr.Dataset:
     return ds.chunk(targets)
 
 
+def _one_step_per_chunk(ds: xr.Dataset, x_dim: str, y_dim: str) -> xr.Dataset:
+    """Rechunk every non-spatial dim of the data variables to one step per chunk.
+
+    The flat path otherwise stores the dataset's dask chunks as they arrive, and a computed
+    result arrives with the read chunks: ``open_icechunk_dataset`` merges up to a year of steps
+    per dask chunk, so an openEO anomaly over daily data was stored 183 days per chunk, and a
+    map client drawing one day read all of them. Ingested stores hold one step per chunk, and
+    the Portolan Zarr profile asks the same of every non-spatial dimension (CLIM-1861).
+
+    Spatial chunks are kept. The stored encoding chunks of a rechunked variable are dropped, so
+    the write follows the new dask chunks rather than refusing a layout they no longer match.
+    """
+    targets: dict[Any, int] = {}
+    for var in ds.data_vars.values():
+        chunks = var.chunks or ((size,) for size in var.shape)
+        for dim, dim_chunks in zip(var.dims, chunks, strict=False):
+            if dim not in (x_dim, y_dim) and max(dim_chunks, default=1) > 1:
+                targets[dim] = 1
+    if not targets:
+        return ds
+    ds = ds.copy()
+    for var in ds.data_vars.values():
+        if any(dim in targets for dim in var.dims):
+            for key in ("chunks", "preferred_chunks"):
+                var.encoding.pop(key, None)
+    return ds.chunk(targets)
+
+
 def _needs_pyramid(ds: xr.Dataset, x_dim: str, y_dim: str) -> bool:
     """Return True when the spatial extent is large enough to benefit from a pyramid."""
     return ds.sizes[x_dim] * ds.sizes[y_dim] > _PYRAMID_PIXEL_THRESHOLD
@@ -733,7 +761,7 @@ def write_to_icechunk_store(
             ds.sizes[y_dim],
         )
         ds = ds.assign_attrs({**ds.attrs, **geozarr_attrs})
-        ds = _uniform_chunks(ds)
+        ds = _uniform_chunks(_one_step_per_chunk(ds, x_dim, y_dim))
         # Bound the time-coordinate chunk so map clients read the axis in a few requests
         # rather than one per timestep (data variables keep their own chunking). Set it for
         # every length: a store reopened after a streaming ingest carries a chunk of 1 in the

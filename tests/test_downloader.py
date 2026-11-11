@@ -513,6 +513,55 @@ def test_write_to_icechunk_store_handles_a_reversed_dask_chunk_tuple(tmp_path: P
     assert float(out["gpp"].isel(t=0).sel(y=24.0, x=7.0)) == pytest.approx(25 * 8 - 1)
 
 
+def test_write_to_icechunk_store_stores_a_computed_result_one_step_per_chunk(tmp_path: Path) -> None:
+    """A result computed from a merged read is stored one day per chunk, as ingested stores are.
+
+    `open_icechunk_dataset` merges days into one dask chunk, and the flat write used to keep that,
+    so a published anomaly was stored 183 days per chunk (CLIM-1861).
+    """
+    written = _daily_store(tmp_path / "daily.icechunk")
+    source = open_icechunk_dataset(tmp_path / "daily.icechunk")
+    try:
+        assert _dask_chunks(source)[0] == 20, "precondition: the read merges every day"
+        result = (source - source.mean("t")).assign_attrs({"proj:code": "EPSG:4326"})
+        store = tmp_path / "anomaly.icechunk"
+        downloader.write_to_icechunk_store(result, store, commit_message="test")
+    finally:
+        source.close()
+
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store)))
+    tg = zarr.open_group(repo.readonly_session("main").store, mode="r")["tg"]
+    assert isinstance(tg, zarr.Array)
+    assert tg.chunks == (1, 8, 8)
+    out = open_icechunk_dataset(store)
+    try:
+        expected = written["tg"] - written["tg"].mean("t")
+        # North-up on publication, so compare by coordinate.
+        np.testing.assert_allclose(out["tg"].sel(y=expected.y).values, expected.values)
+    finally:
+        out.close()
+
+
+def test_one_step_per_chunk_rechunks_an_in_memory_cube_and_leaves_space() -> None:
+    ds = xr.Dataset(
+        {
+            "v": (("t", "y", "x"), np.zeros((4, 6, 6), "float32")),
+            "normal": (("dayofyear", "y", "x"), np.zeros((3, 6, 6), "float32")),
+        },
+        coords={"t": pd.date_range("2020-01-01", periods=4), "dayofyear": [1, 2, 3]},
+    )
+    ds["v"].encoding["chunks"] = (4, 6, 6)
+
+    out = downloader._one_step_per_chunk(ds, "x", "y")
+
+    assert out["v"].chunks == ((1, 1, 1, 1), (6,), (6,))
+    assert out["normal"].chunks == ((1, 1, 1), (6,), (6,))
+    assert "chunks" not in out["v"].encoding
+    assert ds["v"].encoding["chunks"] == (4, 6, 6), "the caller's dataset is left alone"
+    already = ds.chunk({"t": 1, "dayofyear": 1})
+    assert downloader._one_step_per_chunk(already, "x", "y") is already
+
+
 def test_uniform_chunks_leaves_a_legal_trailing_remainder_alone() -> None:
     """Only the illegal shape is rewritten — rechunking a large array is not free."""
     ds = xr.Dataset(
