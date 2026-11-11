@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # Minor and patch updates come as one PR, so CI runs once for the lot. Each major update
+  # gets its own PR, since those need a look. The cooldown waits a week after a release, as a
+  # bad release is usually pulled within days; security updates are not delayed.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      uv-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      github-actions:
+        patterns: ["*"]

@@ -17,6 +17,7 @@ from fastapi import Request
 from markupsafe import Markup, escape
 
 from open_climate_service import config as api_config
+from open_climate_service.data_registry.recipes import producing_workflow
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
@@ -235,21 +236,32 @@ def _licence_label(template: dict[str, Any]) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def _declared_colormap(display: object) -> str | tuple[str, ...] | None:
+    """A template's ``display.colormap``: a name, a tuple of colours, or None. Hashable, for the ramp cache."""
+    colormap = display.get("colormap") if isinstance(display, dict) else None
+    if isinstance(colormap, list):
+        return tuple(str(color) for color in colormap)
+    return colormap if isinstance(colormap, str) else None
+
+
+def _colormap_label(colormap: str | tuple[str, ...] | None) -> str:
+    """The colour scale as the pages name it: the colormap's name, or "Custom" for a list of colours."""
+    if isinstance(colormap, tuple):
+        return "Custom"
+    return colormap or ""
+
+
 @functools.lru_cache(maxsize=64)
-def _colormap_ramp(name: str | None) -> str:
+def _colormap_ramp(colormap: str | tuple[str, ...] | None) -> str:
     """A CSS gradient through a colormap, drawn where a dataset has no thumbnail yet.
 
     The same colormap the map viewer and the thumbnail use, so the placeholder already looks
     like the layer will. Cached: a landing page lists the same few colormaps many times, and
     resolving one imports matplotlib.
     """
-    from matplotlib.colors import to_hex
+    from open_climate_service.shared.thumbnails import colormap_stops
 
-    from open_climate_service.shared.thumbnails import resolve_colormap
-
-    colormap = resolve_colormap(name)
-    stops = ", ".join(to_hex(colormap(i / 4)) for i in range(5))
-    return f"linear-gradient(90deg, {stops})"
+    return f"linear-gradient(90deg, {', '.join(colormap_stops(colormap, count=5))})"
 
 
 def _coverage_label(start: object, end: object, period_type: object = None) -> str:
@@ -278,8 +290,7 @@ def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, An
     """
     from open_climate_service.shared.thumbnails import thumbnail_path
 
-    display = (template or {}).get("display")
-    colormap = display.get("colormap") if isinstance(display, dict) else None
+    colormap = _declared_colormap((template or {}).get("display"))
     status = "published" if dataset.publication.status == "published" else "unpublished"
     try:
         has_thumbnail = thumbnail_path(dataset.dataset_id).is_file()
@@ -297,7 +308,7 @@ def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, An
         "coverage": _coverage_label(dataset.extent.temporal.start, dataset.extent.temporal.end, dataset.period_type),
         "status": status,
         "has_thumbnail": has_thumbnail,
-        "ramp": _colormap_ramp(colormap if isinstance(colormap, str) else None),
+        "ramp": _colormap_ramp(colormap),
         "kind": "vector" if dataset.item_type == "feature" else "raster",
     }
 
@@ -392,15 +403,11 @@ def _dataset_page_context(
         # Linked, not described: a template without a provider declares a hand-registered
         # collection, so a matching template does not show the collection was fetched.
         origin: Fact = ("Data source", str(template.get("name") or template["id"]), f"/data-sources/{template['id']}")
-    elif template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
+    elif template and not registry_datasets.is_ingestable(template) and (workflow := producing_workflow(template)):
         # The workflow's page, not its process graph: the link is named after the workflow, so
         # it should open the thing a reader can read. The JSON stays a click away, behind the
         # "Process graph (JSON)" link on that page.
-        origin = (
-            "Produced by",
-            f"{template['produced_by']} workflow",
-            f"/workflows/{template['produced_by']}",
-        )
+        origin = ("Produced by", f"{workflow} workflow", f"/workflows/{workflow}")
     elif template and registry_datasets.is_ingestable(template):
         # Linked, now that the dataset template has a page: the template page already links to
         # the dataset it produced, so this closes that pair rather than leaving it one-way.
@@ -442,7 +449,7 @@ def _dataset_page_context(
         # Above the scale it describes, and above the bar below the list: the range is what makes
         # the colours mean anything, so it reads before the name of the ramp rather than after.
         ("Display range", "" if classes else range_label, None),
-        ("Colour scale", "" if classes else str(display.get("colormap") or ""), None),
+        ("Colour scale", "" if classes else _colormap_label(_declared_colormap(display)), None),
     ]
 
     def present(facts: list[Fact]) -> list[Fact]:
@@ -794,7 +801,7 @@ def _data_source_page_context(
             else "",
             None,
         ),
-        ("Colour scale", "" if classes else str(display.get("colormap") or ""), None),
+        ("Colour scale", "" if classes else _colormap_label(_declared_colormap(display)), None),
     ]
 
     def present(facts: list[Fact]) -> list[Fact]:
@@ -806,7 +813,7 @@ def _data_source_page_context(
             "id": template["id"],
             "name": template.get("name") or template["id"],
             "provider": template.get("source") or "",
-            "ramp": _colormap_ramp(display.get("colormap") if isinstance(display.get("colormap"), str) else None),
+            "ramp": _colormap_ramp(_declared_colormap(display)),
         },
         "classes": classes,
         "paragraphs": _paragraphs(str(template.get("description") or "")),
@@ -814,7 +821,7 @@ def _data_source_page_context(
         "data": present(data + about),
         "status_facts": present(status),
         "ingestable": ingestable,
-        "produced_by": template.get("produced_by") if not ingestable else None,
+        "produced_by": producing_workflow(template) if not ingestable else None,
         "ingested": (
             {
                 # The dataset's own id, not the template's: the two differ whenever a source was
@@ -1356,7 +1363,7 @@ def _workflow_page_context(
         (
             {"id": t["id"], "name": t.get("name") or t["id"], "ingested": t["id"] in held}
             for t in templates
-            if t.get("produced_by") == record.id and not registry_datasets.is_ingestable(t)
+            if producing_workflow(t) == record.id and not registry_datasets.is_ingestable(t)
         ),
         key=lambda output: str(output["name"]).lower(),
     )
@@ -1814,8 +1821,8 @@ def _landing_catalogue(
         if registry_datasets.is_ingestable(template):
             continue
         view = _source_view(template)
-        produced_by = template.get("produced_by")
-        if isinstance(produced_by, str) and produced_by in workflow_ids:
+        produced_by = producing_workflow(template)
+        if produced_by is not None and produced_by in workflow_ids:
             outputs[produced_by].append(view)
         else:
             unattributed.append(view)

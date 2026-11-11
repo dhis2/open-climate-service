@@ -8,7 +8,7 @@ To ingest a built-in dataset for your configured extent, see the [API reference]
 
 ## ERA5-Land — temperature and precipitation
 
-ERA5-Land provides temperature and precipitation at hourly, daily, and monthly resolution. Nine data sources are available covering both variables and all resolutions, with options for UTC or local-timezone daily aggregation.
+ERA5-Land provides temperature and precipitation at daily and monthly resolution. Six data sources are available. Days and months run in UTC+0; the `utc_offset_hours` setting in `climate-service.yaml` is not applied to them yet.
 
 See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 
@@ -142,17 +142,20 @@ the declared release; new catalogue years can be ingested when requested.
 
 | Property               | Value                                                                                                |
 | ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Dataset ID**         | `copdem30_elevation_static`                                                                          |
+| **Dataset ID**         | `copdem30_elevation_static`, `copdem90_elevation_static`                                             |
 | **Variable**           | `elevation`                                                                                          |
 | **Units**              | meters                                                                                               |
 | **Period**             | None: no time axis                                                                                   |
 | **Spatial coverage**   | Global                                                                                               |
-| **Spatial resolution** | ~30 m                                                                                                |
-| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)   |
+| **Spatial resolution** | ~30 m ([GLO-30](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-30)), ~90 m ([GLO-90](https://earthdatahub.destine.eu/collections/copernicus-dem/datasets/GLO-90)) |
+| **Source**             | [Copernicus / DestinE](https://earthdatahub.destine.eu/collections/copernicus-dem)                   |
 
-Copernicus DEM Global 30m, recording elevation height above sea level. 
+Copernicus DEM Global, recording elevation height above sea level, at 30 m or 90 m. Both data
+sources use the same plugin, with `product: GLO-30` or `product: GLO-90` in `ingestion.params`.
+The 90 m product holds a ninth of the pixels, so it ingests faster and stores smaller for a
+country-sized extent; use the 30 m product where local detail matters.
 
-The dataset is static: it has no time axis, so it is ingested whole and shown without a time slider.
+The datasets are static: they have no time axis, so each is ingested whole and shown without a time slider.
 
 It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account. Add your key to `~/.netrc`
 as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.destine.eu`:
@@ -161,6 +164,47 @@ as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.dest
 machine data.earthdatahub.destine.eu
   password <your-standard-api-key>
 ```
+
+---
+
+## Copernicus CLMS — vegetation index (NDVI V3, dekadal)
+
+| Property               | Value                                                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Dataset ID**         | `clms_ndvi_v3_dekadal`                                                                                                      |
+| **Variable**           | `ndvi`                                                                                                                      |
+| **Units**              | 1 (unitless index)                                                                                                          |
+| **Period**             | Dekadal: days 1–10, 11–20 and 21 to the end of the month                                                                    |
+| **Spatial coverage**   | Global land, 60°S–80°N                                                                                                      |
+| **Spatial resolution** | ~300 m                                                                                                                      |
+| **Record start**       | 2014-01-01                                                                                                                  |
+| **Source**             | [Copernicus Land Monitoring Service](https://land.copernicus.eu/en/products/vegetation/normalised-difference-vegetation-index-v3-0-300m) |
+
+The Normalized Difference Vegetation Index from the Copernicus Land Monitoring Service (CLMS), version 3, indicates how green the vegetation is. The series comes from PROBA-V until 2018 and Sentinel-3 OLCI from 2019, both corrected for viewing angle so they form one consistent record. Each dekad draws on observations from the 30 days ending with that dekad, so consecutive dekads overlap. It is read from the [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/).
+
+**Completeness** — the archive up to November 2025 was processed in one go with a full year of supporting data and has very few empty pixels. Dekads produced since, in near-real time, have only the preceding 30 days of supporting data and so have more empty pixels in persistently cloudy areas and high-latitude winters. CLMS does not say whether it later reprocesses near-real-time dekads to the archive's completeness; if it does, sync will not pick that up for dekads already stored (see below).
+
+**Sync behaviour** — each dekad is published a few days after it ends. Before each sync the API asks the Copernicus catalogue for the newest published dekad and adds the dekads missing from the store. CLMS may replace a dekad with a new production run when it fixes an issue, shown by the last number of the version (V3.0.1 becoming V3.0.2), and can release a minor version with small changes to the algorithm (V3.1). Sync does not detect either for dekads already stored: picking them up currently requires someone to notice the updated dekads and trigger a full manual re-ingestion of the dataset. Such updates seem to be rare: as of November 2026 every V3 dekad is still its first production run (V3.0.1), and the earlier V2 product only had a single run update (V2.0.1 to V2.0.2), applied to 8 of its 198 dekads.
+
+**Transforms** — the source stores each pixel as a whole number from 0 to 250, which is scaled to NDVI with the scale and offset given in each file: NDVI = 0.004 × value − 0.08. Pixels the source flags as water, snow, missing or unknown are left empty.
+
+**Attribution** — the [CLMS data policy](https://land.copernicus.eu/en/data-policy) requires users to acknowledge the source when publishing or sharing the data or products made from it:
+
+> Generated using European Union's Copernicus Land Monitoring Service information; DOI: 10.2909/905223f4-2c3d-4cb6-ad8c-d6d065707465.
+
+It needs free Copernicus Data Space Ecosystem S3 keys:
+
+1. Create an account at [dataspace.copernicus.eu](https://dataspace.copernicus.eu/).
+2. Generate S3 keys at [eodata-s3keysmanager.dataspace.copernicus.eu](https://eodata-s3keysmanager.dataspace.copernicus.eu/). The secret key is shown only once.
+3. Add them as a `cdse` profile in `~/.aws/credentials`, after any profiles already there:
+
+```
+[cdse]
+aws_access_key_id = <your-access-key>
+aws_secret_access_key = <your-secret-key>
+```
+
+**Windows:** use `%USERPROFILE%\.aws\credentials` with the same content.
 
 ---
 

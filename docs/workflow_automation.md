@@ -136,6 +136,10 @@ the recovered job finds the data current and still emits the event it owed, exac
 
 ### Updates from derived datasets
 
+To keep a derived dataset itself current, give its template a recipe rather than a trigger; see
+[Keep a derived dataset current with a recipe](adding_custom_datasets.md#keep-a-derived-dataset-current-with-a-recipe).
+A trigger and a recipe that write the same dataset refuse startup.
+
 An openEO job whose graph ends in `save_result` as Zarr with a `dataset_id` publishes a managed
 dataset, and owns that publication and its `dataset.updated` event. Startup replay and the live
 consumers read events from the native and the openEO job stores alike, so a trigger or a

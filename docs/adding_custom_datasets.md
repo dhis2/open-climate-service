@@ -179,7 +179,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
 | `license`    | No       | The data's licence: an SPDX identifier (`CC-BY-4.0`), or `name` and `url` where none exists (`Licence to Use Copernicus Products`). Published on the STAC collection; without it the collection is published as `other`. Take it from the licence the source names, not from how its page describes the data |
 | `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /data-sources`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
-| `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Derived datasets](#derived-datasets) |
+| `produced_by` | No      | The workflow that produces a non-ingestable template, or its recipe. See [Derived datasets](#derived-datasets) |
 
 **Period and sync**
 
@@ -207,17 +207,19 @@ question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* i
 Multiple templates can share the same plugin class and differ only in `params`:
 
 ```yaml
-- id: era5land_temperature_hourly
+- id: era5land_temperature_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandHourlySingleBandPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
-      variable: 2m_temperature
+      variable: t2m
+      temporal_aggregation: mean
 
-- id: era5land_precipitation_hourly
+- id: era5land_precipitation_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipitationPlugin
+    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
-      variable: total_precipitation
+      variable: tp
+      temporal_aggregation: sum
 ```
 
 ### Static datasets without a time axis
@@ -250,11 +252,59 @@ Name the workflow that produces such a template with `produced_by`:
   produced_by: climate_normal
 ```
 
-`produced_by` is metadata, not behaviour: it records where the data comes from, so a reader can get from
-the dataset to the way it is made, and `GET /data-sources` reports it. A template that
-declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
-either fetched or produced. The workflow id itself is not checked, because workflows can be
-registered later at runtime.
+A workflow id records where the data comes from, so a reader can get from the dataset to the way
+it is made, and `GET /data-sources` reports it. A template that declares `produced_by` beside
+`ingestion.plugin` is rejected at registration, since a dataset is either fetched or produced.
+
+#### Keep a derived dataset current with a recipe
+
+Give `produced_by` the whole recipe instead, and OCS can run it:
+
+```yaml
+- id: era5land_precipitation_monthly_anomaly_1991_2020
+  sync:
+    kind: static
+  produced_by:
+    workflow: climate_anomaly
+    arguments:
+      observed_dataset_id: era5land_precipitation_monthly
+      normal_dataset_id: era5land_precipitation_monthly_normal_1991_2020
+      variable: tp
+    refresh_on: observed_dataset_id
+```
+
+- `arguments` are the fixed parameters that define the product. Changing one makes another
+  dataset, with another id.
+- `output_dataset_id` is not given: OCS passes the template's own id. A recipe's workflow must
+  declare that parameter and publish its result through it, with `save_result` as Zarr and
+  `dataset_id: {from_parameter: output_dataset_id}`, as `climate_normal`, `climate_anomaly` and
+  `temporal_change` do.
+- `refresh_on` names the argument holding the dataset that drives this one. When that dataset
+  updates, by a sync or by another recipe, OCS runs the workflow again over that dataset's full
+  coverage, filling the workflow's one temporal-interval parameter, which the recipe leaves out.
+  Updates of the other datasets it reads, such as the normal above, do not refresh it.
+- Without `refresh_on` the recipe has a fixed range: set the temporal-interval parameter in
+  `arguments`, as for a normal. OCS checks such a recipe at startup but never runs it; an
+  operator runs the workflow when the dataset is needed.
+
+Only a derived dataset that exists is kept current: create it once by running the workflow over
+its input's full coverage. A built-in recipe therefore does nothing on an instance that never
+created its dataset. The run that creates it counts as current, so the first refresh comes with
+the input's next update; a dataset created before its input's latest update is refreshed at the
+next reconciliation. Each refresh is an openEO batch job, listed under `GET /jobs` with the
+title `Refresh <dataset id>`. It runs the workflow as defined when it was submitted, and editing
+the recipe or the workflow makes the next reconciliation refresh the dataset again. One refresh
+of a dataset runs at a time: updates that arrive meanwhile are taken up when it finishes, as one
+run over the newest coverage, or, when it fails, at the next reconciliation. A refresh that
+fails is not retried by itself beyond its job's attempts; the next update of its input starts a
+new one. Updates missed while OCS was stopped are caught up at startup and every 15 minutes.
+
+The recipe is checked at startup, against the registered workflows: an unknown workflow or
+argument, a missing argument, a time range set where `refresh_on` should fill it (or left open
+without `refresh_on`), a workflow that does not publish through `output_dataset_id`, a
+`refresh_on` dataset that no template declares, and a chain of recipes and workflow triggers
+that leads back to itself each refuse startup with the reason. A refreshed dataset's update
+starts the pipelines on it, so a pipeline can deliver the anomaly each time its source syncs.
 
 ### Dekads: a period type with no fixed length
 
@@ -441,12 +491,36 @@ keeps its own attributes:
 
 The following parameters control how the datasets are displayed visually and in text:
 
-| Field              | Required | Description                                              |
-| ------------------ | -------- | -------------------------------------------------------- |
-| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)   |
-| `display.colormap` | No       | Colormap name for map rendering (e.g. `blues`, `rdbu_r`) |
-| `display.range`    | No       | `[min, max]` display range for the colormap              |
-| `display.nodata`   | No       | No-data / fill value                                     |
+| Field              | Required | Description                                                                                                                         |
+| ------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                              |
+| `display.colormap` | No       | A [matplotlib colormap](https://matplotlib.org/stable/gallery/color/colormap_reference.html) name, or a list of colours (see below) |
+| `display.range`    | No       | `[min, max]` display range for the colormap                                                                                         |
+| `display.nodata`   | No       | No-data / fill value                                                                                                                |
+
+A colormap name is matched case-insensitively, and `_r` reverses it (`blues`, `rdbu_r`, `terrain`).
+Where no named colormap fits, list two or more hex colours (`#rgb` or `#rrggbb`), spread
+evenly from the low end of `display.range` to the high end. An alpha (`#rrggbbaa`) is ignored
+and the colour drawn opaque; transparency is set by `display.nodata`.
+
+```yaml
+display:
+  colormap: ["#1a9850", "#fee08b", "#a6611a", "#ffffff"]
+  range: [0, 4500]
+```
+
+The server resolves the colormap once, with matplotlib, and the thumbnail, the landing-page ramp
+and the map viewer all draw from that result. The STAC collection publishes it in its `renders`
+block as a `colormap` of 256 colours keyed `0`-`255`, where `0` is the low end of `rescale` and
+`255` the high end, and adds `colormap_name` when the template gives a name. The map viewer reads
+only the colours, so it needs no colormap library and draws what the thumbnail shows. An unknown
+name or an invalid list falls back to `viridis`.
+
+The STAC lists 256 colours rather than only the few you declared, because map tools that
+follow the STAC render convention (titiler, for one) need the full set to draw a smooth ramp.
+Given only a few, they colour only the pixels that hit those exact values and leave the rest
+blank. Nothing changes in how the colormap looks: matplotlib itself draws every colormap from
+256 colours, so a named colormap appears in the map viewer exactly as it does in matplotlib.
 
 ### Categorical datasets
 
