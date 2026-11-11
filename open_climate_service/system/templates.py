@@ -17,6 +17,7 @@ from fastapi import Request
 from markupsafe import Markup, escape
 
 from open_climate_service import config as api_config
+from open_climate_service.data_registry.recipes import producing_workflow
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
@@ -411,15 +412,11 @@ def _dataset_page_context(
         # Linked, not described: a template without a provider declares a hand-registered
         # collection, so a matching template does not show the collection was fetched.
         origin: Fact = ("Data source", str(template.get("name") or template["id"]), f"/data-sources/{template['id']}")
-    elif template and not registry_datasets.is_ingestable(template) and template.get("produced_by"):
+    elif template and not registry_datasets.is_ingestable(template) and (workflow := producing_workflow(template)):
         # The workflow's page, not its process graph: the link is named after the workflow, so
         # it should open the thing a reader can read. The JSON stays a click away, behind the
         # "Process graph (JSON)" link on that page.
-        origin = (
-            "Produced by",
-            f"{template['produced_by']} workflow",
-            f"/workflows/{template['produced_by']}",
-        )
+        origin = ("Produced by", f"{workflow} workflow", f"/workflows/{workflow}")
     elif template and registry_datasets.is_ingestable(template):
         # Linked, now that the dataset template has a page: the template page already links to
         # the dataset it produced, so this closes that pair rather than leaving it one-way.
@@ -827,7 +824,7 @@ def _data_source_page_context(
         "data": present(data + about),
         "status_facts": present(status),
         "ingestable": ingestable,
-        "produced_by": template.get("produced_by") if not ingestable else None,
+        "produced_by": producing_workflow(template) if not ingestable else None,
         "ingested": (
             {
                 # The dataset's own id, not the template's: the two differ whenever a source was
@@ -1369,7 +1366,7 @@ def _workflow_page_context(
         (
             {"id": t["id"], "name": t.get("name") or t["id"], "ingested": t["id"] in held}
             for t in templates
-            if t.get("produced_by") == record.id and not registry_datasets.is_ingestable(t)
+            if producing_workflow(t) == record.id and not registry_datasets.is_ingestable(t)
         ),
         key=lambda output: str(output["name"]).lower(),
     )
@@ -1827,8 +1824,8 @@ def _landing_catalogue(
         if registry_datasets.is_ingestable(template):
             continue
         view = _source_view(template)
-        produced_by = template.get("produced_by")
-        if isinstance(produced_by, str) and produced_by in workflow_ids:
+        produced_by = producing_workflow(template)
+        if produced_by is not None and produced_by in workflow_ids:
             outputs[produced_by].append(view)
         else:
             unattributed.append(view)

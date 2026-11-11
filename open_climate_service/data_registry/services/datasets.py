@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from open_climate_service import config as api_config
+from open_climate_service.data_registry import recipes
 from open_climate_service.ingestions.schemas import parse_declared_artifact_version
 from open_climate_service.shared.time import SUPPORTED_PERIOD_TYPES
 from open_climate_service.shared.urls import is_segment_safe_id
@@ -515,18 +516,17 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
         if not has_plugin:
             raise ValueError(f"Dataset template '{dataset_id}' in {source} must define ingestion.plugin")
 
-    # produced_by names the workflow that writes a non-ingestable template, so a reader can
-    # get from the dataset to the way it is made. A dataset is either fetched or produced, and
-    # a template claiming both would be listed as a dataset template and as a workflow output at
-    # once. The workflow id itself is not resolved here: workflows can be registered at
-    # runtime, after templates load, so an unknown id is a presentation concern, not an error.
+    # produced_by names the workflow that writes a non-ingestable template, or holds the recipe
+    # that runs it (`data_registry.recipes`). A dataset is either fetched or produced, and a
+    # template claiming both would be listed as a dataset template and as a workflow output at
+    # once. The workflow itself is not resolved here: workflows can be registered after
+    # templates load, so a recipe is checked against its workflow at startup instead.
     produced_by = dataset.get("produced_by")
     if produced_by is not None:
-        if not isinstance(produced_by, str) or not produced_by.strip() or produced_by != produced_by.strip():
-            raise ValueError(
-                f"Dataset template '{dataset_id}' in {source} has an invalid produced_by "
-                f"{produced_by!r}; it must be a workflow id"
-            )
+        try:
+            recipes.parse(produced_by, dataset_id=str(dataset_id))
+        except ValueError as exc:
+            raise ValueError(f"Dataset template '{dataset_id}' in {source}: {exc}") from exc
         if is_ingestable(dataset):
             raise ValueError(
                 f"Dataset template '{dataset_id}' in {source} declares both produced_by and "

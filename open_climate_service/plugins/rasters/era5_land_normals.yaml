@@ -249,7 +249,14 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
-  produced_by: climate_anomaly
+  # Refreshed after each update of the monthly precipitation, once the anomaly was created.
+  produced_by:
+    workflow: climate_anomaly
+    arguments:
+      observed_dataset_id: era5land_precipitation_monthly
+      normal_dataset_id: era5land_precipitation_monthly_normal_1991_2020
+      variable: tp
+    refresh_on: observed_dataset_id
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/

@@ -29,6 +29,7 @@ computed for. An operator can always deliver a held dry run by hand.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -37,6 +38,12 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from open_climate_service import config as api_config
+from open_climate_service.jobs.models import (
+    AUTOMATION_FAILED_EVENT_TYPE,
+    AUTOMATION_RESOLVED_EVENT_TYPE,
+    AUTOMATION_SUCCEEDED_EVENT_TYPE,
+    JobEvent,
+)
 from open_climate_service.pipelines import service, store
 from open_climate_service.pipelines import workflow as workflow_binding
 from open_climate_service.pipelines.schemas import (
@@ -68,6 +75,121 @@ _RETRYABLE_STATUSES = frozenset({408, 425, 429})
 # How far behind the safe bound the event checkpoint stays: covers the moment between an
 # update's time being taken and its job record being written.
 _EVENT_MARGIN = timedelta(minutes=15)
+_SETTLED_RESULTS = frozenset({"delivered", "validated", "acknowledged"})
+
+FinalStage = Literal["succeeded", "submission", "job", "delivery"]
+
+_event_consumer: Callable[[list[JobEvent]], None] | None = None
+
+
+def set_event_consumer(consumer: Callable[[list[JobEvent]], None] | None) -> None:
+    """Register the process-local consumer for the automation events runs persist."""
+    global _event_consumer
+    _event_consumer = consumer
+
+
+def final_stage(run: PipelineRun, delivery_result: str | None) -> FinalStage | None:
+    """Whether the run succeeded, or the stage it failed at; None while it may still go either way.
+
+    ``delivery_result`` is the delivery's outcome as the caller knows it: the run's recorded one,
+    or the delivery job's current one. A cancelled job is neither, and so is a pending run.
+    """
+    if run.submission == "failed":
+        return "submission"
+    # A delivery outcome outlasts the workflow job, which a client may delete once it is delivered.
+    if delivery_result in _SETTLED_RESULTS:
+        return "succeeded"
+    if delivery_result is not None or run.delivery == "failed":
+        return "delivery"
+    if run.job_outcome in ("error", "missing"):
+        return "job"
+    return None
+
+
+def _failure(
+    run: PipelineRun, stage: FinalStage, job_error: str | None, delivery_error: str | None, result: str | None
+) -> RunFailure:
+    if stage == "submission":
+        return RunFailure(stage="submission", message=run.error or "the job could not be submitted")
+    if stage == "job":
+        return RunFailure(stage="job", message=job_error or run.error or f"the job ended: {run.job_outcome or 'gone'}")
+    return RunFailure(stage="delivery", message=delivery_error or f"the delivery ended {result}")
+
+
+def failing(record: PipelineRecord) -> bool:
+    """Whether the pipeline has a failed run that no newer run's success superseded.
+
+    Read from the runs, newest first. A run an operator acknowledged is settled on its own and
+    says nothing about the pipeline, so it is passed over: acknowledging an older run leaves a
+    newer failure open. A run still going either way is passed over too.
+    """
+    for run in record.runs:
+        if run.delivery_result == "acknowledged":
+            continue
+        stage = final_stage(run, run.delivery_result)
+        if stage == "succeeded":
+            return False
+        if stage is not None:
+            return True
+    return False
+
+
+def _health_event(pipeline_id: str, record: PipelineRecord, run: PipelineRun) -> JobEvent | None:
+    """Append the automation event for a change in the pipeline's health that ``run`` just caused.
+
+    ``record.alerting`` is the health the last event reported. The pipeline fails when ``run``
+    fails while nothing was failing; it recovers when ``run`` succeeds, and is resolved when
+    ``run`` is acknowledged, once that leaves no failure open. Any other change, such as a
+    redelivery that has not ended yet, reports nothing until its outcome is known.
+    """
+    now_failing = failing(record)
+    if now_failing == record.alerting:
+        return None
+    stage = final_stage(run, run.delivery_result)
+    data: dict[str, Any] = {"run": run.run_id, "href": f"/pipelines/{pipeline_id}/runs/{run.run_id}"}
+    if now_failing:
+        if stage is None or stage == "succeeded":
+            return None  # an older failure, from before outcomes were reported
+        failure = _failure(run, stage, None, run.error, run.delivery_result)
+        data.update(stage=failure.stage, message=failure.message)
+        event_type = AUTOMATION_FAILED_EVENT_TYPE
+    elif run.delivery_result == "acknowledged":
+        event_type = AUTOMATION_RESOLVED_EVENT_TYPE
+    elif stage == "succeeded":
+        event_type = AUTOMATION_SUCCEEDED_EVENT_TYPE
+    else:
+        return None
+    event = JobEvent(
+        event_id=f"{run.run_id}:{len(run.events)}",
+        time=utc_now(),
+        type=event_type,
+        source=f"/pipelines/{pipeline_id}",
+        data=data,
+    )
+    run.events.append(event)
+    record.alerting = now_failing
+    return event
+
+
+def _update_run_record(pipeline_id: str, run_id: str, change: Callable[[PipelineRun], None]) -> PipelineRun:
+    """Change one stored run, persisting the automation event of a change in health in the same write."""
+    reached: list[JobEvent] = []
+
+    def _apply(current: PipelineRecord) -> PipelineRun:
+        stored = _find(current, run_id)
+        change(stored)
+        event = _health_event(pipeline_id, current, stored)
+        if event is not None:
+            reached.append(event)
+        return stored
+
+    _, stored = store.update_record(pipeline_id, _apply)
+    if reached and _event_consumer is not None:
+        try:
+            _event_consumer(reached)
+        except Exception:
+            logger.exception("Failed to consume the outcome event of pipeline '%s' run %s", pipeline_id, run_id)
+    return stored
 
 
 class RunRefused(ValueError):
@@ -257,10 +379,9 @@ def _submit(pipeline_id: str, run_id: str) -> PipelineRun:
         error = exc
         logger.exception("Pipeline '%s' could not submit run %s", pipeline_id, run.run_id)
 
-    def _outcome(current: PipelineRecord) -> PipelineRun:
-        stored = _find(current, run.run_id)
+    def _outcome(stored: PipelineRun) -> None:
         if stored.submission != "pending":
-            return stored
+            return
         stored.submission_attempts += 1
         if error is None:
             stored.submission = "submitted"
@@ -270,13 +391,11 @@ def _submit(pipeline_id: str, run_id: str) -> PipelineRun:
             stored.error = _message(error)
             if _is_permanent(error) or stored.submission_attempts >= MAX_SUBMISSION_ATTEMPTS:
                 stored.submission = "failed"
-        return stored
 
     try:
-        _, stored = store.update_record(pipeline_id, _outcome)
+        return _update_run_record(pipeline_id, run.run_id, _outcome)
     except LookupError:
         return run
-    return stored
 
 
 def _settled(run: PipelineRun, superseded: set[str]) -> bool:
@@ -330,7 +449,8 @@ def _record_job_outcome(pipeline_id: str, run: PipelineRun, job: Any) -> str | N
     else:
         return None
     if run.job_outcome != outcome:
-        _update_run(pipeline_id, run.run_id, job_outcome=outcome)
+        error = getattr(job, "error_message", None) if outcome == "error" else None
+        _update_run(pipeline_id, run.run_id, job_outcome=outcome, **({"error": error} if error else {}))
     return outcome
 
 
@@ -446,7 +566,10 @@ def _refresh_delivery_result(pipeline_id: str, run: PipelineRun) -> PipelineRun:
     if delivery is None:
         return _update_run(pipeline_id, run.run_id, delivery_result="unknown", error=_gone(run.delivery_job_id))
     result = delivery_result(delivery)
-    return run if result is None else _update_run(pipeline_id, run.run_id, delivery_result=result)
+    if result is None:
+        return run
+    error = delivery.error.message if delivery.error is not None else None
+    return _update_run(pipeline_id, run.run_id, delivery_result=result, **({"error": error} if error else {}))
 
 
 def _delivery_job(job_id: str) -> Any | None:
@@ -523,14 +646,11 @@ def _hold_reason(record: PipelineRecord, run: PipelineRun, *, operator: bool) ->
 
 
 def _update_run(pipeline_id: str, run_id: str, **changes: Any) -> PipelineRun:
-    def _apply(current: PipelineRecord) -> PipelineRun:
-        stored = _find(current, run_id)
+    def _apply(stored: PipelineRun) -> None:
         for key, value in changes.items():
             setattr(stored, key, value)
-        return stored
 
-    _, stored = store.update_record(pipeline_id, _apply)
-    return stored
+    return _update_run_record(pipeline_id, run_id, _apply)
 
 
 def on_job_finished(job: Any) -> None:
@@ -875,20 +995,15 @@ def reconcile() -> None:
     reconcile_events()
 
 
-_SETTLED_RESULTS = frozenset({"delivered", "validated", "acknowledged"})
-
-
 def _run_status(run: PipelineRun, job_status: str, delivery_result: str | None) -> RunStatus:
     if run.submission == "pending":
         return "submitting"
-    if run.submission == "failed":
-        return "failed"
-    # A delivery outcome outlasts the workflow job, which a client may delete once it is delivered.
-    if delivery_result in _SETTLED_RESULTS:
+    stage = final_stage(run, delivery_result)
+    if stage == "succeeded":
         return "succeeded"
-    if delivery_result is not None or run.delivery == "failed":
+    if stage == "delivery":
         return "needs_attention"
-    if run.job_outcome in ("error", "missing"):
+    if stage is not None:
         return "failed"
     if run.job_outcome == "canceled" or job_status == "canceled":
         return "canceled"
@@ -910,11 +1025,10 @@ def _run_failure(
     delivery_result: str | None,
 ) -> RunFailure | None:
     if status == "failed":
-        if run.submission == "failed":
-            return RunFailure(stage="submission", message=run.error or "the job could not be submitted")
-        return RunFailure(stage="job", message=job_error or run.error or f"the job ended: {run.job_outcome or 'gone'}")
+        stage: FinalStage = "submission" if run.submission == "failed" else "job"
+        return _failure(run, stage, job_error, delivery_error, delivery_result)
     if status == "needs_attention":
-        return RunFailure(stage="delivery", message=delivery_error or f"the delivery ended {delivery_result}")
+        return _failure(run, "delivery", job_error, delivery_error, delivery_result)
     return None
 
 
@@ -955,7 +1069,7 @@ def run_view(pipeline_id: str, run: PipelineRun, mount: str) -> PipelineRunView:
     status = _run_status(run, job_status, result)
     return PipelineRunView.model_validate(
         {
-            **run.model_dump(exclude={"process", "idempotency_key", "delivery_status_url"}),
+            **run.model_dump(exclude={"process", "idempotency_key", "delivery_status_url", "events"}),
             **delivery_fields,
             "delivery_result": result,
             "status": status,

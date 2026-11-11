@@ -163,10 +163,14 @@ def test_policy_never_blocks_cors_preflight() -> None:
 def _live_mutating_routes() -> set[tuple[str, str]]:
     write_methods = {"POST", "PUT", "PATCH", "DELETE"}
     live: set[tuple[str, str]] = set()
-    for route in app.routes:
-        methods: set[str] = getattr(route, "methods", None) or set()
-        for method in methods & write_methods:
-            live.add((method, getattr(route, "path", "")))
+    # FastAPI 0.162 keeps an included router as one entry in `app.routes`; its routes, with the
+    # prefix applied, come from `effective_route_contexts()`.
+    for entry in app.routes:
+        included = getattr(entry, "effective_route_contexts", None)
+        for route in included() if included else [entry]:
+            methods: set[str] = getattr(route, "methods", None) or set()
+            for method in methods & write_methods:
+                live.add((method, getattr(route, "path", "")))
     return live
 
 

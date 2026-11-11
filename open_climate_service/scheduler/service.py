@@ -25,7 +25,7 @@ from open_climate_service.scheduler.config import (
     effective_schedules,
     get_scheduler_config,
 )
-from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult, enqueue_sync
+from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult, enqueue_sync, report_check_failure
 from open_climate_service.scheduler.results import SharedResults, SharedResultsStore
 from open_climate_service.scheduler.schemas import ClockStatus, ScheduleListResponse, ScheduleStatus
 from open_climate_service.scheduler.store import StoredSchedule, list_schedules, store_stamp
@@ -121,9 +121,9 @@ class SchedulerService:
         self._effective: list[EffectiveSchedule] = []
         self._runnable: list[tuple[EffectiveSchedule, CronTrigger]] = []
         self._stamp: str | None = None
-        # This process's own refusals and checks. Check results are also recorded in
+        # This process's own refusals and checks. The clock's process also records them in
         # ``self._results``, shared with every process on the data directory; status reports
-        # whichever is newer.
+        # the shared one while a clock runs, else whichever is newer.
         self._last_results: dict[str, CheckResult] = {}
         self._results = results if results is not None else SharedResultsStore()
         # Schedules the last load would not run; the clock never fires them, so no next check.
@@ -246,6 +246,7 @@ class SchedulerService:
             scheduler.start()
             self._scheduler = scheduler
             self.beat()
+            self._report_refusals(plan.refused, already=set())
             logger.warning(
                 "Dataset scheduler enabled in process %d with %d schedule(s); "
                 "exactly one OCS process may enable scheduling",
@@ -305,14 +306,42 @@ class SchedulerService:
             self._stamp = plan.stamp
             self._last_results = {key: value for key, value in self._last_results.items() if key in runnable_ids}
             self._last_results.update(plan.refused)
-            self._refused = set(plan.refused)
+            already, self._refused = self._refused, set(plan.refused)
             if scheduler is not None:
+                self._report_refusals(plan.refused, already=already)
                 # Only the clock's process writes the shared results; a read-only one never does.
                 try:
                     self._results.keep_only({entry.schedule_id for entry in plan.effective})
                 except Exception:
                     logger.exception("Results of removed schedules could not be pruned")
             logger.info("Schedules reloaded: %d runnable", len(plan.runnable))
+
+    def _report_refusals(self, refused: dict[str, CheckResult], *, already: set[str]) -> None:
+        """Report schedules this clock newly refuses to run: each will never check its dataset."""
+        if api_config.is_read_only():
+            return
+        for schedule_id, result in refused.items():
+            if schedule_id not in already:
+                self._remember(self._report(result))
+
+    def _report(self, result: CheckResult) -> CheckResult:
+        """Record a failed check as a failed job, unless it repeats the schedule's last failure.
+
+        A dataset that was never ingested fails the same way at every check; one job says so,
+        and the alert it raised already links to it.
+        """
+        previous = self._last_results.get(result.schedule_id)
+        if (
+            previous is not None
+            and previous.job_id is not None
+            and (previous.outcome, previous.message) == (result.outcome, result.message)
+        ):
+            return result.model_copy(update={"job_id": previous.job_id})
+        try:
+            return report_check_failure(result)
+        except Exception:
+            logger.exception("The failed check for %s could not be recorded as a job", result.dataset_id)
+            return result
 
     def reload_if_changed(self) -> bool:
         """Reload when another process changed the store since this one last loaded it.
@@ -363,13 +392,9 @@ class SchedulerService:
                 message=f"{type(exc).__name__}: {exc}",
             )
             logger.exception("Scheduled sync check failed for %s", schedule.dataset_id)
-        # Kept here too, so this process still reports its own last check if the file cannot be written.
-        self._last_results[schedule.schedule_id] = result
         if not api_config.is_read_only():
-            try:
-                self._results.record(result)
-            except Exception:
-                logger.exception("The result of the check for %s could not be recorded", schedule.dataset_id)
+            result = self._report(result)
+        self._remember(result)
         log = logger.warning if result.outcome == CheckOutcome.ERROR else logger.info
         log(
             "Scheduled sync check for %s: %s (%s)",
@@ -378,6 +403,17 @@ class SchedulerService:
             result.message,
         )
         return result
+
+    def _remember(self, result: CheckResult) -> None:
+        """Keep a result as its schedule's last, here and in the file every process reports from."""
+        # Kept here too, so this process still reports its own last check if the file cannot be written.
+        self._last_results[result.schedule_id] = result
+        if api_config.is_read_only():
+            return
+        try:
+            self._results.record(result)
+        except Exception:
+            logger.exception("The result of the check for %s could not be recorded", result.dataset_id)
 
     # --- reading -------------------------------------------------------------------------------
 
@@ -461,10 +497,14 @@ class SchedulerService:
             next_check: datetime | None = None
             job = None
             if entry.effective:
-                found = [
-                    r for r in (self._last_results.get(entry.schedule_id), shared.results.get(entry.schedule_id)) if r
-                ]
-                result = max(found, key=lambda r: r.checked_at) if found else None
+                own, recorded = self._last_results.get(entry.schedule_id), shared.results.get(entry.schedule_id)
+                # A live clock's result is what runs: it holds the job a refusal was recorded as,
+                # which this process's own refusal of the same schedule does not.
+                if clock is not None and recorded is not None:
+                    result = recorded
+                else:
+                    found = [r for r in (own, recorded) if r]
+                    result = max(found, key=lambda r: r.checked_at) if found else None
                 job = apscheduler_jobs.get(entry.schedule_id)
                 if job is not None:
                     next_check = getattr(job, "next_run_time", None)

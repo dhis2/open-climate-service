@@ -16,6 +16,8 @@ from fastapi import HTTPException
 
 from open_climate_service.jobs import store
 from open_climate_service.jobs.models import (
+    AUTOMATION_FAILED_EVENT_TYPE,
+    AUTOMATION_SUCCEEDED_EVENT_TYPE,
     JobCancelledError,
     JobError,
     JobEvent,
@@ -52,6 +54,28 @@ def _persisted_events(job_id: str, drafts: list[JobEventDraft], time: Any) -> li
     """Assign each event its durable identity: the job id and its position in the job."""
     return [
         JobEvent(event_id=f"{job_id}:{index}", time=time, **draft.model_dump()) for index, draft in enumerate(drafts)
+    ]
+
+
+def _outcome_events(record: JobRecord, error: JobError | None = None) -> list[JobEventDraft]:
+    """The automation event for a job's final outcome, when the job reports one (``outcome_source``)."""
+    if record.outcome_source is None:
+        return []
+    href = record.links[0].href if record.links else f"/jobs/{record.job_id}"
+    if error is None:
+        return [
+            JobEventDraft(
+                type=AUTOMATION_SUCCEEDED_EVENT_TYPE,
+                source=record.outcome_source,
+                data={"job": record.job_id, "href": href},
+            )
+        ]
+    return [
+        JobEventDraft(
+            type=AUTOMATION_FAILED_EVENT_TYPE,
+            source=record.outcome_source,
+            data={"job": record.job_id, "href": href, "stage": "job", "message": error.message or error.type},
+        )
     ]
 
 
@@ -205,12 +229,14 @@ class JobService:
         max_attempts: int = 1,
         job_href_base: str = "/jobs",
         job_id: str | None = None,
+        outcome_source: str | None = None,
     ) -> JobRecord:
         """Submit a callable directly as a background job — no YAML registry needed.
 
         ``func`` must be a module-level function so its dotted path can be stored
         in the job record and re-imported on restart.  ``label`` is the human-readable
-        process name shown in GET /jobs/{id} as ``processID``.
+        process name shown in GET /jobs/{id} as ``processID``. With ``outcome_source``, the
+        job persists an automation event with its final outcome, success or failure.
         """
         qualname = getattr(func, "__qualname__", "")
         if "<locals>" in qualname:
@@ -226,6 +252,7 @@ class JobService:
             max_attempts=max_attempts,
             job_href_base=job_href_base,
             job_id=job_id,
+            outcome_source=outcome_source,
         )
 
     def record_completed_job(
@@ -265,12 +292,49 @@ class JobService:
         self._consume_events(created)
         return created
 
+    def record_failed_job(
+        self,
+        *,
+        label: str,
+        request: dict[str, Any],
+        error: JobError,
+        outcome_source: str,
+        job_href_base: str = "/jobs",
+    ) -> JobRecord:
+        """Persist automated work that failed before it could become a queued job.
+
+        A scheduled check that cannot submit its sync is the case: recorded as a failed job, it
+        reports its failure through the same outcome event as a sync job that failed. The record
+        is created in its terminal state and is never executed or recovered.
+        """
+        job_id = str(uuid4())
+        now = utc_now()
+        record = JobRecord(
+            job_id=job_id,
+            process_id=label,
+            status=JobStatus.FAILED,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+            attempt=1,
+            executor_kind="inline",
+            request={key: value for key, value in request.items() if key != "__fn_path__"},
+            progress=JobProgress(message="Failed"),
+            error=error,
+            outcome_source=outcome_source,
+            links=_job_links(job_id, href_base=job_href_base),
+        )
+        record.events = _persisted_events(job_id, _outcome_events(record, error), now)
+        created = store.create_job_record(record)
+        self._consume_events(created)
+        return created
+
     def _consume_events(self, record: JobRecord) -> None:
         if record.events and self._event_consumer is not None:
             try:
                 self._event_consumer(record.events)
             except Exception:
-                logger.exception("Failed to consume events for completed job %s", record.job_id)
+                logger.exception("Failed to consume events for finished job %s", record.job_id)
 
     def _create_and_enqueue(
         self,
@@ -280,6 +344,7 @@ class JobService:
         max_attempts: int,
         job_href_base: str,
         job_id: str | None = None,
+        outcome_source: str | None = None,
     ) -> JobRecord:
         job_id = job_id or str(uuid4())
         record = JobRecord(
@@ -290,6 +355,7 @@ class JobService:
             max_attempts=max_attempts,
             executor_kind=self._executor.kind,
             request=request,
+            outcome_source=outcome_source,
             links=_job_links(job_id, href_base=job_href_base),
         )
         store.create_job_record(record)
@@ -600,11 +666,10 @@ class JobService:
             execution_result = self._invoke_process(started)
             completed_at = utc_now()
             if isinstance(execution_result, JobExecutionResult):
-                result = execution_result.result
-                events = _persisted_events(job_id, execution_result.events, completed_at)
+                result, drafts = execution_result.result, execution_result.events
             else:
-                result = execution_result
-                events = []
+                result, drafts = execution_result, []
+            events = _persisted_events(job_id, [*drafts, *_outcome_events(started)], completed_at)
             completed = store.mutate_job_record(
                 job_id,
                 lambda current: current.model_copy(
@@ -661,13 +726,15 @@ class JobService:
                 )
                 return retry_after
 
-            store.mutate_job_record(
+            failed_at = utc_now()
+            failed = store.mutate_job_record(
                 job_id,
                 lambda latest: latest.model_copy(
                     update={
                         "status": JobStatus.FAILED,
-                        "finished_at": utc_now(),
+                        "finished_at": failed_at,
                         "error": error,
+                        "events": _persisted_events(job_id, _outcome_events(latest, error), failed_at),
                         "progress": JobProgress(
                             done=latest.progress.done,
                             total=latest.progress.total,
@@ -677,6 +744,7 @@ class JobService:
                     }
                 ),
             )
+            self._consume_events(failed)
             return None
 
     def _invoke_process(self, record: JobRecord) -> Any:
