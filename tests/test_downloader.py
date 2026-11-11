@@ -188,6 +188,16 @@ def test_open_icechunk_dataset_merges_stored_chunks_along_time(tmp_path: Path, m
         result.close()
 
 
+def test_open_icechunk_dataset_can_keep_the_stored_time_chunks(tmp_path: Path) -> None:
+    """A pyramid build reads one stored period per dask chunk, so topozarr shards it that way."""
+    _daily_store(tmp_path / "daily.icechunk")
+    result = open_icechunk_dataset(tmp_path / "daily.icechunk", merge_time=False)
+    try:
+        assert _dask_chunks(result) == (1, 8, 8)
+    finally:
+        result.close()
+
+
 def test_open_icechunk_dataset_keeps_whole_shards_along_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A sharded store's time chunk is a multiple of the shard, sized from its inner chunks."""
     from open_climate_service.data_accessor.services import accessor

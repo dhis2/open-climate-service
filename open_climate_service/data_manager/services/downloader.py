@@ -668,12 +668,12 @@ def write_to_icechunk_store(
         pyramid.attrs.update(geozarr_attrs)
 
         # Keep the no-data sentinel consistent across pyramid levels so the map
-        # renders the same pixels transparent at every zoom. topozarr mean-coarsens
-        # an integer-coded mask (e.g. a 0/1 hotspot raster, where 0 is the no-data
-        # background) into float levels that would otherwise default to a NaN fill,
-        # leaving the 0.0 background opaque at overview zooms. Pin the fill_value to
-        # 0 for integer-coded variables (Pyramid.write applies it across all levels);
-        # float variables already use NaN as both data and fill, so leave them be.
+        # renders the same pixels transparent at every zoom. topozarr keeps an integer
+        # variable's dtype at every level (a mean rounds half to even), but gives it no
+        # fill value unless the source declares one, so an integer-coded mask (e.g. a 0/1
+        # hotspot raster, where 0 is the no-data background) would have no sentinel at all.
+        # Pin the fill_value to 0 for integer-coded variables (Pyramid.write applies it
+        # across all levels); float variables already use NaN as both data and fill.
         for var_name, var_da in ds.data_vars.items():
             if var_da.dtype.kind != "f" and pyramid.fill_values.get(str(var_name)) is None:
                 pyramid.fill_values[str(var_name)] = 0
@@ -687,41 +687,29 @@ def write_to_icechunk_store(
             _overwrite_native_resampled_levels(session.store, ds, x_dim, y_dim, levels, pyramid_method)
             _record_resampling_method(session.store, pyramid_method)
 
-        # topozarr demotes spatial_ref from coordinate to data variable in the pyramid.
-        # Patch the root and each level group: add CRS to multiscales datasets entries so
-        # ZarrLayer can detect the coordinate system without guessing (it defaults to
-        # EPSG:3857 when crs is absent from the OME-NGFF datasets array).
+        # topozarr writes each level's `proj:`/`spatial:` attrs, its `spatial_ref` coordinate,
+        # and the level's affine in the root `multiscales.layout`. GDAL reads none of those.
+        # It places a level by the GDAL GeoTransform, taken here from the level's own layout
+        # entry (one copied from level 0 would place every overview at twice its true size),
+        # and finds its CRS only through a CF `grid_mapping` on the data array.
         root = zarr.open_group(session.store, mode="a")
-        root_attrs = dict(root.attrs)
-        ms = root_attrs.get("multiscales")
-        if isinstance(ms, list) and ms and isinstance(ms[0], dict):
-            datasets = ms[0].get("datasets")
-            if isinstance(datasets, list):
-                for ds_entry in datasets:
-                    if isinstance(ds_entry, dict):
-                        ds_entry.setdefault("crs", crs)
-                root_attrs["multiscales"] = ms
-                root.attrs.update(root_attrs)
         if geometry is not None:
             write_gdal_geotransform(root, geometry["transform"])
-        for level_key in root.keys():
-            level_group = root[level_key]
+        multiscales = root.attrs.get("multiscales")
+        layout = multiscales.get("layout") if isinstance(multiscales, dict) else None
+        for entry in layout if isinstance(layout, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            level_group = root.get(str(entry.get("asset")))
             if not isinstance(level_group, zarr.Group):
                 continue
-            lvl_attrs = dict(level_group.attrs)
-            lvl_attrs["coordinates"] = "spatial_ref"
-            level_group.attrs.update(lvl_attrs)
-            # Level groups are named by their downsample exponent ("0" = native). Anything
-            # else is not a pyramid level, so leave its georeferencing alone.
-            if geometry is not None and level_key.isdigit():
-                # Each level halves the resolution, so it needs its own GeoTransform — one
-                # copied from level 0 would place every overview at twice its true size.
-                factor = float(2 ** int(level_key))
-                step_x, rot_x, origin_x, rot_y, step_y, origin_y = geometry["transform"]
-                write_gdal_geotransform(
-                    level_group,
-                    [step_x * factor, rot_x, origin_x, rot_y, step_y * factor, origin_y],
-                )
+            transform = entry.get("spatial:transform")
+            if geometry is not None and isinstance(transform, list):
+                write_gdal_geotransform(level_group, cast(list[float], transform))
+            if "spatial_ref" in level_group:
+                for _, array in level_group.arrays():
+                    if {x_dim, y_dim} <= set(_dimension_names(array)):
+                        array.attrs["grid_mapping"] = "spatial_ref"
 
         if t_dim is not None:
             _write_root_time_coordinate(session.store, ds, time_dim=t_dim)

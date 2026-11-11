@@ -448,7 +448,7 @@ Building one is not free, though. Level 0 is rewritten rather than kept as-is �
 Levels are aggregated from the full-resolution data, and `ingestion.resampling` controls how:
 
 - **Continuous data** (temperature, precipitation, NDVI, …) — leave the default `mean`.
-- **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a mask into meaningless fractions.
+- **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a float mask into meaningless fractions, and an integer mask into a majority vote in which a tie rounds to 0, so small patches disappear at coarse zooms.
 - **Multi-class categorical** (land-cover class codes, etc.) — use `mode` (majority class). `mean` would average class codes into a _different, non-existent_ class (e.g. `mean(10, 80) = 45`). A dataset that declares [`classes`](#categorical-datasets) gets `mode` unless it sets `resampling` itself.
 
 `mean`/`max`/`min`/`sum`/`nearest` are computed by [topozarr](https://github.com/carbonplan/topozarr), which builds each level from the one above. That is valid for all five because they are _composable_ — for `nearest`, taking the corner of each corner gives the same cell as taking every nth cell of the original.
