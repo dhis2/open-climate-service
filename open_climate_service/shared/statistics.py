@@ -31,7 +31,7 @@ def measure_statistics(store_path: str | Path, variable: str) -> ArtifactStatist
     display, and an ingest that otherwise succeeded must not fail over them, so a failure is
     logged with its traceback and recorded as None.
     """
-    import dask
+    from dask.base import compute
 
     try:
         from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
@@ -42,7 +42,7 @@ def measure_statistics(store_path: str | Path, variable: str) -> ArtifactStatist
                 return None
             array = ds[variable]
             # One pass over the chunks for both reductions, not one each.
-            low, high = (float(value) for value in dask.compute(array.min(skipna=True), array.max(skipna=True)))
+            low, high = (float(value) for value in compute(array.min(skipna=True), array.max(skipna=True)))
     except Exception:
         logger.exception("Could not measure statistics of '%s' in %s", variable, store_path)
         return None
