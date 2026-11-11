@@ -113,7 +113,9 @@ def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_i
     clock: _Clock, webhook: WebhookReceiver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every decision replays the whole log, so an earlier episode's posted recovery is seen
-    again after the next failure is dropped, and must not count as that failure's ending."""
+    again after the next failure is dropped, and must not count as that failure's ending. A
+    failure dropped while its recovery and a newer failure wait behind it takes only the
+    recovery: the newer episode is still posted."""
     from open_climate_service.jobs import events as job_events
 
     log: list[JobEvent] = []
@@ -135,6 +137,16 @@ def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_i
     outcome("rain", 4, failed=False)  # never told it failed
     outcome("rain", 5, failed=True)  # a new episode
     outcome("rain", 6, failed=False)
+    webhook.refused = {"rain"}
+    outcome("rain", 7, failed=True)
+    outcome("rain", 8, failed=False)  # both queued behind the failure being retried
+    outcome("rain", 9, failed=True)
+    for _ in range(notifications._MAX_ATTEMPTS - 1):
+        clock.now += timedelta(hours=2)
+        notifications.replay()
+    webhook.refused = set()
+    clock.now += timedelta(hours=2)
+    notifications.replay()
 
     posted = [(status, body["id"], body["status"]) for status, _, body in webhook.posts]
     assert posted == [
@@ -145,8 +157,11 @@ def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_i
         *[(503, "rain", "failed")] * (notifications._MAX_ATTEMPTS - 1),
         (200, "rain", "failed"),
         (200, "rain", "recovered"),
+        *[(503, "rain", "failed")] * (notifications._MAX_ATTEMPTS + 1),
+        (200, "rain", "failed"),
     ]
-    assert [key for _, key, _ in webhook.posts[-2:]] == ["rain-run-5:0", "rain-run-6:0"]
+    assert [key for _, key, _ in webhook.posts[-14:-12]] == ["rain-run-5:0", "rain-run-6:0"]
+    assert webhook.posts[-1][1] == "rain-run-9:0"
     assert notifications._read(clock.now).queue == []
 
 

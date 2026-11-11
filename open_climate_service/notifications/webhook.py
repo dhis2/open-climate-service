@@ -296,6 +296,7 @@ def _send_round(url: str) -> bool:
 def _settle(state: _State, claimed: _Queued, accepted: bool, now: datetime) -> None:
     """Settle one claim only if this sender still owns it."""
     kept: list[_Queued] = []
+    dropped: _Queued | None = None
     for item in state.queue:
         owns = item.event_id == claimed.event_id and item.source == claimed.source and item.claim_id == claimed.claim_id
         if not owns:
@@ -309,13 +310,18 @@ def _settle(state: _State, claimed: _Queued, accepted: bool, now: datetime) -> N
         if item.attempts >= _MAX_ATTEMPTS:
             logger.error("Dropping notification %s after %d attempts", item.event_id, item.attempts)
             if item.payload.get("status") == "failed":
-                state.abandoned[item.source] = item.event_id
-                kept = [queued for queued in kept if queued.source != item.source]
+                dropped = item
             continue
         item.next_attempt_at = now + timedelta(minutes=min(60, 2**item.attempts))
         kept.append(item)
-    if claimed.source in state.abandoned:
-        kept = [item for item in kept if item.source != claimed.source]
+    if dropped is not None:
+        # Transitions alternate, so the automation's next queued notification is this failure's
+        # ending. Drop only that one: a newer episode behind it is still posted.
+        ending = next((item for item in kept if item.source == dropped.source), None)
+        if ending is None:
+            state.abandoned[dropped.source] = dropped.event_id
+        else:
+            kept.remove(ending)
     state.queue = kept
     atomic_json(_path(), state.model_dump(mode="json"))
 

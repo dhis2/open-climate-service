@@ -228,7 +228,7 @@ is queued in `<data_dir>/notifications.json` before it is posted. An alert the r
 answer with 2xx is retried on the 15-minute maintenance interval with a growing delay, for about
 five hours. Each schedule's and pipeline's alerts arrive in order, and one that is refused holds
 up only its own. A failure alert given up on drops the alert that would end it too, so a
-receiver never gets a recovery or resolution alone. After a restart, outcomes that no process decided are decided then.
+receiver never gets a recovery or resolution alone; a later failure is still posted. After a restart, outcomes that no process decided are decided then.
 Outcomes from before the webhook was first configured are not posted. A read-only instance posts
 nothing.
 
