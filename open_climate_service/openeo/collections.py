@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
-from open_climate_service.shared.urls import absolute_base, absolute_url, path_segment
+from open_climate_service.shared.urls import absolute_base, absolute_url
 from open_climate_service.stac import services as stac_services
 
 logger = logging.getLogger(__name__)
@@ -56,13 +56,15 @@ def _normalize_cube_dimensions(collection: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rewrite_collection_links(collection: dict[str, Any], dataset_id: str, request: Request) -> dict[str, Any]:
-    """Point the STAC collection's self link at `/collections/{id}`, and make every link absolute.
+    """Point every link to a STAC collection at its openEO copy, and make every link absolute.
 
-    The STAC document's relative links (`./README.md`) resolve against its own URL, which this
-    copy is not served from, so they are resolved there before the document moves.
+    The collection's own `self` link and the `derived_from` links to its inputs alike, so an
+    openEO user following either stays in openEO. The STAC document's relative links
+    (`./README.md`) resolve against its own URL, which this copy is not served from, so they are
+    resolved there before the document moves.
     """
     stac_href = absolute_url(request, stac_services.collection_path(dataset_id))
-    openeo_href = absolute_url(request, f"/collections/{path_segment(dataset_id)}")
+    stac_root = absolute_url(request, "/stac/")
     links = collection.get("links", [])
     rewritten: list[dict[str, Any]] = []
     for link in links:
@@ -71,8 +73,10 @@ def _rewrite_collection_links(collection: dict[str, Any], dataset_id: str, reque
         href = link.get("href", "")
         if isinstance(href, str):
             href = urljoin(stac_href, href)
-            if href == stac_href:
-                href = openeo_href
+            segment = href.removeprefix(stac_root).removesuffix("/collection.json")
+            if href.startswith(stac_root) and href.endswith("/collection.json") and segment and "/" not in segment:
+                # Already a path segment, escaped as the STAC link was built.
+                href = absolute_url(request, f"/collections/{segment}")
         rewritten.append({**link, "href": href})
     return {**collection, "links": rewritten}
 

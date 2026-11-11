@@ -140,7 +140,6 @@ Entry links point back into the canonical `/zarr/{dataset_id}/...` namespace.
 
 The branch exposes a dedicated STAC surface under:
 
-- `/stac`
 - `/stac/catalog.json`
 - `/stac/{dataset_id}/collection.json`
 
@@ -258,7 +257,6 @@ Implemented sync behavior:
 
 ### Standards-facing
 
-- `GET /stac`
 - `GET /stac/catalog.json`
 - `GET /stac/{dataset_id}/collection.json`
 

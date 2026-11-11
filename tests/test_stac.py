@@ -101,6 +101,20 @@ def test_the_stac_documents_answer_head_as_a_static_host_does(client: TestClient
         assert int(response.headers["content-length"]) > 0
 
 
+def test_a_raster_collection_answers_head(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The crawl past the root sends HEAD to each raster collection's `collection.json` too."""
+    monkeypatch.setattr(
+        stac_services,
+        "build_collection",
+        lambda dataset_id, request: {"type": "Collection", "id": dataset_id, "links": []},
+    )
+
+    response = client.head("/stac/chirps3_precipitation_daily/collection.json")
+
+    assert response.status_code == 200
+    assert int(response.headers["content-length"]) > 0
+
+
 def test_stac_catalog_lists_child_collections(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         stac_services,

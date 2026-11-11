@@ -451,6 +451,14 @@ def test_the_agents_query_quotes_column_names_and_names_the_stored_crs(
     assert "in EPSG:3857 coordinates" in agents and "longitude and latitude" not in agents
 
 
+def test_a_feature_collections_documents_answer_head(client: TestClient, districts: ArtifactRecord) -> None:
+    """A link checker (Portolan's `rashid check`) sends HEAD to each collection's documents."""
+    for name in ("collection.json", "README.md", "AGENTS.md"):
+        response = client.head(f"/stac/districts/{name}")
+        assert response.status_code == 200, name
+        assert int(response.headers["content-length"]) > 0
+
+
 def test_a_raster_or_unknown_collection_has_no_readme(client: TestClient) -> None:
     for name in ("README.md", "AGENTS.md"):
         response = client.get(f"/stac/nothing_here/{name}")

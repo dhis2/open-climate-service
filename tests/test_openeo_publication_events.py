@@ -975,6 +975,13 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
         f"http://testserver/stac/{source}/collection.json",
         "http://testserver/stac/districts/collection.json",
     ]
+    # The openEO copy links the same inputs at their openEO collections, so following
+    # provenance from openEO stays in openEO.
+    openeo_collection = client.get(f"/collections/{_DATASET}").json()
+    assert [link["href"] for link in openeo_collection["links"] if link["rel"] == "derived_from"] == [
+        f"http://testserver/collections/{source}",
+        "http://testserver/collections/districts",
+    ]
     schema = json.loads((Path(__file__).parent / "data" / "stac_processing_v1.2.0.json").read_text())
     jsonschema.validate(collection, schema)
     [processor] = [provider for provider in collection["providers"] if "processor" in provider["roles"]]
