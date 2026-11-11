@@ -62,6 +62,7 @@ class TableExportPlugin(BaseExportPlugin):
     supports_delivery = True
     supports_dry_run = True
     period_from_result = True
+    drops_incomplete_periods = False
     # Rows carry the `written_at` they were rendered at, so a payload sent again repeats the same
     # rows: current values are unchanged, and history lists them once.
     redelivery_safe = True

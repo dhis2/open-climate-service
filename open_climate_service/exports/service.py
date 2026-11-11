@@ -237,14 +237,23 @@ def with_result_period(data: Any, resolved: ResolvedExport) -> ResolvedExport:
     A table export compiled from a daily source may receive a monthly result, so its period is
     known only once the result is; the temporal and completeness checks then hold it to that.
     For checking and rendering only: the declared export, which a delivery compares, is unchanged.
+    A result carrying no cadence is read from its axis spacing, as `check_data_cadence` does. A
+    single period has no spacing, and is refused rather than stored without a period type.
     """
-    from open_climate_service.shared.time import cadence_of
+    from open_climate_service.shared.time import cadence_of, infer_cadence
 
     if not resolved.plugin.period_from_result or resolved.mapping.get("period_type") is not None:
         return resolved
     cadence = cadence_of(data)
     if cadence is None:
-        return resolved
+        values = _period_values(data, resolved.mapping.get("period_field", "t"))
+        cadence = infer_cadence(values) if values is not None else None
+    if cadence is None:
+        raise ValueError(
+            f"Export '{resolved.export_id}' cannot tell the period of its result: it carries no cadence "
+            "and has fewer than two periods to read one from. Aggregate it with aggregate_temporal_period, "
+            "or declare period_type on the export"
+        )
     return replace(resolved, mapping={**resolved.mapping, "period_type": cadence})
 
 
@@ -340,10 +349,11 @@ def _check_temporal_declaration(resolved: ResolvedExport, provenance: dict[str, 
         )
     incomplete = _incomplete_at_destination(observed, str(destination))
     if incomplete and resolved.mapping.get("incomplete_periods", "reject") != "drop":
+        drop = ", or declare incomplete_periods: drop on the export" if resolved.plugin.drops_incomplete_periods else ""
         raise ValueError(
             f"Export '{resolved.export_id}' would emit {destination} periods the source does not fully "
-            f"cover: {', '.join(incomplete)}. Sync through the end of the period, narrow the temporal "
-            "extent, or declare incomplete_periods: drop on the export"
+            f"cover: {', '.join(incomplete)}. Sync through the end of the period or narrow the temporal "
+            f"extent to complete periods{drop}"
         )
 
 

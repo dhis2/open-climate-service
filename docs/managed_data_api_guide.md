@@ -595,7 +595,9 @@ names.
 A table dataset has one period type, or none, set by its first write. Rows with another period type are refused, and each stored
 Parquet file carries it in its metadata as `ocs:period_type`, for readers of the files themselves. A
 row dated other than on its period's first day, such as a month labelled by its last day the way
-`aggregate_temporal_period` labels it, is stored at its period's start.
+`aggregate_temporal_period` labels it, is stored at its period's start. It has one unit too, the
+first one written: rows in another unit are refused. `publish` applies to its first write; a later
+write keeps the dataset published or not.
 
 Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
 the latest row for each feature, period, class, reducer and weights. Add `history=true` for every
@@ -619,7 +621,9 @@ delivery: { policy: on_update }
 ```
 
 The rows take the period type of the workflow's result, so a workflow that aggregates daily data
-to months writes a monthly dataset, and a month the source does not fully cover is refused. They
+to months writes a monthly dataset, and a month the source does not fully cover is refused: narrow
+the temporal extent to complete periods. A result that carries no period type is read from the
+spacing of its time axis, and a single period without one is refused. They
 take the source dataset's units, the feature names of the collection, and the `reducer` the
 aggregation used. A per-class result, from `aggregate_spatial_classes`, gives one row per class,
 with the class code in `class`. A dry run shows the first rows and checks them against the store

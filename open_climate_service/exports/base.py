@@ -169,6 +169,9 @@ class BaseExportPlugin(ABC):
     # True when the plugin takes its period from the result's cadence rather than declaring one.
     # The export's temporal checks then run against that cadence.
     period_from_result: bool = False
+    # False when the mapping refuses ``incomplete_periods: drop``, so a partial period can only be
+    # refused, and the error does not suggest dropping it.
+    drops_incomplete_periods: bool = True
 
     # --- delivery target hooks (delivery plugins) -----------------------------------------
 

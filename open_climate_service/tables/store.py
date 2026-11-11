@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import math
 import os
-import threading
 from collections.abc import Iterable, Mapping
+from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,7 @@ from open_climate_service.ingestions.schemas import (
     CoverageSpatial,
     CoverageTemporal,
 )
+from open_climate_service.shared.persistence import index_lock
 from open_climate_service.shared.urls import is_segment_safe_id
 
 SCHEMA = pa.schema(
@@ -90,14 +91,16 @@ whether `period_start` starts a day, a month or a year."""
 _WRITABLE = frozenset(SCHEMA.names) - {"written_at"}
 _REQUIRED = ("feature_id", "period_start", "value")
 
-_dataset_locks: dict[str, threading.Lock] = {}
-_dataset_locks_mutex = threading.Lock()
 
+def _dataset_lock(dataset_id: str) -> AbstractContextManager[None]:
+    """Serialize writes to one dataset across processes, so no write's record drops another's file.
 
-def _dataset_lock(dataset_id: str) -> threading.Lock:
-    """Serialize writes to one dataset, so its record always describes the files that are there."""
-    with _dataset_locks_mutex:
-        return _dataset_locks.setdefault(dataset_id, threading.Lock())
+    The lock file sits beside the records index, so a refused write leaves the table store as it was.
+    """
+    from open_climate_service.ingestions import services as ingestion_services
+
+    _require_id(dataset_id, "table dataset")
+    return index_lock(Path(ingestion_services.ARTIFACTS_DIR) / "locks" / f"table-{dataset_id}")
 
 
 def write_rows(
@@ -115,13 +118,13 @@ def write_rows(
 
     Raises ValueError before anything is written when any row is refused. *provenance* is how
     the rows were produced, for computed rows; the record keeps the latest write's. *publish*
-    applies to a new dataset; a later write replaces the dataset's record and keeps its publication.
+    applies to a new dataset only: a later write keeps the dataset's publication, whatever it is.
     """
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
 
     from open_climate_service.ingestions import services as ingestion_services
 
-    # Checked under the lock, so two first writes cannot give one dataset two period types.
+    # Checked under the lock, so two first writes cannot give one dataset two period types or units.
     with _dataset_lock(dataset_id):
         table = check_rows(
             dataset_id=dataset_id, collection_id=collection_id, rows=rows, period_type=period_type, written_at=stamp
@@ -131,7 +134,7 @@ def write_rows(
             existing = _existing_record(dataset_id)
             period_type = period_type or (existing.period_type if existing else None)
             files = [*(existing.asset_paths if existing else []), str(written)]
-            units = set(table.column("unit").drop_null().to_pylist())
+            units = table.column("unit").drop_null().unique().to_pylist()
             record = ArtifactRecord(
                 artifact_id=str(uuid4()),
                 dataset_id=dataset_id,
@@ -140,14 +143,14 @@ def write_rows(
                 format=ArtifactFormat.PARQUET,
                 path=str(_dataset_root(dataset_id)),
                 asset_paths=files,
-                units=units.pop() if len(units) == 1 else (existing.units if existing else None),
+                units=units[0] if units else (existing.units if existing else None),
                 size_bytes=sum(Path(file).stat().st_size for file in files),
                 request_scope=ArtifactRequestScope(),
                 coverage=_coverage(files, period_type),
                 created_at=datetime.now(UTC),
                 provenance=provenance or (existing.provenance if existing else None),
             )
-            return ingestion_services.register_artifact_record(record, publish=publish)
+            return ingestion_services.register_artifact_record(record, publish=publish and existing is None)
         except BaseException:
             # No record names the file, so no reader sees it; remove it rather than leave it.
             written.unlink(missing_ok=True)
@@ -175,11 +178,14 @@ def check_rows(
     A dataset has one period type, the first one written. A *period_type* that differs from it is
     refused; None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`), and each
     `period_start` is stored as the first day of the period that contains it (`start_of_period`).
+    It has one unit too, the first one written: rows in another unit are refused.
     """
     _require_id(dataset_id, "table dataset")
     _require_id(collection_id, "feature collection")
     require_table_id(dataset_id)
     period_type = _dataset_period_type(dataset_id, period_type)
+    existing = _existing_record(dataset_id)
+    unit = existing.units if existing else None
     feature_ids = _collection_feature_ids(collection_id)
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
     columns: dict[str, list[Any]] = {name: [] for name in SCHEMA.names}
@@ -191,6 +197,12 @@ def check_rows(
                 f"row {index}: feature '{clean['feature_id']}' is not in feature collection '{collection_id}'"
             )
         clean["period_start"] = start_of_period(clean["period_start"], period_type)
+        if clean.get("unit") is not None:
+            if unit is not None and clean["unit"] != unit:
+                raise ValueError(
+                    f"row {index}: table dataset '{dataset_id}' is in {unit}; it cannot take rows in {clean['unit']}"
+                )
+            unit = clean["unit"]
         clean["written_at"] = stamp
         key = tuple(clean.get(name) for name in KEY)
         if key in seen:

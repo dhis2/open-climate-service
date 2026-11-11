@@ -196,6 +196,41 @@ def test_a_failed_write_leaves_no_file(monkeypatch: pytest.MonkeyPatch, stores: 
     assert list((stores / "precip_districts").rglob("*")) == [stores / "precip_districts" / "districts"]
 
 
+def test_a_write_waits_for_a_write_in_another_process() -> None:
+    """Another process, a second worker or a CLI run, may be writing the same dataset."""
+    import subprocess
+    import sys
+    import threading
+
+    lock = Path(ingestion_services.ARTIFACTS_DIR) / "locks" / "table-precip_districts.lock"
+    lock.parent.mkdir(parents=True)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import portalocker, sys\n"
+            "handle = open(sys.argv[1], 'a')\n"
+            "portalocker.lock(handle, portalocker.LOCK_EX)\n"
+            "print('locked', flush=True)\n"
+            "sys.stdin.read()",
+            str(lock),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout is not None and holder.stdin is not None
+    assert holder.stdout.readline().strip() == "locked"
+    writer = threading.Thread(target=_write, args=([_row("D1", 1.0)],))
+    writer.start()
+    writer.join(timeout=0.5)
+    assert writer.is_alive()
+    holder.stdin.close()
+    holder.wait(timeout=10)
+    writer.join(timeout=10)
+    assert len(store.read_rows(ingestion_services.published_table_artifacts_by_dataset()["precip_districts"])) == 1
+
+
 @pytest.mark.parametrize(
     ("row", "message"),
     [
@@ -436,6 +471,23 @@ def test_an_untyped_dataset_takes_no_typed_rows(stores: Path) -> None:
             attempt(dataset_id="precip_districts", collection_id="districts", rows=january, period_type="monthly")
 
 
+def test_a_dataset_keeps_one_unit() -> None:
+    _write([_row("D1", 1.0, unit="mm")])
+    for rows in ([_row("D2", 0.002, unit="m")], [_row("D1", 1.0), _row("D2", 2.0, unit="m")]):
+        for attempt in (store.write_rows, store.check_rows):
+            with pytest.raises(ValueError, match="'precip_districts' is in mm; it cannot take rows in m"):
+                attempt(dataset_id="precip_districts", collection_id="districts", rows=rows)
+    # Rows that name no unit are in the dataset's.
+    record = _write([_row("D2", 2.0)], written_at=LATER)
+    assert record.units == "mm"
+
+
+def test_a_later_write_keeps_an_unpublished_dataset_unpublished(client: TestClient) -> None:
+    store.write_rows(dataset_id="draft", collection_id="districts", rows=[_row("D1", 1.0)], publish=False)
+    store.write_rows(dataset_id="draft", collection_id="districts", rows=[_row("D2", 2.0)])
+    assert client.get("/tables/draft/rows").status_code == 404
+
+
 def test_a_destination_payload_for_another_period_type_is_rejected(stores: Path) -> None:
     from open_climate_service.exports.table import plugin
 
@@ -562,8 +614,24 @@ def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkey
 
 def test_a_month_the_source_does_not_fully_cover_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """The result's cadence is the export's period, so the completeness check holds it to whole months."""
-    with pytest.raises(ValueError, match="does not fully cover: 202602"):
+    with pytest.raises(ValueError, match="does not fully cover: 202602") as refused:
         _render_daily_as_months(monkeypatch, "2026-02-20")
+    # A table refuses incomplete_periods, so the error does not suggest it.
+    assert "incomplete_periods" not in str(refused.value)
+
+
+def test_a_result_without_a_cadence_takes_the_period_of_its_axis() -> None:
+    import numpy as np
+
+    from open_climate_service.exports.service import render_resolved_export, resolve_export_definition
+
+    resolved = resolve_export_definition({"id": "p", "plugin": "table", **_MAPPING})
+    months = _cube([1.0, 2.0]).isel(t=[0, 0]).assign_coords(t=np.array(["2026-01-01", "2026-02-01"], "datetime64[ns]"))
+    assert render_resolved_export(months, resolved).periods == ("2026-01", "2026-02")
+
+    # One period has no spacing to read: refused, rather than a dataset with no period type.
+    with pytest.raises(ValueError, match="cannot tell the period of its result"):
+        render_resolved_export(_cube([1.0, 2.0]), resolved)
 
 
 @pytest.mark.parametrize(
