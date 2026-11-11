@@ -92,8 +92,11 @@ def _one_step_per_chunk(ds: xr.Dataset, x_dim: str, y_dim: str) -> xr.Dataset:
     map client drawing one day read all of them. Ingested stores hold one step per chunk, and
     the Portolan Zarr profile asks the same of every non-spatial dimension (CLIM-1861).
 
-    Spatial chunks are kept. The stored encoding chunks of a rechunked variable are dropped, so
-    the write follows the new dask chunks rather than refusing a layout they no longer match.
+    Spatial chunks are kept. A source's stored layout is dropped where it no longer applies, also
+    when the dask chunks are one step already: stored chunks spanning several steps, which the
+    write would refuse to fill from one-step dask chunks, and shards, which a flat store does not
+    have. Inherited shards are worse than refused: the parallel one-step writes into one shard
+    lose steps without an error.
     """
     targets: dict[Any, int] = {}
     for var in ds.data_vars.values():
@@ -101,14 +104,14 @@ def _one_step_per_chunk(ds: xr.Dataset, x_dim: str, y_dim: str) -> xr.Dataset:
         for dim, dim_chunks in zip(var.dims, chunks, strict=False):
             if dim not in (x_dim, y_dim) and max(dim_chunks, default=1) > 1:
                 targets[dim] = 1
-    if not targets:
-        return ds
     ds = ds.copy()
     for var in ds.data_vars.values():
-        if any(dim in targets for dim in var.dims):
+        var.encoding.pop("shards", None)
+        stored = var.encoding.get("chunks") or ()
+        if any(size > 1 for dim, size in zip(var.dims, stored, strict=False) if dim not in (x_dim, y_dim)):
             for key in ("chunks", "preferred_chunks"):
                 var.encoding.pop(key, None)
-    return ds.chunk(targets)
+    return ds.chunk(targets) if targets else ds
 
 
 def _needs_pyramid(ds: xr.Dataset, x_dim: str, y_dim: str) -> bool:

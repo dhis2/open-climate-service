@@ -558,8 +558,52 @@ def test_one_step_per_chunk_rechunks_an_in_memory_cube_and_leaves_space() -> Non
     assert out["normal"].chunks == ((1, 1, 1), (6,), (6,))
     assert "chunks" not in out["v"].encoding
     assert ds["v"].encoding["chunks"] == (4, 6, 6), "the caller's dataset is left alone"
-    already = ds.chunk({"t": 1, "dayofyear": 1})
-    assert downloader._one_step_per_chunk(already, "x", "y") is already
+
+
+def _republished(source: xr.Dataset, tmp_path: Path) -> tuple[zarr.Array, xr.Dataset]:
+    store = tmp_path / "republished.icechunk"
+    downloader.write_to_icechunk_store(source.assign_attrs({"proj:code": "EPSG:4326"}), store, commit_message="test")
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store)))
+    array = zarr.open_group(repo.readonly_session("main").store, mode="r")["v"]
+    assert isinstance(array, zarr.Array)
+    return array, open_icechunk_dataset(store)
+
+
+def _steps(count: int) -> xr.Dataset:
+    values = np.arange(count * 8 * 8, dtype="float32").reshape(count, 8, 8)
+    return xr.Dataset(
+        {"v": (("t", "y", "x"), values)},
+        coords={"t": pd.date_range("2020-01-01", periods=count), "y": np.arange(8.0)[::-1], "x": np.arange(8.0)},
+    )
+
+
+def test_a_one_step_cube_with_larger_stored_chunks_is_written_one_step_per_chunk(tmp_path: Path) -> None:
+    """Dask chunks one step already, stored chunks four steps: the write used to refuse the overlap."""
+    source = _steps(4).chunk({"t": 1})
+    source["v"].encoding["chunks"] = (4, 8, 8)
+
+    array, out = _republished(source, tmp_path)
+    try:
+        assert array.chunks == (1, 8, 8)
+        np.testing.assert_array_equal(out["v"].sel(y=source.y).values, source["v"].values)
+    finally:
+        out.close()
+
+
+def test_a_sharded_source_is_republished_unsharded_with_every_step(tmp_path: Path) -> None:
+    """Its shards span 32 steps: kept, the parallel one-step writes into one shard lost most steps."""
+    expected = _steps(64)
+    expected.to_zarr(
+        tmp_path / "sharded.zarr", zarr_format=3, encoding={"v": {"chunks": (1, 8, 8), "shards": (32, 8, 8)}}
+    )
+    source = xr.open_zarr(tmp_path / "sharded.zarr")
+
+    array, out = _republished(source, tmp_path)
+    try:
+        assert array.chunks == (1, 8, 8) and array.shards is None
+        np.testing.assert_array_equal(out["v"].sel(y=expected.y).values, expected["v"].values)
+    finally:
+        out.close()
 
 
 def test_uniform_chunks_leaves_a_legal_trailing_remainder_alone() -> None:
