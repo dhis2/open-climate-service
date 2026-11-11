@@ -19,7 +19,6 @@ from open_climate_service.exports import routes as exports_routes
 from open_climate_service.extents import routes as extent_routes
 from open_climate_service.features import routes as feature_routes
 from open_climate_service.ingestions import routes as ingestion_routes
-from open_climate_service.jobs.models import JobEvent
 from open_climate_service.jobs.service import get_job_service
 from open_climate_service.openeo import routes as openeo_routes
 from open_climate_service.openeo.jobs import get_openeo_job_service
@@ -105,6 +104,18 @@ async def _recover_pipeline_runs_periodically() -> None:
             logger.exception("Pipeline run recovery failed; retrying at the next interval")
 
 
+async def _refresh_derived_datasets_periodically() -> None:
+    """Refresh derived datasets whose input updated while no process could, for as long as the app runs."""
+    from open_climate_service.derivations.service import reconcile
+
+    while True:
+        await asyncio.sleep(_MAINTENANCE_INTERVAL_S)
+        try:
+            await asyncio.to_thread(reconcile)
+        except Exception:
+            logger.exception("Derived dataset reconciliation failed; retrying at the next interval")
+
+
 async def _warm_process_registry() -> None:
     """Load the openEO process implementations in a worker thread, once, at startup.
 
@@ -136,8 +147,13 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     from open_climate_service.exports.service import validate_configured_exports
 
     validate_configured_exports()
+    from open_climate_service.derivations import service as derivations
+
+    # After plugins load, so a recipe is checked against the workflows it will run.
+    derivations.validate_recipes()
     maintenance: asyncio.Task[None] | None = None
     pipeline_recovery: asyncio.Task[None] | None = None
+    derived_refresh: asyncio.Task[None] | None = None
     if not api_config.is_read_only():
         # Before any job is recovered, so no pyramid rebuild can be in progress. A read-only
         # instance may share its data directory with a writing one, so it leaves them alone.
@@ -156,28 +172,19 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             logger.exception("Could not run pending store collections; continuing startup")
         maintenance = asyncio.create_task(_collect_pending_garbage_periodically())
         pipeline_recovery = asyncio.create_task(_recover_pipeline_runs_periodically())
+        derived_refresh = asyncio.create_task(_refresh_derived_datasets_periodically())
     job_service = get_job_service()
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()
     automation_service = get_workflow_automation_service()
     automation_service.start()
+    from open_climate_service.jobs import dispatch
     from open_climate_service.pipelines import runner as pipeline_runner
 
-    def _consume(events: list[JobEvent]) -> None:
-        try:
-            automation_service.consume(events)
-        except Exception:
-            logger.exception("Workflow automation dispatch for dataset updates failed")
-        # Pipelines run through their own runner, after triggers, on the same durable events.
-        try:
-            pipeline_runner.consume(events)
-        except Exception:
-            logger.exception("Pipeline dispatch for dataset updates failed")
-
-    job_service.set_event_consumer(_consume)
+    job_service.set_event_consumer(dispatch.consume)
     # An openEO job that publishes a managed dataset owns its update event; it reaches the
     # same consumers when the job finishes, and startup replay reads it from the job store.
-    openeo_service.set_event_consumer(_consume)
+    openeo_service.set_event_consumer(dispatch.consume)
     # Registered before openEO jobs are recovered: a re-enqueued triggered job records the
     # delivery it owes as it finishes, which it cannot do before these are in place. A job
     # finishing during reconciliation is caught by one or the other; the deterministic
@@ -188,6 +195,7 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     def _job_finished(record: OpenEOJobRecord) -> None:
         automation_service.on_job_finished(record)
         pipeline_runner.on_job_finished(record)
+        derivations.on_job_finished(record)
 
     openeo_service.set_finished_listener(_job_finished)
     openeo_service.recover_pending_jobs()
@@ -204,6 +212,10 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         pipeline_runner.reconcile()
     except Exception:
         logger.exception("Pipeline run reconciliation failed; continuing startup")
+    try:
+        derivations.reconcile()
+    except Exception:
+        logger.exception("Derived dataset reconciliation failed; continuing startup")
     try:
         automation_service.replay()
     except Exception:
@@ -225,6 +237,8 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
             maintenance.cancel()
         if pipeline_recovery is not None:
             pipeline_recovery.cancel()
+        if derived_refresh is not None:
+            derived_refresh.cancel()
         job_service.set_event_consumer(None)
         openeo_service.set_event_consumer(None)
         # The listener goes first: a delivery a job records from here on is reconciled at the
