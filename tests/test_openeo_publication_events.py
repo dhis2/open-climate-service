@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
@@ -989,13 +990,21 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     [processor] = [provider for provider in collection["providers"] if "processor" in provider["roles"]]
     assert processor["processing:software"] == {"open-climate-service": __version__}
     # As a static catalog's checker (Portolan's rashid) reads it: this instance is the one host,
-    # last; every link on this host answers HEAD; and `proj:code` is declared at v2.0.0.
+    # last; every link on this host, the relative README and AGENTS among them, answers HEAD;
+    # `proj:code` is declared at v2.0.0; and the Portolan profile is declared.
     assert [provider["roles"] for provider in collection["providers"]][-2:] == [["processor"], ["host"]]
+    collection_url = f"http://testserver/stac/{_DATASET}/collection.json"
     for link in collection["links"]:
-        if link["href"].startswith("http://testserver/"):
-            assert client.head(link["href"]).status_code == 200, link
+        href = urljoin(collection_url, link["href"])
+        if href.startswith("http://testserver/"):
+            assert client.head(href).status_code == 200, link
     assert "https://stac-extensions.github.io/projection/v2.0.0/schema.json" in collection["stac_extensions"]
     assert not any("projection/v1" in extension for extension in collection["stac_extensions"])
+    assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in collection["stac_extensions"]
+    readme = client.get(f"/stac/{_DATASET}/README.md").text
+    assert "(processor)" in readme and "(host)" in readme
+    agents = client.get(f"/stac/{_DATASET}/AGENTS.md").text
+    assert f'xr.open_zarr("http://testserver/zarr/{_DATASET}"' in agents
     assert client.get(f"/datasets/{source}").json()["provenance"] is None
 
     plugin.available.append("2026-01-03")

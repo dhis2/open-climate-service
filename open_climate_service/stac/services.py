@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import logging
 from copy import deepcopy
@@ -56,6 +58,27 @@ def collection_path(dataset_id: str) -> str:
     return f"/stac/{path_segment(dataset_id)}/collection.json"
 
 
+def file_fields(path: Path) -> dict[str, object]:
+    """`file:size` and `file:checksum` of a single file an asset serves, as the file extension defines them.
+
+    Only for a file: a Zarr or Icechunk store is a directory of chunks, with neither one size nor
+    one checksum. The checksum is a sha256 multihash (`1220` and the hex digest), computed once
+    for each version of the file, as its size and modification time identify it.
+    """
+    stat = path.stat()
+    return {"file:size": stat.st_size, "file:checksum": _sha256_multihash(str(path), stat.st_mtime_ns, stat.st_size)}
+
+
+@functools.lru_cache(maxsize=256)
+def _sha256_multihash(path: str, mtime_ns: int, size: int) -> str:
+    """The sha256 multihash of the file; `mtime_ns` and `size` are the cache key, not inputs."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return "1220" + digest.hexdigest()
+
+
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
 # v2.0.0, whose `proj:code` is the field written here; v1.1.0 named it `proj:epsg`.
@@ -64,6 +87,9 @@ RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
 WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
+FILE_EXTENSION = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
+# The versioned profile URI is Portolan's only conformance signal; it defines no fields of its own.
+PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
@@ -154,6 +180,7 @@ def build_catalog(request: Request) -> dict[str, object]:
         )
     return {
         "stac_version": STAC_VERSION,
+        "stac_extensions": [PORTOLAN_SCHEMA],
         "type": "Catalog",
         "id": _get_catalog_id(),
         # The instance's own name, as in the web interface; "Open Climate Service" when unset.
@@ -228,7 +255,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     collection_payload["description"] = template.description
     collection_payload["title"] = template.title
     collection_payload["renders"] = _build_renders(artifact, source_dataset)
-    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION, RENDER_EXTENSION}
+    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION, RENDER_EXTENSION, PORTOLAN_SCHEMA}
     existing_extensions = collection_payload.get("stac_extensions", [])
     if isinstance(existing_extensions, list):
         collection_payload["stac_extensions"] = sorted({*existing_extensions, *extensions})
@@ -256,6 +283,8 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
                 "title": input_id,
             }
         )
+    # Relative, as for the catalog and feature collections, so they resolve beside the document.
+    template_links.extend(_document_links())
     collection_payload["links"] = template_links
     assets = collection_payload.setdefault("assets", {})
     zarr_from_xstac = assets.get("zarr", {}) if isinstance(assets, dict) else {}
@@ -285,7 +314,9 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             "type": "image/png",
             "title": "Thumbnail",
             "roles": ["thumbnail"],
+            **file_fields(thumbnail_path(dataset_id)),
         }
+        collection_payload["stac_extensions"] = sorted({*collection_payload["stac_extensions"], FILE_EXTENSION})
     if artifact.format == ArtifactFormat.ICECHUNK:
         collection_payload["assets"]["icechunk"] = {
             "href": absolute_url(request, f"/icechunk/{path_segment(dataset_id)}"),
@@ -375,7 +406,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     # The CRS the geometry is actually stored in, which for a reprojected collection is not
     # WGS 84 even though the extent above is — `spatial_wgs84` exists for exactly that split.
     collection.extra_fields["proj:code"] = detail.crs
-    collection.stac_extensions.append(PROJECTION_EXTENSION)
+    collection.stac_extensions.extend([PROJECTION_EXTENSION, FILE_EXTENSION, PORTOLAN_SCHEMA])
 
     # When the collection was last refreshed, which for a mirror of an upstream source is when
     # it was last synced from it.
@@ -390,6 +421,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
         source_dataset=source_dataset,
         version=artifact.version.value if artifact.version is not None else None,
     )
+    data_path = Path(str(artifact.path)) if artifact.path else None
     collection.add_asset(
         "data",
         pystac.Asset(
@@ -397,11 +429,12 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             media_type=PARQUET_MEDIA_TYPE,
             title="GeoParquet collection",
             roles=["data"],
+            extra_fields=file_fields(data_path) if data_path is not None and data_path.is_file() else None,
         ),
     )
     # Vector tiles for display, when the refresh built them, and the style the viewer draws them
     # with. The `pmtiles` link is how web-map-links clients find the archive and its layer.
-    if artifact.path and tiles.archive_path(Path(str(artifact.path))).is_file():
+    if data_path is not None and tiles.archive_path(data_path).is_file():
         tiles_href = absolute_url(request, f"/features/{path_segment(dataset_id)}/data.pmtiles")
         collection.add_asset(
             "tiles",
@@ -410,6 +443,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 media_type=tiles.PMTILES_MEDIA_TYPE,
                 title="Vector tiles (PMTiles)",
                 roles=["visual"],
+                extra_fields=file_fields(tiles.archive_path(data_path)),
             ),
         )
         collection.add_asset(
@@ -441,6 +475,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 media_type="image/png",
                 title="Thumbnail",
                 roles=["thumbnail"],
+                extra_fields=file_fields(thumbnail_path(dataset_id)),
             ),
         )
 
@@ -566,15 +601,18 @@ def _add_feature_collection_links(
             collection.add_link(
                 pystac.Link(rel="canonical", target=href, media_type="application/json", title="Source STAC collection")
             )
-    for rel, name, title in (("describedby", "README.md", "README"), ("agents", "AGENTS.md", "Guide for agents")):
+    for link in _document_links():
         collection.add_link(
-            pystac.Link(
-                rel=rel,
-                target=f"./{name}",
-                media_type=MARKDOWN_MEDIA_TYPE,
-                title=title,
-            )
+            pystac.Link(rel=link["rel"], target=link["href"], media_type=link["type"], title=link["title"])
         )
+
+
+def _document_links() -> list[dict[str, str]]:
+    """A collection's `README.md` and `AGENTS.md`, relative so they resolve beside its document."""
+    return [
+        {"rel": rel, "href": f"./{name}", "type": MARKDOWN_MEDIA_TYPE, "title": title}
+        for rel, name, title in (("describedby", "README.md", "README"), ("agents", "AGENTS.md", "Guide for agents"))
+    ]
 
 
 def _feature_collection_description(dataset_id: str, artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> str:

@@ -1,4 +1,4 @@
-"""README.md and AGENTS.md for the STAC catalog and each feature collection.
+"""README.md and AGENTS.md for the STAC catalog and each collection, raster or feature.
 
 Linked from the STAC documents as `describedby` and `agents`, so a person or an agent can find
 out what the data is and how to read it without knowing the API. Generated from the records and
@@ -11,12 +11,14 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.features import store
 from open_climate_service.features import templates as feature_templates
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
 from open_climate_service.shared.licences import parse_licence
 from open_climate_service.shared.urls import absolute_url, path_segment
 from open_climate_service.stac import services
+from open_climate_service.stac.media_types import data_group_open_kwargs
 
 
 def catalog_readme(request: Request) -> str:
@@ -61,28 +63,27 @@ def catalog_agents(request: Request) -> str:
 
 
 def collection_readme(dataset_id: str, request: Request) -> str:
-    """Title, description, licence and provenance of one feature collection."""
-    artifact, template = _feature_collection(dataset_id)
+    """Title, description, licence, provenance and shape of one collection."""
+    artifact, template = _published_collection(dataset_id)
+    raster = artifact.format != ArtifactFormat.GEOPARQUET
     licence = parse_licence(template.get("license"))
     licence_text = licence.name or licence.identifier or licence.stac_license
     if licence.url:
         licence_text = f"[{licence_text}]({licence.url})"
-    lines = [
-        f"# {artifact.dataset_name}",
-        "",
-        services._feature_collection_description(dataset_id, artifact, template),
-        "",
-        "## Licence",
-        "",
-        licence_text,
-    ]
+    description = (
+        services._collection_description(dataset_id, artifact, template)
+        if raster
+        else services._feature_collection_description(dataset_id, artifact, template)
+    )
+    lines = [f"# {artifact.dataset_name}", "", description, "", "## Licence", "", licence_text]
     attribution = template.get("attribution")
     if isinstance(attribution, str) and attribution.strip():
         lines += ["", f"Attribution: {attribution.strip()}"]
     lines += ["", "## Provenance", ""]
-    # The providers the STAC document publishes, this instance last as the one host, so the two
-    # documents agree.
-    for provider in services._published_providers(template, request):
+    # The providers the STAC document publishes, a workflow's processor before this instance as
+    # the one host, so the two documents agree.
+    processors = [services._processor_provider(artifact, request)] if artifact.provenance is not None else []
+    for provider in services._published_providers(template, request, processors):
         name = f"[{provider['name']}]({provider['url']})" if provider.get("url") else provider["name"]
         roles = f" ({', '.join(provider['roles'])})" if provider.get("roles") else ""
         lines.append(f"- {name}{roles}")
@@ -92,13 +93,20 @@ def collection_readme(dataset_id: str, request: Request) -> str:
     if artifact.version is not None:
         lines.append(f"- Version: {artifact.version.value} ({artifact.version.authority})")
     lines.append(f"- Last refreshed: {artifact.created_at.isoformat()}")
-    detail = artifact.features
-    if detail is not None:
+    lines += ["", "## Data", ""]
+    if raster:
+        units = template.get("units")
+        unit_text = f" in {units}" if isinstance(units, str) and units.strip() else ""
+        temporal = artifact.coverage.temporal
+        lines.append(f"- Variable `{artifact.variable}`{unit_text}.")
+        if temporal.start and temporal.end:
+            period = f"{artifact.period_type.capitalize()} data" if artifact.period_type else "Data"
+            lines.append(f"- {period} from {temporal.start} to {temporal.end}.")
+        lines.append("- A Zarr v3 store with GeoZarr metadata; its `AGENTS.md` link says how to open it.")
+    elif artifact.features is not None:
+        detail = artifact.features
         types = ", ".join(store.stored_geometry_types(artifact)) or "unknown"
         lines += [
-            "",
-            "## Data",
-            "",
             f"- {detail.feature_count} features, geometry types: {types}.",
             f"- Identifier property: `{detail.id_property}`.",
             f"- Stored in {detail.crs}.",
@@ -107,8 +115,49 @@ def collection_readme(dataset_id: str, request: Request) -> str:
 
 
 def collection_agents(dataset_id: str, request: Request) -> str:
+    """How an agent reads one collection's data."""
+    artifact, _template = _published_collection(dataset_id)
+    if artifact.format != ArtifactFormat.GEOPARQUET:
+        return _raster_agents(dataset_id, artifact, request)
+    return _feature_agents(dataset_id, artifact, request)
+
+
+def _raster_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -> str:
+    """How an agent reads one raster collection: the store, how to open it, the variable."""
+    store_href = absolute_url(request, f"/zarr/{path_segment(dataset_id)}")
+    # The same arguments the STAC `zarr` asset carries as `xarray:open_kwargs`.
+    open_kwargs = {
+        **services._zarr_open_kwargs(artifact),
+        **data_group_open_kwargs(services._zarr_media_type(artifact)),
+    }
+    arguments = "".join(f", {name}={value!r}" for name, value in open_kwargs.items() if value is not None)
+    return "\n".join(
+        [
+            f"# Reading {artifact.dataset_name}",
+            "",
+            f"The data is a Zarr v3 store with GeoZarr metadata: {store_href}",
+            "",
+            f"- The values are in the variable `{artifact.variable}`, over time, latitude and longitude "
+            "or the store's own projected axes; the store's `spatial:` and `proj:` attributes give the grid.",
+            "- Any Zarr v3 reader can open it, over HTTP, reading only the chunks it needs.",
+            "",
+            "With xarray:",
+            "",
+            "```python",
+            "import xarray as xr",
+            f'ds = xr.open_zarr("{store_href}"{arguments})',
+            f'values = ds["{artifact.variable}"]',
+            "```",
+            "",
+            f"The licence, providers and extent are in the STAC collection: "
+            f"{absolute_url(request, services.collection_path(dataset_id))}",
+            "",
+        ]
+    )
+
+
+def _feature_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -> str:
     """How an agent reads one feature collection: the file, its id column, a windowed query."""
-    artifact, _template = _feature_collection(dataset_id)
     detail = artifact.features
     id_property = detail.id_property if detail is not None else "id"
     geometry = detail.primary_geometry if detail is not None else "geometry"
@@ -144,12 +193,14 @@ def collection_agents(dataset_id: str, request: Request) -> str:
     )
 
 
-def _feature_collection(dataset_id: str) -> tuple[ArtifactRecord, dict[str, Any]]:
-    """The published feature collection's record and template, or 404 as the STAC route does."""
+def _published_collection(dataset_id: str) -> tuple[ArtifactRecord, dict[str, Any]]:
+    """The published collection's record and template, or 404 as the STAC route does."""
     artifact = services._eligible_artifacts_by_dataset().get(dataset_id)
-    if artifact is None or artifact.format != ArtifactFormat.GEOPARQUET:
-        raise HTTPException(status_code=404, detail=f"No published feature collection '{dataset_id}'")
-    return artifact, feature_templates.get_feature_template(artifact.dataset_id) or {}
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"No published collection '{dataset_id}'")
+    if artifact.format == ArtifactFormat.GEOPARQUET:
+        return artifact, feature_templates.get_feature_template(artifact.dataset_id) or {}
+    return artifact, registry_datasets.get_dataset(artifact.dataset_id) or {}
 
 
 def _sql_identifier(name: str) -> str:

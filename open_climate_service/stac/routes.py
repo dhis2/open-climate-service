@@ -2,7 +2,7 @@
 
 Laid out as a static catalog, so a client that follows links reads it as files: the root
 `catalog.json` with `README.md` and `AGENTS.md` beside it, and one directory per collection holding
-`collection.json` and, for a feature collection, its own `README.md` and `AGENTS.md`. Each
+`collection.json` with its own `README.md` and `AGENTS.md`. Each
 document has one URL, because its `describedby` and `agents` links are relative to it. Every route
 answers HEAD, as a static host does and a link checker expects.
 """
@@ -53,11 +53,11 @@ def get_catalog_agents(request: Request) -> PlainTextResponse:
 
 @router.api_route("/{dataset_id}/README.md", methods=_GET_HEAD, response_class=PlainTextResponse)
 def get_collection_readme(dataset_id: str, request: Request) -> PlainTextResponse:
-    """A feature collection's title, description, licence and provenance."""
+    """A collection's title, description, licence and provenance."""
     return _markdown(documents.collection_readme(dataset_id, request))
 
 
 @router.api_route("/{dataset_id}/AGENTS.md", methods=_GET_HEAD, response_class=PlainTextResponse)
 def get_collection_agents(dataset_id: str, request: Request) -> PlainTextResponse:
-    """How an agent reads a feature collection's data."""
+    """How an agent reads a collection's data."""
     return _markdown(documents.collection_agents(dataset_id, request))

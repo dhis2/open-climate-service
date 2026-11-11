@@ -459,11 +459,26 @@ def test_a_feature_collections_documents_answer_head(client: TestClient, distric
         assert int(response.headers["content-length"]) > 0
 
 
-def test_a_raster_or_unknown_collection_has_no_readme(client: TestClient) -> None:
+def test_an_unknown_collection_has_no_readme(client: TestClient) -> None:
     for name in ("README.md", "AGENTS.md"):
         response = client.get(f"/stac/nothing_here/{name}")
         assert response.status_code == 404
-        assert response.json()["detail"] == "No published feature collection 'nothing_here'"
+        assert response.json()["detail"] == "No published collection 'nothing_here'"
+
+
+def test_a_feature_collections_files_carry_their_size_and_checksum(
+    client: TestClient, districts: ArtifactRecord
+) -> None:
+    """`file:size` and a sha256 multihash, as a static catalog's checker verifies the bytes against."""
+    import hashlib
+
+    doc = client.get("/stac/districts/collection.json").json()
+    data = Path(str(districts.path))
+
+    assert doc["assets"]["data"]["file:size"] == data.stat().st_size
+    assert doc["assets"]["data"]["file:checksum"] == "1220" + hashlib.sha256(data.read_bytes()).hexdigest()
+    assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" in doc["stac_extensions"]
+    assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in doc["stac_extensions"]
 
 
 def test_the_catalog_guide_opens_a_raster_with_its_assets_open_kwargs(client: TestClient) -> None:
