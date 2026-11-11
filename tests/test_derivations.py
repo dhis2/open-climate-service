@@ -99,6 +99,7 @@ def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch
         "'e': set 'temporal_extent': a recipe without refresh_on runs over a fixed range",
         "'f': leave 'temporal_extent' out",
         *(f"'{output}': its updates lead back to itself" for output in ("g", "h", "i")),
+        "'f': refresh_on names 'rain', which is not a dataset template",
     ):
         assert expected in message
 
@@ -191,7 +192,12 @@ def test_a_derived_dataset_is_refreshed_once_per_latest_update_of_its_input(
     updated(1)
     assert fake.jobs == {}  # never created, so nothing to keep current
     created.add("rain_anomaly")
-    derivations.reconcile()  # at startup, the update it missed
+    log.append(_update(1, "rain_anomaly"))  # an operator ran the workflow by hand
+    derivations.consume([log[-1]])
+    derivations.reconcile()
+    assert fake.jobs == {}  # the creating run covers update 1
+    log.insert(0, log.pop())  # had it been created before update 1, at startup that update is refreshed
+    derivations.reconcile()
     [first] = fake.jobs.values()
     assert first.status == OpenEOJobStatus.QUEUED and first.trigger_id == "derive:rain_anomaly"
     assert first.process["process_graph"] == _graph("2026-01")
@@ -349,8 +355,8 @@ def test_an_input_update_refreshes_the_derived_dataset_and_its_pipeline_hears_of
         openeo.set_finished_listener(derivations.on_job_finished)
 
     def synced(number: int) -> JobEvent:
-        """The input's update, persisted with its sync job."""
-        event = _update(number)
+        """The input's update, persisted with its sync job, after the run that created the dataset."""
+        event = _update(number).model_copy(update={"time": utc_now()})
         native_store.create_job_record(
             JobRecord(
                 job_id=f"sync-{number}",

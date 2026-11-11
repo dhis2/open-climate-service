@@ -284,27 +284,27 @@ Give `produced_by` the whole recipe instead, and OCS can run it:
   coverage, filling the workflow's one temporal-interval parameter, which the recipe leaves out.
   Updates of the other datasets it reads, such as the normal above, do not refresh it.
 - Without `refresh_on` the recipe has a fixed range: set the temporal-interval parameter in
-  `arguments`, as for a normal.
+  `arguments`, as for a normal. OCS checks such a recipe at startup but never runs it; an
+  operator runs the workflow when the dataset is needed.
 
-Only a derived dataset that exists is kept current: create it once by running the workflow. A
-built-in recipe therefore does nothing on an instance that never created its dataset. Once it
-exists, its input's latest update is refreshed if no refresh ran for it yet, also an update from
-before the dataset was created, so a dataset created by hand is computed once more at the next
-reconciliation. Each refresh is an openEO batch job, listed under `GET /jobs` with the title
-`Refresh <dataset id>`. It runs the workflow as defined when it was submitted, and editing the
-recipe or the workflow makes the next reconciliation refresh the dataset again. One refresh of a dataset runs at a time: updates
-that arrive meanwhile are taken up when it finishes, as one run over the newest coverage. A
-refresh that fails is not retried by itself beyond its job's attempts; the next update of its input
-starts a new one. Updates missed while OCS was stopped are caught up at startup and every 15
-minutes.
+Only a derived dataset that exists is kept current: create it once by running the workflow over
+its input's full coverage. A built-in recipe therefore does nothing on an instance that never
+created its dataset. The run that creates it counts as current, so the first refresh comes with
+the input's next update; a dataset created before its input's latest update is refreshed at the
+next reconciliation. Each refresh is an openEO batch job, listed under `GET /jobs` with the
+title `Refresh <dataset id>`. It runs the workflow as defined when it was submitted, and editing
+the recipe or the workflow makes the next reconciliation refresh the dataset again. One refresh
+of a dataset runs at a time: updates that arrive meanwhile are taken up when it finishes, as one
+run over the newest coverage, or, when it fails, at the next reconciliation. A refresh that
+fails is not retried by itself beyond its job's attempts; the next update of its input starts a
+new one. Updates missed while OCS was stopped are caught up at startup and every 15 minutes.
 
 The recipe is checked at startup, against the registered workflows: an unknown workflow or
 argument, a missing argument, a time range set where `refresh_on` should fill it (or left open
-without `refresh_on`), a workflow that does not publish through `output_dataset_id`, and a
-chain of recipes and workflow triggers that leads back to itself each refuse startup with the
-reason. A refreshed
-dataset's update starts the pipelines on it, so a pipeline can deliver the anomaly each time its
-source syncs.
+without `refresh_on`), a workflow that does not publish through `output_dataset_id`, a
+`refresh_on` dataset that no template declares, and a chain of recipes and workflow triggers
+that leads back to itself each refuse startup with the reason. A refreshed dataset's update
+starts the pipelines on it, so a pipeline can deliver the anomaly each time its source syncs.
 
 ### Dekads: a period type with no fixed length
 

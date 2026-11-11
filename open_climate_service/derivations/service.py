@@ -7,9 +7,10 @@ workflow, and the workflow publishes the derived dataset, which emits its own up
 the publication path, so a pipeline on the derived dataset runs next.
 
 Only a derived dataset that exists is kept current: one an operator created once. A built-in
-recipe therefore costs nothing on an instance that never asked for its dataset. Once it exists,
-the driving dataset's latest update is refreshed if no refresh ran for it, also one from before
-the dataset was created: a dataset created outside OCS costs one more full run.
+recipe therefore costs nothing on an instance that never asked for its dataset. The run that
+created it counts as current for the driving dataset's updates it published after, so creating
+it does not start a second full run at once; a dataset that predates the latest update is
+refreshed.
 
 Each refresh is one job whose id is derived from the output, the driving update, the recipe's
 digest and the digest of the workflow definition it runs, frozen with its nested workflows. The
@@ -20,7 +21,8 @@ Whether the latest update has its job is the whole test of being current. A time
 or the input snapshot the output recorded, would take a refresh that started before a newer
 update as covering it, though it computed only the older range. Only the latest update
 matters, since every run recomputes the full range: while a refresh runs, later updates wait,
-and the refresh's completion reconciles against the newest one. Reconciliation runs at startup
+and a finished refresh reconciles against the newest one; after a failed one, the next
+reconciliation does. Reconciliation runs at startup
 and on the maintenance interval too, so an update missed by a stopped process is caught up. A
 refresh whose job failed or was cancelled is not submitted again by itself; the next update of
 its input starts a new one.
@@ -51,10 +53,14 @@ def trigger_id(output: str) -> str:
     return f"{TRIGGER_PREFIX}{output}"
 
 
-def _recipes() -> list[Recipe]:
+def _templates() -> list[dict[str, Any]]:
     from open_climate_service.data_registry.services import datasets
 
-    return [found for template in datasets.list_datasets() if (found := recipes.recipe(template)) is not None]
+    return datasets.list_datasets()
+
+
+def _recipes() -> list[Recipe]:
+    return [found for template in _templates() if (found := recipes.recipe(template)) is not None]
 
 
 # --- validation --------------------------------------------------------------------------------
@@ -88,7 +94,7 @@ def recipe_problems(recipe: Recipe) -> list[str]:
     for name, value in recipe.arguments.items():
         if name not in declared:
             problems.append(f"'{name}' is not a parameter of workflow '{recipe.workflow}'")
-        elif (problem := binding._type_problem(name, binding._schema(declared[name]), value)) is not None:
+        elif (problem := binding.type_problem(name, binding.parameter_schema(declared[name]), value)) is not None:
             problems.append(problem)
     intervals = binding.interval_parameters(record)
     open_intervals = [name for name in intervals if name not in recipe.arguments]
@@ -99,7 +105,7 @@ def recipe_problems(recipe: Recipe) -> list[str]:
     elif recipe.refresh_on is None and open_intervals:
         problems.append(f"set '{intervals[0]}': a recipe without refresh_on runs over a fixed range")
     supplied = {*recipe.arguments, OUTPUT_PARAMETER, *open_intervals}
-    missing = sorted(name for name, p in declared.items() if binding._required(p) and name not in supplied)
+    missing = sorted(name for name, p in declared.items() if binding.is_required(p) and name not in supplied)
     if missing:
         problems.append(f"missing argument(s) {', '.join(missing)}")
     return problems
@@ -149,6 +155,12 @@ def validate_recipes() -> None:
     found = _recipes()
     problems = [f"'{recipe.output}': {problem}" for recipe in found for problem in recipe_problems(recipe)]
     triggers = _trigger_edges()
+    known = {str(template["id"]) for template in _templates()} | {output for _, output in triggers}
+    problems.extend(
+        f"'{recipe.output}': refresh_on names '{recipe.input}', which is not a dataset template"
+        for recipe in found
+        if recipe.input is not None and recipe.input not in known
+    )
     problems.extend(
         f"'{output}': its updates lead back to itself through recipes or workflow triggers"
         for output in _cycles(found, triggers)
@@ -166,14 +178,14 @@ def validate_recipes() -> None:
 # --- refreshing -------------------------------------------------------------------------------
 
 
-def _latest_updates() -> dict[str, JobEvent]:
-    """Each dataset's latest persisted update."""
+def _latest_updates() -> dict[str, tuple[int, JobEvent]]:
+    """Each dataset's latest persisted update, with its position in the log."""
     from open_climate_service.jobs.events import persisted_events
 
-    latest: dict[str, JobEvent] = {}
-    for event in persisted_events():
+    latest: dict[str, tuple[int, JobEvent]] = {}
+    for position, event in enumerate(persisted_events()):
         if event.type == DATASET_UPDATED_EVENT_TYPE and isinstance(dataset_id := event.data.get("dataset_id"), str):
-            latest[dataset_id] = event
+            latest[dataset_id] = (position, event)
     return latest
 
 
@@ -210,9 +222,10 @@ def _refresh_locked(recipe: Recipe) -> OpenEOJobRecord | None:
 
     if recipe.input is None or not _exists(recipe.output):
         return None
-    update = _latest_updates().get(recipe.input)
-    if update is None:
+    updates = _latest_updates()
+    if recipe.input not in updates:
         return None
+    position, update = updates[recipe.input]
     record = workflow_registry.get_workflow(recipe.workflow)
     if record is None:
         raise LookupError(f"workflow '{recipe.workflow}' is not registered")
@@ -225,6 +238,9 @@ def _refresh_locked(recipe: Recipe) -> OpenEOJobRecord | None:
     service = get_openeo_job_service()
     job_id = triggered_job_id(source, trigger_id(recipe.output))
     jobs = [job for job in store_list_jobs() if job.trigger_id == trigger_id(recipe.output)]
+    created = updates.get(recipe.output)
+    if not jobs and created is not None and created[0] > position:
+        return None  # the run that created it published after this update
     if any(job.status in _ACTIVE for job in jobs):
         return None  # its completion reconciles against the newest update
     existing = next((job for job in jobs if job.id == job_id), None)
