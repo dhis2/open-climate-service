@@ -58,7 +58,8 @@ def collection_path(dataset_id: str) -> str:
 
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
-PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
+# v2.0.0, whose `proj:code` is the field written here; v1.1.0 named it `proj:epsg`.
+PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
 RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
 WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
@@ -305,14 +306,12 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             {*collection_payload.get("stac_extensions", []), STAC_CLASSIFICATION_EXTENSION}
         )
     collection_payload["license"] = template.license
-    providers = _build_providers(source_dataset)
-    if artifact.provenance is not None:
-        providers.append(_processor_provider(artifact, request))
+    processor = [_processor_provider(artifact, request)] if artifact.provenance is not None else []
+    if processor:
         collection_payload["stac_extensions"] = sorted(
             {*collection_payload.get("stac_extensions", []), PROCESSING_EXTENSION}
         )
-    if providers:
-        collection_payload["providers"] = providers
+    collection_payload["providers"] = _published_providers(source_dataset, request, processor)
     _remove_helper_variables(collection_payload)
     _round_spatial_steps(collection_payload)
     # Prefer an explicit extents.temporal.resolution; fall back to the dataset's
@@ -450,28 +449,30 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     # over HTTP while serving a request for one of its children.
     payload = collection.to_dict(include_self_link=True, transform_hrefs=False)
     payload["stac_version"] = STAC_VERSION
-    payload["providers"] = _feature_providers(source_dataset, request)
+    payload["providers"] = _published_providers(source_dataset, request)
     return payload
 
 
-def _feature_providers(source_dataset: dict[str, Any], request: Request) -> list[dict[str, Any]]:
-    """The template's providers, then this instance as the one `host`, last.
+def _published_providers(
+    source_dataset: dict[str, Any], request: Request, processors: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """The template's providers, then any processor, then this instance as the one `host`, last.
 
-    The template names who made the data, and its `producer` role says so. Only this instance
-    hosts the copy being served, so a `host` role declared in a template is dropped rather than
-    published as a second host. The host's `url` is the instance itself, where its operator is
-    reached.
+    The template names who made the data, so a provider it declares without roles is the
+    `producer`. Only this instance hosts the copy being served, so a `host` role declared in a
+    template is dropped rather than published as a second host. The host's `url` is the instance
+    itself, where its operator is reached. Raster and feature collections share this, so both
+    carry a producer and exactly one host, as a static catalog's checker expects.
     """
     from open_climate_service import config as api_config
 
     providers = []
     for provider in _build_providers(source_dataset):
         entry = {key: value for key, value in provider.items() if key != "roles"}
-        roles = [role for role in provider.get("roles", []) if role != "host"]
-        if roles:
-            entry["roles"] = roles
+        entry["roles"] = [role for role in provider.get("roles", []) if role != "host"] or ["producer"]
         providers.append(entry)
 
+    providers.extend(processors or [])
     providers.append({"name": api_config.get_name(), "roles": ["host"], "url": absolute_url(request, "/")})
     return providers
 

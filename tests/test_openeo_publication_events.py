@@ -988,6 +988,14 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     jsonschema.validate(collection, schema)
     [processor] = [provider for provider in collection["providers"] if "processor" in provider["roles"]]
     assert processor["processing:software"] == {"open-climate-service": __version__}
+    # As a static catalog's checker (Portolan's rashid) reads it: this instance is the one host,
+    # last; every link on this host answers HEAD; and `proj:code` is declared at v2.0.0.
+    assert [provider["roles"] for provider in collection["providers"]][-2:] == [["processor"], ["host"]]
+    for link in collection["links"]:
+        if link["href"].startswith("http://testserver/"):
+            assert client.head(link["href"]).status_code == 200, link
+    assert "https://stac-extensions.github.io/projection/v2.0.0/schema.json" in collection["stac_extensions"]
+    assert not any("projection/v1" in extension for extension in collection["stac_extensions"])
     assert client.get(f"/datasets/{source}").json()["provenance"] is None
 
     plugin.available.append("2026-01-03")

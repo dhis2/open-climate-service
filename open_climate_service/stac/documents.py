@@ -82,7 +82,7 @@ def collection_readme(dataset_id: str, request: Request) -> str:
     lines += ["", "## Provenance", ""]
     # The providers the STAC document publishes, this instance last as the one host, so the two
     # documents agree.
-    for provider in services._feature_providers(template, request):
+    for provider in services._published_providers(template, request):
         name = f"[{provider['name']}]({provider['url']})" if provider.get("url") else provider["name"]
         roles = f" ({', '.join(provider['roles'])})" if provider.get("roles") else ""
         lines.append(f"- {name}{roles}")

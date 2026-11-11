@@ -1304,7 +1304,10 @@ def test_providers_are_published(client: TestClient, monkeypatch: pytest.MonkeyP
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    assert payload["providers"] == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+    *declared, host = payload["providers"]
+    assert declared == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+    # This instance, last and alone in the role, as a static catalog's checker expects.
+    assert host["roles"] == ["host"] and host["url"] == "http://testserver/"
 
 
 def test_malformed_providers_are_dropped_rather_than_published(
@@ -1321,7 +1324,9 @@ def test_malformed_providers_are_dropped_rather_than_published(
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    assert payload["providers"] == [{"name": "Real"}]
+    # A provider declared without roles made the data, so it is published as the producer.
+    assert payload["providers"][:-1] == [{"name": "Real", "roles": ["producer"]}]
+    assert [p["roles"] for p in payload["providers"]].count(["host"]) == 1
 
 
 # --- reference_system (CLIM-1004) -------------------------------------------------------

@@ -128,8 +128,10 @@ def get_ingestion(ingestion_id: str) -> IngestionResponse:
     return services.get_ingestion_or_404(ingestion_id)
 
 
-@datasets_router.get(
+# GET and HEAD alike: a STAC collection links to these, and a link checker sends HEAD.
+@datasets_router.api_route(
     "",
+    methods=["GET", "HEAD"],
     response_model=DatasetListResponse,
     responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
 )
@@ -150,8 +152,9 @@ def list_datasets(request: Request, response: Response) -> DatasetListResponse |
     return services.list_datasets()
 
 
-@datasets_router.get(
+@datasets_router.api_route(
     "/{dataset_id}",
+    methods=["GET", "HEAD"],
     response_model=DatasetDetailRecord,
     responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
 )
@@ -175,7 +178,7 @@ def get_dataset(dataset_id: str, request: Request, response: Response) -> Datase
     return record
 
 
-@datasets_router.get("/{dataset_id}/thumbnail.png", response_class=FileResponse)
+@datasets_router.api_route("/{dataset_id}/thumbnail.png", methods=["GET", "HEAD"], response_class=FileResponse)
 def get_dataset_thumbnail(dataset_id: str) -> FileResponse:
     """Serve a dataset's thumbnail, the image its STAC collection points at.
 
