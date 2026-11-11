@@ -29,6 +29,14 @@ def _daily() -> xr.Dataset:
     )
 
 
+def _with_infinities() -> xr.Dataset:
+    """`_daily` with infinities in two of its missing cells, which must not count either."""
+    ds = _daily()
+    ds["precip"][1, 0, 0] = np.inf
+    ds["precip"][2, 1, 0] = -np.inf
+    return ds
+
+
 def _pyramid() -> xr.Dataset:
     """Over the 1024-pixel threshold, so a pyramid; a one-pixel spike the averaged levels lose."""
     data = np.zeros((1100, 1100), dtype="float32")
@@ -43,6 +51,7 @@ def _pyramid() -> xr.Dataset:
     ("ds", "variable", "t_dim", "expected"),
     [
         pytest.param(_daily(), "precip", "t", (-4.0, 6.5, 15.0 / 9), id="across-periods"),
+        pytest.param(_with_infinities(), "precip", "t", (-4.0, 6.5, 15.0 / 9), id="infinite"),
         pytest.param(_daily().isel(t=0, drop=True), "precip", None, (1.0, 3.0, 2.0), id="static"),
         pytest.param(_pyramid(), "elevation", None, (0.0, 100.0, 100.0 / 1100**2), id="pyramid"),
         pytest.param(_daily() * np.nan, "precip", "t", None, id="all-missing"),

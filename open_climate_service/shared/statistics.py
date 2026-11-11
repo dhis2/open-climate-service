@@ -38,7 +38,7 @@ _PERCENTILE_SAMPLE_AT = np.linspace(0.0, 100.0, 1001)
 def measure_statistics(store_path: str | Path, variable: str) -> ArtifactStatistics | None:
     """The statistics of *variable* in the Icechunk store at *store_path*, or None.
 
-    Missing cells are skipped; the store's fill value is already decoded to NaN on open. None
+    Missing and infinite cells are skipped; the store's fill value is already decoded to NaN on open. None
     when the variable is absent or has no finite value. **Never raises**: statistics feed the
     display, and an ingest that otherwise succeeded must not fail over them, so a failure is
     logged with its traceback and recorded as None.
@@ -62,6 +62,9 @@ def statistics_of(values: Any) -> ArtifactStatistics | None:
     from dask.base import compute
 
     array = da.asarray(values)
+    # As missing, so an infinity (a division by zero in a user's process) neither becomes the
+    # minimum or maximum nor makes the statistics unserialisable as JSON.
+    array = da.where(da.isfinite(array), array, np.nan)
     flat = array.ravel()
     try:
         sampled, low, high, mean = compute(
