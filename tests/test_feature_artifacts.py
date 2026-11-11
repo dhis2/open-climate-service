@@ -241,6 +241,17 @@ def _record_fields(**overrides: Any) -> dict[str, Any]:
             "no period axis",
             id="geoparquet_claiming_a_period_axis",
         ),
+        pytest.param(
+            {
+                "format": ArtifactFormat.GEOPARQUET,
+                "variable": None,
+                "variables": [],
+                "statistics": {"min": 0.0, "max": 1.0},
+                "features": _FEATURE_DETAIL_FIELDS,
+            },
+            "no measured variable to carry statistics",
+            id="geoparquet_carrying_statistics",
+        ),
         pytest.param({"variable": None}, "must name the raster variable", id="raster_without_a_variable"),
         pytest.param({"variable": "   "}, "must name the raster variable", id="raster_with_a_blank_variable"),
     ],

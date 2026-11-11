@@ -156,6 +156,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
+    midpoint: 0
     range: [-15.0, 15.0]
 
 - id: era5land_precipitation_daily_relative_anomaly_1991_2020
@@ -179,6 +180,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-100.0, 100.0]
 
 - id: era5land_precipitation_daily_anomaly_1991_2020
@@ -202,6 +204,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-20.0, 20.0]
 
 # ---------------------------------------------------------------------------
@@ -231,6 +234,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
+    midpoint: 0
     range: [-3.0, 3.0]
 
 - id: era5land_precipitation_monthly_anomaly_1991_2020
@@ -261,6 +265,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-10.0, 10.0]
 
 - id: era5land_precipitation_monthly_relative_anomaly_1991_2020
@@ -284,4 +289,5 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-100.0, 100.0]

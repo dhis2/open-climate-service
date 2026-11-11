@@ -491,16 +491,20 @@ keeps its own attributes:
 
 The following parameters control how the datasets are displayed visually and in text:
 
-| Field              | Required | Description                                                                                                                         |
-| ------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                              |
-| `display.colormap` | No       | A [matplotlib colormap](https://matplotlib.org/stable/gallery/color/colormap_reference.html) name, or a list of colours (see below) |
-| `display.range`    | No       | `[min, max]` display range for the colormap                                                                                         |
-| `display.nodata`   | No       | No-data / fill value                                                                                                                |
+| Field              | Required | Description                                                                                                                                                                                   |
+| ------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                                                                                        |
+| `display.colormap` | No       | A [matplotlib colormap](https://matplotlib.org/stable/gallery/color/colormap_reference.html) name, or a list of colours (see below). Defaults to `viridis`.                                   |
+| `display.range`    | No       | `[min, max]` the colormap spans. Leave it out to use the minimum and maximum measured from the ingested dataset at each sync, which suit the instance's extent and period rather than a guess. |
+| `display.midpoint` | No       | Value a measured range is centred on, made symmetric about it; a declared range is used as written. Set `0` for a diverging quantity such as an anomaly or a change.                         |
+| `display.nodata`   | No       | No-data / fill value                                                                                                                                                                          |
+
+The minimum and maximum are measured at the end of every sync. A dataset written before they were
+measured gets them in the background the next time the service starts.
 
 A colormap name is matched case-insensitively, and `_r` reverses it (`blues`, `rdbu_r`, `terrain`).
 Where no named colormap fits, list two or more hex colours (`#rgb` or `#rrggbb`), spread
-evenly from the low end of `display.range` to the high end. An alpha (`#rrggbbaa`) is ignored
+evenly from the low end of the display range to the high end. An alpha (`#rrggbbaa`) is ignored
 and the colour drawn opaque; transparency is set by `display.nodata`.
 
 ```yaml

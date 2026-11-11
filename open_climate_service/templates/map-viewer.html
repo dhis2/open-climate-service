@@ -732,6 +732,7 @@
               // The server resolves the template's colormap to its colours, keyed 0-255, so the
               // viewer never looks a colormap name up itself.
               cm: renders.colormap ? Object.values(renders.colormap) : chroma.scale("viridis").colors(256),
+              // No rescale until the dataset has a declared or measured range.
               clim: renders.rescale?.[0] ?? [0, 100],
             };
         const fillValue = renders.nodata ?? null;

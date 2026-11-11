@@ -198,6 +198,7 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-100.0, 100.0]
     nodata: -9999.0
 
@@ -220,6 +221,7 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-20.0, 20.0]
     nodata: -9999.0
 
@@ -242,6 +244,7 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
+    midpoint: 0
     # Tighter than the daily ±20: a monthly mean rate averages the extremes away, so a measured
     # Sierra Leone monsoon anomaly sits near ±2.5 mm/d and ±20 renders as blank white. The
     # ERA5-Land monthly template carries the same range for the same reason.
@@ -267,5 +270,6 @@
       url: https://www.chc.ucsb.edu/data/chirps
   display:
     colormap: RdBu
+    midpoint: 0
     range: [-100.0, 100.0]
     nodata: -9999.0

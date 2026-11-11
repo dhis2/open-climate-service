@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI
@@ -165,7 +166,10 @@ async def test_a_failed_warm_up_is_logged_and_left_to_first_use(
 async def test_lifespan_runs_pending_store_collections_at_startup_and_periodically(
     monkeypatch: pytest.MonkeyPatch, read_only: bool
 ) -> None:
-    """What guarantees a failed attempt's data is freed even if the store is never synced again."""
+    """What guarantees a failed attempt's data is freed even if the store is never synced again.
+
+    The statistics backfill writes records too, so it follows the same rule, and is told to stop
+    when the app does."""
     import asyncio
     import threading
 
@@ -189,6 +193,8 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
 
     monkeypatch.setattr(services, "collect_pending_garbage_everywhere", sweep)
     monkeypatch.setattr(services, "remove_leftover_rebuilds", lambda: 0)
+    backfills: list[Callable[[], bool]] = []
+    monkeypatch.setattr(services, "measure_missing_statistics", lambda should_stop: backfills.append(should_stop) or 0)
     monkeypatch.setattr(main.api_config, "is_read_only", lambda: read_only)
     monkeypatch.setattr(main, "_MAINTENANCE_INTERVAL_S", 0.01)
 
@@ -221,6 +227,9 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
 
     if read_only:
         assert sweeps == []  # may share its data directory with a writing instance
+        assert backfills == []
     else:
         assert in_flight_done == 2  # once at startup, then on the interval
         assert len(sweeps) == in_flight_done, "the loop stops with the app"
+        [should_stop] = backfills
+        assert should_stop()
