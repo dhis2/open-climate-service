@@ -106,6 +106,11 @@ plugin import surface), alongside `BaseDatasetPlugin`.
 - **`daily_period_ids(start, end)`** — enumerate the inclusive ISO day strings for a daily
   `periods()` implementation; apply your own availability clamp around it (accepts ISO
   strings or `date` objects, returns `[]` when `start > end`).
+- **Credentials** — read a key the source needs from an environment variable, which OCS fills
+  from `.env`. Read it when the plugin opens the source, not at import or in `__init__`, so that
+  listing data sources needs no key, and pass it in a header or the reader's own session rather
+  than in the URL, where it leaks into error messages and logs. The built-in plugins share theirs
+  per provider in `open_climate_service/plugins/providers`; a plugin of your own need not use it.
 - **Tuning** — set the class attributes `max_concurrency` (default 1) and
   `commit_batch_size` (default 1) only when the defaults don't fit.
 - **Grid inference** — the framework infers the store grid from the
@@ -605,7 +610,7 @@ And before opening the PR:
 - **One data source per PR.** A plugin shared by several templates of one source (daily and monthly ERA5-Land, say) counts as one.
 - **Ingest a real period.** Run Step 4 on a small extent and open the dataset in the map viewer. Check that units and values are plausible and that the store has the expected time steps.
 - **Tests.** Test `periods()` and `fetch_period()` with the network faked, and run `make lint` and `make test`.
-- **Describe access.** The `description` names the account or key the source needs, and any limit (a short rolling window, a data lag).
+- **Describe access.** The `description` names the account or key the source needs, and any limit (a short rolling window, a data lag). A key is read from an environment variable, listed with its sign-up link in `.env.example`.
 
 ## Distributing a plugin as an installable package
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -11,6 +10,7 @@ import numpy as np
 import xarray as xr
 from earthkit.transforms.temporal import daily_reduce
 
+from open_climate_service.plugins.providers import cds
 from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import (
     daily_period_ids,
@@ -144,27 +144,8 @@ class ERA5HeatDailyUTCIPlugin(ERA5HeatZarrDailyFromHourlyPlugin):
 # Helpers
 
 
-def _get_cdsapi_key() -> str:
-    if os.path.exists(os.path.expanduser("~/.ecmwfdatastoresrc")):
-        with open(os.path.expanduser("~/.ecmwfdatastoresrc"), "r") as f:
-            for line in f:
-                if line.startswith("key:"):
-                    cdsapi_key = line.split(":")[1].strip()
-                    if cdsapi_key:
-                        return cdsapi_key
-
-        raise SystemError(
-            "Unable to retrieve CDS API key, please verify that ~/.ecmwfdatastoresrc has the correct format"
-        )
-
-    raise SystemError("Missing credentials file: ~/.ecmwfdatastoresrc")
-
-
 def _open_cds_zarr(url: str) -> xr.Dataset:
-    cdsapi_key = _get_cdsapi_key()
-    ds: xr.Dataset = xr.open_zarr(
-        url, consolidated=True, storage_options={"headers": {"Authorization": f"Bearer {cdsapi_key}"}}
-    )
+    ds: xr.Dataset = xr.open_zarr(url, consolidated=True, storage_options={"headers": cds.auth_headers()})
     return ds
 
 

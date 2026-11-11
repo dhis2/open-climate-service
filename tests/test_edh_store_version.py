@@ -26,8 +26,8 @@ _STORE = "https://api.earthdatahub.destine.eu/era5/store.zarr"
 
 
 @pytest.fixture(autouse=True)
-def _clean_probe_state() -> Any:
-    """Start each test with cold caches, and let `caplog` see the package logger.
+def _clean_probe_state(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Start each test with cold caches and an EDH key, and let `caplog` see the package logger.
 
     `startup.py` sets `propagate = False` on the `open_climate_service` logger so the package
     owns its handler and does not double-log under uvicorn. That also means caplog, which
@@ -39,6 +39,7 @@ def _clean_probe_state() -> Any:
     package_logger.propagate = True
     era5_land._edh_is_v3_cache.clear()
     era5_land._edh_unknown_until.clear()
+    monkeypatch.setenv("EDH_API_KEY", "mytoken")
     yield
     package_logger.propagate = previous
     era5_land._edh_is_v3_cache.clear()
@@ -263,77 +264,19 @@ def test_a_confirmed_verdict_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
 # --- authentication ---------------------------------------------------------------------
 
 
-def test_the_env_key_path_authenticates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`urlopen` does not turn `user:pass@host` userinfo into Basic Auth the way fsspec does.
-
-    Probing the authenticated URL therefore 401s for anyone using EDH_API_KEY — the whole
-    documented environment-variable path — and the check silently never runs.
-    """
+def test_the_probe_authenticates_with_a_header_not_the_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`urlopen` does not turn `user:pass@host` userinfo into Basic Auth, and userinfo leaks into logs."""
     import base64
 
-    monkeypatch.setenv("EDH_API_KEY", "mytoken")
-
-    header = era5_land._edh_auth_header(_STORE)
-
-    assert base64.b64decode(header["Authorization"].split()[1]).decode() == "edh:mytoken"
-
-
-def test_the_netrc_path_authenticates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`urlopen` does not read netrc either, though fsspec does via `trust_env=True`."""
-    import base64
-
-    monkeypatch.delenv("EDH_API_KEY", raising=False)
-
-    class _Netrc:
-        @staticmethod
-        def authenticators(host: str) -> tuple[str, str, str] | None:
-            # The shape a real netrc yields for the entry EDH documents: a password and no
-            # login. The previous fixture returned ("edh", "", "secret"), which netrc never
-            # produces for that entry, and it hid the empty-login case entirely.
-            return ("", "", "secret") if host == "api.earthdatahub.destine.eu" else None
-
-    monkeypatch.setattr(era5_land.netrc, "netrc", lambda: _Netrc())
-
-    header = era5_land._edh_auth_header(_STORE)
-
-    assert base64.b64decode(header["Authorization"].split()[1]).decode() == "edh:secret"
-
-
-def test_no_credentials_anywhere_sends_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("EDH_API_KEY", raising=False)
-    monkeypatch.setattr(era5_land.netrc, "netrc", lambda: (_ for _ in ()).throw(OSError("no netrc")))
-
-    assert era5_land._edh_auth_header(_STORE) == {}
-
-
-def test_the_probe_never_puts_credentials_in_the_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Userinfo in the probe URL is both useless to urlopen and a leak into anything logging."""
-    monkeypatch.setenv("EDH_API_KEY", "mytoken")
-    seen: list[str] = []
+    seen: list[Any] = []
 
     def capturing(request: Any, timeout: int = 0) -> _Response:
-        seen.append(request.full_url)
+        seen.append(request)
         return _Response({"zarr_format": 3})
 
     monkeypatch.setattr(era5_land, "urlopen", capturing)
     era5_land._edh_is_zarr_v3(_STORE)
 
-    assert seen and all("mytoken" not in url and "@" not in url for url in seen)
-
-
-def test_an_explicit_netrc_login_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Defaulting an empty login must not override one that was actually given."""
-    import base64
-
-    monkeypatch.delenv("EDH_API_KEY", raising=False)
-
-    class _Netrc:
-        @staticmethod
-        def authenticators(host: str) -> tuple[str, str, str] | None:
-            return ("someone", "", "secret")
-
-    monkeypatch.setattr(era5_land.netrc, "netrc", lambda: _Netrc())
-
-    header = era5_land._edh_auth_header(_STORE)
-
-    assert base64.b64decode(header["Authorization"].split()[1]).decode() == "someone:secret"
+    (request,) = seen
+    assert "mytoken" not in request.full_url and "@" not in request.full_url
+    assert base64.b64decode(request.get_header("Authorization").split()[1]).decode() == "edh:mytoken"

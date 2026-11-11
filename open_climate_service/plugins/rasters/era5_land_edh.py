@@ -11,6 +11,7 @@ import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activat
 import xarray as xr
 from earthkit.transforms.temporal import monthly_reduce
 
+from open_climate_service.plugins.providers import edh
 from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import daily_period_ids, monthly_period_ids
 from open_climate_service.shared.zarr import DEFAULT_MAX_CACHE_BYTES, CachedTimeSeriesZarr
@@ -153,6 +154,5 @@ class ERA5LandEDHMonthlyFromDailyPlugin(ERA5LandEDHDailyPlugin):
 
 
 def _open_edh_zarr(url: str) -> xr.Dataset:
-    """Open an Earth Data Hub store, authenticating with ~/netrc file."""
-    ds: xr.Dataset = xr.open_zarr(url, storage_options={"client_kwargs": {"trust_env": True}})
+    ds: xr.Dataset = xr.open_zarr(url, storage_options={"headers": edh.auth_headers()})
     return ds
