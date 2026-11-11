@@ -473,10 +473,21 @@ class ArtifactStatistics(BaseModel):
     Facts about the stored values, never a display decision: how a range is drawn from them is
     the template's choice, so changing it takes no re-sync. Every field is optional, as in STAC,
     so a statistic added later is None on records measured before it rather than a migration.
+
+    Each field can be named in a template's `display.range`, so a new one also needs its hover
+    text in `STATISTIC_TITLES` (`system/templates.py`).
     """
 
     min: float | None = None
     max: float | None = None
+    mean: float | None = None
+    p2: float | None = None
+    p5: float | None = None
+    p25: float | None = None
+    p50: float | None = None
+    p75: float | None = None
+    p95: float | None = None
+    p98: float | None = None
 
 
 class ArtifactRecord(BaseModel):

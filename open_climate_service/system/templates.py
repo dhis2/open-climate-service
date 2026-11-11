@@ -23,7 +23,7 @@ from open_climate_service.extents.services import get_extent
 from open_climate_service.ingestions.services import list_datasets
 from open_climate_service.scheduler.presets import form_values, schedule_description, suggested_frequency
 from open_climate_service.shared.classes import class_colors, classification_from_template
-from open_climate_service.shared.display import display_midpoint, display_range
+from open_climate_service.shared.display import DEFAULT_RANGE, display_midpoint, range_spec
 from open_climate_service.shared.time import datetime_to_period_string, has_calendar_periods
 
 from .schemas import Link, RootResponse
@@ -265,17 +265,42 @@ def _colormap_ramp(colormap: str | tuple[str, ...] | None) -> str:
     return f"linear-gradient(90deg, {', '.join(colormap_stops(colormap, count=5))})"
 
 
+# What each statistic name means, shown on hover. One entry per field of
+# `ArtifactStatistics`; a test makes sure a name is covered both places.
+STATISTIC_TITLES = {
+    "min": "Minimum",
+    "max": "Maximum",
+    "mean": "Mean",
+    "p2": "2nd percentile",
+    "p5": "5th percentile",
+    "p25": "25th percentile",
+    "p50": "Median (50th percentile)",
+    "p75": "75th percentile",
+    "p95": "95th percentile",
+    "p98": "98th percentile",
+}
+
+
+def _range_end(end: Any) -> str:
+    """A number as written, or a statistic name with what it means on hover."""
+    if not isinstance(end, str):
+        return f"{end:g}"
+    return Markup('<abbr title="{}">{}</abbr>').format(STATISTIC_TITLES[end], end)
+
+
 def _range_label(display: dict[str, Any]) -> str:
-    """The declared range as `0 – 20`, or how the range is measured when none is declared.
+    """The range as its template states it: `0 – 20`, `p2 – p98`, or `0 – p98 (centred on 0)`.
 
     The rule rather than today's values: those come from the dataset's statistics, which the
     map viewer reads, and would go stale on a page describing the data source.
     """
-    declared = display_range(display, None)
-    if declared is not None:
-        return f"{declared[0]:g} – {declared[1]:g}"
+    spec = range_spec(display.get("range")) or DEFAULT_RANGE
+    label = Markup(" – ").join(_range_end(end) for end in spec)
+    # Only a range with a measured end is centred; two numbers are used as written.
     midpoint = display_midpoint(display)
-    return "Measured min – max" + (f", centred on {midpoint:g}" if midpoint is not None else "")
+    if midpoint is None or not any(isinstance(end, str) for end in spec):
+        return label
+    return label + Markup(" (centred on {})").format(f"{midpoint:g}")
 
 
 def _coverage_label(start: object, end: object, period_type: object = None) -> str:
