@@ -49,12 +49,14 @@ class BoundWorkflow:
     definition_digest: str
 
 
-def _schema(parameter: dict[str, Any]) -> dict[str, Any]:
+def parameter_schema(parameter: dict[str, Any]) -> dict[str, Any]:
+    """The parameter's JSON Schema, empty when it declares none."""
     schema = parameter.get("schema")
     return schema if isinstance(schema, dict) else {}
 
 
-def _required(parameter: dict[str, Any]) -> bool:
+def is_required(parameter: dict[str, Any]) -> bool:
+    """Whether a call must supply the parameter: it has no default and is not optional."""
     return "default" not in parameter and not parameter.get("optional", False)
 
 
@@ -73,7 +75,7 @@ def saves_own_result(record: WorkflowRecord) -> bool:
 
 def interval_parameters(record: WorkflowRecord) -> list[str]:
     """Names of the parameters declared as a temporal interval."""
-    return [str(p["name"]) for p in parameters(record) if _schema(p).get("subtype") == TEMPORAL_INTERVAL]
+    return [str(p["name"]) for p in parameters(record) if parameter_schema(p).get("subtype") == TEMPORAL_INTERVAL]
 
 
 def pipeline_ready(record: WorkflowRecord) -> bool:
@@ -91,7 +93,7 @@ def definition_digest(record: WorkflowRecord) -> str:
     return json_digest({"parameters": record.parameters, "process_graph": record.process_graph})
 
 
-def _type_problem(name: str, schema: dict[str, Any], value: Any) -> str | None:
+def type_problem(name: str, schema: dict[str, Any], value: Any) -> str | None:
     """A readable reason ``value`` does not fit a simple JSON Schema, or None."""
     subtype = schema.get("subtype")
     if subtype == GEOJSON:
@@ -133,7 +135,7 @@ def inputs(reference: WorkflowReference) -> list[tuple[Literal["dataset", "featu
     declared = {str(p["name"]): p for p in parameters(record)} if record is not None else {}
     found: list[tuple[Literal["dataset", "features"], str, str]] = []
     for name, value in reference.arguments.items():
-        if isinstance(value, str) and _schema(declared.get(name, {})).get("subtype") == COLLECTION_ID:
+        if isinstance(value, str) and parameter_schema(declared.get(name, {})).get("subtype") == COLLECTION_ID:
             found.append(("dataset", value, name))
             continue
         try:
@@ -180,7 +182,7 @@ def bind(reference: WorkflowReference) -> BoundWorkflow:
             f"bind all but one of {', '.join(unbound_intervals)}; the one left receives each run's interval"
         )
     missing = [
-        name for name, p in declared.items() if _required(p) and name != interval and name not in reference.arguments
+        name for name, p in declared.items() if is_required(p) and name != interval and name not in reference.arguments
     ]
     if missing:
         problems.append(f"missing required argument(s) {', '.join(missing)}")
@@ -189,10 +191,10 @@ def bind(reference: WorkflowReference) -> BoundWorkflow:
         parameter = declared.get(name)
         if parameter is None:
             continue
-        problem = _type_problem(name, _schema(parameter), value)
+        problem = type_problem(name, parameter_schema(parameter), value)
         if problem is not None:
             problems.append(problem)
-        elif _schema(parameter).get("subtype") == COLLECTION_ID:
+        elif parameter_schema(parameter).get("subtype") == COLLECTION_ID:
             datasets.append(str(value))
     if problems:
         raise WorkflowBindingError("; ".join(problems))

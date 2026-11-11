@@ -506,6 +506,8 @@ def test_a_crash_right_after_the_commit_completes_the_publication_on_restart(
     event = _assert_one_published_event("job-1")
     [artifact] = _artifacts()
     assert artifact.provenance is not None and artifact.provenance.output_snapshot_id == committed
+    # Measured from the committed store: the job's in-memory result did not survive the crash.
+    assert artifact.statistics is not None and (artifact.statistics.min, artifact.statistics.max) == (5.0, 5.0)
     assert event.data["output_snapshot_id"] == committed
     assert received == [event]
 
@@ -938,7 +940,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     def shown() -> tuple[dict[str, Any], str, dict[str, Any]]:
         detail = client.get(f"/datasets/{_DATASET}").json()["provenance"]
         page = client.get(f"/datasets/{_DATASET}", headers={"Accept": "text/html"}).text
-        return detail, page, client.get(f"/stac/collections/{_DATASET}").json()
+        return detail, page, client.get(f"/stac/{_DATASET}/collection.json").json()
 
     detail, page, collection = shown()
     # One input, though the graph read it twice; only ids leave the execution evidence.
@@ -972,8 +974,15 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     assert 'href="/jobs/job-1"' in page and f'href="/datasets/{source}"' in page
     assert "updated since" not in page
     assert [link["href"] for link in collection["links"] if link["rel"] == "derived_from"] == [
-        f"http://testserver/stac/collections/{source}",
-        "http://testserver/stac/collections/districts",
+        f"http://testserver/stac/{source}/collection.json",
+        "http://testserver/stac/districts/collection.json",
+    ]
+    # The openEO copy links the same inputs at their openEO collections, so following
+    # provenance from openEO stays in openEO.
+    openeo_collection = client.get(f"/collections/{_DATASET}").json()
+    assert [link["href"] for link in openeo_collection["links"] if link["rel"] == "derived_from"] == [
+        f"http://testserver/collections/{source}",
+        "http://testserver/collections/districts",
     ]
     schema = json.loads((Path(__file__).parent / "data" / "stac_processing_v1.2.0.json").read_text())
     jsonschema.validate(collection, schema)

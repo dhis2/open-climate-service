@@ -131,7 +131,7 @@ def test_both_representations_declare_that_they_vary_by_accept(
         response = client.get("/datasets/chirps_monthly", headers={"Accept": accept})
 
         assert response.status_code == 200
-        assert response.headers["vary"] == "Accept", accept
+        assert "Accept" in response.headers["vary"].split(", "), accept
 
 
 def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
@@ -176,7 +176,7 @@ def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html" if html else "application/json")
-    assert response.headers["vary"] == "Accept"
+    assert "Accept" in response.headers["vary"].split(", ")
     if html:
         assert 'data-list data-page-size="12" data-views="datasets"' in response.text
         # Served from the shared asset, so the list behaves the same here as on the landing page.
@@ -418,7 +418,9 @@ def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
 def test_the_dataset_page_offers_the_map_viewer_for_both_and_a_colour_scale_only_for_a_raster(
     monkeypatch: pytest.MonkeyPatch, item_type: str, raster: bool
 ) -> None:
-    """The map viewer draws rasters and vectors, but a feature collection has no colour scale."""
+    """The map viewer draws rasters and vectors, but a feature collection has no colour scale.
+
+    With no template range, a raster's range is measured from the dataset, and the page says so."""
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
 
     html = landing.render_dataset_page(_record(itemType=item_type), "/ocs")
@@ -426,6 +428,7 @@ def test_the_dataset_page_offers_the_map_viewer_for_both_and_a_colour_scale_only
     assert "Open in map viewer" in html
     assert ('class="ramp-bar"' in html) is raster
     assert ("--ramp: linear-gradient" in html) is raster
+    assert ("p2 – p98" in " ".join(_visible_text(html).split())) is raster
 
 
 def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:

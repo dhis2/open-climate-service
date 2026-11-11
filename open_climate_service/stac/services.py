@@ -31,6 +31,7 @@ from open_climate_service.shared.classes import (
     stac_classes,
 )
 from open_climate_service.shared.crs import canonical_crs_code, is_builtin_crs
+from open_climate_service.shared.display import display_range
 from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_climate_service.shared.licences import DatasetLicence, parse_licence
 from open_climate_service.shared.thumbnails import colormap_stops, thumbnail_path
@@ -47,6 +48,14 @@ from open_climate_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group
 CATALOG_DESCRIPTION = "Published datasets: rasters as GeoZarr stores and vector datasets as GeoParquet"
 STAC_VERSION = "1.1.0"
 MARKDOWN_MEDIA_TYPE = "text/markdown"
+CATALOG_PATH = "/stac/catalog.json"
+
+
+def collection_path(dataset_id: str) -> str:
+    """Where a collection's STAC document is served: `collection.json` in its own directory."""
+    return f"/stac/{path_segment(dataset_id)}/collection.json"
+
+
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
 PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
@@ -125,18 +134,19 @@ def _get_catalog_id() -> str:
 def build_catalog(request: Request) -> dict[str, object]:
     """Build the STAC catalog document."""
     self_href = self_url(request)
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    catalog_href = absolute_url(request, CATALOG_PATH)
     links = [
         {"rel": "self", "href": self_href, "type": "application/json"},
         {"rel": "root", "href": catalog_href, "type": "application/json"},
-        {"rel": "describedby", "href": absolute_url(request, "/stac/README.md"), "type": MARKDOWN_MEDIA_TYPE},
-        {"rel": "agents", "href": absolute_url(request, "/stac/AGENTS.md"), "type": MARKDOWN_MEDIA_TYPE},
+        # Relative, as Portolan requires of these two, so they resolve beside the document.
+        {"rel": "describedby", "href": "./README.md", "type": MARKDOWN_MEDIA_TYPE},
+        {"rel": "agents", "href": "./AGENTS.md", "type": MARKDOWN_MEDIA_TYPE},
     ]
     for dataset_id, artifact in _eligible_artifacts_by_dataset().items():
         links.append(
             {
                 "rel": "child",
-                "href": absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"),
+                "href": absolute_url(request, collection_path(dataset_id)),
                 "title": artifact.dataset_name,
                 "type": "application/json",
             }
@@ -182,8 +192,8 @@ def build_collection_for_artifact(dataset_id: str, artifact: ArtifactRecord, req
 def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
     """Build the STAC collection for a Zarr- or Icechunk-backed datacube."""
     source_dataset = registry_datasets.get_dataset(artifact.dataset_id) or {}
-    collection_href = absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}")
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    collection_href = absolute_url(request, collection_path(dataset_id))
+    catalog_href = absolute_url(request, CATALOG_PATH)
     dataset_href = absolute_url(request, f"/datasets/{path_segment(dataset_id)}")
     zarr_href = absolute_url(request, f"/zarr/{path_segment(dataset_id)}")
     # Only when the file is actually there: a collection that advertises a thumbnail a client
@@ -216,11 +226,8 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     collection_payload["stac_version"] = STAC_VERSION
     collection_payload["description"] = template.description
     collection_payload["title"] = template.title
-    renders = _build_renders(artifact, source_dataset)
-    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION}
-    if renders is not None:
-        collection_payload["renders"] = renders
-        extensions.add(RENDER_EXTENSION)
+    collection_payload["renders"] = _build_renders(artifact, source_dataset)
+    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION, RENDER_EXTENSION}
     existing_extensions = collection_payload.get("stac_extensions", [])
     if isinstance(existing_extensions, list):
         collection_payload["stac_extensions"] = sorted({*existing_extensions, *extensions})
@@ -243,7 +250,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
         template_links.append(
             {
                 "rel": "derived_from",
-                "href": absolute_url(request, f"/stac/collections/{path_segment(input_id)}"),
+                "href": absolute_url(request, collection_path(input_id)),
                 "type": "application/json",
                 "title": input_id,
             }
@@ -520,11 +527,11 @@ def _add_feature_collection_links(
     names that one collection, so a `{version}` in `source_stac` is filled with the release this
     collection was read from, and the link is left out when there is no version to fill it.
     """
-    catalog_href = absolute_url(request, "/stac/catalog.json")
+    catalog_href = absolute_url(request, CATALOG_PATH)
     collection.clear_links()
     # Through `set_self_href`, not `add_link`: pystac emits the self link from that attribute,
     # and a rel="self" link added by hand is dropped by `to_dict`. STAC Browser navigates by it.
-    collection.set_self_href(absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}"))
+    collection.set_self_href(absolute_url(request, collection_path(dataset_id)))
     collection.add_link(pystac.Link(rel="root", target=catalog_href, media_type="application/json"))
     collection.add_link(pystac.Link(rel="parent", target=catalog_href, media_type="application/json"))
     collection.add_link(
@@ -562,7 +569,7 @@ def _add_feature_collection_links(
         collection.add_link(
             pystac.Link(
                 rel=rel,
-                target=absolute_url(request, f"/stac/collections/{path_segment(dataset_id)}/{name}"),
+                target=f"./{name}",
                 media_type=MARKDOWN_MEDIA_TYPE,
                 title=title,
             )
@@ -1342,25 +1349,25 @@ def _open_published_store(artifact: ArtifactRecord) -> xr.Dataset:
     return open_zarr_dataset(_artifact_store_path(artifact))
 
 
-def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> dict[str, Any] | None:
+def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> dict[str, Any]:
     display = source_dataset.get("display")
-    if not isinstance(display, dict):
-        return None
+    display = display if isinstance(display, dict) else {}
     colormap = display.get("colormap")
-    value_range = display.get("range")
-    if not isinstance(value_range, list) or len(value_range) != 2:
-        return None
     # The colours themselves, keyed 0-255 across `rescale` as the render extension and titiler
     # read a custom colormap, so a client needs no colormap library that knows the name.
     render: dict[str, Any] = {
         "title": artifact.dataset_name,
         "assets": ["zarr"],
-        "rescale": [[float(value_range[0]), float(value_range[1])]],
         "colormap": {str(i): color for i, color in enumerate(colormap_stops(colormap))},
         "open_climate_service:variable": artifact.variable,
     }
     if isinstance(colormap, str):
         render["colormap_name"] = colormap
+    # The one hint that needs data, so the only one left out without it: until a range is
+    # declared or measured, the colormap, nodata and variable still hold.
+    value_range = display_range(display, artifact.statistics)
+    if value_range is not None:
+        render["rescale"] = [list(value_range)]
     nodata = display.get("nodata")
     if nodata is not None:
         render["nodata"] = float(nodata)

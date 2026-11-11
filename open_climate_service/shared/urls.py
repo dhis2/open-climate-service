@@ -146,10 +146,20 @@ def absolute_base(request: Request) -> str:
     return f"{request.url.scheme}://{request.url.netloc}{prefix}"
 
 
+def configured_public_root() -> str:
+    """The public service root for a URL built outside any request, such as a webhook body.
+
+    The same rule as `absolute_base`, with `ROOT_PATH` standing in for the ASGI prefix. Without
+    a configured origin it is only the prefix, so the URLs built on it are paths.
+    """
+    origin, path = _parse_configured_base(os.getenv(BASE_URL_ENV, ""))
+    return origin + (path or configured_root_path())
+
+
 SEGMENT_SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 """Shape of an id that can appear in a URL path and route back to the same resource.
 
-Every catalogued dataset id becomes a path segment — `/stac/collections/{id}`, `/zarr/{id}`,
+Every catalogued dataset id becomes a path segment — `/stac/{id}/collection.json`, `/zarr/{id}`,
 `/features/{id}` — and an id outside this shape produces a link that does not work, or worse,
 one that silently means something else: `districts?west` makes the rest of the path a query
 string, so the URL resolves elsewhere and nothing reports an error.
