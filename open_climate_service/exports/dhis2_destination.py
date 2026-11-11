@@ -13,7 +13,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator
 
 from open_climate_service import config as api_config
 from open_climate_service.exports.base import (
@@ -39,11 +39,20 @@ _DHIS2_PERIOD_TYPE = {
 }
 _POLYGON_TYPES = {"Polygon", "MultiPolygon"}
 # Lookup name -> DHIS2 metadata resource, for the form's search and the labels of stored UIDs.
-_LOOKUPS = {"data_sets": "dataSets", "data_elements": "dataElements"}
+_LOOKUPS = {
+    "data_sets": "dataSets",
+    "data_elements": "dataElements",
+    "category_option_combos": "categoryOptionCombos",
+    "attribute_option_combos": "categoryOptionCombos",
+}
 _LOOKUP_PAGE = 20
 _LABEL_CHUNK = 50
 # The settings path of each series' data element: its form field, and where validation keeps its labels.
 _DATA_ELEMENT_LABELS = "series.data_element"
+_COMBO_LABELS = {
+    "categoryOptionCombo": "series.category_option_combo",
+    "attributeOptionCombo": "series.attribute_option_combo",
+}
 
 
 class Dhis2Series(BaseModel):
@@ -52,12 +61,18 @@ class Dhis2Series(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     data_element: str = Field(description="DHIS2 data element UID the values are imported into.")
+    category_option_combo: str | None = Field(
+        default=None, description="Category option combo UID of the data element's disaggregation; default when empty."
+    )
+    attribute_option_combo: str | None = Field(
+        default=None, description="Attribute option combo UID of the data set's attribute; default when empty."
+    )
 
-    @field_validator("data_element")
+    @field_validator("data_element", "category_option_combo", "attribute_option_combo")
     @classmethod
-    def _uid(cls, value: str) -> str:
-        if not is_dhis2_uid(value):
-            raise ValueError("data_element must be a DHIS2 UID: 11 characters, a letter first")
+    def _uid(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value is not None and not is_dhis2_uid(value):
+            raise ValueError(f"{info.field_name} must be a DHIS2 UID: 11 characters, a letter first")
         return value
 
 
@@ -153,19 +168,39 @@ def pipeline_settings_form() -> PipelineSettingsForm:
                 widget="lookup",
                 lookup="data_elements",
             ),
+            SettingsFormField(
+                name="series.category_option_combo",
+                label="Category option combo",
+                help_text="Optional. One of the chosen data element's disaggregations; the default when empty.",
+                widget="lookup",
+                lookup="category_option_combos",
+            ),
+            SettingsFormField(
+                name="series.attribute_option_combo",
+                label="Attribute option combo",
+                help_text="Optional. One of the data set's attribute combinations; the default when empty.",
+                widget="lookup",
+                lookup="attribute_option_combos",
+            ),
         ),
     )
 
 
-def lookup_options(lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
-    """Search the connected DHIS2 for data sets or aggregate data elements, by name, code or UID.
+def lookup_options(
+    lookup: str, settings: dict[str, Any], query: str, row: dict[str, Any] | None = None
+) -> list[LookupOption]:
+    """Search the connected DHIS2 for data sets, aggregate data elements or option combos.
 
     Reads only the connection, and the data set when one is chosen, from the form's values:
     elements are then narrowed to that data set, so the mapping cannot name one it will not accept.
+    A category option combo comes from the category combo of the data element chosen in the same
+    series ``row``, and an attribute option combo from the data set's.
     """
     resource = _LOOKUPS.get(lookup)
     if resource is None:
         raise ValueError(f"DHIS2 has no lookup '{lookup}'")
+    if lookup in ("category_option_combos", "attribute_option_combos"):
+        return _combo_options(lookup, settings, query, row or {})
     filters = [f"identifiable:token:{query.strip()}"] if query.strip() else []
     fields = "id,displayName,periodType"
     if lookup == "data_elements":
@@ -194,8 +229,38 @@ def lookup_options(lookup: str, settings: dict[str, Any], query: str) -> list[Lo
     return options
 
 
+def _combo_options(lookup: str, settings: dict[str, Any], query: str, row: dict[str, Any]) -> list[LookupOption]:
+    """The option combos of the row's data element, or of the data set, matching ``query`` by name or UID."""
+    if lookup == "category_option_combos":
+        owner, uid = "dataElements", row.get("data_element")
+        if not is_dhis2_uid(uid):
+            raise ValueError("choose this series' data element first")
+    else:
+        owner, uid = "dataSets", settings.get("data_set")
+        if not is_dhis2_uid(uid):
+            raise ValueError("choose a data set first: its attribute decides the attribute option combos")
+    with closing(_lookup_client(settings)) as client:
+        answer = client.get(
+            f"/api/{owner}/{uid}", params={"fields": "categoryCombo[displayName,categoryOptionCombos[id,displayName]]"}
+        )
+    combo = answer.get("categoryCombo") or {}
+    needle = query.strip().lower()
+    options = [
+        LookupOption(
+            value=item["id"],
+            label=str(item.get("displayName") or item["id"]),
+            detail=str(combo.get("displayName") or ""),
+        )
+        for item in combo.get("categoryOptionCombos", [])
+        if isinstance(item, dict) and is_dhis2_uid(item.get("id"))
+    ]
+    if needle:
+        options = [option for option in options if needle in option.label.lower() or needle in option.value.lower()]
+    return sorted(options, key=lambda option: option.label.lower())[:_LOOKUP_PAGE]
+
+
 def lookup_labels(lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
-    """The display names of stored data set or data element UIDs; unknown UIDs are left out."""
+    """The display names of stored data set, data element or option combo UIDs; unknown UIDs are left out."""
     resource = _LOOKUPS.get(lookup)
     if resource is None:
         raise ValueError(f"DHIS2 has no lookup '{lookup}'")
@@ -258,8 +323,16 @@ def export_definition(settings: dict[str, Any], context: DestinationContext) -> 
         "dataset": dataset.id,
         "connection": parsed.connection,
         "period_type": period_type,
-        "series": [{"select": {}, "data_element": series.data_element} for series in parsed.series],
+        "series": [_series_mapping(series) for series in parsed.series],
     }
+
+
+def _series_mapping(series: Dhis2Series) -> dict[str, Any]:
+    mapping: dict[str, Any] = {"select": {}, "data_element": series.data_element}
+    for field in ("category_option_combo", "attribute_option_combo"):
+        if getattr(series, field) is not None:
+            mapping[field] = getattr(series, field)
+    return mapping
 
 
 def check_destination(settings: dict[str, Any], context: DestinationContext) -> list[DestinationCheck]:
@@ -416,7 +489,12 @@ def _check_dhis2_metadata(
         with closing(get_connection(settings.connection)) as client:
             metadata = client.get(
                 f"/api/dataSets/{data_set}",
-                params={"fields": "id,displayName,periodType,dataSetElements[dataElement[id]],organisationUnits[id]"},
+                params={
+                    "fields": (
+                        "id,displayName,periodType,organisationUnits[id],categoryCombo[categoryOptionCombos[id]],"
+                        "dataSetElements[dataElement[id,categoryCombo[categoryOptionCombos[id]]]]"
+                    )
+                },
             )
     except Exception as exc:  # the connection, its token, or DHIS2 itself
         return DestinationCheck(
@@ -426,10 +504,33 @@ def _check_dhis2_metadata(
     expected = _DHIS2_PERIOD_TYPE.get(period_type or "")
     if expected and metadata.get("periodType") != expected:
         problems.append(f"data set period type is {metadata.get('periodType')!r}, the export is {expected}")
-    elements = {entry.get("dataElement", {}).get("id") for entry in metadata.get("dataSetElements", [])}
+    elements = {
+        element.get("id"): _combo_ids(element)
+        for entry in metadata.get("dataSetElements", [])
+        if isinstance(element := entry.get("dataElement"), dict)
+    }
     missing = [series.data_element for series in settings.series if series.data_element not in elements]
     if missing:
         problems.append(f"data element(s) not in the data set: {', '.join(missing)}")
+    foreign = [
+        f"{series.category_option_combo} (data element {series.data_element})"
+        for series in settings.series
+        if series.category_option_combo is not None
+        and series.data_element in elements
+        and series.category_option_combo not in elements[series.data_element]
+    ]
+    if foreign:
+        problems.append(f"category option combo(s) not of their data element: {', '.join(foreign)}")
+    attributes = _combo_ids(metadata)
+    stray = sorted(
+        {
+            series.attribute_option_combo
+            for series in settings.series
+            if series.attribute_option_combo is not None and series.attribute_option_combo not in attributes
+        }
+    )
+    if stray:
+        problems.append(f"attribute option combo(s) not of the data set's attribute: {', '.join(stray)}")
     assigned = {entry.get("id") for entry in metadata.get("organisationUnits", [])}
     unassigned = [identifier for identifier in feature_ids if identifier not in assigned]
     if feature_ids and unassigned:
@@ -449,6 +550,14 @@ def _check_dhis2_metadata(
     )
 
 
+def _combo_ids(owner: dict[str, Any]) -> set[str]:
+    """The option combo UIDs of a data element's or data set's category combo, as DHIS2 returned them."""
+    combo = owner.get("categoryCombo") or {}
+    return {
+        str(item["id"]) for item in combo.get("categoryOptionCombos", []) if isinstance(item, dict) and item.get("id")
+    }
+
+
 def preview(
     content: bytes,
     settings: dict[str, Any],
@@ -464,7 +573,7 @@ def preview(
     one unit's months. Organisation unit names come from the bound feature collection, which
     stores what DHIS2 sent with the geometry. Data element names come from ``labels``, as the
     last validation resolved them; DHIS2 is asked only for any it did not, and a name is left
-    out when it cannot answer.
+    out when it cannot answer. Option combos are named from ``labels`` only.
     """
     try:
         values = [value for value in json.loads(content).get("dataValues", []) if isinstance(value, dict)]
@@ -487,6 +596,8 @@ def preview(
             logger.warning("Could not resolve data element names for the dry-run sample: %s", exc)
 
     names_by_key = {"orgUnit": org_units, "dataElement": elements}
+    for key, path in _COMBO_LABELS.items():
+        names_by_key[key] = dict((labels or {}).get(path, {}))
 
     def cell(key: str, value: Any) -> Any:
         names = names_by_key.get(key, {})

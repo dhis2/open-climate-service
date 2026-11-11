@@ -65,7 +65,7 @@ data_value_set = service.execute(
                 "dataset_id": "era5land_temperature_monthly",
                 "temporal_extent": ["2025-01-01", "2025-12-31"],
                 "geometries": {"type": "FeatureCollection", "features": [...]},  # your org units
-                "export": "temperature-monthly",  # a named export in the instance configuration
+                "export": "temperature-monthly",  # the id of a pipeline that delivers to DHIS2
                 "method": "mean",
             },
             "result": True,

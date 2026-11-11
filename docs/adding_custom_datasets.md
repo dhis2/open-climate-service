@@ -302,8 +302,8 @@ new one. Updates missed while OCS was stopped are caught up at startup and every
 The recipe is checked at startup, against the registered workflows: an unknown workflow or
 argument, a missing argument, a time range set where `refresh_on` should fill it (or left open
 without `refresh_on`), a workflow that does not publish through `output_dataset_id`, a
-`refresh_on` dataset that no template declares, and a chain of recipes and workflow triggers
-that leads back to itself each refuse startup with the reason. A refreshed dataset's update
+`refresh_on` dataset that no template declares, and a chain of recipes that leads back to
+itself each refuse startup with the reason. A refreshed dataset's update
 starts the pipelines on it, so a pipeline can deliver the anomaly each time its source syncs.
 
 ### Dekads: a period type with no fixed length

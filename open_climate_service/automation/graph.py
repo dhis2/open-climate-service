@@ -1,10 +1,10 @@
-"""The automation graph: how schedules, workflow triggers and pipelines connect.
+"""The automation graph: how schedules, derived dataset recipes and pipelines connect.
 
 Assembled from what OCS already records, so it needs no configuration of its own:
 
 - a sync schedule keeps a dataset current from its data source;
-- a workflow trigger runs when a dataset updates, reads further datasets and feature
-  collections, and publishes a dataset or delivers through a named export;
+- a derived dataset's recipe runs its workflow when the dataset it refreshes on updates, reads
+  further datasets, and publishes the derived dataset;
 - a pipeline runs when its input dataset updates (or by hand) and delivers to a destination.
 
 The graph is configuration, not history: what is set up to run, with the latest run of each
@@ -44,7 +44,7 @@ class GraphNode(BaseModel):
     id: str = Field(description="Unique within the graph, prefixed by kind (dataset:era5land_temperature_daily).")
     kind: NodeKind
     label: str = Field(description="Display name.")
-    ref: str | None = Field(default=None, description="The id the node stands for (dataset id, trigger id).")
+    ref: str | None = Field(default=None, description="The id the node stands for (dataset id, workflow id).")
     meta: list[str] = Field(default_factory=list, description="Short facts: coverage, schedule, workflow.")
     status: NodeStatus | None = None
     href: str | None = Field(default=None, description="Path of the node's own page, relative to the mount.")
@@ -252,7 +252,7 @@ def _pipeline_status(record: Any) -> NodeStatus:
 
 
 def _literal_datasets(value: Any, known: Mapping[str, Any]) -> Iterable[str]:
-    """Dataset ids a trigger argument names literally: a string that is a dataset id."""
+    """Dataset ids a recipe argument names literally: a string that is a dataset id."""
     if isinstance(value, str):
         if value in known:
             yield value
@@ -302,8 +302,8 @@ def assemble_graph(
     datasets: Mapping[str, Any],
     feature_names: Mapping[str, str],
     schedules: Sequence[Any],
-    triggers: Sequence[Any],
-    trigger_jobs: Mapping[str, Any],
+    recipes: Sequence[Any],
+    refresh_jobs: Mapping[str, Any],
     pipelines: Sequence[Any],
     destination_titles: Mapping[str, str] | None = None,
     workflow_titles: Mapping[str, str] | None = None,
@@ -311,7 +311,8 @@ def assemble_graph(
 ) -> AutomationGraph:
     """Build the graph from already-read inputs.
 
-    ``trigger_jobs`` holds each trigger's latest job. ``ingested`` names the datasets fetched
+    ``recipes`` are those of derived datasets that exist, and ``refresh_jobs`` holds each one's
+    latest refresh job by its output. ``ingested`` names the datasets fetched
     from a data source, as opposed to produced by a workflow: only those get a data source box.
     """
     b = _Builder()
@@ -328,42 +329,26 @@ def assemble_graph(
             source = b.node(_source_node(record, schedule.dataset_id))
             b.edge(source, dataset, "updates", _schedule_label(schedule), "schedule")
 
-    for trigger in triggers:
-        arguments = dict(trigger.arguments or {})
-        output = arguments.get("output_dataset_id")
-        workflow_title = workflow_titles.get(trigger.workflow_id) or str(trigger.workflow_id)
+    for recipe in recipes:
+        workflow_title = workflow_titles.get(recipe.workflow) or str(recipe.workflow)
         workflow_node = b.node(
             GraphNode(
-                id=f"workflow:trigger:{trigger.id}",
+                id=f"workflow:recipe:{recipe.output}",
                 kind="workflow",
                 label=workflow_title,
-                ref=trigger.workflow_id,
-                meta=[trigger.workflow_id],
-                status=_job_status(trigger_jobs.get(trigger.id)),
-                href=f"/workflows/{trigger.workflow_id}",
+                ref=recipe.workflow,
+                meta=[recipe.workflow],
+                status=_job_status(refresh_jobs.get(recipe.output)),
+                href=f"/workflows/{recipe.workflow}",
             )
         )
-        b.edge(b.node(_dataset_node(trigger.on_update_of, datasets)), workflow_node, "updates", "on update", "update")
-        inputs = {k: v for k, v in arguments.items() if k != "output_dataset_id"}
-        for dataset_id in dict.fromkeys(_literal_datasets(inputs, datasets)):
-            if dataset_id != trigger.on_update_of:
+        b.edge(b.node(_dataset_node(recipe.input, datasets)), workflow_node, "updates", "on update", "update")
+        for dataset_id in dict.fromkeys(_literal_datasets(recipe.arguments, datasets)):
+            if dataset_id != recipe.input:
                 b.edge(b.node(_dataset_node(dataset_id, datasets)), workflow_node, "input")
-        for collection_id in dict.fromkeys(_feature_refs(inputs)):
+        for collection_id in dict.fromkeys(_feature_refs(recipe.arguments)):
             b.edge(b.node(_features_node(collection_id, feature_names)), workflow_node, "input")
-        if isinstance(output, str) and not output.startswith("$"):
-            b.edge(workflow_node, b.node(_dataset_node(output, datasets)), "updates")
-        deliver = getattr(trigger, "deliver", None)
-        if deliver is not None:
-            destination = b.node(
-                GraphNode(
-                    id=f"destination:export:{deliver.export}",
-                    kind="destination",
-                    label=deliver.export,
-                    ref=deliver.export,
-                    meta=["Named export", "Dry run" if deliver.dry_run else "Live"],
-                )
-            )
-            b.edge(workflow_node, destination, "delivers")
+        b.edge(workflow_node, b.node(_dataset_node(recipe.output, datasets)), "updates")
 
     for record in pipelines:
         spec = record.spec
@@ -414,7 +399,7 @@ def assemble_graph(
 def _add_provenance(b: _Builder, datasets: Mapping[str, Any], ingested: Collection[str]) -> None:
     """Give every ingested dataset in the graph its data source, wherever the graph reaches it.
 
-    Decided once, after every step is in: a dataset only a trigger reads needs its origin as much
+    Decided once, after every step is in: a dataset only a recipe reads needs its origin as much
     as one a pipeline reads. A scheduled dataset already has its source, through the edge that
     carries the schedule; any other gets a plain ``origin`` edge, so the clock stays on scheduled
     datasets only. A dataset a workflow produces has no data source of its own.
@@ -431,14 +416,14 @@ def _add_provenance(b: _Builder, datasets: Mapping[str, Any], ingested: Collecti
 
 
 def build_graph() -> AutomationGraph:
-    """Read the instance's schedules, triggers, pipelines and datasets, and assemble the graph."""
+    """Read the instance's schedules, recipes, pipelines and datasets, and assemble the graph."""
     datasets = _read_datasets()
     return assemble_graph(
         datasets=datasets,
         feature_names=_read_feature_names(),
         schedules=_read_schedules(),
-        triggers=_read_triggers(),
-        trigger_jobs=_read_trigger_jobs(),
+        recipes=_read_recipes(datasets),
+        refresh_jobs=_read_refresh_jobs(),
         pipelines=_read_pipelines(),
         destination_titles=_read_destination_titles(),
         workflow_titles=_read_workflow_titles(),
@@ -523,27 +508,33 @@ def _read_schedules() -> list[Any]:
         return []
 
 
-def _read_triggers() -> list[Any]:
+def _read_recipes(datasets: Mapping[str, Any]) -> list[Any]:
+    """The recipes OCS keeps current: those that refresh on an input, of derived datasets that exist."""
     try:
-        from open_climate_service.automation.config import get_automation_config
+        from open_climate_service.derivations.service import list_recipes
 
-        return list(get_automation_config().workflow_triggers)
+        return [recipe for recipe in list_recipes() if recipe.input is not None and recipe.output in datasets]
     except Exception:
-        _log.exception("Workflow triggers could not be read for the automation graph")
+        _log.exception("Derived dataset recipes could not be read for the automation graph")
         return []
 
 
-def _read_trigger_jobs() -> dict[str, Any]:
+def _read_refresh_jobs() -> dict[str, Any]:
+    """Each derived dataset's latest refresh job, by the dataset it refreshes."""
     try:
+        from open_climate_service.derivations.service import TRIGGER_PREFIX
         from open_climate_service.openeo.jobs import read_job_records
 
         latest: dict[str, Any] = {}
         for job in read_job_records():
-            if job.trigger_id and (job.trigger_id not in latest or job.created > latest[job.trigger_id].created):
-                latest[job.trigger_id] = job
+            if not job.trigger_id or not job.trigger_id.startswith(TRIGGER_PREFIX):
+                continue
+            output = job.trigger_id.removeprefix(TRIGGER_PREFIX)
+            if output not in latest or job.created > latest[output].created:
+                latest[output] = job
         return latest
     except Exception:
-        _log.exception("Triggered jobs could not be read for the automation graph")
+        _log.exception("Derived dataset refresh jobs could not be read for the automation graph")
         return {}
 
 
@@ -646,7 +637,7 @@ def layout(graph: AutomationGraph) -> dict[str, tuple[int, int]]:
         ids = columns[index]
         first_seen = {node_id: position for position, node_id in enumerate(ids)}
         for position, node_id in enumerate(ids):
-            # Order by what drives a step, not by what it reads: a trigger sits beside the
+            # Order by what drives a step, not by what it reads: a recipe sits beside the
             # dataset whose update runs it, not halfway towards a normal it also reads.
             parents = [row[p] for p in (drivers[node_id] or preds[node_id]) if p in row]
             row[node_id] = sum(parents) / len(parents) if parents else float(position)

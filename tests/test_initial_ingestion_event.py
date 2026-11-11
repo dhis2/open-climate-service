@@ -1,4 +1,4 @@
-"""CLIM-1217: a successful initial ingestion emits `dataset.updated` for workflow automation."""
+"""CLIM-1217: a successful initial ingestion emits `dataset.updated` for derived datasets and pipelines."""
 
 from __future__ import annotations
 
@@ -14,22 +14,18 @@ import xarray as xr
 from fastapi.testclient import TestClient
 
 from open_climate_service import config
-from open_climate_service.automation.config import AutomationConfig, WorkflowTrigger
-from open_climate_service.automation.service import WorkflowAutomationService
 from open_climate_service.data_registry.services import datasets as registry_datasets
 from open_climate_service.extents import services as extent_services
 from open_climate_service.ingestions import processes, services
 from open_climate_service.jobs import service as job_service_module
 from open_climate_service.jobs import store as native_store
-from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobRecord, JobStatus
-from open_climate_service.openeo import jobs as openeo_jobs
+from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent, JobRecord, JobStatus
 from open_climate_service.shared.time import utc_now
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
 from .conftest import WebhookReceiver
 
 _DATASET_ID = "rolling_precip"
-_TRIGGER = "chap-after-ingest"
 
 
 class _Plugin(BaseDatasetPlugin):
@@ -56,7 +52,7 @@ class _Plugin(BaseDatasetPlugin):
 
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[str, Any]]:
-    """Real ingestion into a local store, a real native job service, and automation."""
+    """Real ingestion into a local store, and a real native job service whose events are recorded."""
     plugin = _Plugin()
     dataset: dict[str, object] = {
         "id": _DATASET_ID,
@@ -77,40 +73,14 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[dict[s
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
     monkeypatch.setattr(native_store, "JOBS_INDEX_PATH", tmp_path / "data" / "jobs" / "jobs.json")
-    monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
-    # Create the index before background ingestion/event-consumer threads can race
-    # its first initialization with a reader.
-    openeo_jobs.store_list_jobs()
-
     job_service_module.reset_job_service()
-    openeo = openeo_jobs.OpenEOJobService()
-    # Workflow submission is what is under test; executing the workflow is not.
-    monkeypatch.setattr(openeo, "_enqueue", lambda job_id: None)
-    automation = WorkflowAutomationService(
-        config_loader=lambda: AutomationConfig(
-            workflow_triggers=[
-                WorkflowTrigger(
-                    id=_TRIGGER,
-                    on_update_of=_DATASET_ID,
-                    workflow_id="aggregate_to_chap_csv",
-                    arguments={
-                        "dataset_id": "$event.dataset_id",
-                        "temporal_extent": ["$event.previous_end", "$event.current_end"],
-                        "period_type": "day",
-                    },
-                )
-            ]
-        ),
-        openeo_service=openeo,
-    )
-    automation.start()
     jobs = job_service_module.get_job_service()
-    jobs.set_event_consumer(automation.consume)
+    received: list[JobEvent] = []
+    jobs.set_event_consumer(received.extend)
     try:
-        yield {"plugin": plugin, "dataset": dataset, "jobs": jobs, "automation": automation}
+        yield {"plugin": plugin, "dataset": dataset, "jobs": jobs, "received": received}
     finally:
         jobs.set_event_consumer(None)
-        openeo.shutdown()
         job_service_module.reset_job_service()
 
 
@@ -133,29 +103,23 @@ def _await_terminal(instance: dict[str, Any], job_id: str, timeout: float = 20.0
     pytest.fail(f"Ingestion job {job_id} did not finish within {timeout}s")
 
 
-def _triggered_jobs(expected: int = 1, timeout: float = 10.0) -> list[openeo_jobs.OpenEOJobRecord]:
-    """The workflow jobs the trigger submitted, once there are `expected` of them.
+def _handed_on(instance: dict[str, Any], expected: int = 1, timeout: float = 10.0) -> list[JobEvent]:
+    """The dataset updates handed to the event consumer, once there are `expected` of them.
 
-    The job service persists a job as successful first and hands its events to automation after,
-    so a test that saw the ingestion finish can look before the workflow job exists. Waiting for
-    the expected count, and returning whatever is there at the deadline, keeps the assertion on
-    the count rather than on timing.
+    The job service persists a job as successful first and hands its events on after, so a
+    test that saw the ingestion finish can look before the consumer has them. Waiting for the
+    expected count, and returning whatever is there at the deadline, keeps the assertion on the
+    count rather than on timing.
     """
-    # A triggered job's description names its source event and its automation rule.
-    rule = f"automation rule {_TRIGGER}"
     deadline = time.monotonic() + timeout
     while True:
-        jobs = [record for record in openeo_jobs.store_list_jobs() if rule in (record.description or "")]
-        if len(jobs) >= expected or time.monotonic() > deadline:
-            return jobs
+        updates = [event for event in instance["received"] if event.type == DATASET_UPDATED_EVENT_TYPE]
+        if len(updates) >= expected or time.monotonic() > deadline:
+            return updates
         time.sleep(0.05)
 
 
-def _submitted_extent(record: openeo_jobs.OpenEOJobRecord) -> Any:
-    return record.process["process_graph"]["workflow"]["arguments"]["temporal_extent"]
-
-
-def test_initial_ingestion_emits_one_event_and_triggers_the_workflow_once(instance: dict[str, Any]) -> None:
+def test_initial_ingestion_emits_one_event_and_hands_it_on_once(instance: dict[str, Any]) -> None:
     record = _ingest(instance)
 
     assert record.status == JobStatus.SUCCESSFUL, record.error
@@ -171,9 +135,7 @@ def test_initial_ingestion_emits_one_event_and_triggers_the_workflow_once(instan
         "current_start": "2026-01-01",
         "current_end": "2026-01-02",
     }
-    [triggered] = _triggered_jobs()
-    assert f"Triggered by {event.event_id} " in (triggered.description or "")
-    assert _submitted_extent(triggered) == [None, "2026-01-02"]
+    assert _handed_on(instance) == [event]
 
 
 def test_reingesting_a_current_dataset_emits_nothing(instance: dict[str, Any]) -> None:
@@ -182,7 +144,7 @@ def test_reingesting_a_current_dataset_emits_nothing(instance: dict[str, Any]) -
 
     assert again.status == JobStatus.SUCCESSFUL, again.error
     assert again.events == []
-    assert len(_triggered_jobs()) == 1
+    assert len(_handed_on(instance)) == 1
 
 
 def test_extending_ingestion_reports_what_was_stored_before(instance: dict[str, Any]) -> None:
@@ -192,7 +154,7 @@ def test_extending_ingestion_reports_what_was_stored_before(instance: dict[str, 
 
     [event] = extended.events
     assert (event.data["previous_end"], event.data["current_end"]) == ("2026-01-02", "2026-01-03")
-    assert len(_triggered_jobs(expected=2)) == 2
+    assert len(_handed_on(instance, expected=2)) == 2
 
 
 def test_failed_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
@@ -201,7 +163,7 @@ def test_failed_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
 
     assert record.status == JobStatus.FAILED
     assert record.events == []
-    assert _triggered_jobs(expected=0) == []
+    assert _handed_on(instance, expected=0) == []
 
 
 def test_a_scheduled_sync_reports_its_failure_and_its_recovery(
@@ -258,7 +220,7 @@ def test_cancelled_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
 
     assert record.status == JobStatus.CANCELLED
     assert record.events == []
-    assert _triggered_jobs(expected=0) == []
+    assert _handed_on(instance, expected=0) == []
 
 
 @pytest.mark.parametrize("marker", [True, False])
@@ -306,9 +268,7 @@ def test_recovered_ingestion_emits_the_event_its_committed_attempt_owed(instance
     [event] = record.events
     assert event.event_id == "interrupted:0"
     assert event.data["previous_end"] is None
-    instance["automation"].replay()
-    instance["automation"].replay()
-    assert len(_triggered_jobs()) == 1
+    assert len(_handed_on(instance)) == 1
 
 
 def test_streaming_checkpoints_keep_the_marker(instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -339,7 +299,7 @@ def test_inline_ingestion_is_recorded_as_a_completed_job_with_its_event(
     assert (record.status, record.executor_kind) == (JobStatus.SUCCESSFUL, "inline")
     [event] = record.events
     assert event.data["artifact_id"] == response.json()["ingestion_id"]
-    assert len(_triggered_jobs()) == 1
+    assert len(_handed_on(instance)) == 1
     # A recorded job is terminal: recovery never re-runs it.
     instance["jobs"].recover_pending_jobs()
     assert native_store.get_job_record(record.job_id).status == JobStatus.SUCCESSFUL  # type: ignore[union-attr]
@@ -348,7 +308,7 @@ def test_inline_ingestion_is_recorded_as_a_completed_job_with_its_event(
 def test_inline_sync_is_recorded_as_a_completed_job_with_its_event(
     instance: dict[str, Any], client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Before this change only queued and scheduled syncs reached automation.
+    # Before this change only queued and scheduled syncs reached the event consumers.
     instance["dataset"]["sync"] = {"kind": "temporal"}
     monkeypatch.setattr(
         "open_climate_service.shared.plugin_loader.instantiate_plugin", lambda *args, **kwargs: instance["plugin"]
@@ -367,4 +327,4 @@ def test_inline_sync_is_recorded_as_a_completed_job_with_its_event(
     assert event.data["action"] in {"append", "rematerialize"}
     expected_previous_end = "2026-01-02" if event.data["action"] == "append" else None
     assert (event.data["previous_end"], event.data["current_end"]) == (expected_previous_end, "2026-01-03")
-    assert len(_triggered_jobs(expected=2)) == 2
+    assert len(_handed_on(instance, expected=2)) == 2

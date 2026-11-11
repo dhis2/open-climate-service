@@ -2,8 +2,8 @@
 
 The pipeline never looks inside the workflow's process graph beyond its declared interface:
 its parameters, and whether its result is already saved. Workflows come from the one
-workflow registry (`openeo.workflows`), and feature collections are bound with the same
-``from_features`` marker workflow triggers use, resolved by the same code.
+workflow registry (`openeo.workflows`), and feature collections are bound with the
+``from_features`` marker (`features.bindings`).
 """
 
 from __future__ import annotations
@@ -11,11 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from open_climate_service.automation.service import (
-    _feature_versions,
-    _is_inline_geojson,
-    _iter_feature_references,
-    _resolve_feature_references,
+from open_climate_service.features.bindings import (
+    feature_versions,
+    is_inline_geojson,
+    iter_feature_references,
+    resolve_feature_references,
 )
 from open_climate_service.openeo import workflows as workflow_registry
 from open_climate_service.openeo.schemas import WorkflowRecord
@@ -97,11 +97,11 @@ def type_problem(name: str, schema: dict[str, Any], value: Any) -> str | None:
     """A readable reason ``value`` does not fit a simple JSON Schema, or None."""
     subtype = schema.get("subtype")
     if subtype == GEOJSON:
-        if _is_inline_geojson(value):
+        if is_inline_geojson(value):
             return None
         if isinstance(value, dict) and "from_features" in value:
             try:
-                list(_iter_feature_references(value))
+                list(iter_feature_references(value))
             except ValueError as exc:
                 return f"'{name}': {exc}"
             return None
@@ -139,7 +139,7 @@ def inputs(reference: WorkflowReference) -> list[tuple[Literal["dataset", "featu
             found.append(("dataset", value, name))
             continue
         try:
-            found.extend(("features", collection_id, name) for collection_id in _iter_feature_references(value))
+            found.extend(("features", collection_id, name) for collection_id in iter_feature_references(value))
         except ValueError:
             continue
     return found
@@ -211,7 +211,7 @@ def bind(reference: WorkflowReference) -> BoundWorkflow:
         record=record,
         interval_parameter=interval,
         dataset_ids=tuple(datasets),
-        feature_collections=tuple(sorted(set(_iter_feature_references(reference.arguments)))),
+        feature_collections=tuple(sorted(set(iter_feature_references(reference.arguments)))),
         definition_digest=definition_digest(record),
     )
 
@@ -233,9 +233,9 @@ def build_process(
     meanwhile. The result is saved through the pipeline's named export in the destination
     plugin's format. Feature references are pinned to the collection version current now.
     """
-    versions = _feature_versions(reference.arguments)
+    versions = feature_versions(reference.arguments)
     feature_nodes: dict[str, Any] = {}
-    arguments: dict[str, Any] = _resolve_feature_references(reference.arguments, feature_nodes, versions)
+    arguments: dict[str, Any] = resolve_feature_references(reference.arguments, feature_nodes, versions)
     arguments[bound.interval_parameter] = [start, end]
     graph = {
         **feature_nodes,

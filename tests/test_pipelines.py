@@ -47,6 +47,7 @@ from .conftest import MountedClientFactory, WebhookReceiver
 
 _OU = ["ImspTQPwCqd", "O6uvpzGd5pu"]
 _ELEMENT = "LeePHYkZwBk"
+_FEMALE, _MALE, _AOC = "FemaleCOC01", "MaleCOC0001", "PartnerAOC1"
 _SETTINGS: dict[str, Any] = {"connection": "local", "data_set": "N63vVmt2uY0", "series": [{"data_element": _ELEMENT}]}
 _SPEC: dict[str, Any] = {
     "id": "rain-to-dhis2",
@@ -128,7 +129,7 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, datasets: list[Any
     monkeypatch.setattr(feature_services, "registered_collections", lambda: {"districts": SimpleNamespace()})
     monkeypatch.setattr(
         workflow_binding,
-        "_feature_versions",
+        "feature_versions",
         lambda arguments: {"districts": "2026-01-01T00:00:00"} if "districts" in json.dumps(arguments) else {},
     )
     monkeypatch.setattr(
@@ -169,7 +170,15 @@ def _dhis2(
             "id": "N63vVmt2uY0",
             "displayName": "OCS test",
             "periodType": period_type,
-            "dataSetElements": [{"dataElement": {"id": _ELEMENT}}],
+            "dataSetElements": [
+                {
+                    "dataElement": {
+                        "id": _ELEMENT,
+                        "categoryCombo": {"categoryOptionCombos": [{"id": _FEMALE}, {"id": _MALE}]},
+                    }
+                }
+            ],
+            "categoryCombo": {"categoryOptionCombos": [{"id": _AOC}]},
             "organisationUnits": [{"id": ou} for ou in (assigned if assigned is not None else _OU)],
         },
         summary
@@ -512,7 +521,6 @@ def test_validation_passes_when_everything_lines_up(instance: None, monkeypatch:
         "connection": "pass",
         "dhis2_metadata": "pass",
         "schedule": "skip",
-        "configuration": "pass",
         "delivery": "pass",
     }
     assert result.export == {
@@ -563,6 +571,18 @@ def test_validation_reports_dhis2_period_and_assignment(instance: None, monkeypa
     message = _by_id(service.validate_pipeline(store.create_record(_spec())))["dhis2_metadata"].message
     assert "period type is 'Daily', the export is Monthly" in message
     assert "1 of 2 organisation units are not assigned" in message
+
+    _dhis2(monkeypatch)
+    series = [{"data_element": _ELEMENT, "category_option_combo": _FEMALE, "attribute_option_combo": _AOC}]
+    combos = _spec(id="by-sex", destination={"plugin": "dhis2", "settings": {**_SETTINGS, "series": series}})
+    result = service.validate_pipeline(store.create_record(combos))
+    assert result.valid, result.checks
+    assert result.export is not None and result.export["series"] == [{"select": {}, **series[0]}]
+    foreign = [{**series[0], "category_option_combo": "OtherCOC001", "attribute_option_combo": "OtherAOC001"}]
+    wrong = _spec(id="wrong-combos", destination={"plugin": "dhis2", "settings": {**_SETTINGS, "series": foreign}})
+    message = _by_id(service.validate_pipeline(store.create_record(wrong)))["dhis2_metadata"].message
+    assert f"category option combo(s) not of their data element: OtherCOC001 (data element {_ELEMENT})" in message
+    assert "attribute option combo(s) not of the data set's attribute: OtherAOC001" in message
 
 
 def test_validation_rejects_wrong_connection_or_non_polygon_collection(
@@ -964,7 +984,6 @@ def test_the_core_needs_no_dhis2_identifiers(instance: None, monkeypatch: pytest
         "destination",
         "folder",
         "schedule",
-        "configuration",
         "delivery",
     ]
     assert result.export == {"dataset": "rain_monthly", "id": "rain-to-dhis2", "plugin": "drop"}
@@ -1151,6 +1170,12 @@ class _LookupClient(_FakeClient):
             return {"dataSets": [{"id": "N63vVmt2uY0", "displayName": "OCS test", "periodType": "Monthly"}]}
         if path == "/api/dataElements":
             return {"dataElements": [{"id": _ELEMENT, "displayName": "Rainfall total", "valueType": "NUMBER"}]}
+        combos = {f"/api/dataElements/{_ELEMENT}": ("Sex", {_FEMALE: "Female", _MALE: "Male"})}
+        combos["/api/dataSets/N63vVmt2uY0"] = ("Partner", {_AOC: "Partner A"})
+        if path in combos and str((params or {}).get("fields", "")).startswith("categoryCombo"):
+            name, options = combos[path]
+            entries = [{"id": uid, "displayName": label} for uid, label in options.items()]
+            return {"categoryCombo": {"displayName": name, "categoryOptionCombos": entries}}
         return super().get(path, params=params)
 
 
@@ -1230,6 +1255,18 @@ def test_dhis2_lookups_search_by_name_narrow_to_the_data_set_and_resolve_labels(
     assert dhis2_destination.lookup_labels("data_sets", {"connection": "local"}, []) == {}
     assert len(client.gets) == 4, "no values, no request"
 
+    # A disaggregation follows the data element chosen in the same row; an attribute, the data set.
+    row = {"data_element": _ELEMENT}
+    combos = dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "FEM", row)
+    assert [(o.value, o.label, o.detail) for o in combos] == [(_FEMALE, "Female", "Sex")]
+    assert len(dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", row)) == 2
+    attributes = dhis2_destination.lookup_options("attribute_option_combos", {"connection": "local", **_SETTINGS}, "")
+    assert [o.value for o in attributes] == [_AOC]
+    with pytest.raises(ValueError, match="choose this series' data element first"):
+        dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", {})
+    with pytest.raises(ValueError, match="choose a data set first"):
+        dhis2_destination.lookup_options("attribute_option_combos", {"connection": "local"}, "")
+
     with pytest.raises(ValueError, match="choose a DHIS2 connection first"):
         dhis2_destination.lookup_options("data_sets", {}, "x")
     with pytest.raises(ValueError, match="not a configured DHIS2 connection"):
@@ -1253,6 +1290,18 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
         "domainType:eq:AGGREGATE",
         "dataSetElements.dataSet.id:eq:N63vVmt2uY0",
     ]
+
+    # The asking field names its row, so the search sees that row's data element.
+    row = {"dest.connection": "local", "dest.series.0.data_element": _ELEMENT, "dest.series.1.data_element": ""}
+    combos = client.post(
+        "/pipelines/lookups/dhis2/category_option_combos",
+        data={**row, "field": "dest.series.0.category_option_combo", "q": "male"},
+    )
+    assert [option["value"] for option in combos.json()["options"]] == [_FEMALE, _MALE]
+    empty_row = client.post(
+        "/pipelines/lookups/dhis2/category_option_combos", data={**row, "field": "dest.series.1.category_option_combo"}
+    )
+    assert empty_row.status_code == 400 and "data element first" in empty_row.json()["detail"]
 
     missing = client.post("/pipelines/lookups/dhis2/data_sets", data={"q": "rain"})
     assert missing.status_code == 400 and "choose a DHIS2 connection first" in missing.json()["detail"]
@@ -1583,9 +1632,7 @@ def _approve(pipeline_id: str = "rain-to-dhis2", *, live: bool = False) -> Pipel
     return record
 
 
-def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
-    instance: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_validated_pipeline_owns_its_named_export(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
     from open_climate_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
@@ -1602,16 +1649,6 @@ def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
     store.update_record("rain-to-dhis2", _invalidate)
     with pytest.raises(ValueError, match="Unknown export"):
         resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
-
-    store.delete_record("rain-to-dhis2")
-    _validated()
-    api_config._cache["exports"] = [  # type: ignore[index]
-        {"id": "rain-to-dhis2", "plugin": "dhis2", "period_type": "monthly", "series": [{"data_element": _ELEMENT}]}
-    ]
-    with pytest.raises(ValueError, match="declared in the configuration and owned by the pipeline"):
-        resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
-    check = _by_id(service.validate_pipeline(store.get_record("rain-to-dhis2")))["configuration"]  # type: ignore[arg-type]
-    assert check.status == "fail" and "already configured" in check.message
 
 
 def test_save_refuses_an_invalid_pipeline(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -77,15 +77,8 @@ def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch
             arguments={**_ANOMALY.arguments, "observed_dataset_id": "g"},
             refresh_on="observed_dataset_id",
         ),
-        Recipe(
-            output="i",
-            workflow="climate_anomaly",
-            arguments={**_ANOMALY.arguments, "observed_dataset_id": "j"},
-            refresh_on="observed_dataset_id",
-        ),
     ]
-    monkeypatch.setattr(derivations, "_recipes", lambda: broken)
-    monkeypatch.setattr(derivations, "_trigger_edges", lambda: {("i", "j")})  # a trigger writes j after i
+    monkeypatch.setattr(derivations, "list_recipes", lambda: broken)
 
     with pytest.raises(ValueError) as refused:
         derivations.validate_recipes()
@@ -98,7 +91,7 @@ def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch
         "'d': missing argument(s) normal_dataset_id, variable",
         "'e': set 'temporal_extent': a recipe without refresh_on runs over a fixed range",
         "'f': leave 'temporal_extent' out",
-        *(f"'{output}': its updates lead back to itself" for output in ("g", "h", "i")),
+        *(f"'{output}': its updates lead back to itself" for output in ("g", "h")),
         "'f': refresh_on names 'rain', which is not a dataset template",
     ):
         assert expected in message
@@ -167,7 +160,7 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _Instance:
     monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: state.openeo)
     monkeypatch.setattr(openeo_jobs, "store_list_jobs", lambda: list(state.openeo.jobs.values()))
     monkeypatch.setattr(job_events, "persisted_events", lambda: list(state.log))
-    monkeypatch.setattr(derivations, "_recipes", lambda: state.recipes)
+    monkeypatch.setattr(derivations, "list_recipes", lambda: state.recipes)
     monkeypatch.setattr(derivations, "_exists", lambda dataset_id: dataset_id in state.created)
     return state
 
@@ -340,7 +333,7 @@ def test_an_input_update_refreshes_the_derived_dataset_and_its_pipeline_hears_of
     from open_climate_service.shared.time import utc_now
 
     recipe = replace(_ANOMALY, output=_DATASET)
-    monkeypatch.setattr(derivations, "_recipes", lambda: [recipe])
+    monkeypatch.setattr(derivations, "list_recipes", lambda: [recipe])
     running = [first_process]
     monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: running[0])
     heard: list[str] = []

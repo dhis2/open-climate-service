@@ -13,7 +13,6 @@ from starlette.responses import Response
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from open_climate_service import config as api_config
 from open_climate_service.automation import routes as automation_routes
-from open_climate_service.automation.service import get_workflow_automation_service
 from open_climate_service.data_registry import routes as data_source_routes
 from open_climate_service.exports import routes as exports_routes
 from open_climate_service.extents import routes as extent_routes
@@ -153,12 +152,6 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     log_plugin_loading()
     # Before any job is recovered, so no computation starts a dask pool of its own.
     install_shared_dask_pool()
-    # Every configured export is resolved here, so an export whose period cannot be produced
-    # from its dataset, or that lacks the temporal_aggregation it needs, refuses startup with
-    # the same message a job would fail with later (CLIM-1302).
-    from open_climate_service.exports.service import validate_configured_exports
-
-    validate_configured_exports()
     from open_climate_service.derivations import service as derivations
     from open_climate_service.notifications import webhook
 
@@ -192,8 +185,6 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     job_service = get_job_service()
     job_service.recover_pending_jobs()
     openeo_service = get_openeo_job_service()
-    automation_service = get_workflow_automation_service()
-    automation_service.start()
     from open_climate_service.jobs import dispatch
     from open_climate_service.pipelines import runner as pipeline_runner
 
@@ -203,15 +194,11 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     # An openEO job that publishes a managed dataset owns its update event; it reaches the
     # same consumers when the job finishes, and startup replay reads it from the job store.
     openeo_service.set_event_consumer(dispatch.consume)
-    # Registered before openEO jobs are recovered: a re-enqueued triggered job records the
-    # delivery it owes as it finishes, which it cannot do before these are in place. A job
-    # finishing during reconciliation is caught by one or the other; the deterministic
-    # delivery key makes being caught by both harmless.
-    openeo_service.set_delivery_due_provider(automation_service.delivery_due_for)
+    # Registered before openEO jobs are recovered, so a re-enqueued job that finishes during
+    # recovery still reaches its pipeline run or derived dataset.
     from open_climate_service.openeo.schemas import OpenEOJobRecord
 
     def _job_finished(record: OpenEOJobRecord) -> None:
-        automation_service.on_job_finished(record)
         pipeline_runner.on_job_finished(record)
         derivations.on_job_finished(record)
 
@@ -223,10 +210,6 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     except Exception:
         logger.exception("openEO publication reconciliation failed; continuing startup")
     try:
-        automation_service.reconcile_deliveries()
-    except Exception:
-        logger.exception("Workflow delivery reconciliation failed; continuing startup")
-    try:
         pipeline_runner.reconcile()
     except Exception:
         logger.exception("Pipeline run reconciliation failed; continuing startup")
@@ -234,12 +217,6 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         derivations.reconcile()
     except Exception:
         logger.exception("Derived dataset reconciliation failed; continuing startup")
-    try:
-        automation_service.replay()
-    except Exception:
-        # Replay must not take down startup: a partial replay is idempotent and the consumer
-        # above still handles every newly persisted event.
-        logger.exception("Workflow automation replay failed; continuing startup")
     try:
         webhook.replay()
     except Exception:
@@ -266,10 +243,7 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         job_service.set_event_consumer(None)
         pipeline_runner.set_event_consumer(None)
         openeo_service.set_event_consumer(None)
-        # The listener goes first: a delivery a job records from here on is reconciled at the
-        # next start. The delivery provider is deliberately left in place. The executor does
-        # not wait for running jobs, so one can still finish after this; clearing the provider
-        # would persist it with no delivery owed, and nothing could recover that.
+        # A job finishing from here on is reconciled at the next start.
         openeo_service.set_finished_listener(None)
         scheduler_service.shutdown()
         job_service.shutdown()

@@ -28,7 +28,6 @@ from open_climate_service.exports.service import (
     incomplete_periods_to_drop,
     render_named_export,
     resolve_named_export,
-    validate_configured_exports,
 )
 from open_climate_service.jobs import service as job_service_module
 from open_climate_service.jobs import store as native_store
@@ -56,6 +55,8 @@ from open_climate_service.shared.time import (
     stamp_cadence,
     utc_now,
 )
+
+from .conftest import named_exports
 
 _DATA_ELEMENT = "BXgDHhPdFVU"
 _OU_A = "ImspTQPwCqd"
@@ -166,7 +167,8 @@ def _configure(monkeypatch: pytest.MonkeyPatch, source: str | None, **extra: Any
         "series": [{"data_element": _DATA_ELEMENT}],
         **extra,
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [export]})
+    monkeypatch.setattr(config, "_cache", {})
+    named_exports(monkeypatch, export)
     template = {"id": "src", "period_type": source} if source is not None else None
     monkeypatch.setattr(registry, "get_dataset", lambda dataset_id: template if dataset_id == "src" else None)
 
@@ -175,26 +177,11 @@ def test_daily_dataset_with_monthly_export_must_declare_temporal_aggregation(mon
     _configure(monkeypatch, "daily")
     with pytest.raises(ValueError, match="must declare temporal_aggregation"):
         resolve_named_export("DHIS2JSON", {"export": "rain"})
-    with pytest.raises(ValueError, match="must declare temporal_aggregation"):
-        validate_configured_exports()
 
 
 def test_daily_dataset_with_monthly_export_and_a_declaration_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "daily", temporal_aggregation="sum")
     assert resolve_named_export("DHIS2JSON", {"export": "rain"}).mapping["temporal_aggregation"] == "sum"
-    validate_configured_exports()
-
-
-@pytest.mark.parametrize(
-    ("definitions", "message"),
-    [(["not-a-mapping"], "must be a mapping"), ([{"plugin": "dhis2"}], "requires an ID")],
-)
-def test_startup_rejects_malformed_export_definitions(
-    monkeypatch: pytest.MonkeyPatch, definitions: list[Any], message: str
-) -> None:
-    monkeypatch.setattr(config, "_cache", {"exports": definitions})
-    with pytest.raises(ValueError, match=message):
-        validate_configured_exports()
 
 
 def test_monthly_dataset_with_monthly_export_refuses_a_declaration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,21 +396,17 @@ def daily_instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
 
 
 def _export_config(monkeypatch: pytest.MonkeyPatch, **extra: Any) -> None:
-    monkeypatch.setattr(
-        config,
-        "_cache",
+    monkeypatch.setattr(config, "_cache", {})
+    named_exports(
+        monkeypatch,
         {
-            "exports": [
-                {
-                    "id": "rain-monthly",
-                    "plugin": "dhis2",
-                    "dataset": "rain_daily",
-                    "period_type": "monthly",
-                    "aggregation": "mean",
-                    "series": [{"data_element": _DATA_ELEMENT}],
-                    **extra,
-                }
-            ]
+            "id": "rain-monthly",
+            "plugin": "dhis2",
+            "dataset": "rain_daily",
+            "period_type": "monthly",
+            "aggregation": "mean",
+            "series": [{"data_element": _DATA_ELEMENT}],
+            **extra,
         },
     )
 

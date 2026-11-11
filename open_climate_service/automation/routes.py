@@ -1,4 +1,4 @@
-"""The Automation section: how schedules, workflow triggers and pipelines connect.
+"""The Automation section: how schedules, derived dataset recipes and pipelines connect.
 
 ``GET /automation`` opens the section's first tab, the Pipelines page, and ``GET /automation/graph``
 returns the graph a pipeline's diagram is drawn from, as JSON. The Pipelines and Schedules pages
@@ -24,5 +24,5 @@ def automation_section(request: Request) -> RedirectResponse:
 
 @router.get("/graph", response_model=AutomationGraph)
 def automation_graph() -> AutomationGraph:
-    """Every configured path from a data source through schedules, triggers and pipelines, with latest status."""
+    """Every configured path from a data source through schedules, recipes and pipelines, with latest status."""
     return build_graph()

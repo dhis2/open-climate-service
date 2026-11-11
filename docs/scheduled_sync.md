@@ -138,8 +138,8 @@ A dataset that is static, forecast-facing or has no registered data source is re
 reason. The target must have been ingested for a check to submit a sync; a stored schedule for
 a dataset not yet ingested is saved and its checks finish as `not_materialized` until it is.
 
-Changing schedules changes when data moves into the instance, and a sync can trigger
-workflows and deliveries configured under `automation`. These routes are closed on a
+Changing schedules changes when data moves into the instance, and a sync can refresh derived
+datasets and run the pipelines on them, including live deliveries. These routes are closed on a
 read-only instance, but read-only mode is not authentication: an instance that exposes the
 page must be deployed privately or behind reverse-proxy authentication until OCS has its
 own write authentication.

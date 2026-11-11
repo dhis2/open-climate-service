@@ -1,4 +1,4 @@
-"""The Automation section: the graph of schedules, triggers and pipelines, and its pages."""
+"""The Automation section: the graph of schedules, derived dataset recipes and pipelines, and its pages."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service.automation import config as automation_config
-from open_climate_service.automation.config import AutomationConfig, WorkflowTrigger
 from open_climate_service.automation.graph import AutomationGraph, layout
+from open_climate_service.data_registry.recipes import Recipe
 from open_climate_service.data_registry.services import datasets as registry_datasets
+from open_climate_service.derivations import service as derivations
 from open_climate_service.features import services as feature_services
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.main import app
@@ -70,23 +70,12 @@ SCHEDULES = [
     ),
 ]
 
-TRIGGERS = [
-    WorkflowTrigger(
-        id="chirps-anomaly",
-        on_update_of="chirps_monthly",
-        workflow_id="climate_anomaly",
-        arguments={
-            "observed_dataset_id": "$event.dataset_id",
-            "normal_dataset_id": "chirps_normal",
-            "output_dataset_id": "chirps_anomaly",
-            "temporal_extent": ["$event.current_start", "$event.current_end"],
-        },
-    ),
-    WorkflowTrigger(
-        id="anomaly-to-districts",
-        on_update_of="chirps_anomaly",
-        workflow_id="aggregate_to_dhis2_json",
-        arguments={"dataset_id": "$event.dataset_id", "geometries": {"from_features": "districts"}},
+RECIPES = [
+    Recipe(
+        output="chirps_anomaly",
+        workflow="climate_anomaly",
+        arguments={"observed_dataset_id": "chirps_monthly", "normal_dataset_id": "chirps_normal"},
+        refresh_on="observed_dataset_id",
     ),
 ]
 
@@ -134,7 +123,7 @@ def _template(dataset_id: str) -> dict[str, Any]:
 
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A Nepal-like instance: two schedules, a trigger chain through a derived dataset, a pipeline."""
+    """A Nepal-like instance: two schedules, a recipe that derives an anomaly, a pipeline."""
     monkeypatch.setattr(ingestion_services, "list_datasets", lambda: SimpleNamespace(items=DATASETS))
     templates = [_template(d.dataset_id) for d in DATASETS] + [_template("era5_precip_monthly")]
     monkeypatch.setattr(registry_datasets, "list_datasets", lambda: templates)
@@ -145,11 +134,9 @@ def instance(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     status = ScheduleListResponse(enabled=True, running=True, timezone="UTC", schedules=SCHEDULES)
     monkeypatch.setattr(scheduler_service, "get_scheduler_service", lambda: SimpleNamespace(status=lambda: status))
-    monkeypatch.setattr(
-        automation_config, "get_automation_config", lambda: AutomationConfig(workflow_triggers=TRIGGERS)
-    )
+    monkeypatch.setattr(derivations, "list_recipes", lambda: RECIPES)
     finished = SimpleNamespace(
-        trigger_id="chirps-anomaly",
+        trigger_id="derive:chirps_anomaly",
         status="finished",
         created=CHECKED,
         updated=datetime(2026, 10, 21, 6, 2, tzinfo=UTC),
@@ -173,17 +160,15 @@ def _edges(graph: AutomationGraph) -> set[tuple[str, str, str]]:
     return {(e.source, e.target, e.kind) for e in graph.edges}
 
 
-def test_the_graph_connects_schedules_triggers_and_pipelines(client: TestClient) -> None:
+def test_the_graph_connects_schedules_recipes_and_pipelines(client: TestClient) -> None:
     graph = _graph(client)
 
     assert _edges(graph) == {
         ("source:era5_daily", "dataset:era5_daily", "updates"),
         ("source:chirps_monthly", "dataset:chirps_monthly", "updates"),
-        ("dataset:chirps_monthly", "workflow:trigger:chirps-anomaly", "updates"),
-        ("dataset:chirps_normal", "workflow:trigger:chirps-anomaly", "input"),
-        ("workflow:trigger:chirps-anomaly", "dataset:chirps_anomaly", "updates"),
-        ("dataset:chirps_anomaly", "workflow:trigger:anomaly-to-districts", "updates"),
-        ("features:districts", "workflow:trigger:anomaly-to-districts", "input"),
+        ("dataset:chirps_monthly", "workflow:recipe:chirps_anomaly", "updates"),
+        ("dataset:chirps_normal", "workflow:recipe:chirps_anomaly", "input"),
+        ("workflow:recipe:chirps_anomaly", "dataset:chirps_anomaly", "updates"),
         ("dataset:era5_daily", "workflow:pipeline:daily-temperature-to-dhis2", "updates"),
         ("features:districts", "workflow:pipeline:daily-temperature-to-dhis2", "input"),
         ("workflow:pipeline:daily-temperature-to-dhis2", "destination:pipeline:daily-temperature-to-dhis2", "delivers"),
@@ -194,10 +179,10 @@ def test_arrows_say_when_they_fire(client: TestClient) -> None:
     labels = {(e.source, e.target): e.label for e in _graph(client).edges}
 
     assert labels[("source:era5_daily", "dataset:era5_daily")] == "daily 06:00 UTC"
-    assert labels[("dataset:chirps_monthly", "workflow:trigger:chirps-anomaly")] == "on update"
+    assert labels[("dataset:chirps_monthly", "workflow:recipe:chirps_anomaly")] == "on update"
     assert labels[("dataset:era5_daily", "workflow:pipeline:daily-temperature-to-dhis2")] == "on update"
     # Inputs and deliveries carry no label: they read or send, they do not start anything.
-    assert labels[("dataset:chirps_normal", "workflow:trigger:chirps-anomaly")] is None
+    assert labels[("dataset:chirps_normal", "workflow:recipe:chirps_anomaly")] is None
     assert (
         labels[("workflow:pipeline:daily-temperature-to-dhis2", "destination:pipeline:daily-temperature-to-dhis2")]
         is None
@@ -205,8 +190,8 @@ def test_arrows_say_when_they_fire(client: TestClient) -> None:
 
     fires = {(e.source, e.target): e.fires for e in _graph(client).edges}
     assert fires[("source:era5_daily", "dataset:era5_daily")] == "schedule"
-    assert fires[("dataset:chirps_monthly", "workflow:trigger:chirps-anomaly")] == "update"
-    assert fires[("dataset:chirps_normal", "workflow:trigger:chirps-anomaly")] is None
+    assert fires[("dataset:chirps_monthly", "workflow:recipe:chirps_anomaly")] == "update"
+    assert fires[("dataset:chirps_normal", "workflow:recipe:chirps_anomaly")] is None
 
 
 def test_each_step_carries_its_latest_run(client: TestClient) -> None:
@@ -216,8 +201,7 @@ def test_each_step_carries_its_latest_run(client: TestClient) -> None:
     assert nodes["dataset:era5_daily"].status.label == "Checked 21 Oct 06:00 UTC"  # type: ignore[union-attr]
     assert "2026-01-01 to 2026-10-15" in nodes["dataset:era5_daily"].meta
     assert nodes["dataset:chirps_monthly"].status.state == "waiting"  # type: ignore[union-attr]
-    assert nodes["workflow:trigger:chirps-anomaly"].status.state == "ok"  # type: ignore[union-attr]
-    assert nodes["workflow:trigger:anomaly-to-districts"].status.label == "Waiting for an update"  # type: ignore[union-attr]
+    assert nodes["workflow:recipe:chirps_anomaly"].status.state == "ok"  # type: ignore[union-attr]
     assert nodes["workflow:pipeline:daily-temperature-to-dhis2"].status.state == "dry_run"  # type: ignore[union-attr]
     # An input-only dataset has no schedule, so no status.
     assert nodes["dataset:chirps_normal"].status is None
@@ -227,18 +211,11 @@ def test_a_chain_through_a_derived_dataset_reads_left_to_right(client: TestClien
     places = layout(_graph(client))
     column = {node_id: layer for node_id, (layer, _) in places.items()}
 
-    assert (
-        column["source:chirps_monthly"] < column["dataset:chirps_monthly"] < column["workflow:trigger:chirps-anomaly"]
-    )
-    assert (
-        column["workflow:trigger:chirps-anomaly"]
-        < column["dataset:chirps_anomaly"]
-        < column["workflow:trigger:anomaly-to-districts"]
-    )
-    # Destinations get a column of their own, past the last trigger.
-    assert (
-        column["destination:pipeline:daily-temperature-to-dhis2"] == column["workflow:trigger:anomaly-to-districts"] + 1
-    )
+    assert column["source:chirps_monthly"] < column["dataset:chirps_monthly"] < column["workflow:recipe:chirps_anomaly"]
+    assert column["workflow:recipe:chirps_anomaly"] < column["dataset:chirps_anomaly"]
+    # Destinations get a column of their own, past everything else.
+    others = [layer for node_id, layer in column.items() if not node_id.startswith("destination:")]
+    assert column["destination:pipeline:daily-temperature-to-dhis2"] == max(others) + 1
 
 
 def test_automation_opens_on_pipelines_then_schedules(client: TestClient) -> None:
@@ -289,7 +266,7 @@ def test_a_pipeline_page_draws_only_that_pipelines_chain(client: TestClient, mon
     assert 'id="ag-arrow-lit"' in diagram
     assert ">runs on update</span>" in page and ">sync schedule</span>" in page
     # Nothing beside it: the CHIRPS3 chain is not part of this pipeline.
-    assert "trigger:chirps-anomaly" not in diagram
+    assert "recipe:chirps_anomaly" not in diagram
     assert "dataset:chirps_monthly" not in diagram
     # One box to a column here, so the headings are singular.
     assert ">DATA SOURCE<" in diagram
@@ -332,7 +309,7 @@ def test_a_pipeline_view_includes_the_upstream_workflow_that_published_its_input
     diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
 
     assert 'data-id="dataset:chirps_anomaly"' in diagram
-    assert 'data-id="workflow:trigger:chirps-anomaly"' in diagram
+    assert 'data-id="workflow:recipe:chirps_anomaly"' in diagram
     assert 'data-id="dataset:chirps_monthly"' in diagram
     assert ">DATA SOURCE<" in diagram
     assert ">DERIVED DATASET<" in diagram
@@ -349,7 +326,7 @@ def test_the_pipelines_page_draws_each_pipeline_or_lists_them(
     assert 'data-views="pipelines"' in page
     assert page.index('data-view-button="diagrams"') < page.index('data-view-button="list"')
     diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
-    assert 'data-id="dataset:era5_daily"' in diagram and "trigger:chirps-anomaly" not in diagram
+    assert 'data-id="dataset:era5_daily"' in diagram and "recipe:chirps_anomaly" not in diagram
     # Its ids carry the pipeline's id, so several diagrams can share a page.
     assert 'id="ag-arrow-lit-daily-temperature-to-dhis2"' in diagram
     # The card title opens the pipeline; the workflow box opens the reusable workflow.
@@ -427,7 +404,7 @@ def test_only_a_pipeline_that_reads_nothing_says_nothing_feeds_it(
     } == into_pipeline
 
 
-def test_an_unscheduled_dataset_upstream_of_a_trigger_keeps_its_data_source(
+def test_an_unscheduled_dataset_upstream_of_a_recipe_keeps_its_data_source(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A pipeline reads a derived dataset whose input nobody schedules: the chain still starts at its source."""
@@ -443,7 +420,7 @@ def test_an_unscheduled_dataset_upstream_of_a_trigger_keeps_its_data_source(
     page = client.get("/pipelines/daily-temperature-to-dhis2", headers={"Accept": "text/html"}).text
     diagram = page.split('<svg class="automation-graph"', 1)[1].split("</svg>", 1)[0]
 
-    # chirps_monthly is read only by the trigger, and has no schedule: its source comes by origin, no clock.
+    # chirps_monthly is read only by the recipe, and has no schedule: its source comes by origin, no clock.
     assert (
         'class="ag-edge ag-edge-origin" data-source="source:chirps_monthly" data-target="dataset:chirps_monthly"'
         in diagram

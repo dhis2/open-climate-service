@@ -77,8 +77,8 @@ a read-only instance the endpoints that refuse are marked.
 
 Selecting a workflow opens its page: what it does, including its usage example, whether it
 publishes a dataset or exports a file, its parameters with their types and defaults, the
-datasets it produces (linked where they have been made), and any automation configured to
-run it when a dataset is updated. The process graph itself is at
+datasets it produces (linked where they have been made), and the derived datasets whose
+recipe runs it again when their input is updated. The process graph itself is at
 `/process_graphs/{workflow_id}`. Workflows cannot yet be started from the page.
 
 ### The process page (`/processes/{process_id}`)
@@ -142,10 +142,9 @@ enables checks by setting `enabled: true` under `scheduler:` in `climate-service
 restarting OCS. If a change cannot be applied, the page shows why.
 ### The pipeline pages (`/pipelines`)
 
-For a new setup that runs a workflow on a dataset and delivers the result, use a pipeline. The
-older [workflow triggers](workflow_automation.md) and the named `exports` in
-`climate-service.yaml` keep working for existing configurations, and react to the same dataset
-updates, but are due to be retired in favour of pipelines.
+A pipeline runs a workflow on a dataset and delivers the result. It is the one way OCS delivers
+automatically; a derived dataset is kept current by its recipe instead (see
+[Dataset-update automation](workflow_automation.md)).
 
 A **workflow** is a reusable, parameterized sequence of processes that defines how data is
 transformed or analyzed. A **pipeline** is a managed configuration that connects one workflow to
@@ -178,7 +177,7 @@ delivery:
 
 The workflow's arguments are checked against its declared parameters: unknown, missing or
 ill-typed arguments are refused with the reason. A feature collection is bound with
-`{from_features: <id>}`, as for workflow triggers, and pinned to its current version when a run
+`{from_features: <id>}` and pinned to its current version when a run
 is submitted.
 
 In this first iteration a pipeline supports workflows that meet a narrow contract. It is a
@@ -283,7 +282,7 @@ The run records which (`source.update`). Updates do not describe a correction of
 stored periods: OCS has no such update, so a pipeline cannot follow a revision of past data at
 the source (for example a provisional value replaced by a final one) unless the dataset is
 rematerialised. Run that interval by hand. The interval's ends are passed to the workflow as the
-updates give them, as for workflow triggers.
+updates give them.
 
 Each pipeline keeps a durable checkpoint of the updates it has decided on, written in the same
 write as the run an update starts. What happens to an update:
@@ -334,10 +333,8 @@ ones once the pipeline is live again, approved for the bindings they were comput
 does not replay the updates that arrived while paused; run their interval by hand. A scheduled
 release time is not implemented yet and is not accepted.
 
-A pipeline's export id is its own id, unique across the pipelines and the `exports` in
-`climate-service.yaml`. An id configured in both is refused, when the pipeline is validated and
-again when the export is resolved, rather than one silently winning. Pipeline records are kept
-under `<data_dir>/pipelines`; every change is a locked read-modify-write, and an edit names the
+A pipeline's export id is its own id, so pipeline ids are also the named export ids. Pipeline
+records are kept under `<data_dir>/pipelines`; every change is a locked read-modify-write, and an edit names the
 revision it was based on, so a stale edit is refused rather than overwriting a newer one. A
 check, dry run or mode switch computed while the pipeline changed is refused too, and only a
 validation of the current revision publishes the pipeline's export. The run history keeps the

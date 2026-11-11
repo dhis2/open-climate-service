@@ -1,4 +1,4 @@
-"""CLIM-1218: bounded retry and restart recovery for workflow jobs started by triggers."""
+"""CLIM-1218: bounded retry and restart recovery for openEO jobs created for an event."""
 
 from __future__ import annotations
 
@@ -10,27 +10,20 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
-from pydantic import ValidationError
 
-from open_climate_service.automation.config import TriggerDelivery, WorkflowTrigger
 from open_climate_service.openeo import execution
 from open_climate_service.openeo import jobs as openeo_jobs
 from open_climate_service.openeo.execution import SaveResultEnvelope
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.time import utc_now
 
-# `instance_fixture` and `sent_fixture` register the `instance` and `sent` fixtures.
-from tests.test_trigger_delivery import (
+# `instance_fixture` registers the `instance` fixture.
+from tests.test_triggered_jobs import (
     _EXPORT,
-    _await_deliveries,
     _await_openeo,
-    _deliveries,
-    _event,
     _frame,
-    _service,
     _triggered_job_id,
     instance_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-    sent_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
 
 
@@ -69,25 +62,14 @@ def _await_backoff(job_id: str, timeout: float = 30.0) -> OpenEOJobRecord:
     pytest.fail(f"openEO job {job_id} did not start a retry backoff within {timeout}s")
 
 
-# --- configuration -------------------------------------------------------------------------
-
-
-def test_attempt_limit_defaults_to_three_and_is_bounded() -> None:
-    trigger = WorkflowTrigger(id="t", on_update_of="d", workflow_id="w")
-    assert trigger.max_attempts == 3
-    for invalid in (0, 11):
-        with pytest.raises(ValidationError):
-            WorkflowTrigger(id="t", on_update_of="d", workflow_id="w", max_attempts=invalid)
-
-
 # --- transient and permanent failures ------------------------------------------------------
 
 
-def test_transient_failure_is_retried_and_only_the_successful_attempt_delivers(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, no_backoff: None
+def test_transient_failure_is_retried_and_finishes(
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch, no_backoff: None
 ) -> None:
     calls = _failing_then(monkeypatch, [OSError("remote store unreachable")])
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
 
     record = _await_done(job_id)
 
@@ -96,18 +78,14 @@ def test_transient_failure_is_retried_and_only_the_successful_attempt_delivers(
     logs = (record.logs or "").splitlines()
     assert "attempt 1 of 3 failed: OSError: remote store unreachable" in logs[0]
     assert logs[-1].endswith("attempt 2 of 3 finished")  # the history ends with the outcome
-    # The delivery runs as its own job after the finish: wait for it rather than assume it.
-    [delivery] = _await_deliveries(1, timeout=30.0)
-    assert delivery.request["job_id"] == job_id
-    assert len(sent) == 1
 
 
 def test_a_retry_waits_out_its_backoff_without_a_worker(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _failing_then(monkeypatch, [OSError("remote store unreachable")])
     openeo = instance["openeo"]
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
 
     record = _await_backoff(job_id)
     time.sleep(0.2)
@@ -118,7 +96,6 @@ def test_a_retry_waits_out_its_backoff_without_a_worker(
     assert 59 <= (record.retry_at - record.updated).total_seconds() <= 60
     assert job_id in openeo._retry_timers
     assert job_id not in openeo._futures
-    assert _deliveries() == []
 
 
 def _invalid_graph() -> BaseException:
@@ -139,10 +116,10 @@ def _invalid_graph() -> BaseException:
     ids=["invalid-graph", "request-error"],
 )
 def test_permanent_error_is_not_retried(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, failure: BaseException
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch, failure: BaseException
 ) -> None:
     calls = _failing_then(monkeypatch, [failure, failure, failure])
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
 
     record = _await_done(job_id)
 
@@ -150,11 +127,10 @@ def test_permanent_error_is_not_retried(
     assert len(calls) == 1
     assert (record.error_message or "").endswith("(attempt 1 of 3)")
     assert "failed with a permanent error, not retried" in (record.logs or "")
-    assert _deliveries() == []
 
 
 def test_an_invalid_export_found_while_saving_is_not_retried(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runs: list[int] = []
 
@@ -163,7 +139,7 @@ def test_an_invalid_export_found_while_saving_is_not_retried(
         return SaveResultEnvelope(_frame(), "DHIS2JSON", {"export": "no-such-export"})
 
     monkeypatch.setattr(execution, "run_process_graph", run)
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
 
     record = _await_done(job_id)
 
@@ -173,13 +149,13 @@ def test_an_invalid_export_found_while_saving_is_not_retried(
 
 
 def test_a_validation_type_error_while_running_is_retried(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, no_backoff: None
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch, no_backoff: None
 ) -> None:
     """A truncated remote response raises JSONDecodeError, a ValueError; it is worth a retry."""
     import json
 
     calls = _failing_then(monkeypatch, [json.JSONDecodeError("Expecting value", "", 0)])
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
 
     record = _await_done(job_id)
 
@@ -187,8 +163,8 @@ def test_a_validation_type_error_while_running_is_retried(
 
 
 @pytest.mark.parametrize("phase", ["graph", "save"])
-def test_cooperative_cancellation_is_not_retried_or_delivered(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, phase: str
+def test_cooperative_cancellation_is_not_retried(
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     """The cancellation scope must survive the distinction between graph and save failures."""
     from open_climate_service.shared.cancellation import raise_if_cancelled
@@ -214,7 +190,7 @@ def test_cooperative_cancellation_is_not_retried_or_delivered(
 
     monkeypatch.setattr(execution, "run_process_graph", run)
     monkeypatch.setattr(openeo, "_persist_result", save)
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
     record = _await_done(job_id)
     deadline = time.monotonic() + 5
     while job_id in openeo._futures and time.monotonic() < deadline:
@@ -225,15 +201,13 @@ def test_cooperative_cancellation_is_not_retried_or_delivered(
     assert job_id not in openeo._futures
     assert job_id not in openeo._retry_timers
     assert record.publishing is False
-    assert _deliveries() == []
-    assert sent == []
 
 
 def test_exhausted_attempts_leave_the_job_visibly_failed(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, no_backoff: None
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch, no_backoff: None
 ) -> None:
     calls = _failing_then(monkeypatch, [OSError(f"outage {n}") for n in range(1, 4)])
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
 
     record = _await_done(job_id)
 
@@ -247,18 +221,16 @@ def test_exhausted_attempts_leave_the_job_visibly_failed(
     with pytest.raises(HTTPException) as error:
         instance["openeo"].get_results(job_id)
     assert (error.value.status_code, error.value.detail) == (424, record.error_message)
-    assert _deliveries() == []
 
 
 def test_a_replayed_event_does_not_create_a_second_job_for_a_retrying_workflow(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _failing_then(monkeypatch, [OSError("remote store unreachable")])
-    service = _service(instance, TriggerDelivery(export=_EXPORT))
-    job_id = _triggered_job_id(service)
+    job_id = _triggered_job_id(instance)
     _await_backoff(job_id)
 
-    service.consume([_event()])  # the same durable event, replayed
+    _triggered_job_id(instance)  # the same durable event, replayed
 
     assert [record.id for record in openeo_jobs.store_list_jobs()] == [job_id]
 
@@ -276,7 +248,7 @@ def _wait_for_timer(openeo: Any, job_id: str, timeout: float = 30.0) -> None:
 
 
 def test_a_cancel_landing_before_the_retry_timer_exists_takes_effect_at_once(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _failing_then(monkeypatch, [OSError("remote store unreachable")])
     openeo = instance["openeo"]
@@ -288,7 +260,7 @@ def test_a_cancel_landing_before_the_retry_timer_exists_takes_effect_at_once(
         original(self, job_id, seconds)
 
     monkeypatch.setattr(openeo_jobs.OpenEOJobService, "_schedule_retry", cancel_first)
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
 
     record = _await_done(job_id)
 
@@ -320,11 +292,11 @@ def test_a_cancelled_job_is_logged_when_dequeued(instance: dict[str, Any]) -> No
 
 
 def test_cancelling_during_a_backoff_takes_effect_at_once(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _failing_then(monkeypatch, [OSError("remote store unreachable")])
     openeo = instance["openeo"]
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
     _await_backoff(job_id)
     _wait_for_timer(openeo, job_id)
 
@@ -336,11 +308,11 @@ def test_cancelling_during_a_backoff_takes_effect_at_once(
 
 
 def test_a_backoff_survives_shutdown_and_resumes_at_the_next_start(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _failing_then(monkeypatch, [OSError("remote store unreachable")])
     openeo = instance["openeo"]
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
     queued = _await_backoff(job_id)
     time.sleep(0.1)
     openeo.shutdown()
@@ -358,7 +330,7 @@ def test_a_backoff_survives_shutdown_and_resumes_at_the_next_start(
 
 
 def test_a_job_whose_backoff_passed_while_down_runs_at_the_next_start(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _failing_then(monkeypatch, [])
     openeo_jobs.store_create_job(
@@ -396,7 +368,7 @@ def _interrupted(job_id: str, *, attempt: int, trigger_id: str | None = "rain-to
 
 
 def test_a_triggered_job_interrupted_by_a_restart_is_requeued(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _failing_then(monkeypatch, [])
     _interrupted("interrupted", attempt=1)
@@ -428,7 +400,7 @@ def test_an_interrupted_manual_job_is_still_marked_failed(instance: dict[str, An
 
 
 def test_a_job_running_in_another_process_is_not_marked_failed_and_is_taken_over(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An overlapping restart (CLIM-1252): the old process still holds the job's lease."""
     import portalocker
@@ -457,11 +429,11 @@ def test_a_job_running_in_another_process_is_not_marked_failed_and_is_taken_over
 
 
 def test_a_manual_rerun_starts_a_fresh_attempt_budget(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, no_backoff: None
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch, no_backoff: None
 ) -> None:
     _failing_then(monkeypatch, [OSError(f"outage {n}") for n in range(1, 4)])
     openeo = instance["openeo"]
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT)))
+    job_id = _triggered_job_id(instance)
     assert _await_done(job_id).status == OpenEOJobStatus.ERROR
 
     openeo.start_job(job_id)
@@ -611,10 +583,10 @@ def test_a_replaced_timer_that_fires_anyway_does_not_cut_the_new_backoff_short(i
 
 
 def test_a_single_attempt_job_keeps_no_attempt_history(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _failing_then(monkeypatch, [])
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT), max_attempts=1))
+    job_id = _triggered_job_id(instance, max_attempts=1)
     record = _await_done(job_id)
     assert (record.status, record.logs) == (OpenEOJobStatus.FINISHED, None)
 
@@ -623,7 +595,7 @@ def test_a_single_attempt_job_keeps_no_attempt_history(
 
 
 def test_a_worker_does_not_run_a_job_before_its_backoff_has_passed(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """E.g. a second process requeued it after a takeover while the backoff was still running."""
     calls = _failing_then(monkeypatch, [])
@@ -649,7 +621,7 @@ def test_a_worker_does_not_run_a_job_before_its_backoff_has_passed(
 
 
 def test_one_unrecoverable_job_does_not_stop_recovery_of_the_others(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _failing_then(monkeypatch, [])
     openeo = instance["openeo"]
@@ -672,18 +644,16 @@ def test_one_unrecoverable_job_does_not_stop_recovery_of_the_others(
 
 
 def test_deleting_a_job_removes_its_execution_lease_file(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _failing_then(monkeypatch, [])
     openeo = instance["openeo"]
-    job_id = _triggered_job_id(_service(instance, TriggerDelivery(export=_EXPORT, dry_run=True)))
+    job_id = _triggered_job_id(instance)
     _await_done(job_id)
     lease = openeo_jobs._execution_lease_path(job_id)
     lease_file = lease.with_suffix(lease.suffix + ".lock")
     assert lease_file.exists()
     _wait_for_no_worker(openeo, job_id)
-    # The dry-run delivery reads the job's results, and a job in use is not deleted.
-    _await_deliveries(1, timeout=30.0)
 
     openeo.delete_job(job_id)
 
@@ -699,7 +669,7 @@ def _wait_for_no_worker(openeo: Any, job_id: str, timeout: float = 30.0) -> None
 
 
 def test_re_running_a_cancelled_job_is_not_cancelled_again(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _failing_then(monkeypatch, [])
     openeo_jobs.store_create_job(
@@ -740,7 +710,7 @@ def _release_lease(handle: Any) -> None:
 
 
 def test_a_job_the_other_process_finishes_is_left_as_it_wrote_it(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _failing_then(monkeypatch, [])
     openeo = instance["openeo"]
@@ -763,7 +733,7 @@ def test_a_job_the_other_process_finishes_is_left_as_it_wrote_it(
 
 
 def test_a_worker_that_wins_the_lease_never_reruns_a_finished_job(
-    instance: dict[str, Any], sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _failing_then(monkeypatch, [])
     openeo_jobs.store_create_job(

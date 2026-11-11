@@ -213,8 +213,6 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data["cancel_requested"] = record.cancel_requested
     data["trigger_id"] = record.trigger_id
     data["source_event_id"] = record.source_event_id
-    data["finished_at"] = record.finished_at.isoformat() if record.finished_at is not None else None
-    data["delivery_due"] = record.delivery_due
     data["attempt"] = record.attempt
     data["max_attempts"] = record.max_attempts
     data["retry_at"] = record.retry_at.isoformat() if record.retry_at is not None else None
@@ -246,7 +244,7 @@ def _execution_lease_path(job_id: str) -> Path:
 
 
 MAX_TRIGGERED_ATTEMPTS = 10
-"""Upper bound on attempts per triggered job, shared with the trigger configuration."""
+"""Upper bound on attempts per job created for an event, by a pipeline run or a derived dataset refresh."""
 
 
 def _retry_delay_seconds(attempt: int) -> int:
@@ -346,21 +344,12 @@ class OpenEOJobService:
         self._lock = threading.Lock()
         self._finished_listener: Callable[[OpenEOJobRecord], None] | None = None
         self._event_consumer: Callable[[list[JobEvent]], None] | None = None
-        self._delivery_due: Callable[[OpenEOJobRecord], dict[str, str] | None] | None = None
         self._stopping = threading.Event()
         # Jobs waiting out a retry backoff: a timer requeues each, so no worker sleeps.
         self._retry_timers: dict[str, threading.Timer] = {}
         self._watched: set[str] = set()
         # How often a job leased by another process is checked for takeover.
         self.lease_poll_seconds = 5.0
-
-    def set_delivery_due_provider(self, provider: Callable[[OpenEOJobRecord], dict[str, str] | None] | None) -> None:
-        """Register the callback that says which delivery a job owes as it finishes.
-
-        It is called inside the store mutation that marks the job FINISHED, so its answer is
-        persisted atomically with that state. It must be a fast, in-memory lookup.
-        """
-        self._delivery_due = provider
 
     def set_finished_listener(self, listener: Callable[[OpenEOJobRecord], None] | None) -> None:
         """Register the process-local callback run after a job is persisted as FINISHED.
@@ -1249,11 +1238,10 @@ class OpenEOJobService:
         if isinstance(deliveries, list) and deliveries:
             # A re-run keeps its delivery links, so an automated delivery is not repeated.
             usage["deliveries"] = deliveries
-        finished = record.model_copy(
+        return record.model_copy(
             update={
                 "status": OpenEOJobStatus.FINISHED,
                 "updated": now,
-                "finished_at": now,
                 "usage": usage,
                 "publishing": False,
                 # The attempt history ends with the outcome that counts, in the same write.
@@ -1262,13 +1250,6 @@ class OpenEOJobService:
                 else record.logs,
             }
         )
-        due: dict[str, str] | None = None
-        if self._delivery_due is not None:
-            try:
-                due = self._delivery_due(finished)
-            except Exception:
-                logger.exception("Delivery lookup failed for openEO job %s; it will not be delivered", record.id)
-        return finished.model_copy(update={"delivery_due": due})
 
     def _after_finished(self, record: OpenEOJobRecord, events: list[JobEvent] | None = None) -> None:
         """Run the finished listener, then hand the new durable events to the consumer.

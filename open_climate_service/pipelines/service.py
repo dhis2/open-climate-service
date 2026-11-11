@@ -12,7 +12,6 @@ from typing import Any
 
 import jsonschema
 
-from open_climate_service import config as api_config
 from open_climate_service.exports.base import BaseExportPlugin, DestinationContext, PipelineDataset
 from open_climate_service.exports.manifest import plugin_identity
 from open_climate_service.pipelines import workflow as workflow_binding
@@ -243,7 +242,6 @@ def validate_pipeline(record: PipelineRecord) -> ValidationResult:
             labels = settings_labels(plugin, spec.destination.settings)
         checks.append(_check_schedule(bound))
 
-    checks.append(_check_configuration(spec))
     digest = bindings_digest(spec, bound)
     checks.append(_check_delivery(record, digest))
 
@@ -317,22 +315,6 @@ def _check_inputs(bound: BoundWorkflow, *, on_update: bool) -> Check:
     if problems:
         return Check(id="inputs", status="fail", message="; ".join(problems))
     return Check(id="inputs", status="pass", message="; ".join(found) or "the workflow binds no stored input")
-
-
-def _check_configuration(spec: PipelineSpec) -> Check:
-    """Refuse an id a configured named export already owns: the two would be ambiguous."""
-    raw = api_config.get_config().get("exports", [])
-    configured = {item.get("id") for item in raw if isinstance(item, dict)} if isinstance(raw, list) else set()
-    if spec.id in configured:
-        return Check(
-            id="configuration",
-            status="fail",
-            message=(
-                f"export id '{spec.id}' is already configured in climate-service.yaml; a pipeline owns the export "
-                "named after it, so rename the pipeline or remove the configured export"
-            ),
-        )
-    return Check(id="configuration", status="pass", message=f"export id '{spec.id}' belongs to this pipeline")
 
 
 def _check_schedule(bound: BoundWorkflow) -> Check:

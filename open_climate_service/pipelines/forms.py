@@ -227,6 +227,35 @@ def read_arguments(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[s
     return arguments
 
 
+def _read_row(form: dict[str, str], field: dict[str, Any], index: int) -> tuple[dict[str, Any], bool]:
+    """One row of a ``rows`` field, and whether anything was entered in it."""
+    name = field["name"]
+    row: dict[str, Any] = {}
+    has_value = f"dest.{name}.{index}.__present" in form
+    try:
+        for column in field["columns"]:
+            raw = form.get(f"dest.{name}.{index}.{column['name']}", "").strip()
+            if column["widget"] == "checkbox":
+                if raw:
+                    has_value = True
+                row[column["name"]] = _parse_scalar("boolean", raw) if raw else False
+            elif raw:
+                has_value = True
+                row[column["name"]] = _parse_scalar(column["kind"], raw)
+    except ValueError as exc:
+        raise ValueError(f"destination setting '{name}' row {index + 1}: {exc}") from None
+    return row, has_value
+
+
+def read_row(form: dict[str, str], fields: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+    """The row the form field ``key`` (``dest.<rows>.<index>.<column>``) sits in, or None outside a row."""
+    parts = key.split(".")
+    if len(parts) != 4 or parts[0] != "dest" or not parts[2].isdigit():
+        return None
+    field = next((f for f in fields if f["name"] == parts[1] and f["kind"] == "rows"), None)
+    return _read_row(form, field, int(parts[2]))[0] if field is not None else None
+
+
 def read_settings(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[str, Any]:
     """Destination settings from ``dest.`` form fields; empty fields and rows are left out."""
     settings: dict[str, Any] = {}
@@ -237,21 +266,7 @@ def read_settings(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[st
             index = 0
             prefix = f"dest.{name}."
             while any(key.startswith(f"{prefix}{index}.") for key in form):
-                try:
-                    row: dict[str, Any] = {}
-                    has_value = f"{prefix}{index}.__present" in form
-                    for column in field["columns"]:
-                        key = f"dest.{name}.{index}.{column['name']}"
-                        raw = form.get(key, "").strip()
-                        if column["widget"] == "checkbox":
-                            if raw:
-                                has_value = True
-                            row[column["name"]] = _parse_scalar("boolean", raw) if raw else False
-                        elif raw:
-                            has_value = True
-                            row[column["name"]] = _parse_scalar(column["kind"], raw)
-                except ValueError as exc:
-                    raise ValueError(f"destination setting '{name}' row {index + 1}: {exc}") from None
+                row, has_value = _read_row(form, field, index)
                 if has_value:
                     rows.append(row)
                 index += 1

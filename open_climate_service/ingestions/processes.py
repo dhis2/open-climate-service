@@ -44,7 +44,7 @@ def dataset_update_event(
     producer_job_id: str | None = None,
     output_snapshot_id: str | None = None,
 ) -> JobEventDraft:
-    """Describe one change to a managed dataset for workflow automation.
+    """Describe one change to a managed dataset, for the derived datasets and pipelines that follow it.
 
     `previous_end` is the coverage end before the change; None means every period up to
     `current_end` is new or rewritten. `current_start` and `current_end` describe the
