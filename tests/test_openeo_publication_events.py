@@ -989,9 +989,9 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     jsonschema.validate(collection, schema)
     [processor] = [provider for provider in collection["providers"] if "processor" in provider["roles"]]
     assert processor["processing:software"] == {"open-climate-service": __version__}
-    # As a static catalog's checker (Portolan's rashid) reads it: this instance is the one host,
-    # last; every link on this host, the relative README and AGENTS among them, answers HEAD;
-    # `proj:code` is declared at v2.0.0; and the Portolan profile is declared.
+    # As a STAC checker reads it: this instance is the one host, last; every link on this host,
+    # the relative README and AGENTS among them, answers HEAD; `proj:code` is declared at v2.0.0;
+    # and the Portolan profile is declared.
     assert [provider["roles"] for provider in collection["providers"]][-2:] == [["processor"], ["host"]]
     collection_url = f"http://testserver/stac/{_DATASET}/collection.json"
     for link in collection["links"]:

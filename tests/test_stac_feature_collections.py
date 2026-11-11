@@ -452,7 +452,7 @@ def test_the_agents_query_quotes_column_names_and_names_the_stored_crs(
 
 
 def test_a_feature_collections_documents_answer_head(client: TestClient, districts: ArtifactRecord) -> None:
-    """A link checker (Portolan's `rashid check`) sends HEAD to each collection's documents."""
+    """A STAC link checker sends HEAD to each collection's documents."""
     for name in ("collection.json", "README.md", "AGENTS.md"):
         response = client.head(f"/stac/districts/{name}")
         assert response.status_code == 200, name
@@ -478,7 +478,7 @@ def test_an_unknown_collection_has_no_readme(client: TestClient) -> None:
 def test_a_feature_collections_files_carry_their_size_and_checksum(
     client: TestClient, districts: ArtifactRecord
 ) -> None:
-    """`file:size` and a sha256 multihash, as a static catalog's checker verifies the bytes against."""
+    """`file:size` and a sha256 multihash, as a STAC checker verifies the bytes against."""
     import hashlib
 
     doc = client.get("/stac/districts/collection.json").json()
@@ -488,6 +488,23 @@ def test_a_feature_collections_files_carry_their_size_and_checksum(
     assert doc["assets"]["data"]["file:checksum"] == "1220" + hashlib.sha256(data.read_bytes()).hexdigest()
     assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" in doc["stac_extensions"]
     assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in doc["stac_extensions"]
+
+
+def test_a_replaced_file_gets_its_new_size_and_checksum(tmp_path: Path) -> None:
+    """A thumbnail refresh replaces the file at the same path; the cached checksum is not reused."""
+    import hashlib
+    import os
+
+    from open_climate_service.stac.services import file_fields
+
+    path = tmp_path / "thumbnail.png"
+    path.write_bytes(b"old")
+    file_fields(path)
+    pending = tmp_path / "pending.png"
+    pending.write_bytes(b"newer")
+    os.replace(pending, path)
+
+    assert file_fields(path) == {"file:size": 5, "file:checksum": "1220" + hashlib.sha256(b"newer").hexdigest()}
 
 
 def test_the_catalog_guide_opens_a_raster_with_its_assets_open_kwargs(client: TestClient) -> None:

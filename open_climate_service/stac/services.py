@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import logging
+import os
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -63,20 +63,26 @@ def file_fields(path: Path) -> dict[str, object]:
 
     Only for a file: a Zarr or Icechunk store is a directory of chunks, with neither one size nor
     one checksum. The checksum is a sha256 multihash (`1220` and the hex digest), computed once
-    for each version of the file, as its size and modification time identify it.
+    for each version of the file, as its inode, size and modification time identify it. Size and
+    checksum come from one open file, so a file replaced in between (a thumbnail refresh) can't
+    pair one version's size with the other's checksum.
     """
-    stat = path.stat()
-    return {"file:size": stat.st_size, "file:checksum": _sha256_multihash(str(path), stat.st_mtime_ns, stat.st_size)}
-
-
-@functools.lru_cache(maxsize=256)
-def _sha256_multihash(path: str, mtime_ns: int, size: int) -> str:
-    """The sha256 multihash of the file; `mtime_ns` and `size` are the cache key, not inputs."""
-    digest = hashlib.sha256()
     with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return "1220" + digest.hexdigest()
+        stat = os.fstat(handle.fileno())
+        version = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
+        checksum = _CHECKSUMS.get(version)
+        if checksum is None:
+            digest = hashlib.sha256()
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+            checksum = _CHECKSUMS[version] = "1220" + digest.hexdigest()
+            while len(_CHECKSUMS) > 256:
+                _CHECKSUMS.pop(next(iter(_CHECKSUMS)))
+    return {"file:size": stat.st_size, "file:checksum": checksum}
+
+
+_CHECKSUMS: dict[tuple[str, int, int, int], str] = {}
+"""Checksums by file version, oldest first; `file_fields` keeps the latest 256."""
 
 
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
@@ -501,16 +507,20 @@ def _published_providers(
 
     The template names who made the data, so a provider it declares without roles is the
     `producer`. Only this instance hosts the copy being served, so a `host` role declared in a
-    template is dropped rather than published as a second host. The host's `url` is the instance
-    itself, where its operator is reached. Raster and feature collections share this, so both
-    carry a producer and exactly one host, as a static catalog's checker expects.
+    template is dropped rather than published as a second host; a provider that was only a host
+    (an upstream mirror) stays listed without roles, since it need not have made the data. The
+    host's `url` is the instance itself, where its operator is reached. Raster and feature
+    collections share this, so both carry a producer and exactly one host, as STAC checkers expect.
     """
     from open_climate_service import config as api_config
 
     providers = []
     for provider in _build_providers(source_dataset):
         entry = {key: value for key, value in provider.items() if key != "roles"}
-        entry["roles"] = [role for role in provider.get("roles", []) if role != "host"] or ["producer"]
+        declared = provider.get("roles") or []
+        roles = [role for role in declared if role != "host"] if declared else ["producer"]
+        if roles:
+            entry["roles"] = roles
         providers.append(entry)
 
     providers.extend(processors or [])
