@@ -598,16 +598,17 @@ row dated other than on its period's first day, such as a month labelled by its 
 first one written: rows in another unit are refused. `publish` applies to its first write; a later
 write keeps the dataset published or not.
 
-Rows are never changed. A revised value is a new row with a later `written_at`, and the API returns
-the latest row for each feature, period, class, reducer and weights. Add `history=true` for every
-row ever written.
+A table dataset holds current values only, one row per feature, period, class, reducer and weights,
+in one Parquet file. A revised value replaces the previous one, and its `written_at` says when it
+last changed; the same value written again keeps its row. Rows written for a new version of a
+feature collection replace that collection's rows of other versions. No history is kept.
 
 Filters: `collection`, `start` and `end` (inclusive bounds on `period_start`), `reducer` and `weights`. Only
 published table datasets are served.
 
 A pipeline with the `table` destination keeps its workflow's value per feature and period as a
 table dataset, created on its first delivery. With `policy: on_update`, a revised source period
-is computed again and written as new rows, which become the current values:
+is computed again and its values replace the previous ones:
 
 ```yaml
 workflow:

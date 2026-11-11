@@ -3299,13 +3299,13 @@ _TABLE_SPEC: dict[str, Any] = {
 }
 
 
-def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
+def test_end_to_end_a_table_pipeline_keeps_rows_in_ocs_and_replaces_revised_values(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The built-in workflow through the real job service into the table store, read back over /tables (CLIM-1554).
 
     Only data and feature loading are stubbed. The dry run writes nothing; a live run writes one
-    row per feature and period; a dataset update with revised values adds rows that become current.
+    row per feature and period; a dataset update with revised values replaces them.
     """
     from openeo_pg_parser_networkx.process_registry import Process
 
@@ -3451,8 +3451,8 @@ def test_end_to_end_a_table_pipeline_keeps_rows_and_revisions_in_ocs(
 
         revised = current()
         assert [value for _, _, value in revised] == [value * 10 for _, _, value in first]
-        history = client.get("/tables/rain_districts/rows", params={"history": "true"}).json()["items"]
-        assert len(history) == 8
+        # The revised values replace the first ones: still one row per feature and period.
+        assert len(revised) == 4
     finally:
         job_service.shutdown()
         job_service_module.reset_job_service()

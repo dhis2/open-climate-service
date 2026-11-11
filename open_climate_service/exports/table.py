@@ -63,8 +63,8 @@ class TableExportPlugin(BaseExportPlugin):
     supports_dry_run = True
     period_from_result = True
     drops_incomplete_periods = False
-    # Rows carry the `written_at` they were rendered at, so a payload sent again repeats the same
-    # rows: current values are unchanged, and history lists them once.
+    # A payload sent again repeats the same values, which the store keeps as they were, with
+    # their first `written_at`.
     redelivery_safe = True
 
     # --- delivery target: the instance's own table store -------------------------------------
@@ -85,7 +85,7 @@ class TableExportPlugin(BaseExportPlugin):
             title="Table dataset",
             description=(
                 "Keep the workflow's value per feature and period in this instance, as a table dataset "
-                "served at /tables/{id}/rows. Revised values are added as new rows; history is kept."
+                "served at /tables/{id}/rows. A revised value replaces the previous one."
             ),
             fields=(
                 SettingsFormField(name="dataset_id", label="Dataset id", help_text="Letters, digits, '.', '_', '-'."),

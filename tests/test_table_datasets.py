@@ -1,4 +1,4 @@
-"""Table datasets: rows appended as Parquet, listed under /datasets and served as JSON and CSV (CLIM-1553)."""
+"""Table datasets: current values in one Parquet file, listed under /datasets and served as JSON and CSV (CLIM-1553)."""
 
 from __future__ import annotations
 
@@ -102,20 +102,41 @@ def test_written_rows_are_listed_as_a_table_dataset_and_served_as_json_and_csv(c
     ]
 
 
-def test_a_later_write_of_the_same_key_is_current_and_the_first_is_history(client: TestClient) -> None:
-    _write([_row("D1", 10.0)], written_at=FIRST)
+def test_a_revised_value_replaces_the_previous_one(client: TestClient, stores: Path) -> None:
+    _write([_row("D1", 10.0), _row("D2", 20.0)], written_at=FIRST)
     _write([_row("D1", 11.0)], written_at=LATER)
 
     current = client.get("/tables/precip_districts/rows").json()["items"]
-    assert [(row["value"], row["written_at"]) for row in current] == [(11.0, "2026-04-01T00:00:00+00:00")]
-
-    history = client.get("/tables/precip_districts/rows", params={"history": "true"}).json()["items"]
-    assert [row["value"] for row in history] == [10.0, 11.0]
+    assert [(row["feature_id"], row["value"], row["written_at"]) for row in current] == [
+        ("D1", 11.0, "2026-04-01T00:00:00+00:00"),
+        ("D2", 20.0, "2026-03-01T00:00:00+00:00"),
+    ]
+    # One file holds the dataset; no history is kept.
+    assert len(list((stores / "precip_districts").glob("*.parquet"))) == 1
 
     # Still one record, however many writes.
     assert (
         len([item for item in client.get("/datasets").json()["items"] if item["dataset_id"] == "precip_districts"]) == 1
     )
+
+
+def test_the_same_value_written_again_keeps_its_row_and_written_at() -> None:
+    """So `written_at` says when a value last changed, which an export of changes reads."""
+    _write([_row("D1", 10.0), _row("D2", 20.0)], written_at=FIRST)
+    record = _write([_row("D1", 10.0), _row("D2", 21.0)], written_at=LATER)
+
+    rows = {row["feature_id"]: row for row in store.read_rows(record).to_pylist()}
+    assert rows["D1"]["value"] == 10.0 and rows["D1"]["written_at"] == FIRST
+    assert rows["D2"]["value"] == 21.0 and rows["D2"]["written_at"] == LATER
+
+
+def test_a_new_collection_version_replaces_the_collections_rows_of_other_versions() -> None:
+    """Values for two boundary versions never mix: a feature the new version dropped goes too."""
+    _write([_row("D1", 1.0, collection_version="v1"), _row("D2", 2.0, collection_version="v1")])
+    record = _write([_row("D1", 1.5, collection_version="v2")], written_at=LATER)
+
+    rows = store.read_rows(record).to_pylist()
+    assert [(row["feature_id"], row["value"], row["collection_version"]) for row in rows] == [("D1", 1.5, "v2")]
 
 
 def test_null_key_columns_still_identify_one_value() -> None:
@@ -152,16 +173,17 @@ def test_a_reader_during_a_write_sees_the_files_before_it(monkeypatch: pytest.Mo
     def read_then_rename(source: Any, target: Any) -> None:
         # The new file is fully written under its temporary name, and not yet visible.
         assert Path(source).stat().st_size > 0
-        seen.append(store.read_rows(record, history=True).column("value").to_pylist())
+        seen.append(store.read_rows(record).column("value").to_pylist())
         rename(source, target)
 
     monkeypatch.setattr(store.os, "replace", read_then_rename)
     updated = _write([_row("D1", 11.0)], written_at=LATER)
 
     assert seen == [[10.0]]
-    # The earlier record still names only its own file; the new one names both.
-    assert store.read_rows(record, history=True).column("value").to_pylist() == [10.0]
-    assert store.read_rows(updated, history=True).column("value").to_pylist() == [10.0, 11.0]
+    # The new record names the new file only, and the previous file is gone.
+    assert store.read_rows(updated).column("value").to_pylist() == [11.0]
+    assert updated.asset_paths != record.asset_paths
+    assert not Path(record.asset_paths[0]).exists()
 
 
 def test_a_write_whose_record_fails_is_never_read(
@@ -169,7 +191,7 @@ def test_a_write_whose_record_fails_is_never_read(
 ) -> None:
     """Readers follow the record, not the folder: an unrecorded file is not part of the dataset."""
     _write([_row("D1", 1.0)])
-    files = sorted((stores / "precip_districts" / "districts").glob("*.parquet"))
+    files = sorted((stores / "precip_districts").glob("*.parquet"))
     seen: list[list[float]] = []
 
     def fail(*_args: Any, **_kwargs: Any) -> None:
@@ -183,7 +205,7 @@ def test_a_write_whose_record_fails_is_never_read(
         _write([_row("D1", 2.0)], written_at=LATER)
     assert seen == [[1.0]]
     assert [row["value"] for row in client.get("/tables/precip_districts/rows").json()["items"]] == [1.0]
-    assert sorted((stores / "precip_districts" / "districts").glob("*.parquet")) == files
+    assert sorted((stores / "precip_districts").glob("*.parquet")) == files
 
 
 def test_a_failed_write_leaves_no_file(monkeypatch: pytest.MonkeyPatch, stores: Path) -> None:
@@ -193,7 +215,7 @@ def test_a_failed_write_leaves_no_file(monkeypatch: pytest.MonkeyPatch, stores: 
     monkeypatch.setattr(store.os, "replace", fail)
     with pytest.raises(OSError):
         _write([_row("D1", 10.0)])
-    assert list((stores / "precip_districts").rglob("*")) == [stores / "precip_districts" / "districts"]
+    assert list((stores / "precip_districts").rglob("*")) == []
 
 
 def test_a_write_waits_for_a_write_in_another_process() -> None:
@@ -346,9 +368,10 @@ def test_the_destination_renders_rows_and_delivers_them_through_the_writer() -> 
         ("D2", None, "mean", "mm"),
     ]
 
-    # Sent again, as an operator may after an unconfirmed delivery: nothing new in current or history.
+    # Sent again, as an operator may after an unconfirmed delivery: the same two values, unchanged.
     assert plugin.send(rendered.content, "tables").outcome == "success"
-    assert len(store.read_rows(record, history=True)) == 2
+    again = ingestion_services.published_table_artifacts_by_dataset()["precip_districts"]
+    assert store.read_rows(again).to_pylist() == rows
 
 
 def test_a_dry_run_send_checks_without_writing_and_a_refusal_is_a_rejected_report(
@@ -454,8 +477,8 @@ def test_a_dataset_keeps_one_period_type_and_its_files_carry_it(stores: Path) ->
     # A write that names no period type keeps the dataset's.
     store.write_rows(dataset_id="precip_districts", collection_id="districts", rows=[_row("D2", 2.0)], written_at=LATER)
 
-    files = sorted((stores / "precip_districts" / "districts").glob("*.parquet"))
-    assert len(files) == 2
+    files = sorted((stores / "precip_districts").glob("*.parquet"))
+    assert len(files) == 1
     assert {pq.read_schema(path).metadata[store.PERIOD_TYPE_KEY] for path in files} == {b"monthly"}
     assert ingestion_services.published_table_artifacts_by_dataset()["precip_districts"].period_type == "monthly"
 
@@ -661,9 +684,8 @@ def test_an_empty_csv_still_names_every_column(client: TestClient) -> None:
 
 def test_a_filter_that_matches_nothing_returns_no_rows(client: TestClient) -> None:
     _write([_row("D1", 1.0)])
-    for history in ("false", "true"):
-        response = client.get("/tables/precip_districts/rows", params={"start": "2030-01-01", "history": history})
-        assert response.status_code == 200 and response.json()["items"] == []
+    response = client.get("/tables/precip_districts/rows", params={"start": "2030-01-01"})
+    assert response.status_code == 200 and response.json()["items"] == []
 
 
 @pytest.mark.parametrize(

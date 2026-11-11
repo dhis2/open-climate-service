@@ -1,15 +1,19 @@
-"""The table store: values per feature and period, appended as Parquet files (CLIM-1553).
+"""The table store: current values per feature and period, one Parquet file per dataset (CLIM-1553).
 
-One folder per table dataset under `config.get_tables_root`, and one folder per feature
-collection inside it. Every write adds a new immutable file, written under a temporary name and
-renamed. The dataset's record lists its committed files in `asset_paths`, and readers read only
-those: a file becomes part of the dataset when the record naming it is registered, so a reader
-sees the files before a write or after it, and a write whose record fails leaves nothing behind.
-Rows are never updated or deleted: a revised value is a new row with a later `written_at`, and
-the current value is the latest row per `KEY`.
+One folder per table dataset under `config.get_tables_root`, holding the dataset's one file of
+current values. No history is kept: a revised value replaces its row, and a value written again
+unchanged keeps the row and its `written_at`, so `written_at` says when each value last changed.
+A write for a new version of a feature collection drops that collection's rows of other versions,
+so values for two boundary versions never mix.
+
+Every write produces a new file, written under a temporary name and renamed, holding the merged
+rows. The dataset's record names it in `asset_paths`, and readers read only that: the file
+becomes the dataset when the record naming it is registered, then the previous file is removed.
+A reader sees the dataset before a write or after it, and a write whose record fails leaves the
+dataset as it was. The one file is what a static catalog serves as the dataset's data.
 
 `write_rows` is the one writer. It validates rows against the feature collection they report
-on, appends them, and registers the dataset's record, which is what lists it under `/datasets`
+on, merges them, and registers the dataset's record, which is what lists it under `/datasets`
 as `itemType: table`. `check_rows` gives the same verdict without writing, for a dry run.
 `read_rows` reads them back with pyarrow.
 """
@@ -82,7 +86,7 @@ KEY = (
     "lead_time",
     "member",
 )
-"""The columns that identify one value. The current value is the latest `written_at` per key."""
+"""The columns that identify one value: a write with the same key replaces the stored row."""
 
 PERIOD_TYPE_KEY = b"ocs:period_type"
 """Parquet metadata key holding the dataset's period type, so a reader of the files alone knows
@@ -114,7 +118,7 @@ def write_rows(
     provenance: ArtifactProvenance | None = None,
     publish: bool = True,
 ) -> ArtifactRecord:
-    """Check *rows* with `check_rows`, append them as one file and register the dataset.
+    """Check *rows* with `check_rows`, merge them into the dataset's file and register the dataset.
 
     Raises ValueError before anything is written when any row is refused. *provenance* is how
     the rows were produced, for computed rows; the record keeps the latest write's. *publish*
@@ -129,11 +133,11 @@ def write_rows(
         table = check_rows(
             dataset_id=dataset_id, collection_id=collection_id, rows=rows, period_type=period_type, written_at=stamp
         )
-        written = _append(_dataset_root(dataset_id) / collection_id, table, stamp)
+        existing = _existing_record(dataset_id)
+        period_type = period_type or (existing.period_type if existing else None)
+        merged = _merged(_read_file(existing), table, collection_id, period_type)
+        written = _write_file(_dataset_root(dataset_id), merged, stamp)
         try:
-            existing = _existing_record(dataset_id)
-            period_type = period_type or (existing.period_type if existing else None)
-            files = [*(existing.asset_paths if existing else []), str(written)]
             units = table.column("unit").drop_null().unique().to_pylist()
             record = ArtifactRecord(
                 artifact_id=str(uuid4()),
@@ -142,19 +146,24 @@ def write_rows(
                 period_type=period_type,
                 format=ArtifactFormat.PARQUET,
                 path=str(_dataset_root(dataset_id)),
-                asset_paths=files,
+                asset_paths=[str(written)],
                 units=units[0] if units else (existing.units if existing else None),
-                size_bytes=sum(Path(file).stat().st_size for file in files),
+                size_bytes=written.stat().st_size,
                 request_scope=ArtifactRequestScope(),
-                coverage=_coverage(files, period_type),
+                coverage=_coverage(merged, period_type),
                 created_at=datetime.now(UTC),
                 provenance=provenance or (existing.provenance if existing else None),
             )
-            return ingestion_services.register_artifact_record(record, publish=publish and existing is None)
+            registered = ingestion_services.register_artifact_record(record, publish=publish and existing is None)
         except BaseException:
             # No record names the file, so no reader sees it; remove it rather than leave it.
             written.unlink(missing_ok=True)
             raise
+        # The new record names only the new file, so the previous one is no longer the dataset.
+        for previous in existing.asset_paths if existing else []:
+            if Path(previous) != written:
+                Path(previous).unlink(missing_ok=True)
+        return registered
 
 
 def check_rows(
@@ -165,7 +174,7 @@ def check_rows(
     period_type: str | None = None,
     written_at: datetime | None = None,
 ) -> pa.Table:
-    """Return *rows* as the table `write_rows` would append, or raise ValueError; nothing is written.
+    """Return *rows* as the table `write_rows` would merge in, or raise ValueError; nothing is written.
 
     For a dry run, which needs the writer's verdict without the write. Every row names a
     `feature_id` of the registered collection, a `period_start` and a `value`; the other `SCHEMA`
@@ -224,18 +233,16 @@ def read_rows(
     end: date | None = None,
     reducer: str | None = None,
     weights: str | None = None,
-    history: bool = False,
 ) -> pa.Table:
     """Return a table dataset's rows, filtered, ordered by collection, feature and period.
 
-    Current values only, unless *history* asks for every row ever written. The filters are all
-    on key columns, so filtering before picking the latest row per key gives the same answer as
-    filtering after it. *start* and *end* bound `period_start`, inclusive.
+    *start* and *end* bound `period_start`, inclusive.
     """
-    files = _files(record, collection_id)
-    if not files:
+    if not record.asset_paths:
         return SCHEMA.empty_table()
     conditions = []
+    if collection_id is not None:
+        conditions.append(pc.field("collection_id") == collection_id)
     if start is not None:
         conditions.append(pc.field("period_start") >= start)
     if end is not None:
@@ -247,34 +254,51 @@ def read_rows(
     flt = None
     for condition in conditions:
         flt = condition if flt is None else flt & condition
-    table = pds.dataset([str(path) for path in files], schema=SCHEMA, format="parquet").to_table(filter=flt)
-    # A key written twice at the same `written_at` is one write delivered again; history lists it once.
-    table = _latest(table, KEY if not history else (*KEY, "written_at"))
-    return table.sort_by(
-        [
-            ("collection_id", "ascending"),
-            ("feature_id", "ascending"),
-            ("period_start", "ascending"),
-            ("written_at", "ascending"),
+    return pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table(filter=flt).sort_by(_ORDER)
+
+
+_ORDER = [("collection_id", "ascending"), ("feature_id", "ascending"), ("period_start", "ascending")]
+"""How rows are stored and returned, so a reader of the file finds a feature's periods together."""
+
+
+def _read_file(record: ArtifactRecord | None) -> pa.Table | None:
+    """The rows the dataset's file holds now, or None for a new dataset."""
+    if record is None or not record.asset_paths:
+        return None
+    return pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table()
+
+
+def _merged(existing: pa.Table | None, new: pa.Table, collection_id: str, period_type: str | None) -> pa.Table:
+    """The dataset's rows with *new* merged in: one row per `KEY`, the written one where they meet.
+
+    A written row equal to the stored one in everything but `written_at` keeps the stored row, so
+    sending the same values again changes nothing. When every written row names one version of
+    the collection, the collection's rows of any other version are dropped.
+    """
+    stored = existing.to_pylist() if existing is not None else []
+    versions = set(new.column("collection_version").to_pylist())
+    if len(versions) == 1 and (version := next(iter(versions))) is not None:
+        stored = [
+            row for row in stored if row["collection_id"] != collection_id or row["collection_version"] == version
         ]
-    )
+    rows = {tuple(row[name] for name in KEY): row for row in stored}
+    compared = [name for name in SCHEMA.names if name != "written_at"]
+    for row in new.to_pylist():
+        key = tuple(row[name] for name in KEY)
+        current = rows.get(key)
+        if current is None or any(current[name] != row[name] for name in compared):
+            rows[key] = row
+    table = pa.Table.from_pylist(list(rows.values()), schema=SCHEMA).sort_by(_ORDER)
+    return table.replace_schema_metadata({PERIOD_TYPE_KEY: period_type.encode()}) if period_type else table
 
 
-def _latest(table: pa.Table, keys: tuple[str, ...]) -> pa.Table:
-    """Keep the latest row per *keys*. pandas, because its duplicate test treats NULL keys as equal."""
-    frame = table.select([*KEY, "written_at"]).to_pandas()
-    frame["row"] = range(len(frame))
-    latest = frame.sort_values("written_at", kind="stable").drop_duplicates(subset=list(keys), keep="last")
-    return table.take(pa.array(sorted(latest["row"]), type=pa.int64()))
-
-
-def _append(folder: Path, table: pa.Table, stamp: datetime) -> Path:
+def _write_file(folder: Path, table: pa.Table, stamp: datetime) -> Path:
     """Write *table* as a new file in *folder*, under a temporary name first, then renamed."""
     import pyarrow.parquet as pq
 
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{stamp:%Y%m%dT%H%M%S%fZ}-{uuid4().hex}.parquet"
-    # A dot name the reader's `*.parquet` listing never matches, so a half-written file is invisible.
+    # A dot name no listing of `*.parquet` matches, so a half-written file is never taken for the dataset.
     staging = folder / f".{path.name}.writing"
     try:
         pq.write_table(table, staging)
@@ -282,16 +306,6 @@ def _append(folder: Path, table: pa.Table, stamp: datetime) -> Path:
     finally:
         staging.unlink(missing_ok=True)
     return path
-
-
-def _files(record: ArtifactRecord, collection_id: str | None) -> list[Path]:
-    """The files *record* commits, for one collection or all of them; never a file it does not name."""
-    files = [Path(file) for file in record.asset_paths]
-    if collection_id is not None:
-        if not is_segment_safe_id(collection_id):
-            return []
-        files = [file for file in files if file.parent.name == collection_id]
-    return sorted(files)
 
 
 def _dataset_root(dataset_id: str) -> Path:
@@ -309,18 +323,17 @@ def _existing_record(dataset_id: str) -> ArtifactRecord | None:
     return max(records, key=lambda record: record.created_at) if records else None
 
 
-def _coverage(files: list[str], period_type: str | None) -> ArtifactCoverage:
-    """The period range of the rows in *files*, as period labels, and the extent of the collections they report on."""
+def _coverage(table: pa.Table, period_type: str | None) -> ArtifactCoverage:
+    """The period range of *table*'s rows, as period labels, and the extent of the collections they report on."""
     from open_climate_service.features.services import registered_collections
 
-    periods = pds.dataset(files, schema=SCHEMA, format="parquet").to_table(columns=["period_start"])
-    dates = periods.column("period_start").unique().to_pylist()
+    dates = table.column("period_start").unique().to_pylist()
     first, last = min(dates), max(dates)
     collections = registered_collections()
     boxes = [
         (record.coverage.spatial_wgs84 or record.coverage.spatial)
-        for folder in sorted({Path(file).parent.name for file in files})
-        if (record := collections.get(folder)) is not None
+        for collection_id in sorted(set(table.column("collection_id").to_pylist()))
+        if (record := collections.get(collection_id)) is not None
     ]
     spatial = CoverageSpatial(
         xmin=min(box.xmin for box in boxes),
