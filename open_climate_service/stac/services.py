@@ -283,6 +283,12 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
                 "title": input_id,
             }
         )
+    # As for a feature collection: the original source this collection mirrors, and when the copy
+    # was last synced from it.
+    source_url = source_dataset.get("source_url")
+    if isinstance(source_url, str) and source_url.strip():
+        template_links.append({"rel": "via", "href": source_url.strip(), "type": "text/html", "title": "Source"})
+    collection_payload["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
     # Relative, as for the catalog and feature collections, so they resolve beside the document.
     template_links.extend(_document_links())
     collection_payload["links"] = template_links

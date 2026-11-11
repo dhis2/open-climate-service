@@ -457,6 +457,15 @@ def test_a_feature_collections_documents_answer_head(client: TestClient, distric
         response = client.head(f"/stac/districts/{name}")
         assert response.status_code == 200, name
         assert int(response.headers["content-length"]) > 0
+    # And to every link and asset on this host, the `alternate` link to /features among them.
+    from urllib.parse import urljoin
+
+    collection_url = "http://testserver/stac/districts/collection.json"
+    doc = client.get(collection_url).json()
+    for href in [link["href"] for link in doc["links"]] + [asset["href"] for asset in doc["assets"].values()]:
+        absolute = urljoin(collection_url, href)
+        if absolute.startswith("http://testserver/"):
+            assert client.head(absolute).status_code == 200, absolute
 
 
 def test_an_unknown_collection_has_no_readme(client: TestClient) -> None:
