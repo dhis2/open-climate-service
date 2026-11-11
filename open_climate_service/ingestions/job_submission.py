@@ -14,6 +14,7 @@ def submit_sync_job(
     publish: bool,
     label: str = "sync",
     max_attempts: int = 1,
+    outcome_source: str | None = None,
 ) -> JobRecord:
     """Submit a sync through the native job service used by HTTP and schedules."""
     return get_job_service().submit_callable_job(
@@ -22,4 +23,5 @@ def submit_sync_job(
         request={"dataset_id": dataset_id, "end": end, "publish": publish},
         max_attempts=max_attempts,
         job_href_base=INGESTION_JOB_HREF_BASE,
+        outcome_source=outcome_source,
     )

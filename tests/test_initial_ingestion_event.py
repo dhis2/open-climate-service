@@ -26,6 +26,8 @@ from open_climate_service.openeo import jobs as openeo_jobs
 from open_climate_service.shared.time import utc_now
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
+from .conftest import WebhookReceiver
+
 _DATASET_ID = "rolling_precip"
 _TRIGGER = "chap-after-ingest"
 
@@ -200,6 +202,39 @@ def test_failed_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
     assert record.status == JobStatus.FAILED
     assert record.events == []
     assert _triggered_jobs(expected=0) == []
+
+
+def test_a_scheduled_sync_reports_its_failure_and_its_recovery(
+    instance: dict[str, Any], webhook: WebhookReceiver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.ingestions import sync_engine
+    from open_climate_service.notifications import webhook as notifications
+    from open_climate_service.scheduler.config import DatasetSyncSchedule
+    from open_climate_service.scheduler.dispatcher import enqueue_sync
+
+    instance["dataset"]["sync"] = {"kind": "temporal"}
+    monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: instance["plugin"].available)
+    _ingest(instance)
+    instance["jobs"].set_event_consumer(notifications.consume)
+    schedule = DatasetSyncSchedule(dataset_id=_DATASET_ID, cron="0 6 * * *", max_attempts=1)
+    instance["plugin"].available.append("2026-01-03")
+    instance["plugin"].fail = True
+    failed = _await_terminal(instance, str(enqueue_sync(schedule).job_id))
+    instance["plugin"].fail = False
+    synced = _await_terminal(instance, str(enqueue_sync(schedule).job_id))
+    deadline = time.monotonic() + 10  # events reach the consumer just after the job is persisted
+    while len(webhook.posts) < 2 and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert failed.status == JobStatus.FAILED
+    [failure] = failed.events
+    assert (failure.type, failure.source) == ("automation.failed", f"/schedules/sync/{_DATASET_ID}")
+    assert failure.data["stage"] == "job" and "source unavailable" in failure.data["message"]
+    assert [event.type for event in synced.events] == [DATASET_UPDATED_EVENT_TYPE, "automation.succeeded"]
+    assert [body["text"].split(":")[0] for _, _, body in webhook.posts] == [
+        f"Scheduled sync of '{_DATASET_ID}' failed",
+        f"Scheduled sync of '{_DATASET_ID}' succeeded again /schedules/sync/{_DATASET_ID}",
+    ]
 
 
 def test_cancelled_ingestion_emits_nothing(instance: dict[str, Any]) -> None:

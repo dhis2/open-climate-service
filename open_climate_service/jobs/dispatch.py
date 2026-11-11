@@ -1,7 +1,8 @@
 """Hand newly persisted events to each owner of what they mean.
 
 Derivation keeps derived datasets current, pipelines deliver datasets to their destinations,
-and workflow triggers run until CLIM-1426 removes them. Each consumer is isolated: one that
+workflow triggers run until CLIM-1426 removes them, and the failure webhook posts changes in
+an automation's health. Each consumer is isolated: one that
 fails is logged and does not keep the events from the others, and every consumer recovers what
 it missed from the persisted log at startup.
 """
@@ -19,12 +20,14 @@ logger = logging.getLogger(__name__)
 def _consumers() -> list[tuple[str, Callable[[list[JobEvent]], None]]]:
     from open_climate_service.automation.service import get_workflow_automation_service
     from open_climate_service.derivations import service as derivations
+    from open_climate_service.notifications import webhook
     from open_climate_service.pipelines import runner
 
     return [
         ("Derived dataset refresh", derivations.consume),
         ("Pipeline dispatch", runner.consume),
         ("Workflow automation", get_workflow_automation_service().consume),
+        ("Failure notification", webhook.consume),
     ]
 
 
