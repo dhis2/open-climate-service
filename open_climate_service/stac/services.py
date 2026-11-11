@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -314,6 +315,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     if providers:
         collection_payload["providers"] = providers
     _remove_helper_variables(collection_payload)
+    _add_band_statistics(collection_payload, artifact)
     _round_spatial_steps(collection_payload)
     # Prefer an explicit extents.temporal.resolution; fall back to the dataset's
     # period_type so openEO save_result outputs (which omit the extents block) still
@@ -921,6 +923,7 @@ def _build_collection_with_xstac(
             payload.setdefault("extent", {}).setdefault("spatial", {})["bbox"] = [extent_bbox]
         if time_dimension is not None and period_cadence(period_type) is Cadence.IRREGULAR:
             _add_temporal_values(payload, ds, time_dimension)
+        payload.setdefault("assets", {}).setdefault("zarr", {})["bands"] = _store_bands(ds)
         _cache_xstac_collection_payload(cache_key, payload)
         return deepcopy(payload)
     except HTTPException:
@@ -1205,6 +1208,62 @@ def _build_cube_variables(ds: xr.Dataset) -> dict[str, Any]:
                 entry[f"cf:{cf_key}"] = _cf_field(cf_key, value)
         result[str(name)] = entry
     return result
+
+
+def _store_bands(ds: xr.Dataset) -> list[dict[str, Any]]:
+    """One STAC band per data variable, with the no-data value the store itself declares (CLIM-1860).
+
+    `nodata` is the variable's `_FillValue` or `missing_value` as written, never the template's
+    `display.nodata`: that is a rendering choice, and ERA5-Land precipitation sets 0 there to hide
+    dry cells, which as band `nodata` would tell a client every dry day is missing. A variable
+    without dimensions is a helper, left out as `_remove_helper_variables` leaves it out of
+    `cube:variables`, so the band names match its keys.
+    """
+    bands: list[dict[str, Any]] = []
+    for name in ds.data_vars:
+        variable = ds[name]
+        if not variable.dims:
+            continue
+        band: dict[str, Any] = {"name": str(name)}
+        nodata = _stac_nodata(variable.encoding.get("_FillValue", variable.encoding.get("missing_value")))
+        if nodata is not None:
+            band["nodata"] = nodata
+        bands.append(band)
+    return bands
+
+
+def _stac_nodata(value: object) -> int | float | str | None:
+    """A fill value as STAC 1.1 writes `nodata`: a number, or "nan", "inf" or "-inf"."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return "nan"
+    if isinstance(value, float) and math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    return value
+
+
+def _add_band_statistics(collection: dict[str, Any], artifact: ArtifactRecord) -> None:
+    """The artifact's recorded statistics on its variable's band, under STAC's names.
+
+    Added after the cached store metadata rather than inside it, because the startup backfill
+    records statistics on an existing artifact, which a cached payload would never show.
+    Percentiles have no STAC field, so they stay on the record.
+    """
+    recorded = artifact.statistics
+    if recorded is None:
+        return
+    statistics = {
+        name: value
+        for name, value in (("minimum", recorded.min), ("maximum", recorded.max), ("mean", recorded.mean))
+        if value is not None
+    }
+    zarr = collection.get("assets", {}).get("zarr", {})
+    for band in zarr.get("bands", []):
+        if band["name"] == artifact.variable and statistics:
+            band["statistics"] = statistics
 
 
 def _round_spatial_steps(collection: dict[str, Any]) -> None:

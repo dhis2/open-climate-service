@@ -481,6 +481,65 @@ def test_collection_uses_root_href_for_icechunk_store(
     )
 
 
+class DryDaysPlugin:
+    """Two days of rain on a 2x2 grid, with dry cells and one missing cell."""
+
+    time_dim = "t"
+
+    async def periods(self, start: str, end: str) -> list[str]:
+        return ["2025-01-01", "2025-01-02"]
+
+    def fetch_period(self, period_id: str, bbox: list[float], **params: object) -> xr.Dataset:
+        values = {"2025-01-01": [[0.0, 4.0], [0.0, np.nan]], "2025-01-02": [[2.0, 0.0], [6.0, 0.0]]}[period_id]
+        return xr.Dataset(
+            {"precip": (("t", "y", "x"), np.array([values], dtype="float32"))},
+            coords={"t": [np.datetime64(period_id, "ns")], "y": [3.0, 1.0], "x": [1.0, 3.0]},
+        )
+
+
+def test_an_ingested_collection_publishes_measured_band_statistics(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Band statistics and nodata describe the stored data; the display hints stay in `renders`."""
+    import yaml
+
+    from open_climate_service.data_registry.services import datasets as registry
+
+    dataset_id = "dry_days_band_test"
+    template = {
+        "id": dataset_id,
+        "name": "Dry days",
+        "variable": "precip",
+        "period_type": "daily",
+        "sync": {"kind": "temporal"},
+        "ingestion": {"plugin": "tests.test_stac.DryDaysPlugin"},
+        # As ERA5-Land precipitation does, to draw dry cells transparent.
+        "display": {"colormap": "blues", "nodata": 0.0},
+    }
+    (tmp_path / "dry.yaml").write_text(yaml.safe_dump([template]), encoding="utf-8")
+    monkeypatch.setattr(registry, "CONFIGS_DIR", tmp_path)
+    response = client.post(
+        "/ingestions",
+        json={
+            "dataset_id": dataset_id,
+            "start": "2025-01-01",
+            "end": "2025-01-02",
+            "bbox": [0, 0, 4, 4],
+            "publish": True,
+        },
+    )
+    assert response.status_code in (200, 201), response.text
+
+    collection = client.get(f"/stac/{dataset_id}/collection.json").json()
+
+    bands = collection["assets"]["zarr"]["bands"]
+    assert [band["name"] for band in bands] == list(collection["cube:variables"])
+    # The store's own fill value, not the display's 0.0, which would mark every dry cell missing.
+    assert bands[0]["nodata"] == "nan"
+    assert bands[0]["statistics"] == {"minimum": 0.0, "maximum": 6.0, "mean": pytest.approx(12.0 / 7)}
+    assert collection["renders"]["default"]["nodata"] == 0.0
+
+
 def test_collection_returns_404_for_unknown_dataset(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         ingestion_services,
@@ -670,6 +729,7 @@ def test_build_collection_with_xstac_normalizes_pystac_collection(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        data_vars: dict[str, object] = {}
 
         def close(self) -> None:
             pass
@@ -704,6 +764,7 @@ def test_collection_reuses_cached_xstac_payload(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        data_vars: dict[str, object] = {}
 
         def close(self) -> None:
             pass
@@ -771,6 +832,7 @@ def test_collection_preserves_template_links_when_xstac_mutates_template(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        data_vars: dict[str, object] = {}
 
         def close(self) -> None:
             pass
