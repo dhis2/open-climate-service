@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urljoin
 
 from fastapi import HTTPException, Request
 
 from open_climate_service.ingestions import services as ingestion_services
 from open_climate_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
-from open_climate_service.shared.urls import absolute_base
+from open_climate_service.shared.urls import absolute_base, absolute_url
 from open_climate_service.stac import services as stac_services
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,16 @@ def _normalize_cube_dimensions(collection: dict[str, Any]) -> dict[str, Any]:
     return {**collection, "cube:dimensions": new_dims}
 
 
-def _rewrite_collection_links(collection: dict[str, Any], request: Request) -> dict[str, Any]:
-    """Replace /stac/collections links with /collections links."""
-    base_url = absolute_base(request)
+def _rewrite_collection_links(collection: dict[str, Any], dataset_id: str, request: Request) -> dict[str, Any]:
+    """Point every link to a STAC collection at its openEO copy, and make every link absolute.
+
+    The collection's own `self` link and the `derived_from` links to its inputs alike, so an
+    openEO user following either stays in openEO. The STAC document's relative links
+    (`./README.md`) resolve against its own URL, which this copy is not served from, so they are
+    resolved there before the document moves.
+    """
+    stac_href = absolute_url(request, stac_services.collection_path(dataset_id))
+    stac_root = absolute_url(request, "/stac/")
     links = collection.get("links", [])
     rewritten: list[dict[str, Any]] = []
     for link in links:
@@ -64,8 +72,11 @@ def _rewrite_collection_links(collection: dict[str, Any], request: Request) -> d
             continue
         href = link.get("href", "")
         if isinstance(href, str):
-            href = href.replace(f"{base_url}/stac/collections", f"{base_url}/collections")
-            href = href.replace("/stac/catalog.json", "/stac")
+            href = urljoin(stac_href, href)
+            segment = href.removeprefix(stac_root).removesuffix("/collection.json")
+            if href.startswith(stac_root) and href.endswith("/collection.json") and segment and "/" not in segment:
+                # Already a path segment, escaped as the STAC link was built.
+                href = absolute_url(request, f"/collections/{segment}")
         rewritten.append({**link, "href": href})
     return {**collection, "links": rewritten}
 
@@ -107,7 +118,7 @@ def _openeo_collection(dataset_id: str, artifact: ArtifactRecord, request: Reque
     """The STAC collection with openEO links and the cube dimensions `load_collection` returns."""
     # Built from `artifact`, not looked up again, so one record describes the whole document.
     collection = _rewrite_collection_links(
-        stac_services.build_collection_for_artifact(dataset_id, artifact, request), request
+        stac_services.build_collection_for_artifact(dataset_id, artifact, request), dataset_id, request
     )
     if artifact.format == ArtifactFormat.GEOPARQUET:
         return _add_geometry_dimension(collection, artifact)

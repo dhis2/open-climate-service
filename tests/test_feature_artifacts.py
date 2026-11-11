@@ -829,7 +829,7 @@ def test_the_catalogue_and_openeo_both_advertise_a_feature_collection(
     catalog = client.get("/stac/catalog.json").json()
     dataset = client.get("/datasets/districts").json()
 
-    assert any(link["href"].endswith("/stac/collections/districts") for link in catalog["links"])
+    assert any(link["href"].endswith("/stac/districts/collection.json") for link in catalog["links"])
     assert {link["rel"] for link in dataset["links"]} == {"self", "stac", "features"}
     assert [collection["id"] for collection in client.get("/collections").json()["collections"]] == ["districts"]
 
@@ -847,7 +847,7 @@ def test_an_unpublished_feature_collection_is_advertised_nowhere(
     catalog = client.get("/stac/catalog.json").json()
 
     assert all("districts" not in link["href"] for link in catalog["links"])
-    assert client.get("/stac/collections/districts").status_code == 404
+    assert client.get("/stac/districts/collection.json").status_code == 404
     assert {link["rel"] for link in client.get("/datasets/districts").json()["links"]} == {"self"}
 
 
@@ -869,7 +869,7 @@ def test_the_feature_builder_needs_no_datacube_machinery(client: TestClient, mon
     monkeypatch.setattr(stac_services, "_open_published_store", unreachable)
     monkeypatch.setattr(stac_services, "_zarr_media_type", unreachable)
 
-    response = client.get("/stac/collections/districts")
+    response = client.get("/stac/districts/collection.json")
 
     assert response.status_code == 200
     assert response.json()["id"] == "districts"
@@ -1064,7 +1064,7 @@ def test_dataset_links_offer_stac_and_features_but_not_zarr_for_a_feature_collec
     links = services._dataset_links("districts", published, published=published)
 
     assert {link.rel for link in links} == {"self", "stac", "features"}
-    assert any(link.rel == "stac" and link.href == "/stac/collections/districts" for link in links)
+    assert any(link.rel == "stac" and link.href == "/stac/districts/collection.json" for link in links)
     assert any(link.rel == "features" and link.href == "/features/districts" for link in links)
 
 
@@ -1088,7 +1088,7 @@ def test_stac_collection_builder_still_serves_a_raster(client: TestClient, monke
     monkeypatch.setattr(stac_services, "_zarr_asset_metadata", lambda _: {})
     monkeypatch.setattr(stac_services, "_zarr_open_kwargs", lambda _: {})
 
-    response = client.get("/stac/collections/chirps3_precipitation_daily")
+    response = client.get("/stac/chirps3_precipitation_daily/collection.json")
 
     assert response.status_code == 200
     assert response.json()["id"] == "chirps3_precipitation_daily"
