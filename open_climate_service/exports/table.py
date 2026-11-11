@@ -206,12 +206,16 @@ class TableExportPlugin(BaseExportPlugin):
         import pyarrow.parquet as pq
 
         from open_climate_service.features.services import feature_names
+        from open_climate_service.plugins.processes.aggregate_spatial_classes import REDUCERS as CLASS_REDUCERS
         from open_climate_service.shared.time import cadence_of
         from open_climate_service.tables import store
 
         # The result's own cadence: a graph that aggregates in time makes it coarser than its source.
         period_type = cadence_of(data) or mapping.get("period_type")
         frame, reducer = _frame(data)
+        # A class statistic is not in the source's unit, which the mapping carries; the result says
+        # its own unit, when it has one.
+        unit = _attr(data, "units") if reducer in CLASS_REDUCERS else mapping.get("unit")
         id_field, value_field = _fields(frame)
         names = feature_names(mapping["collection_id"])
         rows = [
@@ -222,7 +226,7 @@ class TableExportPlugin(BaseExportPlugin):
                 "class": str(record[_CLASS_FIELD]) if _CLASS_FIELD in record else None,
                 "value": _value(record[value_field]),
                 "reducer": reducer,
-                "unit": mapping.get("unit"),
+                "unit": unit,
             }
             for record in frame.to_dict(orient="records")
         ]
@@ -340,17 +344,21 @@ def _frame(data: Any) -> tuple[Any, str | None]:
 
     if isinstance(data, pd.DataFrame):
         return data.copy(), data.attrs.get(SPATIAL_REDUCER_ATTR)
+    reducer = _attr(data, SPATIAL_REDUCER_ATTR)
     if isinstance(data, xr.DataArray):
-        reducer = data.attrs.get(SPATIAL_REDUCER_ATTR)
         data = data.to_dataset(name=data.name or "value")
-    elif isinstance(data, xr.Dataset):
-        reducer = data.attrs.get(SPATIAL_REDUCER_ATTR) or next(
-            (var.attrs.get(SPATIAL_REDUCER_ATTR) for var in data.data_vars.values()), None
-        )
-    else:
+    elif not isinstance(data, xr.Dataset):
         raise ValueError("a table destination takes a vector cube or a table, one value per feature and period")
     scalars = [name for name, coordinate in data.coords.items() if not coordinate.dims]
     return data.drop_vars(scalars).to_dataframe().reset_index(), reducer
+
+
+def _attr(data: Any, name: str) -> Any:
+    """The result's attribute *name*: a dataset's own, else its first variable's that has it."""
+    attrs = getattr(data, "attrs", {})
+    if attrs.get(name) is not None or not hasattr(data, "data_vars"):
+        return attrs.get(name)
+    return next((var.attrs.get(name) for var in data.data_vars.values() if var.attrs.get(name) is not None), None)
 
 
 def _fields(frame: Any) -> tuple[str, str]:

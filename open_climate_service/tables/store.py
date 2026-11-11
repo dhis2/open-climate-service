@@ -8,7 +8,8 @@ so values for two boundary versions never mix.
 
 Every write produces a new file, written under a temporary name and renamed, holding the merged
 rows. The dataset's record names it in `asset_paths`, and readers read only that: the file
-becomes the dataset when the record naming it is registered, then the previous file is removed.
+becomes the dataset when the record naming it is registered. The previous file stays for a grace
+period, for a reader that resolved the previous record and has not opened its file yet.
 A reader sees the dataset before a write or after it, and a write whose record fails leaves the
 dataset as it was. The one file is what a static catalog serves as the dataset's data.
 
@@ -20,8 +21,10 @@ as `itemType: table`. `check_rows` gives the same verdict without writing, for a
 
 from __future__ import annotations
 
+import logging
 import math
 import os
+import time
 from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime, timedelta
@@ -45,6 +48,8 @@ from open_climate_service.ingestions.schemas import (
 )
 from open_climate_service.shared.persistence import index_lock
 from open_climate_service.shared.urls import is_segment_safe_id
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = pa.schema(
     [
@@ -154,15 +159,21 @@ def write_rows(
                 created_at=datetime.now(UTC),
                 provenance=provenance or (existing.provenance if existing else None),
             )
-            registered = ingestion_services.register_artifact_record(record, publish=publish and existing is None)
+            registered = ingestion_services.register_artifact_record(record, publish=False)
+            if publish and existing is None:
+                try:
+                    registered = ingestion_services.publish_artifact_record(registered.artifact_id)
+                except BaseException:
+                    # The record is stored before it is published; a dataset that failed to
+                    # publish has no record, as before the write. It was never served, so its
+                    # file can go at once.
+                    _remove_records(dataset_id)
+                    raise
         except BaseException:
             # No record names the file, so no reader sees it; remove it rather than leave it.
             written.unlink(missing_ok=True)
             raise
-        # The new record names only the new file, so the previous one is no longer the dataset.
-        for previous in existing.asset_paths if existing else []:
-            if Path(previous) != written:
-                Path(previous).unlink(missing_ok=True)
+        _prune_superseded(_dataset_root(dataset_id), keep=written)
         return registered
 
 
@@ -310,6 +321,39 @@ def _write_file(folder: Path, table: pa.Table, stamp: datetime) -> Path:
 
 def _dataset_root(dataset_id: str) -> Path:
     return api_config.get_tables_root() / dataset_id
+
+
+def _prune_superseded(folder: Path, *, keep: Path) -> None:
+    """Remove the files a newer file replaced more than `SUPERSEDED_FILE_GRACE_SECONDS` ago.
+
+    A reader resolves the record, then opens the file it names, so a file just replaced must stay
+    for a reader caught between the two. A file was replaced when the next newer one was written,
+    so the next file's mtime is when it stopped being the dataset; *keep* is never removed. A file
+    that cannot be removed is logged and tried again on the next write.
+    """
+    from open_climate_service.features.store import SUPERSEDED_FILE_GRACE_SECONDS
+
+    files = sorted(folder.glob("*.parquet"), key=lambda path: path.stat().st_mtime)
+    now = time.time()
+    for older, newer in zip(files, files[1:], strict=False):
+        if older == keep or now - newer.stat().st_mtime < SUPERSEDED_FILE_GRACE_SECONDS:
+            continue
+        try:
+            older.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove superseded table file '%s'", older, exc_info=True)
+
+
+def _remove_records(dataset_id: str) -> None:
+    """Drop the dataset's records, for a first write whose publication failed."""
+    from open_climate_service.ingestions import services as ingestion_services
+
+    def remove(records: list[ArtifactRecord]) -> None:
+        records[:] = [
+            record for record in records if record.dataset_id != dataset_id or record.format != ArtifactFormat.PARQUET
+        ]
+
+    ingestion_services._mutate_records(remove)
 
 
 def _existing_record(dataset_id: str) -> ArtifactRecord | None:

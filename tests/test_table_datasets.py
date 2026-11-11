@@ -102,7 +102,10 @@ def test_written_rows_are_listed_as_a_table_dataset_and_served_as_json_and_csv(c
     ]
 
 
-def test_a_revised_value_replaces_the_previous_one(client: TestClient, stores: Path) -> None:
+def test_a_revised_value_replaces_the_previous_one(
+    client: TestClient, stores: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(feature_store, "SUPERSEDED_FILE_GRACE_SECONDS", 0)
     _write([_row("D1", 10.0), _row("D2", 20.0)], written_at=FIRST)
     _write([_row("D1", 11.0)], written_at=LATER)
 
@@ -180,10 +183,27 @@ def test_a_reader_during_a_write_sees_the_files_before_it(monkeypatch: pytest.Mo
     updated = _write([_row("D1", 11.0)], written_at=LATER)
 
     assert seen == [[10.0]]
-    # The new record names the new file only, and the previous file is gone.
+    # The new record names the new file only.
     assert store.read_rows(updated).column("value").to_pylist() == [11.0]
     assert updated.asset_paths != record.asset_paths
-    assert not Path(record.asset_paths[0]).exists()
+    # A reader that resolved the previous record before the write still reads its file.
+    assert store.read_rows(record).column("value").to_pylist() == [10.0]
+
+
+def test_a_replaced_file_is_removed_once_the_grace_period_has_passed(stores: Path) -> None:
+    import os
+
+    first = _write([_row("D1", 1.0)], written_at=FIRST)
+    second = _write([_row("D1", 2.0)], written_at=LATER)
+    # The second file replaced the first a while ago; the third write removes the first only.
+    replaced = Path(second.asset_paths[0]).stat().st_mtime - feature_store.SUPERSEDED_FILE_GRACE_SECONDS - 1
+    os.utime(first.asset_paths[0], (replaced - 1, replaced - 1))
+    os.utime(second.asset_paths[0], (replaced, replaced))
+    third = _write([_row("D1", 3.0)], written_at=datetime(2026, 5, 1, tzinfo=UTC))
+
+    files = sorted((stores / "precip_districts").glob("*.parquet"))
+    assert files == sorted(Path(path) for path in second.asset_paths + third.asset_paths)
+    assert not Path(first.asset_paths[0]).exists()
 
 
 def test_a_write_whose_record_fails_is_never_read(
@@ -206,6 +226,26 @@ def test_a_write_whose_record_fails_is_never_read(
     assert seen == [[1.0]]
     assert [row["value"] for row in client.get("/tables/precip_districts/rows").json()["items"]] == [1.0]
     assert sorted((stores / "precip_districts").glob("*.parquet")) == files
+
+
+def test_a_first_write_that_fails_to_publish_leaves_no_record_and_no_file(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, stores: Path
+) -> None:
+    publish = ingestion_services.publish_artifact_record
+
+    def fail(_artifact_id: str) -> None:
+        raise OSError("catalog unwritable")
+
+    monkeypatch.setattr(ingestion_services, "publish_artifact_record", fail)
+    with pytest.raises(OSError):
+        _write([_row("D1", 1.0)])
+    assert [item for item in client.get("/datasets").json()["items"] if item["dataset_id"] == "precip_districts"] == []
+    assert list((stores / "precip_districts").glob("*.parquet")) == []
+
+    # Written again once publishing works, it is a first write: published.
+    monkeypatch.setattr(ingestion_services, "publish_artifact_record", publish)
+    _write([_row("D1", 1.0)])
+    assert [row["value"] for row in client.get("/tables/precip_districts/rows").json()["items"]] == [1.0]
 
 
 def test_a_failed_write_leaves_no_file(monkeypatch: pytest.MonkeyPatch, stores: Path) -> None:
@@ -439,6 +479,8 @@ def test_a_per_class_result_is_one_row_per_feature_period_and_class() -> None:
     first_day = [row for row in rows if row["period_start"] == date(2026, 1, 1)]
     shares = {(row["feature_id"], row["class"]): row["value"] for row in first_day}
     assert shares[("D1", "0")] == pytest.approx(1.0) and shares[("D1", "1")] == pytest.approx(0.0)
+    # A share is a fraction, not in the unit the mapping took from the source.
+    assert {(row["reducer"], row["unit"]) for row in rows} == {("share", None)}
 
 
 def test_destination_checks_name_a_held_dataset_id_and_a_missing_collection() -> None:
@@ -478,7 +520,6 @@ def test_a_dataset_keeps_one_period_type_and_its_files_carry_it(stores: Path) ->
     store.write_rows(dataset_id="precip_districts", collection_id="districts", rows=[_row("D2", 2.0)], written_at=LATER)
 
     files = sorted((stores / "precip_districts").glob("*.parquet"))
-    assert len(files) == 1
     assert {pq.read_schema(path).metadata[store.PERIOD_TYPE_KEY] for path in files} == {b"monthly"}
     assert ingestion_services.published_table_artifacts_by_dataset()["precip_districts"].period_type == "monthly"
 
