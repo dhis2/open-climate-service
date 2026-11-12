@@ -6,10 +6,14 @@ from rasterio.session import Session
 
 from open_climate_service.plugins.providers import require_env
 
-_HINT = (
-    "Create free CDSE S3 keys at https://eodata-s3keysmanager.dataspace.copernicus.eu; the secret key is "
-    "shown only once."
-)
+
+def api_key() -> dict[str, str]:
+    """The CDSE S3 access and secret keys."""
+    hint = (
+        "Create free CDSE S3 keys at https://eodata-s3keysmanager.dataspace.copernicus.eu; "
+        "the secret key is shown only once."
+    )
+    return {name: require_env(name, hint=hint) for name in ("CDSE_S3_ACCESS_KEY", "CDSE_S3_SECRET_KEY")}
 
 
 class _KeySession(Session):
@@ -33,9 +37,7 @@ class _KeySession(Session):
 
 def rasterio_session() -> Session:
     """A session for ``rasterio.Env(session=...)`` that reads the CDSE ``eodata`` bucket."""
+    keys = api_key()
     return _KeySession(
-        {
-            "AWS_ACCESS_KEY_ID": require_env("CDSE_S3_ACCESS_KEY", hint=_HINT),
-            "AWS_SECRET_ACCESS_KEY": require_env("CDSE_S3_SECRET_KEY", hint=_HINT),
-        }
+        {"AWS_ACCESS_KEY_ID": keys["CDSE_S3_ACCESS_KEY"], "AWS_SECRET_ACCESS_KEY": keys["CDSE_S3_SECRET_KEY"]}
     )
