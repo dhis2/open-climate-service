@@ -348,7 +348,7 @@ def _dataset_view(dataset: Any, template: dict[str, Any] | None) -> dict[str, An
         "status": status,
         "has_thumbnail": has_thumbnail,
         "ramp": _colormap_ramp(colormap),
-        "kind": "vector" if dataset.item_type == "feature" else "raster",
+        "kind": {"feature": "vector", "table": "table"}.get(dataset.item_type, "raster"),
     }
 
 
@@ -1514,6 +1514,7 @@ _API_GROUP_NOTES = {
     "Ingestions": "Ingest from a data source into this instance, and follow the job it starts.",
     "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
     "Features": "Feature collections as GeoParquet, and refreshing one from its data source.",
+    "Tables": "Current values per feature and period, as JSON or CSV.",
     "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
     "Icechunk": "The same stores for the Icechunk SDK, with version history.",
     "STAC": "Catalogue metadata for discovery, one collection per published dataset.",

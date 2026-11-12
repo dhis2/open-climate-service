@@ -512,26 +512,7 @@ def _spread_over_org_units(values: list[dict[str, Any]], limit: int, names: dict
 
 
 def feature_names(collection_id: str) -> dict[str, str]:
-    """Each stored feature's display name by its id; empty when the collection cannot be read.
+    """Each organisation unit's name by its UID, from the bound collection; empty when unreadable."""
+    from open_climate_service.features.services import feature_names as collection_feature_names
 
-    Reads only the id and name columns, never the geometry, which a large hierarchy makes heavy.
-    """
-    from open_climate_service.features import services as feature_services
-    from open_climate_service.features import store as feature_store
-
-    try:
-        record = feature_services.registered_collections().get(collection_id)
-        if record is None or record.features is None:
-            raise ValueError(f"'{collection_id}' is not a registered feature collection")
-        id_property = record.features.id_property
-        rows = feature_store.read_feature_columns(record, [id_property, "displayName", "name"])
-    except Exception as exc:  # not registered, or its store unreadable: the sample then shows ids
-        logger.warning("Could not read feature names from '%s': %s", collection_id, exc)
-        return {}
-    names: dict[str, str] = {}
-    for row in rows:
-        identifier = row.get(id_property)
-        name = row.get("displayName") or row.get("name")
-        if isinstance(identifier, str) and isinstance(name, str) and name:
-            names[identifier] = name
-    return names
+    return collection_feature_names(collection_id)

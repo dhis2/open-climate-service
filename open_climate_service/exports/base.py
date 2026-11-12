@@ -15,6 +15,7 @@ class PipelineDataset:
     id: str
     variable: str | None
     cadence: str | None
+    units: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,11 @@ class DeliveryContext(Protocol):
     with a no-op implementation so their delivery code works standalone.
     """
 
+    source_job_id: str | None
+    """The job whose saved result is delivered; None when ``send`` runs standalone."""
+    source_provenance: dict[str, Any] | None
+    """That job's execution evidence from its export manifest: process graph digest, observed sources."""
+
     def report_progress(self, done: int | None = None, total: int | None = None, message: str | None = None) -> None:
         """Persist coarse progress (e.g. chunks sent) for one delivery job."""
         ...
@@ -160,6 +166,12 @@ class BaseExportPlugin(ABC):
     # True when sending the same payload twice leaves the destination as sending it once
     # (an upsert). Only then may an operator send a delivery again after an unconfirmed outcome.
     redelivery_safe: bool = False
+    # True when the plugin takes its period from the result's cadence rather than declaring one.
+    # The export's temporal checks then run against that cadence.
+    period_from_result: bool = False
+    # False when the mapping refuses ``incomplete_periods: drop``, so a partial period can only be
+    # refused, and the error does not suggest dropping it.
+    drops_incomplete_periods: bool = True
 
     # --- delivery target hooks (delivery plugins) -----------------------------------------
 

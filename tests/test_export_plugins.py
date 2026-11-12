@@ -200,7 +200,7 @@ def test_broken_plugin_is_skipped(definition: dict[str, Any], tmp_path: Path):
     (local / "broken.py").write_text("plugin = object()\n")
     config.get_config()["plugins_dir"] = str(tmp_path)
     plugins = load_export_plugins()
-    assert set(plugins) == {"dhis2"}
+    assert set(plugins) == {"dhis2", "table"}
 
 
 def test_sync_and_batch_external_export(

@@ -30,6 +30,7 @@ from open_climate_service.scheduler.service import get_scheduler_service
 from open_climate_service.shared import urls
 from open_climate_service.stac import routes as stac_routes
 from open_climate_service.system import routes as system_routes
+from open_climate_service.tables import routes as table_routes
 
 logger = logging.getLogger(__name__)
 
@@ -405,6 +406,7 @@ def create_app() -> FastAPI:
     _app.include_router(openeo_routes.result_router, prefix="/result", tags=["openEO"])
     _app.include_router(extent_routes.router, prefix="/extent", tags=["Extent"])
     _app.include_router(feature_routes.router, prefix="/features", tags=["Features"])
+    _app.include_router(table_routes.router, prefix="/tables", tags=["Tables"])
     _app.include_router(data_source_routes.router, prefix="/data-sources", tags=["Data sources"])
     _app.include_router(ingestion_routes.datasets_router, prefix="/datasets", tags=["Datasets"])
     _app.include_router(ingestion_routes.ingestions_router, prefix="/ingestions", tags=["Ingestions"])
