@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from open_climate_service.features.bindings import (
+    FROM_FEATURES,
     feature_versions,
     is_inline_geojson,
     iter_feature_references,
@@ -99,13 +100,13 @@ def type_problem(name: str, schema: dict[str, Any], value: Any) -> str | None:
     if subtype == GEOJSON:
         if is_inline_geojson(value):
             return None
-        if isinstance(value, dict) and "from_features" in value:
+        if isinstance(value, dict) and FROM_FEATURES in value:
             try:
                 list(iter_feature_references(value))
             except ValueError as exc:
                 return f"'{name}': {exc}"
             return None
-        return f'\'{name}\' takes a feature collection: bind it as {{"from_features": "<collection id>"}}'
+        return f'\'{name}\' takes a feature collection: bind it as {{"{FROM_FEATURES}": "<collection id>"}}'
     enum = schema.get("enum")
     if isinstance(enum, list) and value not in enum:
         return f"'{name}' must be one of {', '.join(map(str, enum))}, not {value!r}"

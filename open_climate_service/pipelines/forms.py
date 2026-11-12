@@ -13,6 +13,7 @@ from dataclasses import asdict
 from typing import Any
 
 from open_climate_service.exports.base import PipelineSettingsForm
+from open_climate_service.features.bindings import FROM_FEATURES
 from open_climate_service.pipelines.workflow import COLLECTION_ID, GEOJSON, TEMPORAL_INTERVAL
 
 _SCALARS = {"string", "integer", "number", "boolean"}
@@ -215,7 +216,7 @@ def read_arguments(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[s
         kind = field["kind"]
         try:
             if kind == "features":
-                arguments[field["name"]] = {"from_features": raw}
+                arguments[field["name"]] = {FROM_FEATURES: raw}
             elif kind in ("json", "interval"):
                 arguments[field["name"]] = json.loads(raw)
             elif kind in ("integer", "number", "boolean", "enum"):
@@ -316,7 +317,7 @@ def argument_value(arguments: dict[str, Any], field: dict[str, Any]) -> str:
     if value is None:
         return ""
     if field["kind"] == "features" and isinstance(value, dict):
-        return str(value.get("from_features", ""))
+        return str(value.get(FROM_FEATURES, ""))
     if field["kind"] in ("json", "interval") or isinstance(value, (dict, list)):
         return json.dumps(value)
     if isinstance(value, bool) and field["kind"] == "boolean":

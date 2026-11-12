@@ -585,6 +585,22 @@ def test_validation_reports_dhis2_period_and_assignment(instance: None, monkeypa
     assert f"category option combo(s) not of their data element: OtherCOC001 (data element {_ELEMENT})" in message
     assert "attribute option combo(s) not of the data set's attribute: OtherAOC001" in message
 
+    # A data set can give its element another category combo, whose option combos then count.
+    client = _dhis2(monkeypatch)
+    client.data_set["dataSetElements"][0]["categoryCombo"] = {"categoryOptionCombos": [{"id": "OtherCOC001"}]}
+    override = _spec(id="override", destination=wrong.destination)
+    message = _by_id(service.validate_pipeline(store.create_record(override)))["dhis2_metadata"].message
+    assert "category option combo" not in message
+
+    # Without a data set, a category option combo is still checked against its data element.
+    client.data_set = {"dataElements": [client.data_set["dataSetElements"][0]["dataElement"]]}
+    unset = {key: value for key, value in _SETTINGS.items() if key != "data_set"}
+    for spec_id, chosen, status in (("no-set", series, "pass"), ("no-set-wrong", foreign, "fail")):
+        spec = _spec(id=spec_id, destination={"plugin": "dhis2", "settings": {**unset, "series": chosen}})
+        check = _by_id(service.validate_pipeline(store.create_record(spec)))["dhis2_metadata"]
+        assert check.status == status, check.message
+    assert "OtherCOC001" in check.message
+
 
 def test_validation_rejects_wrong_connection_or_non_polygon_collection(
     instance: None, monkeypatch: pytest.MonkeyPatch
@@ -1263,6 +1279,13 @@ def test_dhis2_lookups_search_by_name_narrow_to_the_data_set_and_resolve_labels(
     assert len(dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", row)) == 2
     attributes = dhis2_destination.lookup_options("attribute_option_combos", {"connection": "local", **_SETTINGS}, "")
     assert [o.value for o in attributes] == [_AOC]
+    # In a data set that gives the element another category combo, that combo's option combos are offered.
+    client.data_set["dataSetElements"][0]["categoryCombo"] = {
+        "displayName": "Age",
+        "categoryOptionCombos": [{"id": "UnderFive01", "displayName": "Under 5"}],
+    }
+    in_set = dhis2_destination.lookup_options("category_option_combos", {"connection": "local", **_SETTINGS}, "", row)
+    assert [(o.value, o.label, o.detail) for o in in_set] == [("UnderFive01", "Under 5", "Age")]
     with pytest.raises(ValueError, match="choose this series' data element first"):
         dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", {})
     with pytest.raises(ValueError, match="choose a data set first"):
@@ -1322,12 +1345,19 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
         """A third-party destination implementing the original lookup hook."""
 
         def destination_settings_schema(self) -> dict[str, Any]:
-            return {"type": "object", "properties": {"folder": {"type": "string"}}}
+            rule = {"type": "object", "properties": {"target": {"type": "string"}}}
+            return {
+                "type": "object",
+                "properties": {"folder": {"type": "string"}, "rules": {"type": "array", "items": rule}},
+            }
 
         def pipeline_settings_form(self) -> PipelineSettingsForm:
             return PipelineSettingsForm(
                 title="Legacy destination",
-                fields=(SettingsFormField(name="folder", widget="lookup", lookup="folders"),),
+                fields=(
+                    SettingsFormField(name="folder", widget="lookup", lookup="folders"),
+                    SettingsFormField(name="rules.target", widget="lookup", lookup="folders"),
+                ),
             )
 
         def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
@@ -1337,6 +1367,8 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
     legacy = client.post("/pipelines/lookups/legacy/folders", data={"dest.folder": "/srv/drop", "q": "archive"})
     assert legacy.status_code == 200, legacy.text
     assert legacy.json() == {"options": [{"value": "/srv/drop", "label": "archive", "detail": "folders"}]}
+    in_row = {"dest.folder": "/srv/drop", "dest.rules.0.target": "", "field": "dest.rules.0.target", "q": "archive"}
+    assert client.post("/pipelines/lookups/legacy/folders", data=in_row).json() == legacy.json()
 
     monkeypatch.setattr(api_config, "is_read_only", lambda: True)
     assert client.post("/pipelines/lookups/dhis2/data_sets", data={"dest.connection": "local"}).status_code == 403

@@ -38,6 +38,7 @@ from fastapi import HTTPException
 from open_climate_service import config as api_config
 from open_climate_service.data_registry import recipes
 from open_climate_service.data_registry.recipes import OUTPUT_PARAMETER, Recipe
+from open_climate_service.features.bindings import feature_versions, resolve_feature_references
 from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
 from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus, WorkflowRecord
 
@@ -59,9 +60,10 @@ def _templates() -> list[dict[str, Any]]:
     return datasets.list_datasets()
 
 
-def list_recipes() -> list[Recipe]:
-    """Every recipe the dataset templates declare."""
-    return [found for template in _templates() if (found := recipes.recipe(template)) is not None]
+def list_recipes(templates: list[dict[str, Any]] | None = None) -> list[Recipe]:
+    """Every recipe the dataset templates declare; *templates* when the caller has read them already."""
+    read = _templates() if templates is None else templates
+    return [found for template in read if (found := recipes.recipe(template)) is not None]
 
 
 # --- validation --------------------------------------------------------------------------------
@@ -229,12 +231,14 @@ def _refresh_locked(recipe: Recipe) -> OpenEOJobRecord | None:
             f"not {open_intervals}"
         )
     [interval] = open_intervals
+    # A feature collection bound by id is loaded at the version current now, as a pipeline run does.
+    feature_nodes: dict[str, Any] = {}
     arguments: dict[str, Any] = {
-        **recipe.arguments,
+        **resolve_feature_references(recipe.arguments, feature_nodes, feature_versions(recipe.arguments)),
         OUTPUT_PARAMETER: recipe.output,
         interval: [update.data.get("current_start"), update.data.get("current_end")],
     }
-    call = {"derive": {"process_id": recipe.workflow, "arguments": arguments, "result": True}}
+    call = {**feature_nodes, "derive": {"process_id": recipe.workflow, "arguments": arguments, "result": True}}
     job, _ = service.create_triggered_job(
         OpenEOJobCreate(
             title=f"Refresh {recipe.output}",

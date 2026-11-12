@@ -134,7 +134,7 @@ def instance(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     status = ScheduleListResponse(enabled=True, running=True, timezone="UTC", schedules=SCHEDULES)
     monkeypatch.setattr(scheduler_service, "get_scheduler_service", lambda: SimpleNamespace(status=lambda: status))
-    monkeypatch.setattr(derivations, "list_recipes", lambda: RECIPES)
+    monkeypatch.setattr(derivations, "list_recipes", lambda templates=None: RECIPES)
     finished = SimpleNamespace(
         trigger_id="derive:chirps_anomaly",
         status="finished",

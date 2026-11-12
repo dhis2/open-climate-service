@@ -143,6 +143,7 @@ def test_the_workflow_page_lists_outputs_and_the_datasets_it_keeps_current() -> 
     ]
     recipes = [
         Recipe(output="normal_b", workflow="climate_normal", arguments={"x": "chirps_monthly"}, refresh_on="x"),
+        Recipe(output="normal_a", workflow="climate_normal", arguments={"x": "chirps_monthly"}, refresh_on="x"),
         Recipe(output="change", workflow="temporal_change", arguments={"x": "chirps_monthly"}, refresh_on="x"),
         Recipe(output="fixed", workflow="climate_normal", arguments={"x": "chirps_monthly"}),
     ]
@@ -150,9 +151,9 @@ def test_the_workflow_page_lists_outputs_and_the_datasets_it_keeps_current() -> 
     context = landing._workflow_page_context(record, templates, [_record("normal_b")], recipes)
 
     assert [(o["id"], o["ingested"]) for o in context["outputs"]] == [("normal_a", False), ("normal_b", True)]
-    # Only a recipe that refreshes on an input is kept current, and only this workflow's.
-    assert [(r["output"], r["output_held"], r["input"], r["held"]) for r in context["refreshes"]] == [
-        ("normal_b", True, "chirps_monthly", False)
+    # Only this workflow's recipes that refresh on an input, of derived datasets that exist, are kept current.
+    assert [(r["output"], r["input"], r["held"]) for r in context["refreshes"]] == [
+        ("normal_b", "chirps_monthly", False)
     ]
 
 

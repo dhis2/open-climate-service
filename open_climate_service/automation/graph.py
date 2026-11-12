@@ -264,16 +264,14 @@ def _literal_datasets(value: Any, known: Mapping[str, Any]) -> Iterable[str]:
             yield from _literal_datasets(item, known)
 
 
-def _feature_refs(value: Any) -> Iterable[str]:
-    if isinstance(value, Mapping):
-        if isinstance(value.get("from_features"), str):
-            yield value["from_features"]
-        else:
-            for item in value.values():
-                yield from _feature_refs(item)
-    elif isinstance(value, list | tuple):
-        for item in value:
-            yield from _feature_refs(item)
+def _feature_refs(value: Any) -> list[str]:
+    """The feature collections a recipe binds by id; none for a malformed binding, which validation refuses."""
+    from open_climate_service.features.bindings import iter_feature_references
+
+    try:
+        return list(iter_feature_references(value))
+    except ValueError:
+        return []
 
 
 def _features_node(collection_id: str, feature_names: Mapping[str, str]) -> GraphNode:
@@ -418,32 +416,46 @@ def _add_provenance(b: _Builder, datasets: Mapping[str, Any], ingested: Collecti
 def build_graph() -> AutomationGraph:
     """Read the instance's schedules, recipes, pipelines and datasets, and assemble the graph."""
     datasets = _read_datasets()
+    templates = _read_templates()
     return assemble_graph(
         datasets=datasets,
         feature_names=_read_feature_names(),
         schedules=_read_schedules(),
-        recipes=_read_recipes(datasets),
+        recipes=_read_recipes(datasets, templates),
         refresh_jobs=_read_refresh_jobs(),
         pipelines=_read_pipelines(),
         destination_titles=_read_destination_titles(),
         workflow_titles=_read_workflow_titles(),
-        ingested=_read_ingested(datasets),
+        ingested=_read_ingested(datasets, templates),
     )
 
 
-def _read_ingested(datasets: Mapping[str, Any]) -> set[str]:
+def _read_templates() -> list[dict[str, Any]] | None:
+    """The dataset templates, read once for the recipes and the ingested datasets; None when unreadable."""
+    try:
+        from open_climate_service.data_registry.services import datasets as registry
+
+        return registry.list_datasets()
+    except Exception:
+        _log.exception("Dataset templates could not be read for the automation graph")
+        return None
+
+
+def _read_ingested(datasets: Mapping[str, Any], templates: list[dict[str, Any]] | None) -> set[str]:
     """The datasets whose data source template fetches them, rather than a workflow producing them.
 
     A workflow's output gets an auto-generated template that copies ``source`` from its input's,
     so the name alone cannot tell the two apart; the registry's ``is_ingestable`` rule can.
     """
+    if templates is None:
+        return set()
     try:
         from open_climate_service.data_registry.services import datasets as registry
 
-        templates = {template["id"]: template for template in registry.list_datasets()}
+        by_id = {template["id"]: template for template in templates}
         ingested: set[str] = set()
         for dataset_id, record in datasets.items():
-            template = templates.get(getattr(record, "source_dataset_id", None) or dataset_id)
+            template = by_id.get(getattr(record, "source_dataset_id", None) or dataset_id)
             if template is not None and registry.is_ingestable(template):
                 ingested.add(dataset_id)
         return ingested
@@ -508,12 +520,14 @@ def _read_schedules() -> list[Any]:
         return []
 
 
-def _read_recipes(datasets: Mapping[str, Any]) -> list[Any]:
+def _read_recipes(datasets: Mapping[str, Any], templates: list[dict[str, Any]] | None) -> list[Any]:
     """The recipes OCS keeps current: those that refresh on an input, of derived datasets that exist."""
+    if templates is None:
+        return []
     try:
         from open_climate_service.derivations.service import list_recipes
 
-        return [recipe for recipe in list_recipes() if recipe.input is not None and recipe.output in datasets]
+        return [recipe for recipe in list_recipes(templates) if recipe.input is not None and recipe.output in datasets]
     except Exception:
         _log.exception("Derived dataset recipes could not be read for the automation graph")
         return []

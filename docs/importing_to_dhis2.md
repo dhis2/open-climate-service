@@ -89,8 +89,13 @@ org units and delivers to DHIS2. Its DHIS2 settings name the
 [connection](#named-connections-for-server-side-plugins), an optional data set, and one row per
 series: the data element, searched in the connected DHIS2 and narrowed to the data set, and
 optionally a category option combo, offered from that data element's disaggregations, and an
-attribute option combo, offered from the data set's attribute. The DHIS2 period is the dataset's
-own: monthly data imports as monthly periods.
+attribute option combo, offered from the data set's attribute. When the data set gives the data
+element another category combo, its option combos are the ones offered. The DHIS2 period is the
+dataset's own: monthly data imports as monthly periods.
+
+Validation asks DHIS2 whether the settings line up. Each category option combo is checked against
+its data element, with or without a data set. The data set's period type, its organisation units
+and the attribute option combo are checked only when the pipeline names one.
 
 Once the pipeline validates, its named export `rainfall-monthly` resolves, for the pipeline's own
 runs and for any process graph that saves through it. A pipeline that fails validation, or is

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Callable
 from dataclasses import asdict
+from functools import partial
 from typing import Any, Literal, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
@@ -251,11 +253,12 @@ async def lookup_options(request: Request, plugin_id: str, lookup: str) -> JSONR
         row = forms.read_row(field, fields, asking)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    search = partial(plugin.lookup_options, lookup, settings, query)
+    # A plugin written before rows were passed takes three arguments; it is searched without the row.
+    if row is not None and "row" in inspect.signature(plugin.lookup_options).parameters:
+        search = partial(search, row=row)
     try:
-        if row is None:
-            options = await run_in_threadpool(plugin.lookup_options, lookup, settings, query)
-        else:
-            options = await run_in_threadpool(plugin.lookup_options, lookup, settings, query, row)
+        options = await run_in_threadpool(search)
     except NotImplementedError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

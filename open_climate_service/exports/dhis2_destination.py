@@ -11,7 +11,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator
 
@@ -229,21 +229,23 @@ def lookup_options(
     return options
 
 
+_COMBO_FIELDS = "categoryCombo[displayName,categoryOptionCombos[id,displayName]]"
+
+
 def _combo_options(lookup: str, settings: dict[str, Any], query: str, row: dict[str, Any]) -> list[LookupOption]:
     """The option combos of the row's data element, or of the data set, matching ``query`` by name or UID."""
+    data_set = settings.get("data_set")
     if lookup == "category_option_combos":
-        owner, uid = "dataElements", row.get("data_element")
-        if not is_dhis2_uid(uid):
+        data_element = row.get("data_element")
+        if not is_dhis2_uid(data_element):
             raise ValueError("choose this series' data element first")
+        with closing(_lookup_client(settings)) as client:
+            combo = _element_combo(client, data_element, data_set if is_dhis2_uid(data_set) else None)
     else:
-        owner, uid = "dataSets", settings.get("data_set")
-        if not is_dhis2_uid(uid):
+        if not is_dhis2_uid(data_set):
             raise ValueError("choose a data set first: its attribute decides the attribute option combos")
-    with closing(_lookup_client(settings)) as client:
-        answer = client.get(
-            f"/api/{owner}/{uid}", params={"fields": "categoryCombo[displayName,categoryOptionCombos[id,displayName]]"}
-        )
-    combo = answer.get("categoryCombo") or {}
+        with closing(_lookup_client(settings)) as client:
+            combo = client.get(f"/api/dataSets/{data_set}", params={"fields": _COMBO_FIELDS}).get("categoryCombo") or {}
     needle = query.strip().lower()
     options = [
         LookupOption(
@@ -257,6 +259,24 @@ def _combo_options(lookup: str, settings: dict[str, Any], query: str, row: dict[
     if needle:
         options = [option for option in options if needle in option.label.lower() or needle in option.value.lower()]
     return sorted(options, key=lambda option: option.label.lower())[:_LOOKUP_PAGE]
+
+
+def _element_combo(client: Any, data_element: str, data_set: str | None) -> dict[str, Any]:
+    """The category combo a data element's values take: the data set's override for it, else the element's own.
+
+    A data set can give one of its elements another category combo, and DHIS2 then accepts only
+    that combo's option combos for the element in that data set.
+    """
+    if data_set is not None:
+        answer = client.get(
+            f"/api/dataSets/{data_set}", params={"fields": f"dataSetElements[dataElement[id],{_COMBO_FIELDS}]"}
+        )
+        for entry in answer.get("dataSetElements", []):
+            override = entry.get("categoryCombo")
+            if (entry.get("dataElement") or {}).get("id") == data_element and isinstance(override, dict):
+                return cast(dict[str, Any], override)
+    combo = client.get(f"/api/dataElements/{data_element}", params={"fields": _COMBO_FIELDS}).get("categoryCombo")
+    return cast(dict[str, Any], combo) if isinstance(combo, dict) else {}
 
 
 def lookup_labels(lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
@@ -476,11 +496,7 @@ def _check_dhis2_metadata(
     """Ask DHIS2 whether the data set, elements and org units line up; skip when it cannot be asked."""
     data_set = settings.data_set
     if data_set is None:
-        return DestinationCheck(
-            id="dhis2_metadata",
-            status="skip",
-            message="no data set declared, so period type and assignment are not checked",
-        )
+        return _check_combos_without_data_set(settings)
     if settings.connection not in connections():
         return DestinationCheck(id="dhis2_metadata", status="skip", message="connection not configured")
     try:
@@ -492,7 +508,8 @@ def _check_dhis2_metadata(
                 params={
                     "fields": (
                         "id,displayName,periodType,organisationUnits[id],categoryCombo[categoryOptionCombos[id]],"
-                        "dataSetElements[dataElement[id,categoryCombo[categoryOptionCombos[id]]]]"
+                        "dataSetElements[categoryCombo[categoryOptionCombos[id]],"
+                        "dataElement[id,categoryCombo[categoryOptionCombos[id]]]]"
                     )
                 },
             )
@@ -504,23 +521,17 @@ def _check_dhis2_metadata(
     expected = _DHIS2_PERIOD_TYPE.get(period_type or "")
     if expected and metadata.get("periodType") != expected:
         problems.append(f"data set period type is {metadata.get('periodType')!r}, the export is {expected}")
+    # An element's combos are the data set's override for it when it has one.
     elements = {
-        element.get("id"): _combo_ids(element)
+        element.get("id"): _combo_ids(entry if entry.get("categoryCombo") else element)
         for entry in metadata.get("dataSetElements", [])
         if isinstance(element := entry.get("dataElement"), dict)
     }
     missing = [series.data_element for series in settings.series if series.data_element not in elements]
     if missing:
         problems.append(f"data element(s) not in the data set: {', '.join(missing)}")
-    foreign = [
-        f"{series.category_option_combo} (data element {series.data_element})"
-        for series in settings.series
-        if series.category_option_combo is not None
-        and series.data_element in elements
-        and series.category_option_combo not in elements[series.data_element]
-    ]
-    if foreign:
-        problems.append(f"category option combo(s) not of their data element: {', '.join(foreign)}")
+    if foreign := _foreign_category_combos(settings, elements):
+        problems.append(foreign)
     attributes = _combo_ids(metadata)
     stray = sorted(
         {
@@ -547,6 +558,53 @@ def _check_dhis2_metadata(
             f"'{metadata.get('displayName', data_set)}' is {expected}, holds the element(s), "
             "every organisation unit assigned"
         ),
+    )
+
+
+def _foreign_category_combos(settings: Dhis2DestinationSettings, elements: dict[Any, set[str]]) -> str | None:
+    """The series whose category option combo is not one of its data element's, as a problem; None when all are."""
+    foreign = [
+        f"{series.category_option_combo} (data element {series.data_element})"
+        for series in settings.series
+        if series.category_option_combo is not None
+        and series.data_element in elements
+        and series.category_option_combo not in elements[series.data_element]
+    ]
+    return f"category option combo(s) not of their data element: {', '.join(foreign)}" if foreign else None
+
+
+def _check_combos_without_data_set(settings: Dhis2DestinationSettings) -> DestinationCheck:
+    """With no data set to check against, check at least each category option combo against its data element."""
+    skipped = "no data set declared, so period type, assignment and attribute option combos are not checked"
+    chosen = sorted({series.data_element for series in settings.series if series.category_option_combo is not None})
+    if not chosen:
+        return DestinationCheck(id="dhis2_metadata", status="skip", message=skipped)
+    if settings.connection not in connections():
+        return DestinationCheck(id="dhis2_metadata", status="skip", message="connection not configured")
+    try:
+        from open_climate_service.exports.dhis2 import get_connection
+
+        with closing(get_connection(settings.connection)) as client:
+            answer = client.get(
+                "/api/dataElements",
+                params={
+                    "filter": f"id:in:[{','.join(chosen)}]",
+                    "fields": "id,categoryCombo[categoryOptionCombos[id]]",
+                    "paging": "false",
+                },
+            )
+    except Exception as exc:  # the connection, its token, or DHIS2 itself
+        return DestinationCheck(
+            id="dhis2_metadata", status="fail", message=f"could not read the data elements from DHIS2: {exc}"
+        )
+    elements = {item.get("id"): _combo_ids(item) for item in answer.get("dataElements", []) if isinstance(item, dict)}
+    problems = [problem] if (problem := _foreign_category_combos(settings, elements)) else []
+    if missing := [uid for uid in chosen if uid not in elements]:
+        problems.append(f"data element(s) not in DHIS2: {', '.join(missing)}")
+    if problems:
+        return DestinationCheck(id="dhis2_metadata", status="fail", message="; ".join(problems))
+    return DestinationCheck(
+        id="dhis2_metadata", status="pass", message=f"category option combos belong to their data elements; {skipped}"
     )
 
 

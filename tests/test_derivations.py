@@ -223,6 +223,31 @@ def test_a_derived_dataset_is_refreshed_once_per_latest_update_of_its_input(
     assert len(fake.jobs) == 4
 
 
+def test_a_refresh_loads_a_feature_collection_bound_by_id_at_its_current_version(
+    instance: _Instance, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from open_climate_service.features import services as feature_services
+
+    refreshed = datetime(2026, 9, 1, 6, tzinfo=UTC)
+    monkeypatch.setattr(
+        feature_services, "registered_collections", lambda: {"districts": SimpleNamespace(created_at=refreshed)}
+    )
+    # climate_anomaly takes no geometry, so the workflow drops the argument; the node it reads is what counts.
+    bound = {**_ANOMALY.arguments, "geometries": {"from_features": "districts"}}
+    instance.recipes = [replace(_ANOMALY, arguments=bound)]
+    instance.created.add("rain_anomaly")
+    instance.log.append(_update(1))
+    derivations.consume([instance.log[-1]])
+
+    [job] = instance.openeo.jobs.values()
+    assert job.process["process_graph"]["features_districts"] == {
+        "process_id": "load_features",
+        "arguments": {"id": "districts", "version": refreshed.isoformat()},
+    }
+
+
 def test_updates_handled_at_once_start_one_refresh(instance: _Instance, monkeypatch: pytest.MonkeyPatch) -> None:
     instance.created.add("rain_anomaly")
     creating = threading.Event()

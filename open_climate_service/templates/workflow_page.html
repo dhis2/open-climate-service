@@ -99,7 +99,7 @@
               {% for r in refreshes %}
               <div class="trigger">
                 <p>
-                  {% if r.output_held %}<a href="{{ mount }}/datasets/{{ r.output }}">{{ r.output }}</a>{% else %}<code>{{ r.output }}</code>{% endif %}
+                  <a href="{{ mount }}/datasets/{{ r.output }}">{{ r.output }}</a>
                   is computed again when
                   {% if r.held %}<a href="{{ mount }}/datasets/{{ r.input }}">{{ r.input }}</a>{% else %}<code>{{ r.input }}</code>{% endif %}
                   is updated.

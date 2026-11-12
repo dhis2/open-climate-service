@@ -1381,13 +1381,13 @@ def _workflow_page_context(
         "refreshes": [
             {
                 "output": recipe.output,
-                "output_held": recipe.output in held,
                 "input": recipe.input,
                 "held": recipe.input in held,
                 "arguments": json.dumps(recipe.arguments, indent=2) if recipe.arguments else "",
             }
             for recipe in recipes
-            if recipe.workflow == record.id and recipe.input is not None
+            # As derivations do: a recipe refreshes on an input, and only a derived dataset that exists.
+            if recipe.workflow == record.id and recipe.input is not None and recipe.output in held
         ],
     }
 

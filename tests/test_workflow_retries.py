@@ -718,11 +718,9 @@ def test_a_job_the_other_process_finishes_is_left_as_it_wrote_it(
     _interrupted("finished-elsewhere", attempt=1)
     handle = _hold_lease("finished-elsewhere")
     openeo.recover_pending_jobs()
-    finished_at = utc_now()
     # The other process finishes the job, then exits.
     openeo_jobs.store_update_job(
-        "finished-elsewhere",
-        lambda r: r.model_copy(update={"status": OpenEOJobStatus.FINISHED, "finished_at": finished_at}),
+        "finished-elsewhere", lambda r: r.model_copy(update={"status": OpenEOJobStatus.FINISHED})
     )
     written = openeo_jobs.store_get_job("finished-elsewhere")
     _release_lease(handle)
