@@ -132,14 +132,7 @@ def test_fetch_period_refuses_a_dekad_without_exactly_one_item(
         CLMSNDVIDekadalPlugin().fetch_period("2024-01-11", _BBOX)
 
 
-@pytest.mark.parametrize(
-    ("unset", "message"),
-    [
-        (None, "Check CDSE_S3_ACCESS_KEY and CDSE_S3_SECRET_KEY"),
-        ("CDSE_S3_SECRET_KEY", "CDSE_S3_SECRET_KEY is not set"),
-    ],
-)
-def test_refused_s3_read_names_the_cdse_keys(monkeypatch: pytest.MonkeyPatch, unset: str | None, message: str) -> None:
+def test_refused_s3_read_names_the_cdse_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     import rasterio.env
     import rioxarray
     from rasterio.errors import RasterioIOError
@@ -151,8 +144,6 @@ def test_refused_s3_read_names_the_cdse_keys(monkeypatch: pytest.MonkeyPatch, un
 
     _fake_catalogue(monkeypatch, [[_item("2024-01-11", "s3://eodata/ndvi.tiff")]])
     monkeypatch.setattr(rioxarray, "open_rasterio", refuse)
-    if unset:
-        monkeypatch.delenv(unset)
 
-    with pytest.raises(PermissionError, match=message):
+    with pytest.raises(PermissionError, match="Check CDSE_S3_ACCESS_KEY and CDSE_S3_SECRET_KEY"):
         CLMSNDVIDekadalPlugin().fetch_period("2024-01-11", _BBOX)

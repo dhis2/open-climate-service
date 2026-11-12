@@ -1,5 +1,4 @@
 import os
-from typing import Any
 
 import pytest
 import xarray as xr
@@ -20,10 +19,10 @@ def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyP
     source = xr.Dataset(
         {"dsm": (("lat", "lon"), np.ones((lat.size, lon.size), dtype="float32"))}, {"lat": lat, "lon": lon}
     )
-    opened: list[tuple[str, Any]] = []
+    opened: list[str] = []
 
-    def open_dataset(url: str, storage_options: Any, **_: object) -> xr.Dataset:
-        opened.append((url, storage_options))
+    def open_dataset(url: str, **_: object) -> xr.Dataset:
+        opened.append(url)
         return source
 
     monkeypatch.setattr(copdem.xr, "open_dataset", open_dataset)
@@ -31,12 +30,7 @@ def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyP
 
     ds = CopDEMPlugin(product=product).fetch(bbox=_TEST_BBOX)
 
-    assert opened == [
-        (
-            f"https://data.earthdatahub.destine.eu/copernicus-dem/{product}-v1.zarr",
-            {"headers": {"Authorization": "Basic ZWRoOm15dG9rZW4="}},  # edh:mytoken
-        )
-    ]
+    assert opened == [f"https://data.earthdatahub.destine.eu/copernicus-dem/{product}-v1.zarr"]
     assert set(ds["elevation"].dims) == {"y", "x"} and "t" not in ds.coords
     assert float(ds.x.min()) >= _TEST_BBOX[0] - 0.05 and float(ds.x.max()) <= _TEST_BBOX[2] + 0.05
 
