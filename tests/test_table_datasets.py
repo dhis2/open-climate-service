@@ -174,9 +174,11 @@ def test_a_reader_during_a_write_sees_the_files_before_it(monkeypatch: pytest.Mo
     rename = store.os.replace
 
     def read_then_rename(source: Any, target: Any) -> None:
-        # The new file is fully written under its temporary name, and not yet visible.
-        assert Path(source).stat().st_size > 0
-        seen.append(store.read_rows(record).column("value").to_pylist())
+        # The record index is replaced the same way; only the table's file is under test here.
+        if Path(target).suffix == ".parquet":
+            # The new file is fully written under its temporary name, and not yet visible.
+            assert Path(source).stat().st_size > 0
+            seen.append(store.read_rows(record).column("value").to_pylist())
         rename(source, target)
 
     monkeypatch.setattr(store.os, "replace", read_then_rename)
