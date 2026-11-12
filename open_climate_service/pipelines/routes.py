@@ -252,7 +252,10 @@ async def lookup_options(request: Request, plugin_id: str, lookup: str) -> JSONR
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
-        options = await run_in_threadpool(plugin.lookup_options, lookup, settings, query, row)
+        if row is None:
+            options = await run_in_threadpool(plugin.lookup_options, lookup, settings, query)
+        else:
+            options = await run_in_threadpool(plugin.lookup_options, lookup, settings, query, row)
     except NotImplementedError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

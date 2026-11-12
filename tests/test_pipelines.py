@@ -26,6 +26,7 @@ from open_climate_service.exports.base import (
     BaseExportPlugin,
     DestinationCheck,
     DestinationContext,
+    LookupOption,
     PipelineSettingsForm,
     RenderedExport,
     SettingsFormField,
@@ -1316,6 +1317,26 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
     monkeypatch.setattr(fake, "get", _down)
     failed = client.post("/pipelines/lookups/dhis2/data_sets", data={"dest.connection": "local", "q": "x"})
     assert failed.status_code == 502 and "connection refused" in failed.json()["detail"]
+
+    class _LegacyLookupPlugin:
+        """A third-party destination implementing the original lookup hook."""
+
+        def destination_settings_schema(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {"folder": {"type": "string"}}}
+
+        def pipeline_settings_form(self) -> PipelineSettingsForm:
+            return PipelineSettingsForm(
+                title="Legacy destination",
+                fields=(SettingsFormField(name="folder", widget="lookup", lookup="folders"),),
+            )
+
+        def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
+            return [LookupOption(value=settings.get("folder", ""), label=query, detail=lookup)]
+
+    monkeypatch.setattr(service, "destination_plugins", lambda: {"legacy": _LegacyLookupPlugin()})
+    legacy = client.post("/pipelines/lookups/legacy/folders", data={"dest.folder": "/srv/drop", "q": "archive"})
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json() == {"options": [{"value": "/srv/drop", "label": "archive", "detail": "folders"}]}
 
     monkeypatch.setattr(api_config, "is_read_only", lambda: True)
     assert client.post("/pipelines/lookups/dhis2/data_sets", data={"dest.connection": "local"}).status_code == 403
