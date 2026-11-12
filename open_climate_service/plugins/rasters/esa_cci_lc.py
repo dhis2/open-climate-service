@@ -23,7 +23,7 @@ import numpy as np
 import xarray as xr
 from ecmwf.datastores import Client as _CdsClient
 
-from open_climate_service.plugins.providers import cds
+from open_climate_service.plugins.rasters.providers import cds
 from open_climate_service.streaming import BaseDatasetPlugin
 
 _CDS_API_URL = "https://cds.climate.copernicus.eu/api"

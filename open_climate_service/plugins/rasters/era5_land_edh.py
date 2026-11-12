@@ -11,7 +11,7 @@ import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activat
 import xarray as xr
 from earthkit.transforms.temporal import monthly_reduce
 
-from open_climate_service.plugins.providers import edh
+from open_climate_service.plugins.rasters.providers import edh
 from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import daily_period_ids, monthly_period_ids
 from open_climate_service.shared.zarr import DEFAULT_MAX_CACHE_BYTES, CachedTimeSeriesZarr

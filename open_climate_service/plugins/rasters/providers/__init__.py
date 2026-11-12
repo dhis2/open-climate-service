@@ -1,6 +1,6 @@
-"""Helpers shared by the built-in plugins that read from the same upstream provider.
+"""Helpers shared by the built-in raster plugins that read from the same upstream provider.
 
-Internal to the built-in plugins: external plugins neither import nor follow these. A credential
+Internal to the built-in raster plugins: external plugins neither import nor follow these. A credential
 is read from the environment, which OCS fills from ``.env``, when a plugin opens a source, so
 listing data sources needs no keys.
 """

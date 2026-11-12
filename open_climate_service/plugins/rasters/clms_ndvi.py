@@ -26,7 +26,7 @@ from typing import Any, cast
 import httpx
 import xarray as xr
 
-from open_climate_service.plugins.providers import cdse
+from open_climate_service.plugins.rasters.providers import cdse
 from open_climate_service.shared.time import dekad_period_ids
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 

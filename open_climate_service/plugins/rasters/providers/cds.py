@@ -1,6 +1,6 @@
 """Copernicus Climate Data Store (CDS) credentials."""
 
-from open_climate_service.plugins.providers import require_env
+from open_climate_service.plugins.rasters.providers import require_env
 
 
 def api_key() -> dict[str, str]:

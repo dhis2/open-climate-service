@@ -10,7 +10,7 @@ import numpy as np
 import xarray as xr
 from earthkit.transforms.temporal import daily_reduce
 
-from open_climate_service.plugins.providers import cds
+from open_climate_service.plugins.rasters.providers import cds
 from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import (
     daily_period_ids,

@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 import earthkit.transforms.climatology as ek_climatology
 import xarray as xr
 
-from open_climate_service.plugins.providers import edh
+from open_climate_service.plugins.rasters.providers import edh
 from open_climate_service.streaming import BaseDatasetPlugin, cell_pad
 from open_climate_service.transforms.climatology import circular_rolling_mean
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm

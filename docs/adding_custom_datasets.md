@@ -110,7 +110,7 @@ plugin import surface), alongside `BaseDatasetPlugin`.
   from `.env`. Read it when the plugin opens the source, not at import or in `__init__`, so that
   listing data sources needs no key, and pass it in a header or the reader's own session rather
   than in the URL, where it leaks into error messages and logs. The built-in plugins share theirs
-  per provider in `open_climate_service/plugins/providers`; a plugin of your own need not use it.
+  per provider in `open_climate_service/plugins/rasters/providers`; a plugin of your own need not use it.
 - **Tuning** — set the class attributes `max_concurrency` (default 1) and
   `commit_batch_size` (default 1) only when the defaults don't fit.
 - **Grid inference** — the framework infers the store grid from the

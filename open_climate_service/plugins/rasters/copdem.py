@@ -5,7 +5,7 @@ from typing import Any
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
 
-from open_climate_service.plugins.providers import edh
+from open_climate_service.plugins.rasters.providers import edh
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
 # v1 is the v0 data rewritten as Zarr v3: north-up, one column per pixel (v0 repeated 180
