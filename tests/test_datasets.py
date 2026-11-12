@@ -5,6 +5,7 @@ from pathlib import Path
 import icechunk
 import pytest
 import xarray as xr
+from icechunk.store import IcechunkStore
 
 from open_climate_service.ingestions import services
 from open_climate_service.ingestions.schemas import (
@@ -481,6 +482,92 @@ def test_a_replace_refused_while_a_reader_holds_the_file_is_retried(
     persistence.atomic_text(tmp_path / "index.json", "[]")
 
     assert (tmp_path / "index.json").read_text(encoding="utf-8") == "[]"
+
+
+def _published_icechunk_store(
+    store_path: Path, monkeypatch: pytest.MonkeyPatch, values: list[float]
+) -> icechunk.Repository:
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(store_path)))
+    session = repo.writable_session("main")
+    xr.Dataset({"precip": (("t", "x"), [values])}, coords={"t": ["2026-01-01"]}).to_zarr(
+        session.store, mode="w", zarr_format=3
+    )
+    session.commit("seed")
+    artifact = _artifact(artifact_id="open-store")
+    artifact.path = str(store_path)
+    artifact.asset_paths = [str(store_path)]
+    monkeypatch.setattr(
+        services, "latest_published_raster_artifacts_by_dataset", lambda: {"chirps3_precipitation_daily": artifact}
+    )
+    return repo
+
+
+def test_zarr_route_keeps_an_icechunk_store_open_and_follows_new_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _published_icechunk_store(tmp_path / "open.icechunk", monkeypatch, [1.0])
+    opens: list[object] = []
+    sessions: list[object] = []
+    open_repository, open_session = icechunk.Repository.open, icechunk.Repository.readonly_session
+    monkeypatch.setattr(icechunk.Repository, "open", lambda storage: opens.append(storage) or open_repository(storage))
+    monkeypatch.setattr(
+        icechunk.Repository,
+        "readonly_session",
+        lambda self, *args, **kwargs: sessions.append(kwargs) or open_session(self, *args, **kwargs),
+    )
+
+    def chunk() -> bytes:
+        response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0")
+        assert isinstance(response, services.Response)
+        return bytes(response.body)
+
+    before = [chunk() for _ in range(3)]
+    session = repo.writable_session("main")
+    xr.Dataset({"precip": (("t", "x"), [[2.0]])}, coords={"t": ["2026-01-01"]}).to_zarr(
+        session.store, mode="w", zarr_format=3
+    )
+    session.commit("revise")
+    after = chunk()
+
+    assert before == [before[0]] * 3
+    assert after != before[0]
+    assert (len(opens), len(sessions)) == (1, 2)
+
+
+def test_zarr_route_reads_only_the_requested_range_of_an_icechunk_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _published_icechunk_store(tmp_path / "ranged.icechunk", monkeypatch, [float(i) for i in range(64)])
+
+    def get(key: str, range_header: str | None = None) -> services.Response:
+        response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", key, range_header)
+        assert isinstance(response, services.Response)
+        return response
+
+    full = bytes(get("precip/c/0/0").body)
+    reads: list[object] = []
+    store_get = IcechunkStore.get
+
+    async def recording_get(self: IcechunkStore, key: str, prototype: object, byte_range: object = None) -> object:
+        reads.append(byte_range)
+        return await store_get(self, key, prototype, byte_range)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(IcechunkStore, "get", recording_get)
+    middle = get("precip/c/0/0", "bytes=2-5")
+    suffix = get("precip/c/0/0", "bytes=-4")
+
+    assert (middle.status_code, middle.body, middle.headers["content-range"]) == (
+        206,
+        full[2:6],
+        f"bytes 2-5/{len(full)}",
+    )
+    assert suffix.body == full[-4:]
+    assert None not in reads, "a range request read the whole chunk"
+    assert get("precip/c/0/0", f"bytes={len(full)}-").status_code == 416
+    # zarr-viewer's layout probe is not a Zarr key at all; it is missing, not a server error.
+    with pytest.raises(services.HTTPException) as probe:
+        get("refs/branch.main/ref.json")
+    assert probe.value.status_code == 404
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:

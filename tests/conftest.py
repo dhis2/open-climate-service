@@ -130,6 +130,8 @@ def _reset_config_cache() -> Generator[None, None, None]:
     # Keyed on records.json, so a test that patches the lookup itself would otherwise be
     # served whatever an earlier test cached for the same file.
     ingestion_services._store_artifacts_cache = None
+    ingestion_services._open_repositories.clear()
+    ingestion_services._open_sessions.clear()
     yield
     api_config._cache = None
     xclim_processes._cache = None

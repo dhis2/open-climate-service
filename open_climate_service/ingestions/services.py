@@ -8,7 +8,7 @@ import logging
 import mimetypes
 import shutil
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,7 +19,9 @@ import portalocker
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import Response
+from zarr.abc.store import ByteRequest, RangeByteRequest
 from zarr.core.buffer import default_buffer_prototype
+from zarr.core.sync import sync as zarr_sync
 
 from open_climate_service import config as api_config
 from open_climate_service.data_accessor.services.accessor import get_data_coverage_for_paths
@@ -89,6 +91,7 @@ from open_climate_service.streaming.store import (
 
 logger = logging.getLogger(__name__)
 MutationResult = TypeVar("MutationResult")
+StoreResult = TypeVar("StoreResult")
 
 
 # Per-store threading locks prevent two concurrent ingest/sync runs from writing
@@ -157,6 +160,11 @@ _store_artifacts_cache: tuple[tuple[str, int, int, int], dict[str, "ArtifactReco
 # Record writes made by this process, so the cache never misses one of them.
 _records_write_count = 0
 
+# Icechunk repositories the store routes keep open, and the read-only session last opened on
+# each, by store path; see `_open_icechunk_store_or_404`. Dropped whenever the records change.
+_open_repositories: dict[str, Any] = {}
+_open_sessions: dict[str, _IcechunkSession] = {}
+
 
 @dataclass(frozen=True)
 class _StreamingMaterializationPlan:
@@ -193,8 +201,8 @@ def _acquire_store_lock(store_path: Path) -> StoreWriteLock:
 
 class _IcechunkReadableStore(Protocol):
     def list_dir(self, prefix: str) -> AsyncIterator[str]: ...
-    def exists(self, key: str) -> Awaitable[bool]: ...
-    def get(self, key: str, prototype: Any) -> Awaitable[Any]: ...
+    def getsize(self, key: str) -> Coroutine[Any, Any, int]: ...
+    def get(self, key: str, prototype: Any, byte_range: ByteRequest | None = None) -> Coroutine[Any, Any, Any]: ...
 
 
 class _IcechunkSession:
@@ -2166,6 +2174,9 @@ def _latest_published_raster_artifacts_cached() -> dict[str, ArtifactRecord]:
         return _store_artifacts_cache[1]
     artifacts = latest_published_raster_artifacts_by_dataset()
     _store_artifacts_cache = (key, artifacts)
+    # A rebuilt store can sit at the same path as the one it replaced; reopen everything.
+    _open_repositories.clear()
+    _open_sessions.clear()
     return artifacts
 
 
@@ -2181,61 +2192,46 @@ def _get_latest_published_icechunk_artifact(dataset_id: str) -> ArtifactRecord:
 
 
 def _open_icechunk_store_or_404(artifact: ArtifactRecord) -> _IcechunkSession:
-    """Open the readonly Icechunk session store for a published artifact."""
+    """Return a read-only session on the tip of a published artifact's `main` branch.
+
+    The repository stays open between requests, so its snapshot and manifests stay in its cache,
+    and the session is reopened only when the branch has moved. A chunk request then costs one
+    read of the branch ref besides the chunk itself (CLIM-1580).
+    """
     if artifact.format != ArtifactFormat.ICECHUNK:
         raise HTTPException(status_code=409, detail="Artifact is not an Icechunk-backed Zarr store")
     store_path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
     if store_path is None:
         raise HTTPException(status_code=409, detail="Artifact has no resolvable store path")
-    path = Path(store_path).resolve()
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Icechunk store path does not exist on disk")
 
     import icechunk
 
-    storage = icechunk.local_filesystem_storage(str(path))
-    repo = icechunk.Repository.open(storage)
-    snapshot_id = repo.lookup_branch("main")
-    session_store = cast(_IcechunkReadableStore, repo.readonly_session("main").store)
-    return _IcechunkSession(store=session_store, snapshot_id=snapshot_id, store_path=str(path))
-
-
-def _run_async(awaitable: Any) -> Any:
-    """Run an async Icechunk store operation from sync route/service code.
-
-    Most calls arrive from sync FastAPI handlers with no running event loop.
-    If a loop is already running in this thread, run the awaitable in a short-
-    lived worker thread instead of nesting event loops in-process.
-    """
+    repo = _open_repositories.get(store_path)
+    if repo is None:
+        path = Path(store_path).resolve()
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Icechunk store path does not exist on disk")
+        repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(path)))
+        _open_repositories[store_path] = repo
     try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(awaitable)
-        finally:
-            loop.close()
+        snapshot_id = repo.lookup_branch("main")
+    except icechunk.IcechunkError as exc:
+        _open_repositories.pop(store_path, None)
+        raise HTTPException(status_code=404, detail="Icechunk store could not be read") from exc
+    session = _open_sessions.get(store_path)
+    if session is None or session.snapshot_id != snapshot_id:
+        store = cast(_IcechunkReadableStore, repo.readonly_session(snapshot_id=snapshot_id).store)
+        session = _IcechunkSession(store=store, snapshot_id=snapshot_id, store_path=store_path)
+        _open_sessions[store_path] = session
+    return session
 
-    result: dict[str, Any] = {}
-    error: dict[str, BaseException] = {}
 
-    def runner() -> None:
-        loop = asyncio.new_event_loop()
-        try:
-            result["value"] = loop.run_until_complete(awaitable)
-        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
-            error["value"] = exc
-        finally:
-            loop.close()
+def _run_async(coroutine: Coroutine[Any, Any, StoreResult]) -> StoreResult:
+    """Run an async Icechunk store call from sync route and service code.
 
-    thread = threading.Thread(target=runner, daemon=True)
-    thread.start()
-    thread.join()
-    if "value" in error:
-        raise error["value"]
-    if "value" not in result:
-        raise RuntimeError("async runner completed without a result or error")
-    return result["value"]
+    On zarr's long-lived I/O loop: a new event loop per call cost more than the read itself.
+    """
+    return zarr_sync(coroutine)
 
 
 def _icechunk_list_dir(store: _IcechunkReadableStore, prefix: str) -> list[str]:
@@ -2245,11 +2241,11 @@ def _icechunk_list_dir(store: _IcechunkReadableStore, prefix: str) -> list[str]:
             items.append(item)
         return items
 
-    return cast(list[str], _run_async(collect()))
+    return _run_async(collect())
 
 
-def _icechunk_exists(store: _IcechunkReadableStore, key: str) -> bool:
-    """Whether *key* exists in the store; False for anything Icechunk cannot address.
+def _icechunk_get(store: _IcechunkReadableStore, key: str, byte_range: ByteRequest | None = None) -> bytes | None:
+    """The bytes at *key*, or *byte_range* of them; None for anything Icechunk cannot address.
 
     A browser probing an unknown store asks for keys that are not Zarr keys at all, and Icechunk
     rejects those two different ways: ``KeyError`` for Zarr v2 spellings (``.zgroup``,
@@ -2257,7 +2253,7 @@ def _icechunk_exists(store: _IcechunkReadableStore, key: str) -> bool:
     namespace entirely (``repo``, ``refs/branch.main/ref.json`` — the layout probes zarr-viewer
     uses to decide whether a URL is an Icechunk repository).
 
-    Both mean "not here", so both must answer False. Letting the second escape turned a probe
+    Both mean "not here", so both must answer None. Letting the second escape turned a probe
     into a 500, and because an unhandled 500 is raised above the CORS middleware it reached the
     browser with no ``Access-Control-Allow-Origin`` — reported as a CORS failure, which is not
     where anyone would look for a missing-key bug.
@@ -2265,18 +2261,24 @@ def _icechunk_exists(store: _IcechunkReadableStore, key: str) -> bool:
     from icechunk import IcechunkError
 
     try:
-        return cast(bool, _run_async(store.exists(key)))
+        buffer: Any = _run_async(store.get(key, prototype=default_buffer_prototype(), byte_range=byte_range))
     except (KeyError, IcechunkError):
-        return False
-
-
-def _icechunk_get(store: _IcechunkReadableStore, key: str) -> bytes | None:
-    buffer: Any = _run_async(store.get(key, prototype=default_buffer_prototype()))
+        return None
     if buffer is None:
         return None
     if hasattr(buffer, "to_bytes"):
         return cast(bytes, buffer.to_bytes())
     return cast(bytes, buffer)
+
+
+def _icechunk_getsize(store: _IcechunkReadableStore, key: str) -> int | None:
+    """The size of the value at *key*, from the manifest; None where `_icechunk_get` gives None."""
+    from icechunk import IcechunkError
+
+    try:
+        return _run_async(store.getsize(key))
+    except (KeyError, FileNotFoundError, IcechunkError):
+        return None
 
 
 def _build_icechunk_consolidated_metadata(session: _IcechunkSession) -> dict[str, object]:
@@ -2354,6 +2356,43 @@ def _normalize_zarr_relative_path(relative_path: str) -> str:
     return target
 
 
+def _requested_byte_range(range_header: str | None, total: int) -> tuple[int, int] | None:
+    """The inclusive (start, end) a ``Range`` header asks of *total* bytes; None for all of them.
+
+    Raises ValueError for a range that cannot be satisfied.
+    """
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    spec = range_header[len("bytes=") :].strip()
+    if spec.startswith("-"):
+        start, end = max(0, total - int(spec[1:])), total - 1
+    elif spec.endswith("-"):
+        start, end = int(spec[:-1]), total - 1
+    else:
+        first, _, last = spec.partition("-")
+        start, end = int(first), int(last)
+    if start > end or start >= total or end >= total:
+        raise ValueError("unsatisfiable range")
+    return start, end
+
+
+def _range_not_satisfiable(total: int) -> Response:
+    return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+
+
+def _partial_content(part: bytes, start: int, end: int, total: int, media_type: str) -> Response:
+    return Response(
+        content=part,
+        status_code=206,
+        media_type=media_type,
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{total}",
+            "Content-Length": str(len(part)),
+            "Accept-Ranges": "bytes",
+        },
+    )
+
+
 def _serve_bytes_ranged(content: bytes, media_type: str, range_header: str | None) -> Response:
     """Serve bytes with HTTP range request support (RFC 7233).
 
@@ -2361,39 +2400,41 @@ def _serve_bytes_ranged(content: bytes, media_type: str, range_header: str | Non
     suffix and individual inner chunks without downloading the full shard file.
     """
     total = len(content)
-    base_headers: dict[str, str] = {"Accept-Ranges": "bytes", "Content-Length": str(total)}
-    if not range_header or not range_header.startswith("bytes="):
-        return Response(content=content, media_type=media_type, headers=base_headers)
     try:
-        spec = range_header[len("bytes=") :].strip()
-        if spec.startswith("-"):
-            suffix_len = int(spec[1:])
-            start = max(0, total - suffix_len)
-            end = total - 1
-        elif spec.endswith("-"):
-            start = int(spec[:-1])
-            end = total - 1
-        else:
-            parts = spec.split("-", 1)
-            start, end = int(parts[0]), int(parts[1])
-        if start > end or start >= total or end >= total:
-            raise ValueError("unsatisfiable range")
-    except (ValueError, IndexError):
+        requested = _requested_byte_range(range_header, total)
+    except ValueError:
+        return _range_not_satisfiable(total)
+    if requested is None:
         return Response(
-            status_code=416,
-            headers={"Content-Range": f"bytes */{total}"},
+            content=content, media_type=media_type, headers={"Accept-Ranges": "bytes", "Content-Length": str(total)}
         )
-    sliced = content[start : end + 1]
-    return Response(
-        content=sliced,
-        status_code=206,
-        media_type=media_type,
-        headers={
-            "Content-Range": f"bytes {start}-{end}/{total}",
-            "Content-Length": str(len(sliced)),
-            "Accept-Ranges": "bytes",
-        },
-    )
+    start, end = requested
+    return _partial_content(content[start : end + 1], start, end, total, media_type)
+
+
+def _serve_icechunk_range_or_none(
+    store: _IcechunkReadableStore, key: str, media_type: str, range_header: str | None
+) -> Response | None:
+    """Answer a range request by reading only that range of *key*; None when there is no range.
+
+    The size comes from the manifest, so the read is the requested bytes and nothing more.
+    """
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    total = _icechunk_getsize(store, key)
+    if total is None:
+        raise HTTPException(status_code=404, detail=f"Zarr path '{key}' not found")
+    try:
+        requested = _requested_byte_range(range_header, total)
+    except ValueError:
+        return _range_not_satisfiable(total)
+    if requested is None:
+        return None
+    start, end = requested
+    part = _icechunk_get(store, key, RangeByteRequest(start, end + 1))
+    if part is None:
+        raise HTTPException(status_code=404, detail=f"Zarr path '{key}' not found")
+    return _partial_content(part, start, end, total, media_type)
 
 
 def _get_icechunk_store_path_or_404(
@@ -2408,27 +2449,30 @@ def _get_icechunk_store_path_or_404(
         # Serve the group metadata it stands for, which is also what the appended request gets.
         target = "zarr.json"
 
-    if _icechunk_exists(store, target):
-        payload = _icechunk_get(store, target)
-        if payload is None:
-            raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
-        if target.endswith("zarr.json"):
-            meta = json.loads(payload.decode("utf-8"))
-            # Inject consolidated metadata into every group's zarr.json so xarray can
-            # enumerate variables when accessing the store over HTTP, without needing
-            # directory listing or a separate consolidation step.  Result is cached
-            # per snapshot so repeated requests within a snapshot lifetime are free.
-            # Every group, not just the root: a pyramid level (`/zarr/{id}/0`) is the URL
-            # an analysis client opens for full-resolution data, and without its own
-            # subtree it opens as an empty dataset.
-            if meta.get("node_type") == "group":
-                group_path = target.removesuffix("zarr.json").rstrip("/")
-                meta["consolidated_metadata"] = _consolidated_metadata_for_group(session, group_path)
-            return JSONResponse(content=meta)
-        media_type, _ = mimetypes.guess_type(target)
-        return _serve_bytes_ranged(payload, media_type or "application/octet-stream", range_header)
+    media_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
+    if not target.endswith("zarr.json"):
+        ranged = _serve_icechunk_range_or_none(store, target, media_type, range_header)
+        if ranged is not None:
+            return ranged
 
-    raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
+    # One store read per request: an absent key reads as None, without asking first whether it exists.
+    payload = _icechunk_get(store, target)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
+    if target.endswith("zarr.json"):
+        meta = json.loads(payload.decode("utf-8"))
+        # Inject consolidated metadata into every group's zarr.json so xarray can
+        # enumerate variables when accessing the store over HTTP, without needing
+        # directory listing or a separate consolidation step.  Result is cached
+        # per snapshot so repeated requests within a snapshot lifetime are free.
+        # Every group, not just the root: a pyramid level (`/zarr/{id}/0`) is the URL
+        # an analysis client opens for full-resolution data, and without its own
+        # subtree it opens as an empty dataset.
+        if meta.get("node_type") == "group":
+            group_path = target.removesuffix("zarr.json").rstrip("/")
+            meta["consolidated_metadata"] = _consolidated_metadata_for_group(session, group_path)
+        return JSONResponse(content=meta)
+    return _serve_bytes_ranged(payload, media_type, None)
 
 
 def _get_filesystem_zarr_store_path_or_404(
