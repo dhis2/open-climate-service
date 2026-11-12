@@ -38,10 +38,10 @@ class ArtifactFormat(StrEnum):
     the `table` extension, so the catalogue never advertises a child it cannot serve.
     """
     PARQUET = "parquet"
-    """A table dataset: values per feature and period, appended as Parquet files (CLIM-1553).
+    """A table dataset: current values per feature and period in one Parquet file (CLIM-1553).
 
-    The record's `path` is the dataset's folder, holding one folder per feature collection of
-    immutable files, which `tables.store` writes and reads. Neither catalogue describes it yet.
+    The record's `path` is the dataset's folder and its `asset_paths` names the current file,
+    which `tables.store` writes and reads; a write merges into it. Neither catalogue describes it yet.
     """
 
 

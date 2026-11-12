@@ -3,7 +3,7 @@
 The `table` destination renders a workflow's vector cube to the rows of a table dataset and
 delivers them through the one writer, `tables.store.write_rows`. The payload is those rows as a
 Parquet file, checked against the store when rendered, so a dry run reports what the writer
-would accept and a delivery appends exactly what was rendered.
+would accept and a delivery merges exactly what was rendered into the table's current-value file.
 """
 
 from __future__ import annotations
@@ -261,7 +261,7 @@ class TableExportPlugin(BaseExportPlugin):
         dry_run: bool = False,
         context: DeliveryContext | None = None,
     ) -> ExportReport:
-        """Append the rendered rows, or with *dry_run* only check them; a refused write writes nothing."""
+        """Merge the rendered rows into the table, or with *dry_run* only check them; a refused write writes nothing."""
         import hashlib
 
         from open_climate_service.tables import store
