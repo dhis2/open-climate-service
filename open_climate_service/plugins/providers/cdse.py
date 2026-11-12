@@ -22,11 +22,12 @@ class _KeySession(Session):
     def __init__(self, credentials: dict[str, str]) -> None:
         self.credentials = credentials
 
+    # The base methods are unannotated and return NotImplemented, which pyright takes as their type.
     @classmethod
-    def hascreds(cls, config: dict[str, Any]) -> bool:
+    def hascreds(cls, config: dict[str, Any]) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
         return "AWS_ACCESS_KEY_ID" in config
 
-    def get_credential_options(self) -> dict[str, str]:
+    def get_credential_options(self) -> dict[str, str]:  # pyright: ignore[reportIncompatibleMethodOverride]
         return dict(self.credentials)
 
 
