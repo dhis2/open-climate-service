@@ -1,8 +1,5 @@
 import asyncio
-import os
-import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
 
 import numpy as np
 import pytest
@@ -246,88 +243,3 @@ def test_cached_time_series_zarr_rejects_ranges_over_cache_limit():
 
     with pytest.raises(ValueError, match="use xarray directly for large ranges"):
         zarr.slice_time(np.datetime64("2020-01-01"), np.datetime64("2020-01-03"))
-
-
-# Functional integrations tests
-
-
-@pytest.fixture
-def daily_utci_data_func():
-    """Returns adjustable function to easily fetch data for a single day of UTCI heat index data"""
-    # hacky check for TEST_INTEGRATIONS flag for integration tests that should only be run manually
-    if os.getenv("TEST_INTEGRATIONS") != "1":
-        pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
-
-    def func(period_id: str, temporal_aggregation: str):
-        plugin = ERA5HeatDailyUTCIPlugin(temporal_aggregation=temporal_aggregation)
-        ds = plugin.fetch_period(period_id=period_id, bbox=_TEST_BBOX)
-        return ds
-
-    return func
-
-
-def test_daily_from_hourly_periods_efficiency():
-    """Check that daily-from-hourly period generation stays fast across a multi-year daily range.
-
-    This generates the list of daily periods, checks that the hourly plugin reuses rather than
-    re-fetching the cutoff cache, and bounds the full loop's runtime.
-    """
-    if os.getenv("TEST_INTEGRATIONS") != "1":
-        pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
-
-    hourly_plugin = ERA5HeatZarrHourlyPlugin(variable="utci")
-    daily_plugin = ERA5HeatZarrDailyFromHourlyPlugin(variable="utci", temporal_aggregation="mean")
-
-    # Generate daily IDs, then ensure each day's hourly IDs are produced quickly.
-    start = "2020-01-01"
-    end = "2025-12-31"
-    days = asyncio.run(daily_plugin.periods(start, end))
-    assert hourly_plugin._cached_cutoff is None
-    t = time.monotonic()
-    for day in days:
-        hours = asyncio.run(hourly_plugin.periods(start=day, end=day))
-        assert len(hours) == 24
-        assert hours[0][:10] == day
-        assert hourly_plugin._cached_cutoff is not None
-    duration = time.monotonic() - t
-    max_duration = 10  # seconds for the full multi-year loop
-    assert duration < max_duration
-
-
-def test_utci_dims_and_values(daily_utci_data_func: Any):
-    # run the data function
-    period_id = "2023-01-01"
-    daily_utci_data = daily_utci_data_func(period_id=period_id, temporal_aggregation="mean")
-
-    assert isinstance(daily_utci_data, xr.Dataset)
-
-    assert set(("t", "y", "x")).issubset(daily_utci_data.dims)
-
-    assert daily_utci_data.sizes["x"] > 1
-    assert daily_utci_data.sizes["y"] > 1
-    assert daily_utci_data.sizes["t"] == 1
-    assert str(daily_utci_data.t.values[0])[:10] == period_id
-
-    assert "utci" in daily_utci_data.data_vars
-    assert daily_utci_data["utci"].size > 0
-
-
-def test_utci_temporal_aggregation(daily_utci_data_func: Any):
-    # run the data function
-    period_id = "2023-01-01"
-    min_data = daily_utci_data_func(
-        period_id=period_id,
-        temporal_aggregation="min",
-    )
-    mean_data = daily_utci_data_func(
-        period_id=period_id,
-        temporal_aggregation="mean",
-    )
-    max_data = daily_utci_data_func(
-        period_id=period_id,
-        temporal_aggregation="max",
-    )
-
-    # ensure stats values are indeed lower or higher than each other
-    assert (min_data.utci < mean_data.utci).all()
-    assert (mean_data.utci < max_data.utci).all()

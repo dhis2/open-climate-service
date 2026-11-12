@@ -35,6 +35,9 @@ test: ## Run tests with pytest in parallel (PYTEST_WORKERS, default 2)
 test-serial: ## Run tests with pytest in one process, to diagnose a failure
 	uv run pytest tests/
 
+test-integration: ## Fetch from every built-in data source, one at a time; needs every source's key
+	uv run pytest -m integration tests/
+
 # Compose bind-mounts this into the container; a missing file would make Docker
 # create a directory at the mount point, so fail early with guidance instead.
 climate-service.yaml:

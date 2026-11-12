@@ -57,6 +57,7 @@ make run    # start the dev server with hot reload
 make lint   # ruff + mypy + pyright
 make test   # pytest on 2 workers; PYTEST_WORKERS=4 for more
 make test-serial  # pytest in one process, to diagnose a failure
+make test-integration  # fetch from every built-in data source; needs their keys
 ```
 
 Dependabot opens a weekly PR with the minor and patch updates of the Python dependencies, a separate PR for each major update, and one PR for GitHub Actions updates ([.github/dependabot.yml](.github/dependabot.yml)).
