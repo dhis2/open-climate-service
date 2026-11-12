@@ -308,17 +308,13 @@
       // reported against 0.6.1, which never read these attributes, so it is a separate
       // fault and still open.
       import { ZarrLayer } from "https://esm.sh/@carbonplan/zarr-layer@0.9.1";
+      // A raster is read from its Icechunk repository, the collection's `icechunk` asset, not
+      // chunk by chunk through `/zarr` (CLIM-1580). The browser resolves chunks from the
+      // manifests itself, so the server only serves files, which a bucket or CDN can serve
+      // too, and every file but `repo` is cached for good. `/zarr` stays for GDAL clients.
       import { IcechunkStore } from "https://esm.sh/icechunk-js@0.6.1";
       import chroma from "https://esm.sh/chroma-js@3.2.0";
 
-      // Trial (CLIM-1580): `?reader=icechunk` reads the store natively, through the
-      // collection's `icechunk` asset, instead of chunk by chunk through `/zarr`. The browser
-      // resolves chunks from the manifests itself and the server only serves files.
-      // `?reader=zarr` keeps the default path; either value records `window.trialTiming`,
-      // milliseconds since navigation, for the measurements.
-      const trialReader = new URLSearchParams(location.search).get("reader");
-      const nativeIcechunk = trialReader === "icechunk";
-      window.trialTiming = { reader: trialReader ?? "zarr", ready: null, drawn: null, error: null };
       // A vector dataset is drawn from its PMTiles archive (CLIM-1177): MapLibre reads the
       // tiles in view with range requests, through the `pmtiles://` protocol.
       import { Protocol as PMTilesProtocol } from "https://esm.sh/pmtiles@4.5.0";
@@ -731,13 +727,13 @@
         }
 
         const renders = collection.renders?.default ?? {};
-        const zarr = collection.assets?.zarr;
-        if (!zarr?.href) {
-          setStatus("No Zarr asset found in this collection.");
+        const icechunk = collection.assets?.icechunk;
+        if (!icechunk?.href) {
+          setStatus("No Icechunk asset found in this collection.");
           return;
         }
 
-        const classes = zarr["classification:classes"] ?? [];
+        const classes = icechunk["classification:classes"] ?? [];
         const colors = classColors(classes);
         const { cm, clim } = classes.length
           ? classColormap(classes, colors)
@@ -800,43 +796,27 @@
         // invisible at country zoom, wrong as you zoom in. The store knows which it holds
         // and the viewer does not, so let the library read the store.
 
-        const icechunk = nativeIcechunk ? collection.assets?.icechunk : null;
-        if (nativeIcechunk && !icechunk?.href) {
-          setStatus("No Icechunk asset found in this collection.", true);
-          return;
-        }
-
         try {
-          const zarrVersion = zarr["zarr:zarr_format"] ?? null;
-          const store = icechunk ? await IcechunkStore.open(icechunk.href, { branch: "main" }) : null;
+          // Opening reads `repo`, the snapshot and a manifest; a newer dataset may be chosen
+          // meanwhile. The branch is `main` until rasters are published by branch (CLIM-1328).
+          const store = await IcechunkStore.open(icechunk.href, { branch: "main" });
           if (superseded()) return;
           activeLayer = new ZarrLayer({
             id: "zarr-layer",
-            ...(store ? { store } : { source: zarr.href }),
+            store,
             variable,
             clim,
             colormap: cm,
             opacity: 1,
             selector,
-            ...(zarrVersion !== null && { zarrVersion }),
+            zarrVersion: 3,
             ...(fillValue !== null && { fillValue }),
             crs: nativeCrs,
-            // The first idle after a level is committed is the first drawn map; `loading: false`
-            // alone can come before the layer has any level (see zarr-layer's README).
-            onLoadingStateChange: ({ loading, error }) => {
-              const timing = window.trialTiming;
-              if (error) timing.error = String(error);
-              if (!loading && timing.ready !== null && timing.drawn === null) timing.drawn = performance.now();
-            },
           });
           // Nothing awaits between the check above and here, but this is the step that would
           // actually go wrong, so it says so itself.
           if (superseded()) return;
           map.addLayer(activeLayer);
-          activeLayer.ready.then(
-            () => (window.trialTiming.ready ??= performance.now()),
-            (err) => (window.trialTiming.error = String(err)),
-          );
           for (const layer of map.getStyle().layers) {
             if ((layer.type === "line" && layer.id.startsWith("boundary")) || layer.type === "symbol") {
               map.moveLayer(layer.id);
