@@ -629,6 +629,10 @@ aggregation used. A per-class result, from `aggregate_spatial_classes`, gives on
 with the class code in `class`. A dry run shows the first rows and checks them against the store
 without writing.
 
+Pipeline rows do not record `weights` yet: a weighted aggregation is stored with `weights` empty,
+so keep results computed with different weights datasets in separate table datasets. Give each
+table dataset one pipeline; two pipelines writing the same one replace each other's values.
+
 `/datasets/{dataset_id}` shows the table's `units` and, under `provenance`, the job that computed
 its latest rows, that job's process graph digest and the datasets it read, as for any dataset a
 workflow produced.
