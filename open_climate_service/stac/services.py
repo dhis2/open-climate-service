@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -70,19 +71,25 @@ def file_fields(path: Path) -> dict[str, object]:
     with open(path, "rb") as handle:
         stat = os.fstat(handle.fileno())
         version = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
-        checksum = _CHECKSUMS.get(version)
+        with _CHECKSUMS_LOCK:
+            checksum = _CHECKSUMS.get(version)
         if checksum is None:
+            # Hashed outside the lock, so one large file does not hold up every other request.
             digest = hashlib.sha256()
             for block in iter(lambda: handle.read(1 << 20), b""):
                 digest.update(block)
-            checksum = _CHECKSUMS[version] = "1220" + digest.hexdigest()
-            while len(_CHECKSUMS) > 256:
-                _CHECKSUMS.pop(next(iter(_CHECKSUMS)))
+            checksum = "1220" + digest.hexdigest()
+            with _CHECKSUMS_LOCK:
+                _CHECKSUMS[version] = checksum
+                while len(_CHECKSUMS) > 256:
+                    _CHECKSUMS.pop(next(iter(_CHECKSUMS)))
     return {"file:size": stat.st_size, "file:checksum": checksum}
 
 
 _CHECKSUMS: dict[tuple[str, int, int, int], str] = {}
 """Checksums by file version, oldest first; `file_fields` keeps the latest 256."""
+# Routes run in a thread pool, so two requests evicting at once could pop the same entry.
+_CHECKSUMS_LOCK = threading.Lock()
 
 
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
@@ -418,7 +425,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     # The CRS the geometry is actually stored in, which for a reprojected collection is not
     # WGS 84 even though the extent above is — `spatial_wgs84` exists for exactly that split.
     collection.extra_fields["proj:code"] = detail.crs
-    collection.stac_extensions.extend([PROJECTION_EXTENSION, FILE_EXTENSION, PORTOLAN_SCHEMA])
+    collection.stac_extensions.extend([PROJECTION_EXTENSION, PORTOLAN_SCHEMA])
 
     # When the collection was last refreshed, which for a mirror of an upstream source is when
     # it was last synced from it.
@@ -490,6 +497,11 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 extra_fields=file_fields(thumbnail_path(dataset_id)),
             ),
         )
+
+    # As for a raster collection: declared only when an asset carries `file:*` fields, which a
+    # collection whose GeoParquet has gone missing does not.
+    if any("file:size" in asset.extra_fields for asset in collection.assets.values()):
+        collection.stac_extensions.append(FILE_EXTENSION)
 
     # `transform_hrefs=False` because every href here is already absolute. With it on, pystac
     # resolves the root link to rewrite relative ones — which means *fetching* the catalogue

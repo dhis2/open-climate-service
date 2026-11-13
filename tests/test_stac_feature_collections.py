@@ -490,6 +490,24 @@ def test_a_feature_collections_files_carry_their_size_and_checksum(
     assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in doc["stac_extensions"]
 
 
+def test_a_collection_with_no_file_left_does_not_declare_the_file_extension(
+    client: TestClient, districts: ArtifactRecord
+) -> None:
+    """The extension is declared for the `file:*` fields an asset carries, as on a raster collection."""
+    from open_climate_service.features import tiles
+    from open_climate_service.shared.thumbnails import thumbnail_path
+
+    data = Path(str(districts.path))
+    tiles.archive_path(data).unlink(missing_ok=True)
+    thumbnail_path("districts").unlink(missing_ok=True)
+    data.unlink()
+
+    doc = client.get("/stac/districts/collection.json").json()
+
+    assert "file:size" not in doc["assets"]["data"]
+    assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" not in doc["stac_extensions"]
+
+
 def test_a_replaced_file_gets_its_new_size_and_checksum(tmp_path: Path) -> None:
     """A thumbnail refresh replaces the file at the same path; the cached checksum is not reused."""
     import hashlib
