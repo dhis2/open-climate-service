@@ -5,6 +5,7 @@ from typing import Any
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
 
+from open_climate_service.plugins.rasters.providers import edh
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
 # v1 is the v0 data rewritten as Zarr v3: north-up, one column per pixel (v0 repeated 180
@@ -31,7 +32,7 @@ class CopDEMPlugin(BaseDatasetPlugin):
     def fetch(self, bbox: list[float], **params: Any) -> xr.Dataset:
         ds = xr.open_dataset(
             _ZARR_URL.format(product=self.product),
-            storage_options={"client_kwargs": {"trust_env": True}},
+            storage_options={"headers": edh.auth_headers()},
             chunks={},
             engine="zarr",
         )

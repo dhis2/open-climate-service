@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -14,6 +12,7 @@ import xarray as xr
 from earthkit.meteo.thermo import relative_humidity_from_dewpoint
 from earthkit.transforms.temporal import daily_reduce
 
+from open_climate_service.plugins.rasters.providers import cds
 from open_climate_service.shared.raster_contract import normalize_y_direction
 from open_climate_service.shared.time import (
     daily_period_ids,
@@ -259,27 +258,5 @@ class ERA5LandCDSDailyRelHumPlugin(BaseDatasetPlugin):
 
 
 def _open_cds_zarr(url: str) -> xr.Dataset:
-    """Open a CDS ARCO store using the configured CDS API token."""
-    token = _get_cdsapi_key()
-    ds: xr.Dataset = xr.open_zarr(
-        url,
-        consolidated=True,
-        storage_options={"headers": {"Authorization": f"Bearer {token}"}},
-    )
+    ds: xr.Dataset = xr.open_zarr(url, consolidated=True, storage_options={"headers": cds.auth_headers()})
     return ds
-
-
-def _get_cdsapi_key() -> str:
-    token = os.environ.get("CDS_API_KEY") or os.environ.get("CDSAPI_KEY")
-    if token:
-        return token
-
-    credentials_path = Path.home() / ".ecmwfdatastoresrc"
-    if not credentials_path.exists():
-        raise SystemError("Missing CDS API credentials: set CDS_API_KEY or configure ~/.ecmwfdatastoresrc")
-    for line in credentials_path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("key:"):
-            token = line.partition(":")[2].strip()
-            if token:
-                return token
-    raise SystemError(f"Unable to retrieve CDS API key from {credentials_path}")

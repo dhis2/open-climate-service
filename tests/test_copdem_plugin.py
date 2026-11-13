@@ -26,6 +26,7 @@ def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyP
         return source
 
     monkeypatch.setattr(copdem.xr, "open_dataset", open_dataset)
+    monkeypatch.setenv("EDH_API_KEY", "mytoken")
 
     ds = CopDEMPlugin(product=product).fetch(bbox=_TEST_BBOX)
 

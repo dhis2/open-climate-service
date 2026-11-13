@@ -127,9 +127,9 @@ System (LCCS) classes. This is a categorical dataset which uses categorical **mo
 resampling when building overviews rather than averaging the class codes. The no-data code (0) is
 stored as missing data.
 
-**Setup** — register for a Copernicus Climate Data Store account, configure the CDS credentials,
-and accept the dataset licence in the browser before ingesting. See the
-[CDS setup instructions](era5_land_datasets.md#copernicus-climate-data-store-monthly-datasets).
+**Setup** — register for a Copernicus Climate Data Store account, set its key as `CDS_API_KEY` in
+`.env`, and accept the dataset licence in the browser before ingesting. See the
+[CDS setup instructions](era5_land_datasets.md#copernicus-climate-data-store-daily-datasets).
 
 **Availability and sync** — the plugin discovers the allowed years from the CDS catalogue when
 listing available periods, so newly published years do not require a hardcoded plugin year limit.
@@ -157,13 +157,8 @@ country-sized extent; use the 30 m product where local detail matters.
 
 The datasets are static: they have no time axis, so each is ingested whole and shown without a time slider.
 
-It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account. Add your key to `~/.netrc`
-as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.destine.eu`:
-
-```
-machine data.earthdatahub.destine.eu
-  password <your-standard-api-key>
-```
+It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account, with its key set as
+`EDH_API_KEY` in `.env` as for [ERA5-Land](era5_land_datasets.md).
 
 ---
 
@@ -196,15 +191,12 @@ It needs free Copernicus Data Space Ecosystem S3 keys:
 
 1. Create an account at [dataspace.copernicus.eu](https://dataspace.copernicus.eu/).
 2. Generate S3 keys at [eodata-s3keysmanager.dataspace.copernicus.eu](https://eodata-s3keysmanager.dataspace.copernicus.eu/). The secret key is shown only once.
-3. Add them as a `cdse` profile in `~/.aws/credentials`, after any profiles already there:
+3. Set them in `.env`:
 
 ```
-[cdse]
-aws_access_key_id = <your-access-key>
-aws_secret_access_key = <your-secret-key>
+CDSE_S3_ACCESS_KEY=<your-access-key>
+CDSE_S3_SECRET_KEY=<your-secret-key>
 ```
-
-**Windows:** use `%USERPROFILE%\.aws\credentials` with the same content.
 
 ---
 

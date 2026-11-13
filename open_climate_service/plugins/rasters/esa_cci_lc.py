@@ -5,7 +5,7 @@ resampling so coarse zoom levels show a real class rather than an average of cod
 
 The CDS serves the maps as ``satellite-land-cover``: version 2.0.7 for 1992-2015 and the C3S
 continuation, version 2.1.1, from 2016. Each year is requested for the extent only. Requests need
-a CDS key (see the README) and the dataset's licence accepted once in the browser.
+``CDS_API_KEY`` and the dataset's licence accepted once in the browser.
 The plugin submits each year as a separate request to avoid CDS request size limit, and supports
 multiple concurrent requests to CDS. The CDS either processes these in parallel or queues them;
 either way the downloads can take up to several minutes per year.
@@ -23,14 +23,21 @@ import numpy as np
 import xarray as xr
 from ecmwf.datastores import Client as _CdsClient
 
+from open_climate_service.plugins.rasters.providers import cds
 from open_climate_service.streaming import BaseDatasetPlugin
 
+_CDS_API_URL = "https://cds.climate.copernicus.eu/api"
 _DATASET = "satellite-land-cover"
 _NO_DATA = 0
 
 
+def _client() -> _CdsClient:
+    # Both given, so the client never falls back to ~/.ecmwfdatastoresrc or its own variables.
+    return _CdsClient(url=_CDS_API_URL, key=cds.api_key())
+
+
 def _available_years() -> list[str]:
-    constraints = _CdsClient().apply_constraints(_DATASET, {})
+    constraints = _client().apply_constraints(_DATASET, {})
     years = constraints.get("year")
     if not isinstance(years, list) or not all(isinstance(year, str) for year in years):
         raise RuntimeError(f"CDS returned no valid year options for collection {_DATASET!r}: {years!r}")
@@ -58,7 +65,7 @@ def _load_year(year: str, bbox: list[float]) -> xr.DataArray:
     }
     with tempfile.TemporaryDirectory() as tmp:
         target = Path(tmp) / "land_cover"
-        client = _CdsClient()
+        client = _client()
         client.check_authentication()
         client.submit(_DATASET, request).download(str(target))
 
