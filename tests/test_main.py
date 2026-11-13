@@ -34,34 +34,12 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         def set_finished_listener(self, listener: object) -> None:
             calls.append("finished-listener-set" if listener is not None else "finished-listener-cleared")
 
-        def set_delivery_due_provider(self, provider: object) -> None:
-            calls.append("delivery-due-set" if provider is not None else "delivery-due-cleared")
-
         def set_event_consumer(self, consumer: object | None) -> None:
             # The same consumer as native jobs: a published managed dataset's update.
             calls.append("openeo-consumer-set" if consumer is not None else "openeo-consumer-unset")
 
         def shutdown(self) -> None:
             calls.append("openeo-shutdown")
-
-    class FakeAutomationService:
-        def consume(self, events: object) -> None:
-            pass
-
-        def start(self) -> None:
-            calls.append("automation-start")
-
-        def on_job_finished(self, record: object) -> None:
-            pass
-
-        def delivery_due_for(self, record: object) -> None:
-            return None
-
-        def reconcile_deliveries(self) -> None:
-            calls.append("automation-reconcile")
-
-        def replay(self) -> None:
-            calls.append("automation-replay")
 
     class FakeSchedulerService:
         def start(self) -> None:
@@ -72,7 +50,6 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(main, "get_job_service", lambda: FakeJobService())
     monkeypatch.setattr(main, "get_openeo_job_service", lambda: FakeOpenEOJobService())
-    monkeypatch.setattr(main, "get_workflow_automation_service", lambda: FakeAutomationService())
     monkeypatch.setattr(main, "get_scheduler_service", lambda: FakeSchedulerService())
 
     from open_climate_service.openeo import processes
@@ -94,15 +71,11 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         assert await asyncio.to_thread(loading.wait, 1)
         assert calls == [
             "recover",
-            "automation-start",
             "consumer-set",
             "openeo-consumer-set",
-            "delivery-due-set",
             "finished-listener-set",
             "openeo-recover",
             "openeo-reconcile-publications",
-            "automation-reconcile",
-            "automation-replay",
             "scheduler-start",
         ]
         # Released only once shutdown has begun: shutdown must wait for the thread to finish.
@@ -110,15 +83,11 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
 
     assert calls == [
         "recover",
-        "automation-start",
         "consumer-set",
         "openeo-consumer-set",
-        "delivery-due-set",
         "finished-listener-set",
         "openeo-recover",
         "openeo-reconcile-publications",
-        "automation-reconcile",
-        "automation-replay",
         "scheduler-start",
         "processes-loaded",
         "consumer-unset",
@@ -205,7 +174,6 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
     for factory in (
         "get_job_service",
         "get_openeo_job_service",
-        "get_workflow_automation_service",
         "get_scheduler_service",
     ):
         monkeypatch.setattr(main, factory, lambda: _Quiet())

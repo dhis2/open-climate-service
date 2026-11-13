@@ -83,6 +83,37 @@ def _uniform_chunks(ds: xr.Dataset) -> xr.Dataset:
     return ds.chunk(targets)
 
 
+def _one_step_per_chunk(ds: xr.Dataset, x_dim: str, y_dim: str) -> xr.Dataset:
+    """Rechunk every non-spatial dim of the data variables to one step per chunk.
+
+    The flat path otherwise stores the dataset's dask chunks as they arrive, and a computed
+    result arrives with the read chunks: ``open_icechunk_dataset`` merges up to a year of steps
+    per dask chunk, so an openEO anomaly over daily data was stored 183 days per chunk, and a
+    map client drawing one day read all of them. Ingested stores hold one step per chunk, and
+    the Portolan Zarr profile asks the same of every non-spatial dimension (CLIM-1861).
+
+    Spatial chunks are kept. A source's stored layout is dropped where it no longer applies, also
+    when the dask chunks are one step already: stored chunks spanning several steps, which the
+    write would refuse to fill from one-step dask chunks, and shards, which a flat store does not
+    have. Inherited shards are worse than refused: the parallel one-step writes into one shard
+    lose steps without an error.
+    """
+    targets: dict[Any, int] = {}
+    for var in ds.data_vars.values():
+        chunks = var.chunks or ((size,) for size in var.shape)
+        for dim, dim_chunks in zip(var.dims, chunks, strict=False):
+            if dim not in (x_dim, y_dim) and max(dim_chunks, default=1) > 1:
+                targets[dim] = 1
+    ds = ds.copy()
+    for var in ds.data_vars.values():
+        var.encoding.pop("shards", None)
+        stored = var.encoding.get("chunks") or ()
+        if any(size > 1 for dim, size in zip(var.dims, stored, strict=False) if dim not in (x_dim, y_dim)):
+            for key in ("chunks", "preferred_chunks"):
+                var.encoding.pop(key, None)
+    return ds.chunk(targets) if targets else ds
+
+
 def _needs_pyramid(ds: xr.Dataset, x_dim: str, y_dim: str) -> bool:
     """Return True when the spatial extent is large enough to benefit from a pyramid."""
     return ds.sizes[x_dim] * ds.sizes[y_dim] > _PYRAMID_PIXEL_THRESHOLD
@@ -668,12 +699,12 @@ def write_to_icechunk_store(
         pyramid.attrs.update(geozarr_attrs)
 
         # Keep the no-data sentinel consistent across pyramid levels so the map
-        # renders the same pixels transparent at every zoom. topozarr mean-coarsens
-        # an integer-coded mask (e.g. a 0/1 hotspot raster, where 0 is the no-data
-        # background) into float levels that would otherwise default to a NaN fill,
-        # leaving the 0.0 background opaque at overview zooms. Pin the fill_value to
-        # 0 for integer-coded variables (Pyramid.write applies it across all levels);
-        # float variables already use NaN as both data and fill, so leave them be.
+        # renders the same pixels transparent at every zoom. topozarr keeps an integer
+        # variable's dtype at every level (a mean rounds half to even), but gives it no
+        # fill value unless the source declares one, so an integer-coded mask (e.g. a 0/1
+        # hotspot raster, where 0 is the no-data background) would have no sentinel at all.
+        # Pin the fill_value to 0 for integer-coded variables (Pyramid.write applies it
+        # across all levels); float variables already use NaN as both data and fill.
         for var_name, var_da in ds.data_vars.items():
             if var_da.dtype.kind != "f" and pyramid.fill_values.get(str(var_name)) is None:
                 pyramid.fill_values[str(var_name)] = 0
@@ -687,41 +718,30 @@ def write_to_icechunk_store(
             _overwrite_native_resampled_levels(session.store, ds, x_dim, y_dim, levels, pyramid_method)
             _record_resampling_method(session.store, pyramid_method)
 
-        # topozarr demotes spatial_ref from coordinate to data variable in the pyramid.
-        # Patch the root and each level group: add CRS to multiscales datasets entries so
-        # ZarrLayer can detect the coordinate system without guessing (it defaults to
-        # EPSG:3857 when crs is absent from the OME-NGFF datasets array).
+        # topozarr writes each level's `proj:`/`spatial:` attrs, its `spatial_ref` coordinate,
+        # and the level's affine in the root `multiscales.layout`. GDAL reads those only from
+        # consolidated metadata, which these stores do not have. So each level also gets the
+        # GDAL GeoTransform, taken from its own layout entry (one copied from level 0 would
+        # place every overview at twice its true size), and a CF `grid_mapping` on its data
+        # arrays, through which GDAL finds the CRS.
         root = zarr.open_group(session.store, mode="a")
-        root_attrs = dict(root.attrs)
-        ms = root_attrs.get("multiscales")
-        if isinstance(ms, list) and ms and isinstance(ms[0], dict):
-            datasets = ms[0].get("datasets")
-            if isinstance(datasets, list):
-                for ds_entry in datasets:
-                    if isinstance(ds_entry, dict):
-                        ds_entry.setdefault("crs", crs)
-                root_attrs["multiscales"] = ms
-                root.attrs.update(root_attrs)
         if geometry is not None:
             write_gdal_geotransform(root, geometry["transform"])
-        for level_key in root.keys():
-            level_group = root[level_key]
+        multiscales = root.attrs.get("multiscales")
+        layout = multiscales.get("layout") if isinstance(multiscales, dict) else None
+        for entry in layout if isinstance(layout, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            level_group = root.get(str(entry.get("asset")))
             if not isinstance(level_group, zarr.Group):
                 continue
-            lvl_attrs = dict(level_group.attrs)
-            lvl_attrs["coordinates"] = "spatial_ref"
-            level_group.attrs.update(lvl_attrs)
-            # Level groups are named by their downsample exponent ("0" = native). Anything
-            # else is not a pyramid level, so leave its georeferencing alone.
-            if geometry is not None and level_key.isdigit():
-                # Each level halves the resolution, so it needs its own GeoTransform — one
-                # copied from level 0 would place every overview at twice its true size.
-                factor = float(2 ** int(level_key))
-                step_x, rot_x, origin_x, rot_y, step_y, origin_y = geometry["transform"]
-                write_gdal_geotransform(
-                    level_group,
-                    [step_x * factor, rot_x, origin_x, rot_y, step_y * factor, origin_y],
-                )
+            transform = entry.get("spatial:transform")
+            if geometry is not None and isinstance(transform, list):
+                write_gdal_geotransform(level_group, cast(list[float], transform))
+            if "spatial_ref" in level_group:
+                for _, array in level_group.arrays():
+                    if {x_dim, y_dim} <= set(_dimension_names(array)):
+                        array.attrs["grid_mapping"] = "spatial_ref"
 
         if t_dim is not None:
             _write_root_time_coordinate(session.store, ds, time_dim=t_dim)
@@ -733,7 +753,7 @@ def write_to_icechunk_store(
             ds.sizes[y_dim],
         )
         ds = ds.assign_attrs({**ds.attrs, **geozarr_attrs})
-        ds = _uniform_chunks(ds)
+        ds = _uniform_chunks(_one_step_per_chunk(ds, x_dim, y_dim))
         # Bound the time-coordinate chunk so map clients read the axis in a few requests
         # rather than one per timestep (data variables keep their own chunking). Set it for
         # every length: a store reopened after a streaming ingest carries a chunk of 1 in the

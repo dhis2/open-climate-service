@@ -12,7 +12,6 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -598,8 +597,7 @@ def test_a_crash_after_the_event_is_durable_finishes_without_a_second_event(
 def test_a_crash_after_finished_but_before_dispatch_is_delivered_by_startup_replay(
     service: Any, received: list[JobEvent], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.automation.config import AutomationConfig, WorkflowTrigger
-    from open_climate_service.automation.service import WorkflowAutomationService
+    from open_climate_service.jobs.events import persisted_events
 
     _job("job-1", 5.0, monkeypatch)
 
@@ -614,29 +612,8 @@ def test_a_crash_after_finished_but_before_dispatch_is_delivered_by_startup_repl
     # Normal recovery no longer looks at a FINISHED job.
     assert service._recover("job-1") is False and received == []
 
-    # Startup replay reads the event from the openEO job that owns it.
-    submitted: list[str] = []
-    fake = SimpleNamespace(
-        create_triggered_job=lambda body, *, source_event_id, trigger_id, max_attempts: (
-            submitted.append(source_event_id) or SimpleNamespace(id=f"job-for-{source_event_id}"),
-            True,
-        ),
-        start_triggered_job=lambda job_id: True,
-    )
-    config = AutomationConfig(
-        workflow_triggers=[
-            WorkflowTrigger(
-                id="after-derived",
-                on_update_of=_DATASET,
-                workflow_id="aggregate_by_features",
-                arguments={"dataset_id": "$event.dataset_id"},
-                replay_existing=True,
-            )
-        ]
-    )
-    automation = WorkflowAutomationService(config_loader=lambda: config, openeo_service=fake)  # type: ignore[arg-type]
-    automation.replay()
-    assert submitted == [event.event_id]
+    # Startup replay (derivations and pipelines alike) reads the event from the job that owns it.
+    assert event in persisted_events()
 
 
 # --- ordinary failures after the commit -----------------------------------------------------

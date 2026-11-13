@@ -105,14 +105,10 @@ class OpenEOJobRecord(BaseModel):
     # Persisted internal state (underscore prefix excluded from openEO output)
     error_message: str | None = Field(default=None, exclude=True)
     cancel_requested: bool = Field(default=False, exclude=True)
-    # Set on jobs created by a workflow trigger; automated delivery keys off them.
+    # Set on jobs a pipeline run or a derived dataset refresh creates: who owns the job, and the
+    # event it answers, from which its id is derived.
     trigger_id: str | None = Field(default=None, exclude=True)
     source_event_id: str | None = Field(default=None, exclude=True)
-    # When the job last reached FINISHED. `updated` moves on every later mutation, so it
-    # cannot tell whether a job finished before a delivery activation boundary.
-    finished_at: datetime | None = Field(default=None, exclude=True)
-    # The delivery this job owed when it finished ({"export", "mode"}), written with FINISHED.
-    delivery_due: dict[str, str] | None = Field(default=None, exclude=True)
     # Execution attempts under this one job ID. Triggered jobs retry up to `max_attempts`;
     # `retry_at` is when a job waiting out a backoff becomes due again.
     attempt: int = Field(default=0, exclude=True)

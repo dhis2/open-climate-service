@@ -62,7 +62,7 @@ The flat vs. pyramid decision is made at build time based on spatial size (see [
 
 ## Chunk sizing
 
-**Time:** a store written by an ingestion or sync holds one time step per chunk. Periods are fetched and appended one at a time, and nothing rechunks along time afterwards, so drawing one date on a map reads only that date's chunks, and a long time series for one place reads one chunk per step. A store published from an openEO job keeps the time chunks of the job's result, which can hold several steps each. The `t` coordinate array is chunked in blocks of up to 4096 values, so a client reads the whole axis in a few requests.
+**Time:** a store holds one time step per chunk. An ingestion or sync fetches and appends periods one at a time, and a store published from an openEO job without a pyramid is rechunked to one step per chunk (and one value per chunk on any other non-spatial axis, such as a normal's `dayofyear`) before it is written. So drawing one date on a map reads only that date's chunks, and a long time series for one place reads one chunk per step. The `t` coordinate array is chunked in blocks of up to 4096 values, so a client reads the whole axis in a few requests.
 
 **Space** depends on the layout:
 
@@ -128,7 +128,9 @@ transforms have run, so they reflect the final stored data.
 
 `zarr_conventions` for a flat store contains the base GeoZarr convention declaration. For pyramid stores it also includes a `multiscales` entry that declares the level structure.
 
-The pyramid metadata follows the **GeoZarr `multiscales.layout` format** (not OME-NGFF). Each level is described as a `layout` entry with an `asset` key pointing to the level path, plus `transform.scale` and `transform.translation` values for that level.
+The pyramid metadata follows the **GeoZarr `multiscales.layout` format** (not OME-NGFF). Each level is described as a `layout` entry with an `asset` key pointing to the level path, its `transform.scale` and `transform.translation` relative to the level it is derived from, and its own `spatial:transform` and `spatial:shape`. Each level group also carries `proj:code`, `proj:wkt2` and the `spatial:` attributes, a `spatial_ref` coordinate with the GDAL `GeoTransform`, and a CF `grid_mapping` on its data arrays, so GDAL and QGIS can open any level with its own georeferencing.
+
+Every level of an ingested pyramid holds one time step per shard. A sync appends one period at a time, and appending into a shard several periods wide would rewrite that shard on every append. A pyramid published from an openEO job keeps the time chunks of the job's result, which can hold several steps each; it is not appended to.
 
 ---
 

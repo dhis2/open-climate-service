@@ -122,7 +122,7 @@ def file_formats() -> dict[str, Any]:
             "title": "DHIS2 JSON",
             "description": (
                 "DHIS2 import-ready JSON dataValues envelope for aggregated org-unit results. "
-                "Pass the save_result option 'export' to render a configured named export, which "
+                "Pass the save_result option 'export' with a pipeline id to render that pipeline's export, which "
                 "can be delivered to DHIS2; or pass ad-hoc options such as data_element_id, "
                 "org_unit_field, and period_type for a download-only payload."
             ),

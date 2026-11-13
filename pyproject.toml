@@ -87,17 +87,10 @@ server = [
     "zarr>=3.1.6,<4",
     "icechunk>=2.0,<3",
     "geozarr-toolkit==0.1.*",
-    # 0.1.3 added the `nearest` coarsening method, so categorical pyramids no longer need a
-    # local decimation path (carbonplan/topozarr#26). `mode` is still ours — see downloader.
-    # The floor is 0.1.4 rather than 0.1.3 for a packaging reason: `topozarr` and
-    # `topozarr-core` are separate distributions, and 0.1.3 declared only
-    # `topozarr-core>=0.1.0,<0.2` — too loose, since the `nearest` kernel exists only from core
-    # 0.1.2. That combination installs cleanly and then fails *at ingest time* with "method must
-    # be one of 'mean', 'max', 'min', 'sum'", because the Python layer accepts `nearest` and the
-    # Rust kernel rejects it. 0.1.4 pins `topozarr-core==0.1.4` and adds a lockstep release
-    # check (carbonplan/topozarr#28), so the pair can no longer be mismatched and OCS no longer
-    # needs a `topozarr-core` pin of its own. Do not lower this floor.
-    "topozarr>=0.1.4,<0.2",
+    # 0.2.2 writes each level's `proj:`/`spatial:` attrs, its `spatial_ref` coordinate and its
+    # affine in `multiscales.layout`, and sizes time shards from the source's time chunks. 0.3.0
+    # applies the encoding's codecs and drops the 4-D limit. `mode` is still ours (topozarr#26).
+    "topozarr>=0.3.0,<0.4",
     "rioxarray>=0.17",
     # Directly imported (shared/time.py, streaming, openeo). Capped to 2.x; pandas
     # 3.0 is a breaking major and not yet validated against this stack.

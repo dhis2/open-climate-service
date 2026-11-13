@@ -1769,10 +1769,13 @@ def test_maybe_build_pyramid_calls_write_to_icechunk_store(tmp_path: Path, monke
     icechunk_path.mkdir()
 
     ds = xr.Dataset()
-    monkeypatch.setattr(
-        "open_climate_service.data_accessor.services.accessor.open_icechunk_dataset",
-        lambda _: ds,
-    )
+    opened: list[dict[str, object]] = []
+
+    def fake_open(_: Path, **kw: object) -> xr.Dataset:
+        opened.append(kw)
+        return ds
+
+    monkeypatch.setattr("open_climate_service.data_accessor.services.accessor.open_icechunk_dataset", fake_open)
 
     written: list[tuple] = []
 
@@ -1785,6 +1788,8 @@ def test_maybe_build_pyramid_calls_write_to_icechunk_store(tmp_path: Path, monke
     result = _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "precip"})
 
     assert len(written) == 1
+    # One period per dask chunk, so topozarr keeps one period per time shard (CLIM-1765).
+    assert opened == [{"merge_time": False}]
     # The rewrite cannot target the store it is reading from, so it goes to a sibling and is
     # swapped in. What matters to callers is where it ends up, and that nothing is left over.
     assert written[0][1] == icechunk_path.with_name(f"{icechunk_path.name}.rebuild")
@@ -1821,7 +1826,7 @@ def test_maybe_build_pyramid_skips_rewrite_for_normalized_flat_store(
     )
     monkeypatch.setattr(
         "open_climate_service.data_accessor.services.accessor.open_icechunk_dataset",
-        lambda _: ds,
+        lambda _, **__: ds,
     )
 
     written: list[tuple] = []
@@ -1846,7 +1851,7 @@ def test_maybe_build_pyramid_falls_back_on_build_error(tmp_path: Path, monkeypat
     ds = xr.Dataset()
     monkeypatch.setattr(
         "open_climate_service.data_accessor.services.accessor.open_icechunk_dataset",
-        lambda _: ds,
+        lambda _, **__: ds,
     )
 
     def fake_write_fail(*_a: object, **_k: object) -> None:

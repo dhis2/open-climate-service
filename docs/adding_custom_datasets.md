@@ -302,8 +302,8 @@ new one. Updates missed while OCS was stopped are caught up at startup and every
 The recipe is checked at startup, against the registered workflows: an unknown workflow or
 argument, a missing argument, a time range set where `refresh_on` should fill it (or left open
 without `refresh_on`), a workflow that does not publish through `output_dataset_id`, a
-`refresh_on` dataset that no template declares, and a chain of recipes and workflow triggers
-that leads back to itself each refuse startup with the reason. A refreshed dataset's update
+`refresh_on` dataset that no template declares, and a chain of recipes that leads back to
+itself each refuse startup with the reason. A refreshed dataset's update
 starts the pipelines on it, so a pipeline can deliver the anomaly each time its source syncs.
 
 ### Dekads: a period type with no fixed length
@@ -448,7 +448,7 @@ Building one is not free, though. Level 0 is rewritten rather than kept as-is �
 Levels are aggregated from the full-resolution data, and `ingestion.resampling` controls how:
 
 - **Continuous data** (temperature, precipitation, NDVI, …) — leave the default `mean`.
-- **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a mask into meaningless fractions.
+- **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a float mask into meaningless fractions. An integer mask without a declared no-data value gets 0 as its fill value, which the mean skips, so it already behaves like `max`; with another no-data value, such as 255, 0 is data and the mean becomes a majority vote in which a tie rounds to 0, so small patches disappear at coarse zooms.
 - **Multi-class categorical** (land-cover class codes, etc.) — use `mode` (majority class). `mean` would average class codes into a _different, non-existent_ class (e.g. `mean(10, 80) = 45`). A dataset that declares [`classes`](#categorical-datasets) gets `mode` unless it sets `resampling` itself.
 
 `mean`/`max`/`min`/`sum`/`nearest` are computed by [topozarr](https://github.com/carbonplan/topozarr), which builds each level from the one above. That is valid for all five because they are _composable_ — for `nearest`, taking the corner of each corner gives the same cell as taking every nth cell of the original.

@@ -1,4 +1,5 @@
 import os
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -482,6 +483,24 @@ def test_a_replace_refused_while_a_reader_holds_the_file_is_retried(
     persistence.atomic_text(tmp_path / "index.json", "[]")
 
     assert (tmp_path / "index.json").read_text(encoding="utf-8") == "[]"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_record_write_keeps_the_records_file_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replacement is written through an owner-only temporary file; records.json must not become owner-only."""
+    umask = os.umask(0)
+    os.umask(umask)
+    artifacts_dir = tmp_path / "artifacts"
+    index_path = artifacts_dir / "records.json"
+    monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
+    monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", index_path)
+
+    services._save_records([_artifact(artifact_id="first")])
+    assert stat.S_IMODE(index_path.stat().st_mode) == 0o666 & ~umask
+
+    index_path.chmod(0o640)
+    services._save_records([_artifact(artifact_id="second")])
+    assert stat.S_IMODE(index_path.stat().st_mode) == 0o640
 
 
 def _published_icechunk_store(

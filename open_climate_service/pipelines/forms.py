@@ -13,6 +13,7 @@ from dataclasses import asdict
 from typing import Any
 
 from open_climate_service.exports.base import PipelineSettingsForm
+from open_climate_service.features.bindings import FROM_FEATURES
 from open_climate_service.pipelines.workflow import COLLECTION_ID, GEOJSON, TEMPORAL_INTERVAL
 
 _SCALARS = {"string", "integer", "number", "boolean"}
@@ -215,7 +216,7 @@ def read_arguments(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[s
         kind = field["kind"]
         try:
             if kind == "features":
-                arguments[field["name"]] = {"from_features": raw}
+                arguments[field["name"]] = {FROM_FEATURES: raw}
             elif kind in ("json", "interval"):
                 arguments[field["name"]] = json.loads(raw)
             elif kind in ("integer", "number", "boolean", "enum"):
@@ -225,6 +226,35 @@ def read_arguments(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[s
         except ValueError as exc:
             raise ValueError(f"workflow argument '{field['name']}': {exc}") from None
     return arguments
+
+
+def _read_row(form: dict[str, str], field: dict[str, Any], index: int) -> tuple[dict[str, Any], bool]:
+    """One row of a ``rows`` field, and whether anything was entered in it."""
+    name = field["name"]
+    row: dict[str, Any] = {}
+    has_value = f"dest.{name}.{index}.__present" in form
+    try:
+        for column in field["columns"]:
+            raw = form.get(f"dest.{name}.{index}.{column['name']}", "").strip()
+            if column["widget"] == "checkbox":
+                if raw:
+                    has_value = True
+                row[column["name"]] = _parse_scalar("boolean", raw) if raw else False
+            elif raw:
+                has_value = True
+                row[column["name"]] = _parse_scalar(column["kind"], raw)
+    except ValueError as exc:
+        raise ValueError(f"destination setting '{name}' row {index + 1}: {exc}") from None
+    return row, has_value
+
+
+def read_row(form: dict[str, str], fields: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+    """The row the form field ``key`` (``dest.<rows>.<index>.<column>``) sits in, or None outside a row."""
+    parts = key.split(".")
+    if len(parts) != 4 or parts[0] != "dest" or not parts[2].isdigit():
+        return None
+    field = next((f for f in fields if f["name"] == parts[1] and f["kind"] == "rows"), None)
+    return _read_row(form, field, int(parts[2]))[0] if field is not None else None
 
 
 def read_settings(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[str, Any]:
@@ -237,21 +267,7 @@ def read_settings(form: dict[str, str], fields: list[dict[str, Any]]) -> dict[st
             index = 0
             prefix = f"dest.{name}."
             while any(key.startswith(f"{prefix}{index}.") for key in form):
-                try:
-                    row: dict[str, Any] = {}
-                    has_value = f"{prefix}{index}.__present" in form
-                    for column in field["columns"]:
-                        key = f"dest.{name}.{index}.{column['name']}"
-                        raw = form.get(key, "").strip()
-                        if column["widget"] == "checkbox":
-                            if raw:
-                                has_value = True
-                            row[column["name"]] = _parse_scalar("boolean", raw) if raw else False
-                        elif raw:
-                            has_value = True
-                            row[column["name"]] = _parse_scalar(column["kind"], raw)
-                except ValueError as exc:
-                    raise ValueError(f"destination setting '{name}' row {index + 1}: {exc}") from None
+                row, has_value = _read_row(form, field, index)
                 if has_value:
                     rows.append(row)
                 index += 1
@@ -301,7 +317,7 @@ def argument_value(arguments: dict[str, Any], field: dict[str, Any]) -> str:
     if value is None:
         return ""
     if field["kind"] == "features" and isinstance(value, dict):
-        return str(value.get("from_features", ""))
+        return str(value.get(FROM_FEATURES, ""))
     if field["kind"] in ("json", "interval") or isinstance(value, (dict, list)):
         return json.dumps(value)
     if isinstance(value, bool) and field["kind"] == "boolean":

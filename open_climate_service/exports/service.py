@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
-from open_climate_service import config
 from open_climate_service.exports.base import BaseExportPlugin, RenderedExport
 from open_climate_service.exports.registry import load_export_plugins
 
@@ -28,48 +27,11 @@ class ResolvedExport:
     references: dict[str, str]
 
 
-def _configured_export_definitions() -> dict[str, dict[str, Any]]:
-    """Validate configured and pipeline-owned export definitions and index them by ID.
-
-    An ID claimed by both the configuration and a pipeline is left out and listed by
-    :func:`_contested_export_ids`, so resolving it fails instead of picking one.
-    """
-    by_id, _ = _export_definitions()
-    return by_id
-
-
-def _export_definitions() -> tuple[dict[str, dict[str, Any]], set[str]]:
-    definitions = config.get_config().get("exports", [])
-    if not isinstance(definitions, list):
-        raise ValueError("exports must be a list of named mappings")
-    by_id: dict[str, dict[str, Any]] = {}
-    for definition in definitions:
-        if not isinstance(definition, dict):
-            raise ValueError("Each export definition must be a mapping")
-        identifier = definition.get("id")
-        if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", identifier):
-            raise ValueError("Each export requires an ID containing letters, digits, underscores, or hyphens")
-        if identifier in by_id:
-            raise ValueError(f"Duplicate export ID '{identifier}'")
-        by_id[identifier] = definition
-    # A validated pipeline owns the named export under its id. Neither side wins a clash.
+def _export_definitions() -> dict[str, dict[str, Any]]:
+    """The named exports, each owned by the validated pipeline of the same id."""
     from open_climate_service.pipelines.exports import pipeline_export_definitions
 
-    contested: set[str] = set()
-    for definition in pipeline_export_definitions():
-        identifier = str(definition["id"])
-        if identifier in by_id:
-            contested.add(identifier)
-            logger.error(
-                "Export '%s' is declared in the configuration and owned by the pipeline of the same id; "
-                "neither is used until one is renamed or removed",
-                identifier,
-            )
-            continue
-        by_id[identifier] = definition
-    for identifier in contested:
-        by_id.pop(identifier, None)
-    return by_id, contested
+    return {str(definition["id"]): definition for definition in pipeline_export_definitions()}
 
 
 def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
@@ -77,12 +39,7 @@ def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
     export_id = options.get("export")
     if not isinstance(export_id, str) or not export_id.strip() or set(options) != {"export"}:
         raise ValueError("Named exports require options containing only a non-empty 'export' ID")
-    by_id, contested = _export_definitions()
-    if export_id in contested:
-        raise ValueError(
-            f"Export '{export_id}' is declared in the configuration and owned by the pipeline of the same id; "
-            "rename the pipeline or remove the configured export"
-        )
+    by_id = _export_definitions()
     if export_id not in by_id:
         raise ValueError(f"Unknown export '{export_id}'")
     resolved = resolve_export_definition(by_id[export_id])
@@ -92,7 +49,7 @@ def resolve_named_export(fmt: str, options: dict[str, Any]) -> ResolvedExport:
 
 
 def resolve_export_definition(definition: dict[str, Any]) -> ResolvedExport:
-    """Resolve one explicit definition through the same path as an instance named export.
+    """Resolve one explicit definition through the same path as a named export.
 
     Pipelines use this to validate and dry-run the definition their destination compiles,
     before it is resolvable by name. It deliberately accepts a complete definition rather than
@@ -123,26 +80,6 @@ def resolve_export_definition(definition: dict[str, Any]) -> ResolvedExport:
     resolved = ResolvedExport(export_id, plugin, deepcopy(mapping), references)
     check_cadence_declaration(resolved)
     return resolved
-
-
-def validate_configured_exports() -> None:
-    """Resolve every configured export, so a cadence contradiction fails startup, not a job.
-
-    Automation already resolves the exports its triggers deliver through; this covers the
-    rest, so an export nobody has run yet is refused with the same message at the same time.
-    """
-    # A pipeline's export is checked when the pipeline validates; a stale one must not stop startup.
-    from open_climate_service.pipelines.exports import pipeline_export_definitions
-
-    owned = {str(definition["id"]) for definition in pipeline_export_definitions()}
-    for export_id, definition in _configured_export_definitions().items():
-        if export_id in owned:
-            continue
-        plugin_id = definition.get("plugin")
-        plugin = load_export_plugins().get(plugin_id) if isinstance(plugin_id, str) else None
-        if plugin is None:
-            raise ValueError(f"Export '{export_id}' names an unknown plugin {plugin_id!r}")
-        resolve_named_export(plugin.format, {"export": export_id})
 
 
 def declared_dataset_cadence(resolved: ResolvedExport) -> str | None:
@@ -223,7 +160,7 @@ def render_resolved_export(
 
     This is the invocation-local counterpart to :func:`render_named_export`. Draft pipelines
     resolve their generated definition directly, but must still receive the exact cadence and
-    incomplete-period checks applied to configured named exports.
+    incomplete-period checks applied to named exports.
     """
     checked = with_result_period(data, resolved)
     if provenance is not None:

@@ -87,10 +87,12 @@ class Dhis2ExportPlugin(BaseExportPlugin):
 
         return dhis2_destination.check_destination(settings, context)
 
-    def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
+    def lookup_options(
+        self, lookup: str, settings: dict[str, Any], query: str, row: dict[str, Any] | None = None
+    ) -> list[LookupOption]:
         from open_climate_service.exports import dhis2_destination
 
-        return dhis2_destination.lookup_options(lookup, settings, query)
+        return dhis2_destination.lookup_options(lookup, settings, query, row)
 
     def lookup_labels(self, lookup: str, settings: dict[str, Any], values: Sequence[str]) -> dict[str, str]:
         from open_climate_service.exports import dhis2_destination

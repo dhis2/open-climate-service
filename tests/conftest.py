@@ -231,3 +231,16 @@ def webhook(monkeypatch: pytest.MonkeyPatch) -> WebhookReceiver:
     monkeypatch.setattr(notifications.httpx, "post", post)
     monkeypatch.setattr(notifications, "_kick", notifications.send_due)
     return receiver
+
+
+def named_exports(monkeypatch: pytest.MonkeyPatch, *definitions: dict[str, Any]) -> list[dict[str, Any]]:
+    """Stand in for validated pipelines owning these named exports; return the list to edit in place.
+
+    A pipeline owns the named export under its id. Tests about rendering or delivering an export
+    need the definition resolvable by name, not a stored, validated pipeline behind it.
+    """
+    from open_climate_service.pipelines import exports as pipeline_exports
+
+    owned = list(definitions)
+    monkeypatch.setattr(pipeline_exports, "pipeline_export_definitions", lambda: owned)
+    return owned

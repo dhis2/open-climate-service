@@ -38,6 +38,7 @@ from fastapi import HTTPException
 from open_climate_service import config as api_config
 from open_climate_service.data_registry import recipes
 from open_climate_service.data_registry.recipes import OUTPUT_PARAMETER, Recipe
+from open_climate_service.features.bindings import feature_versions, resolve_feature_references
 from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
 from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus, WorkflowRecord
 
@@ -59,8 +60,10 @@ def _templates() -> list[dict[str, Any]]:
     return datasets.list_datasets()
 
 
-def _recipes() -> list[Recipe]:
-    return [found for template in _templates() if (found := recipes.recipe(template)) is not None]
+def list_recipes(templates: list[dict[str, Any]] | None = None) -> list[Recipe]:
+    """Every recipe the dataset templates declare; *templates* when the caller has read them already."""
+    read = _templates() if templates is None else templates
+    return [found for template in read if (found := recipes.recipe(template)) is not None]
 
 
 # --- validation --------------------------------------------------------------------------------
@@ -111,14 +114,10 @@ def recipe_problems(recipe: Recipe) -> list[str]:
     return problems
 
 
-def _cycles(found: list[Recipe], triggers: set[tuple[str, str]]) -> list[str]:
-    """The recipe outputs whose updates lead back to themselves, through recipes or triggers.
-
-    ``triggers`` holds each workflow trigger's (input, output): the trigger side refuses its
-    own cycles, so only a loop that passes through a recipe is left to find here.
-    """
+def _cycles(found: list[Recipe]) -> list[str]:
+    """The recipe outputs whose updates lead back to themselves through other recipes."""
     feeds: dict[str, set[str]] = {}
-    for source, output in {*triggers, *((r.input, r.output) for r in found if r.input is not None)}:
+    for source, output in {(r.input, r.output) for r in found if r.input is not None}:
         feeds.setdefault(source, set()).add(output)
 
     def returns_to(start: str) -> bool:
@@ -136,41 +135,17 @@ def _cycles(found: list[Recipe], triggers: set[tuple[str, str]]) -> list[str]:
     return sorted({recipe.output for recipe in found if recipe.input is not None and returns_to(recipe.output)})
 
 
-def _trigger_edges() -> set[tuple[str, str]]:
-    """Each workflow trigger's (input, output) where the output is known. Goes with CLIM-1426."""
-    from open_climate_service.automation.config import get_automation_config
-    from open_climate_service.automation.service import _resolved_output_dataset
-    from open_climate_service.openeo import workflows as workflow_registry
-
-    edges: set[tuple[str, str]] = set()
-    for trigger in get_automation_config().workflow_triggers:
-        workflow = workflow_registry.get_workflow(trigger.workflow_id)
-        if workflow is not None and (output := _resolved_output_dataset(trigger, workflow)) is not None:
-            edges.add((trigger.on_update_of, output))
-    return edges
-
-
 def validate_recipes() -> None:
-    """Refuse startup with every recipe that cannot run, loops, or competes with a trigger."""
-    found = _recipes()
+    """Refuse startup with every recipe that cannot run or loops."""
+    found = list_recipes()
     problems = [f"'{recipe.output}': {problem}" for recipe in found for problem in recipe_problems(recipe)]
-    triggers = _trigger_edges()
-    known = {str(template["id"]) for template in _templates()} | {output for _, output in triggers}
+    known = {str(template["id"]) for template in _templates()}
     problems.extend(
         f"'{recipe.output}': refresh_on names '{recipe.input}', which is not a dataset template"
         for recipe in found
         if recipe.input is not None and recipe.input not in known
     )
-    problems.extend(
-        f"'{output}': its updates lead back to itself through recipes or workflow triggers"
-        for output in _cycles(found, triggers)
-    )
-    contested = {output for _, output in triggers}
-    problems.extend(
-        f"'{recipe.output}': a workflow trigger also writes it; remove one of the two"
-        for recipe in found
-        if recipe.output in contested
-    )
+    problems.extend(f"'{output}': its updates lead back to itself through recipes" for output in _cycles(found))
     if problems:
         raise ValueError("Derived dataset recipes cannot run:\n- " + "\n- ".join(problems))
 
@@ -256,12 +231,14 @@ def _refresh_locked(recipe: Recipe) -> OpenEOJobRecord | None:
             f"not {open_intervals}"
         )
     [interval] = open_intervals
+    # A feature collection bound by id is loaded at the version current now, as a pipeline run does.
+    feature_nodes: dict[str, Any] = {}
     arguments: dict[str, Any] = {
-        **recipe.arguments,
+        **resolve_feature_references(recipe.arguments, feature_nodes, feature_versions(recipe.arguments)),
         OUTPUT_PARAMETER: recipe.output,
         interval: [update.data.get("current_start"), update.data.get("current_end")],
     }
-    call = {"derive": {"process_id": recipe.workflow, "arguments": arguments, "result": True}}
+    call = {**feature_nodes, "derive": {"process_id": recipe.workflow, "arguments": arguments, "result": True}}
     job, _ = service.create_triggered_job(
         OpenEOJobCreate(
             title=f"Refresh {recipe.output}",
@@ -288,7 +265,7 @@ def _refresh_locked(recipe: Recipe) -> OpenEOJobRecord | None:
 def _reconcile(only: set[str] | None = None) -> None:
     if api_config.is_read_only():
         return
-    found = [recipe for recipe in _recipes() if recipe.input is not None]
+    found = [recipe for recipe in list_recipes() if recipe.input is not None]
     if only is not None:
         found = [recipe for recipe in found if recipe.input in only or recipe.output in only]
     if not found:

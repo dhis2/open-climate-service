@@ -69,7 +69,7 @@ Silent failures found the hard way. Each passed its tests at first.
 
 - **Timestamps in openEO process arguments lose their offset.** Every argument that parses as an ISO 8601 timestamp is made timezone-naive before the process sees it (`_normalise_temporal_arguments` in `openeo/execution.py`). Never pass one through as an opaque token and compare it as a string; compare parsed instants.
 - **`TestClient(root_path=...)` does not prefix the path** the way uvicorn does, so a test of prefix handling passes with the fix removed. Use the `mounted_client_factory` fixture in `tests/conftest.py`.
-- **topozarr above 0.1.8 shards pyramids along time by default.** On an appending store every daily sync then rewrites the partial shard, about 25 times more data written. Set the shard size explicitly before upgrading.
+- **topozarr sizes a pyramid's time shards from the source's dask chunks.** Opened merged along time, a store gives every level shards of several periods, and on an appending store each daily sync then rewrites the partial shard, about 25 times more data written. The ingest path opens the store with its stored chunks (`merge_time=False`), one period each; `test_an_ingested_pyramid_keeps_one_period_per_time_shard` guards it.
 - **Tests that assert on a submitted request** (a process graph, a job body) do not show that it runs. Execute it once.
 
 For adding a data source, follow the checklist in [docs/adding_custom_datasets.md](docs/adding_custom_datasets.md#contributing-a-data-source).
