@@ -4,10 +4,15 @@ This guide shows the full round-trip: pull organisation unit boundaries from DHI
 
 The DHIS2 mapping (data elements, their category and attribute option combos, the period and the connection) is a pipeline's destination. A pipeline owns the named export under its own id, and the built-in [`aggregate_to_dhis2_json`](workflows.md#built-in-workflows) workflow saves its result through it. Because each org unit's GeoJSON `id` is its DHIS2 UID, the result imports without any remapping.
 
+Rendering a DHIS2 payload and delivering it are separate operations. Passing a pipeline id to a
+workflow uses that pipeline's validated destination mapping; it does not run the pipeline or
+contact DHIS2. The workflow must read the dataset declared by the pipeline. Server-side delivery
+always goes through a pipeline, while a client can import a synchronously rendered payload itself.
+
 There are three ways to get the values into DHIS2:
 
 - **Automated delivery.** Let the pipeline run on each update of its dataset and deliver the result. See [Automated delivery with a pipeline](#automated-delivery-with-a-pipeline).
-- **Client import.** Run the workflow synchronously with the pipeline's id as its export, and import the returned `dataValueSet` with a DHIS2 client.
+- **Client import.** Run the workflow synchronously with the pipeline's id as its mapping, then import the returned `dataValueSet` with a DHIS2 client. For a one-off payload without a pipeline, use an [ad-hoc `save_result`](#ad-hoc-dhis2-json-without-a-named-export) mapping instead.
 - **Server delivery of one batch job.** Run the workflow as a batch job and submit the saved result to the pipeline's export. See [Deliver one batch job](#deliver-one-batch-job).
 
 ## Prerequisites
