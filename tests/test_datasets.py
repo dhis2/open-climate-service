@@ -553,6 +553,46 @@ def test_zarr_route_keeps_an_icechunk_store_open_and_follows_new_commits(
     assert (len(opens), len(sessions)) == (1, 2)
 
 
+def test_parallel_first_chunk_requests_open_a_store_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A map view's first chunk requests arrive together, in worker threads; one opens the store for all."""
+    import threading
+    import time
+
+    _published_icechunk_store(tmp_path / "parallel.icechunk", monkeypatch, [1.0])
+    opens: list[object] = []
+    sessions: list[object] = []
+    open_repository, open_session = icechunk.Repository.open, icechunk.Repository.readonly_session
+
+    def slow_open(storage: object) -> icechunk.Repository:
+        opens.append(storage)
+        time.sleep(0.05)  # Long enough for every request to reach the cache before the first open ends.
+        return open_repository(storage)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(icechunk.Repository, "open", slow_open)
+    monkeypatch.setattr(
+        icechunk.Repository,
+        "readonly_session",
+        lambda self, *args, **kwargs: sessions.append(kwargs) or open_session(self, *args, **kwargs),
+    )
+    start = threading.Barrier(8)
+    bodies: list[bytes] = []
+
+    def chunk() -> None:
+        start.wait()
+        response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0")
+        assert isinstance(response, services.Response)
+        bodies.append(bytes(response.body))
+
+    threads = [threading.Thread(target=chunk) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(bodies) == 8 and len(set(bodies)) == 1
+    assert (len(opens), len(sessions)) == (1, 1)
+
+
 def test_zarr_route_reads_only_the_requested_range_of_an_icechunk_chunk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -164,6 +164,9 @@ _records_write_count = 0
 # each, by store path; see `_open_icechunk_store_or_404`. Dropped whenever the records change.
 _open_repositories: dict[str, Any] = {}
 _open_sessions: dict[str, _IcechunkSession] = {}
+# Chunk requests run in worker threads, and a map view sends many at once: one opens a store's
+# repository or session, and the others wait for it rather than opening their own.
+_open_stores_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -2180,8 +2183,9 @@ def _latest_published_raster_artifacts_cached() -> dict[str, ArtifactRecord]:
     artifacts = latest_published_raster_artifacts_by_dataset()
     _store_artifacts_cache = (key, artifacts)
     # A rebuilt store can sit at the same path as the one it replaced; reopen everything.
-    _open_repositories.clear()
-    _open_sessions.clear()
+    with _open_stores_lock:
+        _open_repositories.clear()
+        _open_sessions.clear()
     return artifacts
 
 
@@ -2213,21 +2217,29 @@ def _open_icechunk_store_or_404(artifact: ArtifactRecord) -> _IcechunkSession:
 
     repo = _open_repositories.get(store_path)
     if repo is None:
-        path = Path(store_path).resolve()
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Icechunk store path does not exist on disk")
-        repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(path)))
-        _open_repositories[store_path] = repo
+        with _open_stores_lock:
+            repo = _open_repositories.get(store_path)
+            if repo is None:
+                path = Path(store_path).resolve()
+                if not path.exists():
+                    raise HTTPException(status_code=404, detail="Icechunk store path does not exist on disk")
+                repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(path)))
+                _open_repositories[store_path] = repo
     try:
         snapshot_id = repo.lookup_branch("main")
     except icechunk.IcechunkError as exc:
-        _open_repositories.pop(store_path, None)
+        with _open_stores_lock:
+            if _open_repositories.get(store_path) is repo:
+                del _open_repositories[store_path]
         raise HTTPException(status_code=404, detail="Icechunk store could not be read") from exc
     session = _open_sessions.get(store_path)
     if session is None or session.snapshot_id != snapshot_id:
-        store = cast(_IcechunkReadableStore, repo.readonly_session(snapshot_id=snapshot_id).store)
-        session = _IcechunkSession(store=store, snapshot_id=snapshot_id, store_path=store_path)
-        _open_sessions[store_path] = session
+        with _open_stores_lock:
+            session = _open_sessions.get(store_path)
+            if session is None or session.snapshot_id != snapshot_id:
+                store = cast(_IcechunkReadableStore, repo.readonly_session(snapshot_id=snapshot_id).store)
+                session = _IcechunkSession(store=store, snapshot_id=snapshot_id, store_path=store_path)
+                _open_sessions[store_path] = session
     return session
 
 

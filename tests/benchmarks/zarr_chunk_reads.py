@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import multiprocessing
+import os
 import socket
 import statistics
 import tempfile
@@ -32,24 +33,33 @@ import pandas as pd
 import uvicorn
 import xarray as xr
 
-from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
-from open_climate_service.ingestions import services
-from open_climate_service.ingestions.schemas import (
-    ArtifactCoverage,
-    ArtifactFormat,
-    ArtifactPublication,
-    ArtifactRecord,
-    ArtifactRequestScope,
-    CoverageSpatial,
-    CoverageTemporal,
-    PublicationStatus,
-)
-from open_climate_service.main import app
+# OCS is imported only after `_use_temporary_instance`, never at module level: store paths are
+# resolved from the config when their modules are imported, and the app's lifespan recovers jobs
+# and starts the scheduler, so an import under the developer's `.env` would read and write their
+# instance. The client processes import this module too, and never import OCS.
 
 DATASET_ID = "chirps3_precipitation_daily"
 
+_CONFIG = """\
+extent:
+  name: Nepal
+  bbox: [80.0, 26.3, 88.25, 30.5]
+  country_code: NPL
+data_dir: ./data
+"""
+
+
+def _use_temporary_instance(root: Path) -> Path:
+    """Point OCS at an instance under *root*, before anything from it is imported; returns its data root."""
+    config = root / "climate-service.yaml"
+    config.write_text(_CONFIG, encoding="utf-8")
+    os.environ["CLIMATE_SERVICE_CONFIG"] = str(config)
+    return root / "data"
+
 
 def _write_store(root: Path) -> tuple[Path, list[str]]:
+    from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+
     times = pd.date_range("2023-01-01", periods=1096, freq="D")
     ds = xr.Dataset(
         {"precip": (("t", "y", "x"), np.random.default_rng(0).random((len(times), 84, 165), dtype="float32"))},
@@ -68,9 +78,19 @@ def _write_store(root: Path) -> tuple[Path, list[str]]:
     return store_path, keys
 
 
-def _register(store_path: Path, artifacts_dir: Path) -> None:
-    services.ARTIFACTS_DIR = artifacts_dir
-    services.ARTIFACTS_INDEX_PATH = artifacts_dir / "records.json"
+def _register(store_path: Path) -> None:
+    from open_climate_service.ingestions import services
+    from open_climate_service.ingestions.schemas import (
+        ArtifactCoverage,
+        ArtifactFormat,
+        ArtifactPublication,
+        ArtifactRecord,
+        ArtifactRequestScope,
+        CoverageSpatial,
+        CoverageTemporal,
+        PublicationStatus,
+    )
+
     services._save_records(
         [
             ArtifactRecord(
@@ -99,6 +119,8 @@ def _register(store_path: Path, artifacts_dir: Path) -> None:
 
 
 def _serve() -> tuple[str, uvicorn.Server, threading.Thread]:
+    from open_climate_service.main import app
+
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
@@ -130,11 +152,16 @@ async def _run(base: str, keys: list[str], concurrency: int, rounds: int, ranged
     return latencies
 
 
-def _client(base: str, keys: list[str], concurrency: int, rounds: int, ranged: bool) -> tuple[list[float], float]:
-    """Run the requests in their own process, so the client does not share the server's GIL."""
-    started = time.perf_counter()
+def _client(
+    base: str, keys: list[str], concurrency: int, rounds: int, ranged: bool
+) -> tuple[list[float], float, float]:
+    """Run the requests in their own process, so the client does not share the server's GIL.
+
+    Returns the latencies and the wall-clock start and end, comparable across processes.
+    """
+    started = time.time()
     latencies = asyncio.run(_run(base, keys, concurrency, rounds, ranged))
-    return latencies, time.perf_counter() - started
+    return latencies, started, time.time()
 
 
 def _report(label: str, latencies: list[float], seconds: float) -> None:
@@ -154,9 +181,9 @@ def main() -> None:
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+        root = _use_temporary_instance(Path(tmp))
         store_path, keys = _write_store(root)
-        _register(store_path, root / "artifacts")
+        _register(store_path)
         base, server, thread = _serve()
         try:
             print(f"{len(keys)} chunks, {args.clients} client(s) x {args.concurrency} parallel, {args.rounds} rounds")
@@ -167,8 +194,10 @@ def main() -> None:
                         for _ in range(args.clients)
                     ]
                     results = [run() for run in runs]
-                    # Timed inside each client, so starting the client processes is not counted.
-                    _report(label, [lat for lats, _ in results for lat in lats], max(secs for _, secs in results))
+                    # Timed inside each client, so starting the client processes is not counted, from
+                    # the first client's start to the last one's end, as they need not start together.
+                    seconds = max(end for _, _, end in results) - min(start for _, start, _ in results)
+                    _report(label, [lat for lats, _, _ in results for lat in lats], seconds)
         finally:
             server.should_exit = True
             thread.join(timeout=10)
