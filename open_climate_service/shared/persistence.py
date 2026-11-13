@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import tempfile
 import time
 from collections.abc import Generator
@@ -10,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 import portalocker
+
+# Read once at import: os.umask can only be read by setting it, which is not thread-safe later.
+_UMASK = os.umask(0)
+os.umask(_UMASK)
 
 
 @contextmanager
@@ -86,6 +91,7 @@ def atomic_text(path: Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(temporary, _file_mode(path))
         _replace(temporary, path)
         temporary = None
         if os.name != "nt":
@@ -99,13 +105,21 @@ def atomic_text(path: Path, text: str) -> None:
             Path(temporary).unlink(missing_ok=True)
 
 
+def _file_mode(path: Path) -> int:
+    """The mode *path* has, or the one a new file gets; the temporary file starts owner-only."""
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        return 0o666 & ~_UMASK
+
+
 def _replace(source: str, target: Path, attempts: int = 20) -> None:
     """`os.replace`, retried briefly while Windows refuses to replace a file a reader has open.
 
     Readers of some indexes, such as the artifact records, do not take the lock, so they never wait
-        on a writer. On Windows a replace can then land while one of them holds the file and fail with
-        `PermissionError`; the read takes milliseconds, so the replace succeeds a moment later.
-        Elsewhere it never fails this way.
+    on a writer. On Windows a replace can then land while one of them holds the file and fail with
+    `PermissionError`; the read takes milliseconds, so the replace succeeds a moment later.
+    Elsewhere it never fails this way.
     """
     for attempt in range(attempts):
         try:
