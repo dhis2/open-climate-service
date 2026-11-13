@@ -1906,7 +1906,12 @@ def _maybe_build_pyramid(
         return _StoreNormalizationResult(completed=True)
 
     try:
-        ds = open_icechunk_dataset(store_path)
+        # Stored chunks, one period each, not merged along time: topozarr sizes each level's
+        # time shards from the source's dask chunks, and a sync appends one period at a time,
+        # so a shard several periods wide would be rewritten on every append (CLIM-879).
+        # Splitting merged chunks afterwards instead made the build five times slower and
+        # larger in memory, since every split re-reads its merged block (CLIM-1765).
+        ds = open_icechunk_dataset(store_path, merge_time=False)
     except Exception:
         logger.warning("Could not open Icechunk store for GeoZarr write; skipping", exc_info=True)
         return _StoreNormalizationResult(completed=False)

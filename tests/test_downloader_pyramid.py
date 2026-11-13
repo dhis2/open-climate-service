@@ -286,7 +286,12 @@ def test_pyramid_levels_carry_the_crs_definition_and_not_just_the_code(tmp_path:
     repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
     root = zarr.open_group(repo.readonly_session("main").store, mode="r")
 
-    for name, attrs in [("root", dict(root.attrs)), ("level 0", dict(root["0"].attrs))]:
+    levels = [(f"level {key}", dict(root[key].attrs)) for key in sorted(root.group_keys())]
+    for name, attrs in [("root", dict(root.attrs)), *levels]:
         assert attrs["proj:code"] == "EPSG:27700", name
         assert CRS.from_wkt(attrs["proj:wkt2"]) == CRS.from_epsg(27700), name
-        assert CRS.from_json_dict(attrs["proj:projjson"]) == CRS.from_epsg(27700), name
+    # topozarr writes the level attrs with WKT2 only; the root also carries PROJJSON.
+    assert CRS.from_json_dict(root.attrs["proj:projjson"]) == CRS.from_epsg(27700)
+    # Without consolidated metadata, GDAL finds a level's CRS only through the CF grid mapping.
+    for key in sorted(root.group_keys()):
+        assert root[key]["v"].attrs["grid_mapping"] == "spatial_ref", key

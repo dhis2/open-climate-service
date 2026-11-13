@@ -211,11 +211,13 @@ def _open_zarr_group(store: Any, group: str | None, *, chunks: Any) -> xr.Datase
     return xr.open_zarr(store, group=group, zarr_format=3, chunks=chunks)  # type: ignore[no-any-return]
 
 
-def open_icechunk_dataset(store_path: str | Path) -> xr.Dataset:
+def open_icechunk_dataset(store_path: str | Path, *, merge_time: bool = True) -> xr.Dataset:
     """Open an Icechunk-backed dataset through a readonly repository session.
 
     Dask chunks follow the stored chunks in space and merge them along time up to
     ``READ_CHUNK_TARGET_BYTES``, so computations are sized for dask rather than for storage.
+    ``merge_time=False`` keeps the stored chunks along time as well, for a rewrite whose
+    layout follows the source's chunks (a pyramid build, see ``_maybe_build_pyramid``).
     """
     import icechunk
 
@@ -243,10 +245,12 @@ def open_icechunk_dataset(store_path: str | Path) -> xr.Dataset:
         t_dim: str | None = get_time_dim(probe)
     except ValueError:
         t_dim = None
-    time_chunk = _read_time_chunk(probe, t_dim) if t_dim is not None else None
+    time_chunk = _read_time_chunk(probe, t_dim) if t_dim is not None and merge_time else None
     probe.close()
     if time_chunk is not None and t_dim is not None:
         ds = _open_zarr_group(session.store, group, chunks={t_dim: time_chunk})
+    elif not merge_time:
+        ds = _open_zarr_group(session.store, group, chunks={})
     else:
         ds = _open_zarr_group(session.store, group, chunks="auto")
     if t_dim is not None:
