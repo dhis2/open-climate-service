@@ -33,7 +33,7 @@ _NO_DATA = 0
 
 def _client() -> _CdsClient:
     # Both given, so the client never falls back to ~/.ecmwfdatastoresrc or its own variables.
-    return _CdsClient(url=_CDS_API_URL, key=cds.api_key()["CDS_API_KEY"])
+    return _CdsClient(url=_CDS_API_URL, key=cds.api_key())
 
 
 def _available_years() -> list[str]:
