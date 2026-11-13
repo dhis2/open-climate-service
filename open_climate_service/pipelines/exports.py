@@ -1,10 +1,9 @@
-"""Stored pipelines as a source of named exports, beside the instance configuration.
+"""Stored pipelines as the source of named exports.
 
 A pipeline owns exactly one named export, under its own id: the definition its destination
 plugin compiled when the pipeline last validated. Making it resolvable by name is what lets
-a run's batch job save through it and its delivery job deliver it. Ids are unique across the
-configuration file and the pipelines: a clash is refused when a pipeline is validated, and
-an export claimed by both is refused at resolution rather than resolved by precedence.
+a run's batch job save through it, its delivery job deliver it, and a hand-written process
+graph save through it with ``save_result(..., options={"export": <pipeline id>})``.
 """
 
 from __future__ import annotations

@@ -1384,7 +1384,7 @@ def _parameter_views(record: Any) -> list[dict[str, Any]]:
 
 
 def _workflow_page_context(
-    record: Any, templates: list[dict[str, Any]], datasets: list[Any], triggers: list[Any]
+    record: Any, templates: list[dict[str, Any]], datasets: list[Any], recipes: list[Any]
 ) -> dict[str, Any]:
     held = {dataset.dataset_id for dataset in datasets}
     outputs = sorted(
@@ -1406,26 +1406,27 @@ def _workflow_page_context(
         "blocks": _description_blocks(record.description),
         "parameters": parameters,
         "outputs": outputs,
-        "triggers": [
+        "refreshes": [
             {
-                "id": trigger.id,
-                "on_update_of": trigger.on_update_of,
-                "held": trigger.on_update_of in held,
-                "arguments": json.dumps(trigger.arguments, indent=2) if trigger.arguments else "",
+                "output": recipe.output,
+                "input": recipe.input,
+                "held": recipe.input in held,
+                "arguments": json.dumps(recipe.arguments, indent=2) if recipe.arguments else "",
             }
-            for trigger in triggers
-            if trigger.workflow_id == record.id
+            for recipe in recipes
+            # As derivations do: a recipe refreshes on an input, and only a derived dataset that exists.
+            if recipe.workflow == record.id and recipe.input is not None and recipe.output in held
         ],
     }
 
 
-def _load_triggers() -> list[Any]:
+def _load_recipes() -> list[Any]:
     try:
-        from open_climate_service.automation.config import get_automation_config
+        from open_climate_service.derivations.service import list_recipes
 
-        return list(get_automation_config().workflow_triggers)
+        return list_recipes()
     except Exception:
-        _log.exception("Unexpected error loading workflow triggers")
+        _log.exception("Unexpected error loading derived dataset recipes")
         return []
 
 
@@ -1438,7 +1439,7 @@ def render_workflow_page(record: Any, mount: str) -> str:
         logo=LOGO,
         styles=_read_asset("ocs_ui.css"),
         nav=page_nav(mount, "workflows"),
-        **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_triggers()),
+        **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_recipes()),
     )
 
 
@@ -1521,7 +1522,7 @@ _API_GROUP_NOTES = {
     "openEO": "Process graphs: collections, processes, stored workflows, jobs and synchronous results.",
     "Extent": "The area this instance covers.",
     "Schedules": "Everything on the clock. Sync schedules, one per dataset, under /schedules/sync.",
-    "Automation": "How schedules, workflow triggers and pipelines connect, with each step's latest status.",
+    "Automation": "How schedules, derived dataset recipes and pipelines connect, with each step's latest status.",
     "Exports": "Deliver an export to its destination, and follow the delivery job.",
     "Pipelines": "Run a reusable workflow over bound inputs and deliver its result: save, dry-run, run, pause.",
     "System": "Health, version and the landing page's JSON form.",

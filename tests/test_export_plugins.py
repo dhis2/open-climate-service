@@ -25,6 +25,8 @@ from open_climate_service.openeo.jobs import (
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.time import utc_now
 
+from .conftest import named_exports
+
 
 @pytest.fixture
 def definition(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -34,7 +36,8 @@ def definition(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "period_type": "monthly",
         "series": [{"select": {}, "data_element": "BXgDHhPdFVU"}],
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [definition]})
+    monkeypatch.setattr(config, "_cache", {})
+    named_exports(monkeypatch, definition)
     return definition
 
 
@@ -140,12 +143,6 @@ def test_mapping_is_not_mutated_and_request_cannot_override_it(definition: dict[
         render_named_export(_frame(), "CHAPCSV", {"export": "rainfall"})
 
 
-def test_duplicate_export_ids_fail(definition: dict[str, Any]):
-    config.get_config()["exports"].append(definition.copy())
-    with pytest.raises(ValueError, match="Duplicate export ID"):
-        _render(_frame())
-
-
 def _plugin_source(marker: str) -> str:
     return (
         "from open_climate_service.exports import BaseExportPlugin, RenderedExport\n"
@@ -238,7 +235,7 @@ def test_sync_and_batch_external_export(
     # Historical asset metadata does not depend on the current plugin definition.
     assets = _result_assets(record)
     assert "manifest" in assets
-    config.get_config()["exports"] = []
+    named_exports(monkeypatch)
     assert _result_assets(record) == assets
 
 

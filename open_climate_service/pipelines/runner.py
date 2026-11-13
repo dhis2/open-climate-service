@@ -938,7 +938,7 @@ def reconcile_events() -> None:
 
     Updates are read from the shared event log (`jobs.events`): each update is stored with the
     job that made it, a native ingestion or sync, or an openEO job that published a managed
-    dataset. There is no cursor over it, so this reads it once (as workflow automation does at
+    dataset. There is no cursor over it, so this reads it once (as the other startup replays do at
     startup) and skips updates before each pipeline's checkpoint without looking further.
     The checkpoint then moves to the earliest of: the start of this pass, the creation of
     any native job still unfinished (its update, if any, will be later; an openEO job stamps

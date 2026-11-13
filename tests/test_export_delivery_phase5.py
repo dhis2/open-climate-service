@@ -14,6 +14,8 @@ from open_climate_service import plugin_discovery
 from open_climate_service.exports import ExportOutcome, ExportReport, merge_chunk_reports
 from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
+from .conftest import named_exports
+
 
 class FakeResponse:
     def __init__(self: Any, status_code: int, payload: dict[str, Any]) -> None:
@@ -477,12 +479,11 @@ plugin = ChunkedDelivery()
 
 
 def test_third_party_delivery_plugin_uses_only_public_apis(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from open_climate_service import config
     from open_climate_service.exports.registry import load_export_plugins
     from open_climate_service.exports.service import render_named_export
 
     _install_delivery_fixture(tmp_path, monkeypatch)
-    config.get_config()["exports"] = [{"id": "chunky", "plugin": "chunky"}]
+    named_exports(monkeypatch, {"id": "chunky", "plugin": "chunky"})
     plugin = load_export_plugins()["chunky"]
     assert plugin.supports_delivery is True
 
@@ -657,7 +658,7 @@ def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.Monk
     _install_delivery_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(jobs, "_JOBS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path)
-    config.get_config()["exports"] = [{"id": "chunky", "plugin": "chunky", "connection": "hmis"}]
+    named_exports(monkeypatch, {"id": "chunky", "plugin": "chunky", "connection": "hmis"})
     config.get_config()["dhis2_connections"] = [
         {"id": "hmis", "url": "https://example.org", "token_env": "UNSET_TEST_TOKEN"},
     ]

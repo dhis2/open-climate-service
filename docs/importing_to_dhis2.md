@@ -2,12 +2,13 @@
 
 This guide shows the full round-trip: pull organisation unit boundaries from DHIS2, aggregate a published dataset to those org units with Open Climate Service, and import the result back into DHIS2 as data values.
 
-The spatial aggregation happens via the built-in [`aggregate_to_dhis2_json`](workflows.md#built-in-workflows) workflow. It saves its result through a named export declared in the instance configuration, which maps the aggregate to DHIS2 data elements and periods. Because each org unit's GeoJSON `id` is its DHIS2 UID, the result imports without any remapping.
+The DHIS2 mapping (data elements, their category and attribute option combos, the period and the connection) is a pipeline's destination. A pipeline owns the named export under its own id, and the built-in [`aggregate_to_dhis2_json`](workflows.md#built-in-workflows) workflow saves its result through it. Because each org unit's GeoJSON `id` is its DHIS2 UID, the result imports without any remapping.
 
-There are two ways to get the values into DHIS2:
+There are three ways to get the values into DHIS2:
 
-- **Client import.** Run the workflow synchronously and import the returned `dataValueSet` with a DHIS2 client.
-- **Server delivery.** Run the workflow as a batch job and let OCS deliver the saved result. See [Automated delivery with a named export](#automated-delivery-with-a-named-export).
+- **Automated delivery.** Let the pipeline run on each update of its dataset and deliver the result. See [Automated delivery with a pipeline](#automated-delivery-with-a-pipeline).
+- **Client import.** Run the workflow synchronously with the pipeline's id as its export, and import the returned `dataValueSet` with a DHIS2 client.
+- **Server delivery of one batch job.** Run the workflow as a batch job and submit the saved result to the pipeline's export. See [Deliver one batch job](#deliver-one-batch-job).
 
 ## Prerequisites
 
@@ -80,35 +81,25 @@ will own import recovery and reports. This connection helper does not introduce
 an export endpoint, bypass read-only guards, or authorize operations: the calling
 operator command or future HTTP route remains responsible for those controls.
 
-## 1. Configure a named export
+## 1. Create a pipeline
 
-Declare the export in the file referenced by `CLIMATE_SERVICE_CONFIG`:
+On the [pipeline pages](web_interface.md#the-pipeline-pages-pipelines) (`/pipelines`), create a
+pipeline with id `rainfall-monthly` that aggregates `era5land_precipitation_monthly` over your
+org units and delivers to DHIS2. Its DHIS2 settings name the
+[connection](#named-connections-for-server-side-plugins), an optional data set, and one row per
+series: the data element, searched in the connected DHIS2 and narrowed to the data set, and
+optionally a category option combo, offered from that data element's disaggregations, and an
+attribute option combo, offered from the data set's attribute. When the data set gives the data
+element another category combo, its option combos are the ones offered. The DHIS2 period is the
+dataset's own: monthly data imports as monthly periods.
 
-```yaml
-exports:
-  - id: rainfall-monthly
-    plugin: dhis2
-    dataset: era5land_precipitation_monthly
-    connection: national-hmis
-    aggregation: mean
-    period_type: monthly
-    series:
-      - select: {}
-        data_element: BXgDHhPdFVU
-```
+Validation asks DHIS2 whether the settings line up. Each category option combo is checked against
+its data element, with or without a data set. The data set's period type, its organisation units
+and the attribute option combo are checked only when the pipeline names one.
 
-Replace the data element UID with one that exists in your DHIS2 instance. The
-`period_type` must match the dataset's native temporal resolution.
-
-The other fields are optional for client import:
-
-- `dataset` is checked against the dataset the job actually loaded.
-- `aggregation` must equal the workflow's `method`; a run with a different method fails, synchronously or as a batch job.
-- `connection` names a [DHIS2 connection](#named-connections-for-server-side-plugins) and is required for server delivery.
-
-See [Export plugins and named mappings](export_plugins.md) for all mapping fields,
-including several series and category option combos. Restart the service after
-changing the configuration.
+Once the pipeline validates, its named export `rainfall-monthly` resolves, for the pipeline's own
+runs and for any process graph that saves through it. A pipeline that fails validation, or is
+deleted, takes its export with it.
 
 ## 2. Fetch organisation units from DHIS2
 
@@ -118,7 +109,7 @@ For reusable destination mappings and pure rendering through `save_result`, see
 Pull the org unit boundaries as GeoJSON. Each feature's `id` is the org unit UID, which the workflow uses as the `orgUnit`.
 
 !!! tip
-    On a running instance, let OCS fetch and store them instead, with the built-in `dhis2` feature provider: see [DHIS2 organisation units](built_in_datasets.md#dhis2-organisation-units-feature-collection). A workflow then takes them as a `load_collection` node passed as `geometries`, or, in a workflow trigger's arguments, as `{from_features: districts}`. The collection id on its own is not geometry, so it cannot replace `org_units` in the example below.
+    On a running instance, let OCS fetch and store them instead, with the built-in `dhis2` feature provider: see [DHIS2 organisation units](built_in_datasets.md#dhis2-organisation-units-feature-collection). A workflow then takes them as a `load_collection` node passed as `geometries`, or, in a pipeline, as `{from_features: districts}`. The collection id on its own is not geometry, so it cannot replace `org_units` in the example below.
 
 ```python
 from dhis2_client import DHIS2Client
@@ -156,7 +147,7 @@ data_value_set = service.execute(
                 "dataset_id": "era5land_precipitation_monthly",  # a published collection
                 "temporal_extent": ["2025-01-01", "2025-12-31"],
                 "geometries": org_units,
-                "export": "rainfall-monthly",  # the named export from step 1
+                "export": "rainfall-monthly",  # the pipeline from step 1
                 "method": "mean",  # mean (default), min, max, sum, or median
             },
             "result": True,
@@ -176,12 +167,22 @@ report = dhis2.post_data_value_set(data_value_set)
 print(report["response"]["importCount"])
 ```
 
-## Automated delivery with a named export
+## Automated delivery with a pipeline
 
-Instead of importing the payload from a client, OCS can deliver it. This needs a
-`connection` on the export from step 1 and a writable instance.
+A pipeline delivers its own results. Dry-run it first: the run renders the payload, has DHIS2
+validate it without storing anything, and shows a sample of the values by name. Then switch it to
+live, and set its policy to run on each update of its dataset. From then on a sync that appends a
+month runs the pipeline over that month and imports it, with each run, its delivery and its
+outcome recorded on the pipeline page. See
+[the pipeline pages](web_interface.md#the-pipeline-pages-pipelines) for modes, run history and
+recovery, and [Dataset-update automation](workflow_automation.md) for how updates reach it. The
+server process needs the connection's token in its environment, for example
+`DHIS2_IMPORT_TOKEN`.
 
-### Run the workflow as a batch job
+## Deliver one batch job
+
+To deliver a result computed outside the pipeline's own runs, run the workflow as a batch job and
+submit the saved result to the pipeline's export.
 
 Submit the same process graph to `POST /jobs` and start it with
 `POST /jobs/{job_id}/results`:
@@ -212,13 +213,7 @@ target, observed dataset, and executed aggregation method. A synchronous
 `POST /result` returns the same payload without a manifest, so its result cannot be
 delivered by the server.
 
-To run the workflow whenever a dataset updates, reference it from an
-`automation.workflow_triggers` entry with the same arguments. See
-`climate-service.yaml.example`.
-
-### Deliver the result
-
-Submit the finished job to its export. Start with a dry run:
+Submit the finished job to the export. Start with a dry run:
 
 ```http
 POST /exports/rainfall-monthly
@@ -230,18 +225,17 @@ Content-Type: application/json
 
 The response is `202 Accepted` with a delivery job ID and status URL. When the
 dry-run report's `outcome` is `dry_run`, repeat the request with `"dry_run": false`
-and a new idempotency key. The server process needs the connection's token in its
-environment, for example `DHIS2_IMPORT_TOKEN`.
+and a new idempotency key.
 
 Delivery refuses a result if its payload, mapping, renderer, or target has changed
-since the job ran. Re-run the workflow after changing the export configuration.
+since the job ran. Re-run the workflow after changing the pipeline's destination.
 [Export plugins and named mappings](export_plugins.md#deliver-a-saved-export)
 describes chunking, recovery, and reports.
 
 ## Ad-hoc DHIS2 JSON without a named export
 
-To render a payload without instance configuration, write the graph yourself and
-pass the mapping as `save_result` options:
+To render a payload without a pipeline, write the graph yourself and pass the mapping as
+`save_result` options:
 
 ```json
 {

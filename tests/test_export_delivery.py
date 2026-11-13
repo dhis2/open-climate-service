@@ -28,6 +28,8 @@ from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 from open_climate_service.shared.provenance import json_digest
 from open_climate_service.shared.time import utc_now
 
+from .conftest import named_exports
+
 
 def _data() -> pd.DataFrame:
     return pd.DataFrame({"geometry": ["DiszpKrYNg8"] * 2, "t": ["202501", "202502"], "rain": [0.0, float("nan")]})
@@ -43,16 +45,17 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
         config,
         "_cache",
         {
-            "exports": [
-                {
-                    "id": "rain",
-                    "plugin": "dhis2",
-                    "connection": "hmis",
-                    "period_type": "monthly",
-                    "series": [{"data_element": "BXgDHhPdFVU"}],
-                }
-            ],
             "dhis2_connections": [{"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "TEST_TOKEN"}],
+        },
+    )
+    named_exports(
+        monkeypatch,
+        {
+            "id": "rain",
+            "plugin": "dhis2",
+            "connection": "hmis",
+            "period_type": "monthly",
+            "series": [{"data_element": "BXgDHhPdFVU"}],
         },
     )
     monkeypatch.delenv("TEST_TOKEN", raising=False)
