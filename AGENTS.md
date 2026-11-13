@@ -74,7 +74,7 @@ Silent failures found the hard way. Each passed its tests at first.
 - **`TestClient(root_path=...)` does not prefix the path** the way uvicorn does, so a test of prefix handling passes with the fix removed. Use the `mounted_client_factory` fixture in `tests/conftest.py`.
 - **topozarr above 0.1.8 shards pyramids along time by default.** On an appending store every daily sync then rewrites the partial shard, about 25 times more data written. Set the shard size explicitly before upgrading.
 - **Tests that assert on a submitted request** (a process graph, a job body) do not show that it runs. Execute it once.
-- **`fetch_period` output should be usable on its own.** The write path strips CF attributes before writing, but a direct caller (a notebook, a test) sees whatever the plugin returns. After scaling a rioxarray read, replace the file's attributes, which still describe the raw bytes. If you drop coordinates with `reset_coords(drop=True)`, that also removes the `spatial_ref` coordinate carrying the CRS, so write the CRS back (see `clms_ndvi.py`).
+- **`fetch_period` output should be usable on its own.** The write path strips the packing attributes (`scale_factor`, `add_offset`, `_FillValue`, `missing_value`) before writing, but a direct caller (a notebook, a test) sees whatever the plugin returns. After scaling a rioxarray read, replace the file's attributes, which still describe the raw bytes. If you drop coordinates with `reset_coords(drop=True)`, that also removes the `spatial_ref` coordinate carrying the CRS, so write the CRS back (see `clms_ndvi.py`).
 
 For adding a data source, follow the checklist in [docs/adding_custom_datasets.md](docs/adding_custom_datasets.md#contributing-a-data-source).
 
@@ -94,7 +94,7 @@ ingestion:
 
 Tracked in Jira, project [CLIM](https://dhis2.atlassian.net/jira/software/c/projects/CLIM/issues), component "Climate Service", grouped under one epic per area (data ingestion, processing and workflows, openEO, catalogue and metadata, GeoZarr and Icechunk storage, vector data, DHIS2 integration, and so on). GitHub issues are not used.
 
-Before starting new code work or submitting new Jira tasks (e.g. a system change, a new data source, a fix), search CLIM for issues that cover it, open and closed. Confirm with the developer which issue the work belongs to, and name its key in the branch, commits and PR (see [Commit conventions](#commit-conventions)). If more than one issue covers the same work, or a related one is in progress or already done, tell the developer before starting rather than filing another. Without access to Jira, ask the developer for the issue key.
+Before starting new code work or submitting new Jira tasks (e.g. a system change, a new data source, a fix), search CLIM for issues that cover it, open and closed. Confirm with the developer which issue the work belongs to, and name its key in the branch and PR title (see [Commit conventions](#commit-conventions)). If more than one issue covers the same work, or a related one is in progress or already done, tell the developer before starting rather than filing another. Without access to Jira, ask the developer for the issue key.
 
 When writing a Jira epic or issue, follow the [write-issue guide](https://github.com/dhis2-chap/claude-plugins/blob/main/plugins/write-issue/skills/write-issue/SKILL.md). Filing details for this repo:
 
@@ -109,7 +109,8 @@ To install the guide as a skill in Claude Code, Codex, Copilot or another agent:
 ## Commit conventions
 
 - **Conventional Commits** for all git activity — commit messages, branch names, and PR titles.
-  - Format: `<type>(<scope>)?: <description> (<Jira key>)` (e.g. `fix(scheduler): read a remote clock's crons in its own timezone (CLIM-1490)`).
+  - Commit messages: `<type>(<scope>)?: <description>` (e.g. `fix(scheduler): read a remote clock's crons in its own timezone`).
+  - PR titles: `<type>(<scope>)?: <description> (<Jira key>)` (e.g. `fix(scheduler): read a remote clock's crons in its own timezone (CLIM-1490)`).
   - Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `ci`, `build`, `perf`, `style`, `revert`.
   - Branch names: `<type>/<jira-key>-<short-description>` (e.g. `fix/clim-1490-shared-schedule-results`).
 - **No attribution.** Do not add `Co-Authored-By: Claude ...`, "Generated with Claude Code", or any similar attribution to commits, PRs, or files.
