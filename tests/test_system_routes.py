@@ -399,10 +399,19 @@ def test_the_map_viewer_draws_each_class_in_its_own_colour(client: TestClient) -
     """A dataset with STAC classes gets one colormap entry per code and a legend of labels."""
     body = client.get("/map").text
 
-    assert 'const classes = zarr["classification:classes"] ?? [];' in body
+    assert 'const classes = icechunk["classification:classes"] ?? [];' in body
     assert "c.color_hint ? `#${c.color_hint}` : CLASS_PALETTE[i % CLASS_PALETTE.length]" in body
     assert "return { cm, clim: [lo - 0.5, hi + 0.5] };" in body
     assert "if (classes.length) updateClassLegend(classes, colors);" in body
+
+
+def test_the_map_viewer_reads_a_raster_from_its_icechunk_repository(client: TestClient) -> None:
+    """The browser reads the repository's files itself; `/zarr` is left to GDAL clients (CLIM-1580)."""
+    body = client.get("/map").text
+
+    assert "const icechunk = collection.assets?.icechunk;" in body
+    assert 'await IcechunkStore.open(icechunk.href, { branch: "main" })' in body
+    assert "assets?.zarr" not in body and "source:" not in body
 
 
 def test_the_map_viewer_draws_the_colours_the_server_resolved(client: TestClient) -> None:

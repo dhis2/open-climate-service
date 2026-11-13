@@ -409,7 +409,9 @@ for the instance in `climate-service.yaml`. On a read-only instance neither form
 ## The map viewer (`/map`)
 
 The map viewer renders **published** datasets directly in the browser: rasters from their
-GeoZarr stores, vector datasets from vector tiles. Only published datasets appear here.
+Icechunk repositories (`/icechunk/{id}`), vector datasets from vector tiles. Only published
+datasets appear here. The browser reads a raster's chunks itself, fetching only those in view,
+and keeps every file but the repository's `repo` file in its cache.
 
 - **Dataset selector** — pick any published dataset from the dropdown, grouped into raster and
   vector datasets when the instance has both.

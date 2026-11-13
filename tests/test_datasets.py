@@ -6,6 +6,7 @@ from pathlib import Path
 import icechunk
 import pytest
 import xarray as xr
+from fastapi.testclient import TestClient
 from icechunk.store import IcechunkStore
 
 from open_climate_service.ingestions import services
@@ -627,6 +628,25 @@ def test_zarr_route_reads_only_the_requested_range_of_an_icechunk_chunk(
     with pytest.raises(services.HTTPException) as probe:
         get("refs/branch.main/ref.json")
     assert probe.value.status_code == 404
+
+
+def test_icechunk_route_lets_browsers_keep_files_named_by_id_and_revalidate_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    store_path = tmp_path / "cached.icechunk"
+    # Large enough that Icechunk writes the chunk as a file rather than inline in the manifest.
+    _published_icechunk_store(store_path, monkeypatch, [float(i) for i in range(1000)])
+    files = {path.relative_to(store_path).parts[0]: path for path in store_path.rglob("*") if path.is_file()}
+
+    def cache_control(top: str) -> str:
+        response = client.get(f"/icechunk/chirps3_precipitation_daily/{files[top].relative_to(store_path)}")
+        assert response.status_code == 200
+        return response.headers["cache-control"]
+
+    named_by_id = ("chunks", "manifests", "snapshots", "transactions")
+    assert {top: cache_control(top) for top in named_by_id} == dict.fromkeys(named_by_id, "max-age=31536000, immutable")
+    # Moves with the branch: a browser that kept it would serve the store as it was.
+    assert cache_control("repo") == "no-cache"
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:
