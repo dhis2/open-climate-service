@@ -62,7 +62,7 @@ The flat vs. pyramid decision is made at build time based on spatial size (see [
 
 ## Chunk sizing
 
-**Time:** a store written by an ingestion or sync holds one time step per chunk. Periods are fetched and appended one at a time, and nothing rechunks along time afterwards, so drawing one date on a map reads only that date's chunks, and a long time series for one place reads one chunk per step. A store published from an openEO job keeps the time chunks of the job's result, which can hold several steps each. The `t` coordinate array is chunked in blocks of up to 4096 values, so a client reads the whole axis in a few requests.
+**Time:** a store holds one time step per chunk. An ingestion or sync fetches and appends periods one at a time, and a store published from an openEO job without a pyramid is rechunked to one step per chunk (and one value per chunk on any other non-spatial axis, such as a normal's `dayofyear`) before it is written. So drawing one date on a map reads only that date's chunks, and a long time series for one place reads one chunk per step. The `t` coordinate array is chunked in blocks of up to 4096 values, so a client reads the whole axis in a few requests.
 
 **Space** depends on the layout:
 

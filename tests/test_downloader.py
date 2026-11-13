@@ -513,6 +513,99 @@ def test_write_to_icechunk_store_handles_a_reversed_dask_chunk_tuple(tmp_path: P
     assert float(out["gpp"].isel(t=0).sel(y=24.0, x=7.0)) == pytest.approx(25 * 8 - 1)
 
 
+def test_write_to_icechunk_store_stores_a_computed_result_one_step_per_chunk(tmp_path: Path) -> None:
+    """A result computed from a merged read is stored one day per chunk, as ingested stores are.
+
+    `open_icechunk_dataset` merges days into one dask chunk, and the flat write used to keep that,
+    so a published anomaly was stored 183 days per chunk (CLIM-1861).
+    """
+    written = _daily_store(tmp_path / "daily.icechunk")
+    source = open_icechunk_dataset(tmp_path / "daily.icechunk")
+    try:
+        assert _dask_chunks(source)[0] == 20, "precondition: the read merges every day"
+        result = (source - source.mean("t")).assign_attrs({"proj:code": "EPSG:4326"})
+        store = tmp_path / "anomaly.icechunk"
+        downloader.write_to_icechunk_store(result, store, commit_message="test")
+    finally:
+        source.close()
+
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store)))
+    tg = zarr.open_group(repo.readonly_session("main").store, mode="r")["tg"]
+    assert isinstance(tg, zarr.Array)
+    assert tg.chunks == (1, 8, 8)
+    out = open_icechunk_dataset(store)
+    try:
+        expected = written["tg"] - written["tg"].mean("t")
+        # North-up on publication, so compare by coordinate.
+        np.testing.assert_allclose(out["tg"].sel(y=expected.y).values, expected.values)
+    finally:
+        out.close()
+
+
+def test_one_step_per_chunk_rechunks_an_in_memory_cube_and_leaves_space() -> None:
+    ds = xr.Dataset(
+        {
+            "v": (("t", "y", "x"), np.zeros((4, 6, 6), "float32")),
+            "normal": (("dayofyear", "y", "x"), np.zeros((3, 6, 6), "float32")),
+        },
+        coords={"t": pd.date_range("2020-01-01", periods=4), "dayofyear": [1, 2, 3]},
+    )
+    ds["v"].encoding["chunks"] = (4, 6, 6)
+
+    out = downloader._one_step_per_chunk(ds, "x", "y")
+
+    assert out["v"].chunks == ((1, 1, 1, 1), (6,), (6,))
+    assert out["normal"].chunks == ((1, 1, 1), (6,), (6,))
+    assert "chunks" not in out["v"].encoding
+    assert ds["v"].encoding["chunks"] == (4, 6, 6), "the caller's dataset is left alone"
+
+
+def _republished(source: xr.Dataset, tmp_path: Path) -> tuple[zarr.Array, xr.Dataset]:
+    store = tmp_path / "republished.icechunk"
+    downloader.write_to_icechunk_store(source.assign_attrs({"proj:code": "EPSG:4326"}), store, commit_message="test")
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store)))
+    array = zarr.open_group(repo.readonly_session("main").store, mode="r")["v"]
+    assert isinstance(array, zarr.Array)
+    return array, open_icechunk_dataset(store)
+
+
+def _steps(count: int) -> xr.Dataset:
+    values = np.arange(count * 8 * 8, dtype="float32").reshape(count, 8, 8)
+    return xr.Dataset(
+        {"v": (("t", "y", "x"), values)},
+        coords={"t": pd.date_range("2020-01-01", periods=count), "y": np.arange(8.0)[::-1], "x": np.arange(8.0)},
+    )
+
+
+def test_a_one_step_cube_with_larger_stored_chunks_is_written_one_step_per_chunk(tmp_path: Path) -> None:
+    """Dask chunks one step already, stored chunks four steps: the write used to refuse the overlap."""
+    source = _steps(4).chunk({"t": 1})
+    source["v"].encoding["chunks"] = (4, 8, 8)
+
+    array, out = _republished(source, tmp_path)
+    try:
+        assert array.chunks == (1, 8, 8)
+        np.testing.assert_array_equal(out["v"].sel(y=source.y).values, source["v"].values)
+    finally:
+        out.close()
+
+
+def test_a_sharded_source_is_republished_unsharded_with_every_step(tmp_path: Path) -> None:
+    """Its shards span 32 steps: kept, the parallel one-step writes into one shard lost most steps."""
+    expected = _steps(64)
+    expected.to_zarr(
+        tmp_path / "sharded.zarr", zarr_format=3, encoding={"v": {"chunks": (1, 8, 8), "shards": (32, 8, 8)}}
+    )
+    source = xr.open_zarr(tmp_path / "sharded.zarr")
+
+    array, out = _republished(source, tmp_path)
+    try:
+        assert array.chunks == (1, 8, 8) and array.shards is None
+        np.testing.assert_array_equal(out["v"].sel(y=expected.y).values, expected["v"].values)
+    finally:
+        out.close()
+
+
 def test_uniform_chunks_leaves_a_legal_trailing_remainder_alone() -> None:
     """Only the illegal shape is rewritten — rechunking a large array is not free."""
     ds = xr.Dataset(
