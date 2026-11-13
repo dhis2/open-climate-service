@@ -8,7 +8,7 @@ back. Run with `make test-integration`, with every source's key set up.
 
 import asyncio
 import inspect
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -60,7 +60,7 @@ def test_raster_source_returns_one_period(template: dict[str, Any]) -> None:
         plugin = instantiate_plugin(template["ingestion"]["plugin"], dict(params))
         # The newest period, as a sync fetches it, so a moved cutoff or a broken listing shows here too.
         today = date.today()
-        start = today.replace(year=today.year - _LOOKBACK_YEARS)
+        start = today - timedelta(days=365 * _LOOKBACK_YEARS)
         periods = asyncio.run(plugin.periods(start.isoformat(), today.isoformat()))
         assert periods, f"the source lists no period since {start}"
         ds = asyncio.run(_fetch_period(plugin, periods[-1], params))
