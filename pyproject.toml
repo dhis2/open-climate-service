@@ -191,6 +191,12 @@ skip-magic-trailing-comma = false
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
 
+[tool.pytest.ini_options]
+# Integration tests fetch from real data sources, so a plain run leaves them out; a later
+# `-m integration` replaces this selection (see `make test-integration`).
+addopts = "-m 'not integration'"
+markers = ["integration: fetches from a real data source; run with `make test-integration`"]
+
 [tool.mypy]
 python_version = "3.12"
 plugins = ["pydantic.mypy"]

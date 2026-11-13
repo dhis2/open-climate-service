@@ -60,7 +60,8 @@ def _local_only(address: Any) -> None:
 
     A test that reaches a data source fails when the network does, and every developer and
     CI run sends it again, so parallel workers multiply the load on servers that may block
-    us. Stub the source instead, as the sync tests do with `_query_available_periods`.
+    us. Stub the source instead, as the sync tests do with `_query_available_periods`; only a
+    test marked `integration` gets through (see `_integration`).
     """
     host = address[0] if isinstance(address, tuple) else None  # a Unix socket's address is a path
     if host is None or host == "localhost":
@@ -112,6 +113,20 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         os.environ.pop("CLIMATE_SERVICE_CONFIG", None)
     else:
         os.environ["CLIMATE_SERVICE_CONFIG"] = _CALLERS_CONFIG
+
+
+@pytest.fixture(autouse=True)
+def _integration(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let a test marked `integration` reach the network.
+
+    These tests are left out of a plain run and run with `make test-integration`, which assumes
+    the key of every data source is set up, so that no source goes untested unnoticed.
+    """
+    if request.node.get_closest_marker("integration") is None:
+        return
+    monkeypatch.setattr(socket.socket, "connect", _connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _connect_ex)
+    monkeypatch.setattr(socket, "getaddrinfo", _getaddrinfo)
 
 
 @pytest.fixture(autouse=True)
