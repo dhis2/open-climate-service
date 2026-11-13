@@ -762,6 +762,8 @@ def test_the_route_serves_the_thumbnail(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.content == written.read_bytes()
+    # A link checker sends HEAD to the asset the STAC collection lists.
+    assert client.head("/datasets/thumb_dataset/thumbnail.png").status_code == 200
 
 
 def test_the_route_404s_when_a_dataset_has_no_thumbnail(client: TestClient) -> None:
