@@ -18,8 +18,10 @@ def _prefers_async(prefer: str | None) -> bool:
     return "respond-async" in directives
 
 
-# GET and HEAD alike: a STAC collection links to these, and a link checker sends HEAD.
-@router.api_route("", methods=["GET", "HEAD"], response_model=FeatureCollectionListResponse)
+# GET and HEAD alike: a STAC collection links to these, and a link checker sends HEAD. HEAD is
+# kept out of the OpenAPI schema so each operation is listed once.
+@router.get("", response_model=FeatureCollectionListResponse)
+@router.head("", response_model=FeatureCollectionListResponse, include_in_schema=False)
 def list_feature_collections() -> FeatureCollectionListResponse:
     """List the feature collections this instance holds.
 
@@ -30,7 +32,8 @@ def list_feature_collections() -> FeatureCollectionListResponse:
     return services.list_feature_collections()
 
 
-@router.api_route("/{collection_id}", methods=["GET", "HEAD"], response_model=FeatureCollectionRecord)
+@router.get("/{collection_id}", response_model=FeatureCollectionRecord)
+@router.head("/{collection_id}", response_model=FeatureCollectionRecord, include_in_schema=False)
 def get_feature_collection(collection_id: str) -> FeatureCollectionRecord:
     """Return one registered feature collection."""
     return services.get_feature_collection_or_404(collection_id)
@@ -104,7 +107,8 @@ def download_feature_tiles(collection_id: str) -> FileResponse:
     return FileResponse(path, media_type=PMTILES_MEDIA_TYPE, filename=f"{collection_id}.pmtiles")
 
 
-@router.api_route("/{collection_id}/styles/default.json", methods=["GET", "HEAD"])
+@router.get("/{collection_id}/styles/default.json")
+@router.head("/{collection_id}/styles/default.json", include_in_schema=False)
 def feature_style(collection_id: str, request: Request) -> JSONResponse:
     """Serve the MapLibre style a published collection is drawn with, over its vector tiles.
 

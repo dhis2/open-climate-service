@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import open_climate_service.main as main
 
@@ -233,3 +234,13 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
         assert len(sweeps) == in_flight_done, "the loop stops with the app"
         [should_stop] = backfills
         assert should_stop()
+
+
+def test_openapi_lists_each_operation_once(client: TestClient) -> None:
+    """A route that also answers HEAD lists only its GET, so no two operations share an id."""
+    paths = client.get("/openapi.json").json()["paths"]
+    operations = [(path, method, op["operationId"]) for path, item in paths.items() for method, op in item.items()]
+
+    assert [(path, method) for path, method, _ in operations if method == "head"] == []
+    ids = [operation_id for _, _, operation_id in operations]
+    assert len(ids) == len(set(ids))
