@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -101,6 +103,16 @@ def test_running_it_again_changes_nothing(instance: Path, capsys: pytest.Capture
     assert migrate_layout.main([]) == 0
     assert "Nothing to migrate" in capsys.readouterr().out
     assert (instance / "data" / "artifacts" / "records.json").read_text() == records
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_rewriting_the_records_keeps_their_mode(instance: Path) -> None:
+    """The records are replaced through an owner-only temporary file; the migration must not leave them owner-only."""
+    index = instance / "data" / "artifacts" / "records.json"
+    index.chmod(0o644)
+
+    assert migrate_layout.main([]) == 0
+    assert stat.S_IMODE(index.stat().st_mode) == 0o644
 
 
 def test_a_dry_run_reports_and_changes_nothing(instance: Path, capsys: pytest.CaptureFixture[str]) -> None:

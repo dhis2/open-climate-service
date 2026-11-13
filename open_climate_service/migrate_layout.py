@@ -18,16 +18,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import open_climate_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]  # loads .env
 from open_climate_service import config as api_config
+from open_climate_service.shared.persistence import atomic_text
 
 DATA_RENAMES = (("downloads", "rasters"), ("features", "vectors"))
 PLUGIN_RENAMES = (("datasets", "rasters"), ("features", "vectors"))
@@ -191,18 +190,9 @@ def apply(plan: Plan) -> None:
         path.write_text(text, encoding="utf-8")
     if plan.records is not None:
         index, records = plan.records
-        _replace_json(index, records)
+        atomic_text(index, f"{json.dumps(records, indent=2)}\n")
     for source, target in plan.renames:
         source.rename(target)
-
-
-def _replace_json(path: Path, value: Any) -> None:
-    """Write records.json in the form the service writes it, replacing the old file whole."""
-    with tempfile.NamedTemporaryFile(
-        "w", dir=path.parent, prefix=".records-", encoding="utf-8", delete=False
-    ) as handle:
-        handle.write(f"{json.dumps(value, indent=2)}\n")
-    os.replace(handle.name, path)
 
 
 def describe(plan: Plan) -> list[str]:

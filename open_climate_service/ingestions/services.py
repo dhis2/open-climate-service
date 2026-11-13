@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import mimetypes
-import os
 import shutil
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
@@ -65,6 +64,7 @@ from open_climate_service.publications.services import managed_dataset_id_for, p
 from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
+from open_climate_service.shared.persistence import atomic_text, index_lock
 from open_climate_service.shared.raster_contract import TIME_ALIASES
 from open_climate_service.shared.statistics import measure_statistics
 from open_climate_service.shared.storage_size import stored_bytes
@@ -223,8 +223,11 @@ ARTIFACTS_INDEX_PATH = ARTIFACTS_DIR / "records.json"
 def ensure_store() -> None:
     """Create the artifact metadata store if it does not exist."""
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    if not ARTIFACTS_INDEX_PATH.exists():
-        ARTIFACTS_INDEX_PATH.write_text("[]\n", encoding="utf-8")
+    if ARTIFACTS_INDEX_PATH.exists():
+        return
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        if not ARTIFACTS_INDEX_PATH.exists():
+            atomic_text(ARTIFACTS_INDEX_PATH, "[]\n")
 
 
 def list_artifacts() -> ArtifactListResponse:
@@ -2152,8 +2155,8 @@ def _latest_published_raster_artifacts_cached() -> dict[str, ArtifactRecord]:
     """Return `latest_published_raster_artifacts_by_dataset()`, recomputed only when records.json changes.
 
     A map view requests hundreds of chunks, and resolving the dataset from scratch reads, validates
-    and path-resolves every record on the instance each time. Record writes rewrite records.json in
-    place, so the cache is keyed on its path, modification time and size, which catches writes by
+    and path-resolves every record on the instance each time. Record writes replace records.json
+    whole, so the cache is keyed on its path, modification time and size, which catches writes by
     other processes, and on this process's write count, which catches writes the modification time
     cannot tell apart where it is coarse. A store deleted from disk without a record change stays in
     the result until the next write; serving it then fails as a missing path.
@@ -2491,8 +2494,9 @@ def _load_records() -> list[ArtifactRecord]:
 def _save_records(records: list[ArtifactRecord]) -> None:
     global _records_write_count
     ensure_store()
-    ARTIFACTS_INDEX_PATH.write_text(_encode_records(records), encoding="utf-8")
-    _records_write_count += 1
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        atomic_text(ARTIFACTS_INDEX_PATH, _encode_records(records))
+        _records_write_count += 1
 
 
 def _store_artifact_record(record: ArtifactRecord) -> ArtifactRecord:
@@ -2657,22 +2661,19 @@ def _fill_statistics(measured: ArtifactRecord, statistics: ArtifactStatistics) -
 
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
-    """Apply a read-modify-write mutation under an exclusive file lock."""
+    """Apply a read-modify-write mutation under an exclusive lock.
+
+    The lock is a sibling file and the index is replaced whole, so readers, which take no lock,
+    see the records before the write or after it and never a partly written file.
+    """
     global _records_write_count
     ensure_store()
-    with ARTIFACTS_INDEX_PATH.open("a+", encoding="utf-8") as handle:
-        portalocker.lock(handle, portalocker.LOCK_EX)
-        handle.seek(0)
-        raw = handle.read()
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        raw = ARTIFACTS_INDEX_PATH.read_text(encoding="utf-8")
         records = [_decode_record(item) for item in json.loads(raw or "[]")]
         result = mutation(records)
-        handle.seek(0)
-        handle.truncate()
-        handle.write(_encode_records(records))
-        handle.flush()
-        os.fsync(handle.fileno())
+        atomic_text(ARTIFACTS_INDEX_PATH, _encode_records(records))
         _records_write_count += 1
-        portalocker.unlock(handle)
         return result
 
 
