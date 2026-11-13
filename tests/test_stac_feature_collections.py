@@ -475,17 +475,31 @@ def test_an_unknown_collection_has_no_readme(client: TestClient) -> None:
         assert response.json()["detail"] == "No published collection 'nothing_here'"
 
 
-def test_a_feature_collections_files_carry_their_size_and_checksum(
-    client: TestClient, districts: ArtifactRecord
+def test_a_feature_collections_data_files_carry_their_size_but_are_not_hashed(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`file:size` and a sha256 multihash, as a STAC checker verifies the bytes against."""
+    """Hashing on request would read every GeoParquet and PMTiles file on a cold cache; only thumbnails are hashed."""
     import hashlib
+
+    from open_climate_service.shared.thumbnails import thumbnail_path
+
+    hashed: list[int] = []
+    sha256 = hashlib.sha256
+
+    def counting_sha256(*args: object) -> object:
+        hashed.append(1)
+        return sha256(*args)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(stac_services.hashlib, "sha256", counting_sha256)
+    monkeypatch.setattr(stac_services, "_CHECKSUMS", {})
+    thumbnail_path("districts").unlink(missing_ok=True)
 
     doc = client.get("/stac/districts/collection.json").json()
     data = Path(str(districts.path))
 
     assert doc["assets"]["data"]["file:size"] == data.stat().st_size
-    assert doc["assets"]["data"]["file:checksum"] == "1220" + hashlib.sha256(data.read_bytes()).hexdigest()
+    assert all("file:checksum" not in doc["assets"][key] for key in ("data", "tiles") if key in doc["assets"])
+    assert hashed == []
     assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" in doc["stac_extensions"]
     assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in doc["stac_extensions"]
 

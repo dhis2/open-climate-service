@@ -59,6 +59,14 @@ def collection_path(dataset_id: str) -> str:
     return f"/stac/{path_segment(dataset_id)}/collection.json"
 
 
+def file_size(path: Path) -> dict[str, object]:
+    """`file:size` alone, for data files: hashing them on request would read all vector data on a cold cache.
+
+    Their checksums are to be computed when the writer writes the file (CLIM-1879).
+    """
+    return {"file:size": path.stat().st_size}
+
+
 def file_fields(path: Path) -> dict[str, object]:
     """`file:size` and `file:checksum` of a single file an asset serves, as the file extension defines them.
 
@@ -448,7 +456,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             media_type=PARQUET_MEDIA_TYPE,
             title="GeoParquet collection",
             roles=["data"],
-            extra_fields=file_fields(data_path) if data_path is not None and data_path.is_file() else None,
+            extra_fields=file_size(data_path) if data_path is not None and data_path.is_file() else None,
         ),
     )
     # Vector tiles for display, when the refresh built them, and the style the viewer draws them
@@ -462,7 +470,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 media_type=tiles.PMTILES_MEDIA_TYPE,
                 title="Vector tiles (PMTiles)",
                 roles=["visual"],
-                extra_fields=file_fields(tiles.archive_path(data_path)),
+                extra_fields=file_size(tiles.archive_path(data_path)),
             ),
         )
         collection.add_asset(
