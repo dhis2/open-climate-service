@@ -130,7 +130,7 @@ transforms have run, so they reflect the final stored data.
 
 The pyramid metadata follows the **GeoZarr `multiscales.layout` format** (not OME-NGFF). Each level is described as a `layout` entry with an `asset` key pointing to the level path, its `transform.scale` and `transform.translation` relative to the level it is derived from, and its own `spatial:transform` and `spatial:shape`. Each level group also carries `proj:code`, `proj:wkt2` and the `spatial:` attributes, a `spatial_ref` coordinate with the GDAL `GeoTransform`, and a CF `grid_mapping` on its data arrays, so GDAL and QGIS can open any level with its own georeferencing.
 
-Every level holds one time step per shard. A sync appends one period at a time, and appending into a shard several periods wide would rewrite that shard on every append.
+Every level of an ingested pyramid holds one time step per shard. A sync appends one period at a time, and appending into a shard several periods wide would rewrite that shard on every append. A pyramid published from an openEO job keeps the time chunks of the job's result, which can hold several steps each; it is not appended to.
 
 ---
 
