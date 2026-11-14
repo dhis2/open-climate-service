@@ -2365,7 +2365,7 @@ requires-dist = [
     { name = "geojson-pydantic", marker = "extra == 'server'", specifier = ">=2.1.0" },
     { name = "geozarr-toolkit", marker = "extra == 'server'", specifier = "==0.1.*" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "icechunk", marker = "extra == 'server'", specifier = ">=2.0,<3" },
+    { name = "icechunk", marker = "extra == 'server'", specifier = ">=2.2,<3" },
     { name = "iso3166", marker = "extra == 'server'", specifier = ">=2.1" },
     { name = "jinja2", marker = "extra == 'server'", specifier = ">=3.1" },
     { name = "joblib", marker = "extra == 'server'", specifier = ">=1.3" },
