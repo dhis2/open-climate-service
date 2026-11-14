@@ -4,8 +4,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import icechunk
+import numpy as np
 import pytest
 import xarray as xr
+import zarr
+from icechunk.store import IcechunkStore
 
 from open_climate_service.ingestions import services
 from open_climate_service.ingestions.schemas import (
@@ -500,6 +503,166 @@ def test_a_record_write_keeps_the_records_file_mode(tmp_path: Path, monkeypatch:
     index_path.chmod(0o640)
     services._save_records([_artifact(artifact_id="second")])
     assert stat.S_IMODE(index_path.stat().st_mode) == 0o640
+
+
+def _published_icechunk_store(
+    store_path: Path, monkeypatch: pytest.MonkeyPatch, values: list[float]
+) -> icechunk.Repository:
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(str(store_path)))
+    session = repo.writable_session("main")
+    xr.Dataset({"precip": (("t", "x"), [values])}, coords={"t": ["2026-01-01"]}).to_zarr(
+        session.store, mode="w", zarr_format=3
+    )
+    session.commit("seed")
+    artifact = _artifact(artifact_id="open-store")
+    artifact.path = str(store_path)
+    artifact.asset_paths = [str(store_path)]
+    monkeypatch.setattr(
+        services, "latest_published_raster_artifacts_by_dataset", lambda: {"chirps3_precipitation_daily": artifact}
+    )
+    return repo
+
+
+def test_zarr_route_keeps_an_icechunk_store_open_and_follows_new_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _published_icechunk_store(tmp_path / "open.icechunk", monkeypatch, [1.0])
+    opens: list[object] = []
+    sessions: list[object] = []
+    open_repository, open_session = icechunk.Repository.open, icechunk.Repository.readonly_session
+    monkeypatch.setattr(icechunk.Repository, "open", lambda storage: opens.append(storage) or open_repository(storage))
+    monkeypatch.setattr(
+        icechunk.Repository,
+        "readonly_session",
+        lambda self, *args, **kwargs: sessions.append(kwargs) or open_session(self, *args, **kwargs),
+    )
+
+    def chunk() -> bytes:
+        response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0")
+        assert isinstance(response, services.Response)
+        return bytes(response.body)
+
+    before = [chunk() for _ in range(3)]
+    session = repo.writable_session("main")
+    xr.Dataset({"precip": (("t", "x"), [[2.0]])}, coords={"t": ["2026-01-01"]}).to_zarr(
+        session.store, mode="w", zarr_format=3
+    )
+    session.commit("revise")
+    after = chunk()
+
+    assert before == [before[0]] * 3
+    assert after != before[0]
+    assert (len(opens), len(sessions)) == (1, 2)
+
+
+def test_parallel_first_chunk_requests_open_a_store_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A map view's first chunk requests arrive together, in worker threads; one opens the store for all."""
+    import threading
+    import time
+
+    _published_icechunk_store(tmp_path / "parallel.icechunk", monkeypatch, [1.0])
+    opens: list[object] = []
+    sessions: list[object] = []
+    open_repository, open_session = icechunk.Repository.open, icechunk.Repository.readonly_session
+
+    def slow_open(storage: object) -> icechunk.Repository:
+        opens.append(storage)
+        time.sleep(0.05)  # Long enough for every request to reach the cache before the first open ends.
+        return open_repository(storage)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(icechunk.Repository, "open", slow_open)
+    monkeypatch.setattr(
+        icechunk.Repository,
+        "readonly_session",
+        lambda self, *args, **kwargs: sessions.append(kwargs) or open_session(self, *args, **kwargs),
+    )
+    start = threading.Barrier(8)
+    bodies: list[bytes] = []
+
+    def chunk() -> None:
+        start.wait()
+        response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0")
+        assert isinstance(response, services.Response)
+        bodies.append(bytes(response.body))
+
+    threads = [threading.Thread(target=chunk) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(bodies) == 8 and len(set(bodies)) == 1
+    assert (len(opens), len(sessions)) == (1, 1)
+
+
+def test_zarr_route_reads_only_the_requested_range_of_an_icechunk_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _published_icechunk_store(tmp_path / "ranged.icechunk", monkeypatch, [float(i) for i in range(64)])
+
+    def get(key: str, range_header: str | None = None) -> services.Response:
+        response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", key, range_header)
+        assert isinstance(response, services.Response)
+        return response
+
+    full = bytes(get("precip/c/0/0").body)
+    reads: list[object] = []
+    store_get = IcechunkStore.get
+
+    async def recording_get(self: IcechunkStore, key: str, prototype: object, byte_range: object = None) -> object:
+        reads.append(byte_range)
+        return await store_get(self, key, prototype, byte_range)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(IcechunkStore, "get", recording_get)
+    middle = get("precip/c/0/0", "bytes=2-5")
+    suffix = get("precip/c/0/0", "bytes=-4")
+
+    assert (middle.status_code, middle.body, middle.headers["content-range"]) == (
+        206,
+        full[2:6],
+        f"bytes 2-5/{len(full)}",
+    )
+    assert suffix.body == full[-4:]
+    assert None not in reads, "a range request read the whole chunk"
+    assert get("precip/c/0/0", f"bytes={len(full)}-").status_code == 416
+    # zarr-viewer's layout probe is not a Zarr key at all; it is missing, not a server error.
+    with pytest.raises(services.HTTPException) as probe:
+        get("refs/branch.main/ref.json")
+    assert probe.value.status_code == 404
+
+
+def test_zarr_route_answers_a_range_on_an_unwritten_icechunk_chunk_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Icechunk sizes an unwritten chunk as 0; a range on it is a 404, which clients read as the fill value."""
+    repo = _published_icechunk_store(tmp_path / "gaps.icechunk", monkeypatch, [1.0])
+    session = repo.writable_session("main")
+    gaps = zarr.open_group(session.store, mode="a").create_array(
+        "gaps", shape=(2,), chunks=(1,), dtype="f4", fill_value=float("nan")
+    )
+    gaps[0] = 1.0
+    session.commit("one chunk of two")
+
+    for range_header in ("bytes=0-3", "bytes=-4"):
+        with pytest.raises(services.HTTPException) as missing:
+            services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "gaps/c/1", range_header)
+        assert missing.value.status_code == 404
+
+
+def test_zarr_route_answers_an_unreadable_icechunk_chunk_as_a_server_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunk file that is gone is broken data, not missing data: a 500, never a 404 drawn as the fill value."""
+    store_path = tmp_path / "broken.icechunk"
+    # Random values, so the chunk is too large to be stored inline in the manifest.
+    _published_icechunk_store(store_path, monkeypatch, list(np.random.default_rng(0).random(4096)))
+    for chunk_file in (store_path / "chunks").iterdir():
+        chunk_file.unlink()
+
+    for range_header in (None, "bytes=0-3"):
+        with pytest.raises(services.HTTPException) as broken:
+            services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0", range_header)
+        assert broken.value.status_code == 500
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:
