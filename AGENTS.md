@@ -42,6 +42,7 @@ make fix      # ruff autofix + format, whole tree
 make lint     # ruff check + ruff format + mypy + pyright
 make test     # pytest on PYTEST_WORKERS workers (default 2)
 make test-serial  # pytest in one process, to diagnose a failure
+make test-integration  # fetch from every built-in data source; needs their keys
 make start    # docker compose up --build
 ```
 
