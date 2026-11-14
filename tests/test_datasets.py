@@ -4,8 +4,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import icechunk
+import numpy as np
 import pytest
 import xarray as xr
+import zarr
 from icechunk.store import IcechunkStore
 
 from open_climate_service.ingestions import services
@@ -627,6 +629,40 @@ def test_zarr_route_reads_only_the_requested_range_of_an_icechunk_chunk(
     with pytest.raises(services.HTTPException) as probe:
         get("refs/branch.main/ref.json")
     assert probe.value.status_code == 404
+
+
+def test_zarr_route_answers_a_range_on_an_unwritten_icechunk_chunk_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Icechunk sizes an unwritten chunk as 0; a range on it is a 404, which clients read as the fill value."""
+    repo = _published_icechunk_store(tmp_path / "gaps.icechunk", monkeypatch, [1.0])
+    session = repo.writable_session("main")
+    gaps = zarr.open_group(session.store, mode="a").create_array(
+        "gaps", shape=(2,), chunks=(1,), dtype="f4", fill_value=float("nan")
+    )
+    gaps[0] = 1.0
+    session.commit("one chunk of two")
+
+    for range_header in ("bytes=0-3", "bytes=-4"):
+        with pytest.raises(services.HTTPException) as missing:
+            services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "gaps/c/1", range_header)
+        assert missing.value.status_code == 404
+
+
+def test_zarr_route_answers_an_unreadable_icechunk_chunk_as_a_server_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunk file that is gone is broken data, not missing data: a 500, never a 404 drawn as the fill value."""
+    store_path = tmp_path / "broken.icechunk"
+    # Random values, so the chunk is too large to be stored inline in the manifest.
+    _published_icechunk_store(store_path, monkeypatch, list(np.random.default_rng(0).random(4096)))
+    for chunk_file in (store_path / "chunks").iterdir():
+        chunk_file.unlink()
+
+    for range_header in (None, "bytes=0-3"):
+        with pytest.raises(services.HTTPException) as broken:
+            services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0", range_header)
+        assert broken.value.status_code == 500
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:

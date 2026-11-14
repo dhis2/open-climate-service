@@ -2205,7 +2205,10 @@ def _open_icechunk_store_or_404(artifact: ArtifactRecord) -> _IcechunkSession:
 
     The repository stays open between requests, so its snapshot and manifests stay in its cache,
     and the session is reopened only when the branch has moved. A chunk request then costs one
-    read of the branch ref besides the chunk itself (CLIM-1580).
+    read of the branch ref besides the chunk itself (CLIM-1580). Each open repository keeps its
+    own caches until the records change and everything is reopened.
+
+    A store without a `main` branch is a 404; any other failure to read the branch is a 500.
     """
     if artifact.format != ArtifactFormat.ICECHUNK:
         raise HTTPException(status_code=409, detail="Artifact is not an Icechunk-backed Zarr store")
@@ -2228,10 +2231,13 @@ def _open_icechunk_store_or_404(artifact: ArtifactRecord) -> _IcechunkSession:
     try:
         snapshot_id = repo.lookup_branch("main")
     except icechunk.IcechunkError as exc:
+        # Drop the repository, so a transient failure is not kept for the next request.
         with _open_stores_lock:
             if _open_repositories.get(store_path) is repo:
                 del _open_repositories[store_path]
-        raise HTTPException(status_code=404, detail="Icechunk store could not be read") from exc
+        if isinstance(exc, icechunk.RefNotFoundError):
+            raise HTTPException(status_code=404, detail="Icechunk store has no main branch") from exc
+        raise _store_read_failed(store_path, exc) from exc
     session = _open_sessions.get(store_path)
     if session is None or session.snapshot_id != snapshot_id:
         with _open_stores_lock:
@@ -2251,6 +2257,16 @@ def _run_async(coroutine: Coroutine[Any, Any, StoreResult]) -> StoreResult:
     return zarr_sync(coroutine)
 
 
+def _store_read_failed(where: str, exc: Exception) -> HTTPException:
+    """A 500 for a store that exists but cannot be read, logged with its cause.
+
+    Raised as an HTTPException rather than left to escape: an unhandled error is answered above
+    the CORS middleware, so the browser would see a CORS failure instead of the 500.
+    """
+    logger.error("Icechunk read failed at %s: %s", where, exc)
+    return HTTPException(status_code=500, detail="Icechunk store could not be read")
+
+
 def _icechunk_list_dir(store: _IcechunkReadableStore, prefix: str) -> list[str]:
     async def collect() -> list[str]:
         items: list[str] = []
@@ -2265,22 +2281,27 @@ def _icechunk_get(store: _IcechunkReadableStore, key: str, byte_range: ByteReque
     """The bytes at *key*, or *byte_range* of them; None for anything Icechunk cannot address.
 
     A browser probing an unknown store asks for keys that are not Zarr keys at all, and Icechunk
-    rejects those two different ways: ``KeyError`` for Zarr v2 spellings (``.zgroup``,
-    ``.zarray``), and ``IcechunkError: invalid zarr key format`` for paths outside the Zarr
-    namespace entirely (``repo``, ``refs/branch.main/ref.json`` — the layout probes zarr-viewer
-    uses to decide whether a URL is an Icechunk repository).
+    rejects those as ``KeyError`` (``NodeNotFoundError`` is one) or as ``InvalidInputError:
+    invalid zarr key format`` for paths outside the Zarr namespace entirely (``repo``,
+    ``refs/branch.main/ref.json`` — the layout probes zarr-viewer uses to decide whether a URL
+    is an Icechunk repository).
 
     Both mean "not here", so both must answer None. Letting the second escape turned a probe
     into a 500, and because an unhandled 500 is raised above the CORS middleware it reached the
     browser with no ``Access-Control-Allow-Origin`` — reported as a CORS failure, which is not
     where anyone would look for a missing-key bug.
+
+    Any other Icechunk error, such as a ``StorageError`` for a chunk file that is gone, is a 500:
+    answering it as missing would show a fill value where the data is broken.
     """
-    from icechunk import IcechunkError
+    from icechunk import IcechunkError, InvalidInputError
 
     try:
         buffer: Any = _run_async(store.get(key, prototype=default_buffer_prototype(), byte_range=byte_range))
-    except (KeyError, IcechunkError):
+    except (KeyError, InvalidInputError):
         return None
+    except IcechunkError as exc:
+        raise _store_read_failed(key, exc) from exc
     if buffer is None:
         return None
     if hasattr(buffer, "to_bytes"):
@@ -2289,13 +2310,20 @@ def _icechunk_get(store: _IcechunkReadableStore, key: str, byte_range: ByteReque
 
 
 def _icechunk_getsize(store: _IcechunkReadableStore, key: str) -> int | None:
-    """The size of the value at *key*, from the manifest; None where `_icechunk_get` gives None."""
-    from icechunk import IcechunkError
+    """The size of the value at *key*, from the manifest; None where `_icechunk_get` gives None.
+
+    Icechunk reports an unwritten chunk as size 0 rather than missing; a written value never is,
+    so 0 is None too, and a range request on the chunk is a 404 (fill value), not a 416.
+    """
+    from icechunk import IcechunkError, InvalidInputError
 
     try:
-        return _run_async(store.getsize(key))
-    except (KeyError, FileNotFoundError, IcechunkError):
+        size = _run_async(store.getsize(key))
+    except (KeyError, FileNotFoundError, InvalidInputError):
         return None
+    except IcechunkError as exc:
+        raise _store_read_failed(key, exc) from exc
+    return size or None
 
 
 def _build_icechunk_consolidated_metadata(session: _IcechunkSession) -> dict[str, object]:

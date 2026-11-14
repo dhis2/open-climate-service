@@ -85,7 +85,7 @@ server = [
     "xstac>=1.0,<2",
     "xarray>=2025.12.0",
     "zarr>=3.1.6,<4",
-    "icechunk>=2.0,<3",
+    "icechunk>=2.2,<3",
     "geozarr-toolkit==0.1.*",
     # 0.2.2 writes each level's `proj:`/`spatial:` attrs, its `spatial_ref` coordinate and its
     # affine in `multiscales.layout`, and sizes time shards from the source's time chunks. 0.3.0
