@@ -93,17 +93,18 @@
               {% endif %}
             </section>
 
-            <section class="panel" aria-labelledby="triggers-title">
-              <h3 id="triggers-title">Automation</h3>
-              {% if triggers %}
-              {% for t in triggers %}
+            <section class="panel" aria-labelledby="refreshes-title">
+              <h3 id="refreshes-title">Automation</h3>
+              {% if refreshes %}
+              {% for r in refreshes %}
               <div class="trigger">
                 <p>
-                  <strong>{{ t.id }}</strong> runs when
-                  {% if t.held %}<a href="{{ mount }}/datasets/{{ t.on_update_of }}">{{ t.on_update_of }}</a>{% else %}<code>{{ t.on_update_of }}</code>{% endif %}
+                  <a href="{{ mount }}/datasets/{{ r.output }}">{{ r.output }}</a>
+                  is computed again when
+                  {% if r.held %}<a href="{{ mount }}/datasets/{{ r.input }}">{{ r.input }}</a>{% else %}<code>{{ r.input }}</code>{% endif %}
                   is updated.
                 </p>
-                {% if t.arguments %}<pre class="code"><code>{{ t.arguments }}</code></pre>{% endif %}
+                {% if r.arguments %}<pre class="code"><code>{{ r.arguments }}</code></pre>{% endif %}
               </div>
               {% endfor %}
               {% else %}

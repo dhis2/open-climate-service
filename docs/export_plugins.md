@@ -1,26 +1,34 @@
 # Export plugins and named mappings
 
-Named exports render a computed aggregate using a mapping in instance configuration.
-They work with synchronous `POST /result` and batch jobs. Rendering does not contact
-DHIS2, resolve a credential, fetch organisation units, or run another aggregation.
+A named export renders a computed aggregate through an export plugin, using a mapping. A
+[pipeline](web_interface.md#the-pipeline-pages-pipelines) owns one under its own id: its
+destination plugin compiles the destination settings into the mapping each time the pipeline
+validates. Named exports work with synchronous `POST /result` and batch jobs. Rendering does not
+contact DHIS2, resolve a credential, fetch organisation units, or run another aggregation.
 
 ## Render one series for DHIS2
 
-Add an export to the file referenced by `CLIMATE_SERVICE_CONFIG`:
+A pipeline delivering to DHIS2 compiles a mapping like this one:
 
 ```yaml
-exports:
-  - id: rainfall-monthly
-    plugin: dhis2
-    period_type: monthly
-    org_unit_field: feature_id
-    period_field: t
-    series:
-      - select: {}
-        data_element: BXgDHhPdFVU
+id: rainfall-monthly          # the pipeline's id
+plugin: dhis2
+dataset: era5land_precipitation_monthly
+connection: national-hmis
+period_type: monthly          # the dataset's own cadence
+series:
+  - select: {}
+    data_element: BXgDHhPdFVU
+    category_option_combo: FemaleCOC01   # optional
 ```
 
-Replace the data-element UID with the destination defined in your DHIS2 instance.
+The pipeline's DHIS2 settings fill the connection, and per series the data element and the
+optional category and attribute option combos. The dataset and the period come from the
+workflow the pipeline binds. The rest of this section describes the mapping the DHIS2 renderer
+accepts; fields no pipeline setting fills (`org_unit_field`, `period_field`,
+`temporal_aggregation`, `incomplete_periods`, `aggregation` and a `select` naming a variable)
+keep their defaults.
+
 `org_unit_field: feature_id`, the default, reads each value's organisation unit from the
 feature ids a spatial aggregation keeps beside its geometries. CHAP CSV's `location_field`
 defaults to `feature_id` too. Geometries are never used as ids: a result that has shapes but
@@ -42,9 +50,9 @@ Pass the prepared aggregate to `save_result`:
 This is a graph node; `aggregate` must be a preceding node in the full graph.
 The built-in `aggregate_to_dhis2_json` workflow wraps this aggregation and
 `save_result` call, taking the export ID as its `export` parameter. See
-[Importing data to DHIS2](importing_to_dhis2.md#automated-delivery-with-a-named-export).
-Named exports accept only the `export` option. Change the configured mapping to
-change its destination or fields; per-request overrides are rejected. Hand-written
+[Importing data to DHIS2](importing_to_dhis2.md#deliver-one-batch-job).
+Named exports accept only the `export` option. Edit the pipeline's destination to
+change its target or fields; per-request overrides are rejected. Hand-written
 `DHIS2JSON` graphs using `data_element_id`, `org_unit_field`, and `period_type`
 still render an ad-hoc payload without a named export, but that payload cannot be
 delivered by the server.
@@ -94,8 +102,9 @@ for that binding.
 
 An export exports what exists. `period_type` labels; it never aggregates, and neither does
 anything else on the export path. So the export has to say how its period relates to the
-dataset it declares, and OCS checks it twice: at startup, from the dataset template's
-`period_type`, and at render time, from the spacing of the data actually being exported.
+dataset it declares, and OCS checks it twice: when the pipeline validates, from the dataset
+template's `period_type`, and at render time, from the spacing of the data actually being
+exported.
 
 | Dataset cadence | Export `period_type` | Outcome |
 | --- | --- | --- |
@@ -103,16 +112,16 @@ dataset it declares, and OCS checks it twice: at startup, from the dataset templ
 | finer, and tiling the period | coarser | Exportable only after an explicit aggregation. `temporal_aggregation: sum \| mean \| min \| max` declares which, and the export verifies that it ran. |
 | anything else | | Refused, with the reason. |
 
-Producing the coarser data is openEO's job, not the export's, and there are two ways to do it.
-Publish a derived dataset (`load_collection`, `aggregate_temporal_period`, `save_result` as
-Zarr with a `dataset_id`) and point the export at that dataset, which then needs no
-declaration at all. Or put `aggregate_temporal_period` in the graph that feeds the export and
-declare its reducer as `temporal_aggregation`. The built-in org-unit workflows do neither:
-given a dataset finer than the export's period, they are refused.
+Producing the coarser data is openEO's job, not the export's. Publish a derived dataset
+(`load_collection`, `aggregate_temporal_period`, `save_result` as Zarr with a `dataset_id`) and
+point the pipeline at that dataset, which then needs no declaration at all; a
+[recipe](adding_custom_datasets.md#keep-a-derived-dataset-current-with-a-recipe) keeps it
+current. A pipeline's mapping has no `temporal_aggregation`, so the built-in org-unit workflows,
+given a dataset finer than the export's period, are refused.
 
 A derived dataset is published by an openEO job, and that job records a `dataset.updated`
-event when the publication succeeds, so a workflow trigger or a pipeline listens for it the
-way it listens for a sync. See [Updates from derived datasets](workflow_automation.md#updates-from-derived-datasets).
+event when the publication succeeds, so a pipeline listens for it the way it listens for a
+sync. See [Updates from derived datasets](workflow_automation.md#updates-from-derived-datasets).
 
 The pairs currently supported by `aggregate_temporal_period`: hourly into daily, weekly,
 monthly and yearly; daily into weekly, monthly and yearly; dekadal into monthly and yearly;
@@ -123,21 +132,7 @@ produce and record them. Nothing can be made finer than it is stored.
 
 `aggregate_dekads(period="week")` is a separate, day-overlap-weighted transformation rather
 than a tiling aggregation. Its weekly result can be exported ad hoc, or published as a derived
-weekly dataset and then used by a named export. A named weekly export declared directly against
-the original dekadal dataset is still refused at startup.
-
-```yaml
-exports:
-  - id: rainfall-monthly
-    plugin: dhis2
-    dataset: chirps3_precipitation_daily
-    period_type: monthly
-    temporal_aggregation: sum       # required: the dataset is daily
-    incomplete_periods: reject      # the default; or drop
-    series:
-      - select: {}
-        data_element: BXgDHhPdFVU
-```
+weekly dataset and then delivered by a pipeline on it.
 
 When the graph aggregates, a destination period counts only when every source period inside
 it is present. A sync that ends on the 14th does not produce that month: the job fails naming
@@ -181,9 +176,11 @@ class SummaryExport(BaseExportPlugin):
 plugin = SummaryExport()
 ```
 
-Declare `exports: [{id: summary, plugin: summary}]` and use
-`save_result(format="SUMMARYJSON", options={"export": "summary"})`.
-The format is advertised in `GET /file_formats` with its `export` parameter.
+A pipeline whose destination is the plugin owns a named export of it (see
+[Act as a pipeline destination](#act-as-a-pipeline-destination)); a graph then uses
+`save_result(format="SUMMARYJSON", options={"export": "<pipeline id>"})`. Without a pipeline,
+a hand-written graph uses the format with its ad-hoc options. The format is advertised in
+`GET /file_formats` with its `export` parameter.
 
 `render` receives the computed result and the validated mapping. It returns bytes
 and non-negative `record_count` / `skipped_count` values. The framework owns file
@@ -218,9 +215,9 @@ destination by overriding these optional hooks of `BaseExportPlugin`:
 |---|---|
 | `destination_settings_schema()` | JSON Schema of the settings; drives the pipeline form. Returning `None` (the default) means "not a destination". |
 | `pipeline_settings_form()` | Optional structured presentation metadata for the plugin's pipeline settings: display title and description, sections, field order, labels, help text and widget hints. Returning `None` keeps schema-derived defaults. |
-| `lookup_options(lookup, settings, query)` | The choices the destination offers for a `lookup` field as the form types, from the settings entered so far. May contact the destination; raise `ValueError` naming what is missing. |
+| `lookup_options(lookup, settings, query, row)` | The choices the destination offers for a `lookup` field as the form types, from the settings entered so far. For a column of a `rows` field, `row` holds the values entered in the asking row, so a choice can follow its neighbour (DHIS2 offers the chosen data element's category option combos). A plugin whose hook takes no `row` is searched without it. May contact the destination; raise `ValueError` naming what is missing. |
 | `lookup_labels(lookup, settings, values)` | How stored lookup values read at the destination, by value. Called at validation; the labels are kept with the result so pages never wait for the destination. |
-| `export_definition(settings, context)` | Compile the settings into an export definition (mapping plus `dataset`/`connection` references), resolved like a configured named export. Pure; raise `ValueError` for bad settings. |
+| `export_definition(settings, context)` | Compile the settings into an export definition (mapping plus `dataset`/`connection` references), resolved as the pipeline's named export. Pure; raise `ValueError` for bad settings. |
 | `check_destination(settings, context)` | Destination-side checks run on save, re-check and going live, returned as `DestinationCheck`s. May contact the destination. |
 | `preview(content, settings, context, labels, limit)` | A few rendered records for the dry-run summary. A cell may be `{"value", "label"}` so an identifier shows by name. `labels` are the names `lookup_labels` resolved at the last validation, so the destination need not be asked again: the DHIS2 plugin names data elements from them, asks DHIS2 only for any missing, and names organisation units from the bound feature collection's id and name columns. |
 | `target_binding(references)` | Credential-free identity of the target the export's references name. Recorded in each saved export's manifest and compared before delivery, so a moved target is refused. Default: the `connection` reference as a named instance connection, `{connection_id, url_sha256}`. |
@@ -230,11 +227,13 @@ destination by overriding these optional hooks of `BaseExportPlugin`:
 
 The target hooks apply to every delivery, not only pipelines. The defaults keep the contract
 existing delivery plugins rely on, including DHIS2: `send` receives a named connection's id. A
-plugin delivering anywhere else, a database or a file store, overrides both hooks.
+plugin delivering anywhere else, a database or a file store, overrides both hooks, as the
+built-in `table` destination does for this instance's own table store.
 
 `context` is a `DestinationContext`: the pipeline's export id, the datasets its workflow binds
-(id, variable, cadence) and the feature collections it binds. The built-in DHIS2 plugin
-implements all of them in `open_climate_service/exports/dhis2_destination.py`.
+(id, variable, cadence, units) and the feature collections it binds. The built-in DHIS2 plugin
+implements all of them in `open_climate_service/exports/dhis2_destination.py`; the `table`
+destination, which keeps the result as a table dataset, in `open_climate_service/exports/table.py`.
 
 ### Configure the plugin's pipeline settings
 
@@ -340,7 +339,8 @@ downloadable but are not eligible for automatic delivery.
 
 ## Deliver a saved export
 
-Configure `connection` on the export, then submit a completed source job:
+A pipeline delivers its own runs. To deliver another completed job saved through a pipeline's
+export, submit it:
 
 ```http
 POST /exports/rainfall-monthly
@@ -380,7 +380,9 @@ through the existing client workflow.
 
 ## Map multiple series
 
-Use one entry per output series; a merged raster cube is not required:
+The renderer takes one entry per output series; a merged raster cube is not required. A
+pipeline's series rows all use `select: {}`, so a pipeline delivers one value series to several
+data elements or disaggregations; selecting by variable, as below, has no pipeline setting yet.
 
 ```yaml
 series:

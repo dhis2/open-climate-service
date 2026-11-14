@@ -2,13 +2,19 @@
 
 import json
 import os
+import stat
 import tempfile
+import time
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
 import portalocker
+
+# Read once at import: os.umask can only be read by setting it, which is not thread-safe later.
+_UMASK = os.umask(0)
+os.umask(_UMASK)
 
 
 @contextmanager
@@ -66,18 +72,27 @@ def execution_lease(path: Path) -> Generator[bool]:
 
 def atomic_json(path: Path, value: Any) -> None:
     """Flush contents and directory entries before returning to the caller."""
+    # Keep parity with the previous store: a completed job whose result
+    # carries NaN must still persist rather than failing the write.
+    atomic_text(path, json.dumps(value, allow_nan=True))
+
+
+def atomic_text(path: Path, text: str) -> None:
+    """Replace *path* with *text* whole, so a reader sees the old file or the new one, never part of one.
+
+    Flushes contents and directory entries before returning to the caller.
+    """
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
             dir=path.parent, prefix=".index-", mode="w", encoding="utf-8", delete=False
         ) as handle:
             temporary = handle.name
-            # Keep parity with the previous store: a completed job whose result
-            # carries NaN must still persist rather than failing the write.
-            json.dump(value, handle, allow_nan=True)
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        os.chmod(temporary, _file_mode(path))
+        _replace(temporary, path)
         temporary = None
         if os.name != "nt":
             descriptor = os.open(path.parent, os.O_RDONLY)
@@ -88,3 +103,29 @@ def atomic_json(path: Path, value: Any) -> None:
     finally:
         if temporary is not None:
             Path(temporary).unlink(missing_ok=True)
+
+
+def _file_mode(path: Path) -> int:
+    """The mode *path* has, or the one a new file gets; the temporary file starts owner-only."""
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        return 0o666 & ~_UMASK
+
+
+def _replace(source: str, target: Path, attempts: int = 20) -> None:
+    """`os.replace`, retried briefly while Windows refuses to replace a file a reader has open.
+
+    Readers of some indexes, such as the artifact records, do not take the lock, so they never wait
+    on a writer. On Windows a replace can then land while one of them holds the file and fail with
+    `PermissionError`; the read takes milliseconds, so the replace succeeds a moment later.
+    Elsewhere it never fails this way.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.01)

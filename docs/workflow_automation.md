@@ -1,149 +1,52 @@
-# Dataset-update workflow automation
+# Dataset-update automation
 
-An OCS instance can run an existing openEO workflow when a successful ingestion or sync operation
-changes stored data. This is event-driven: it does not guess that an operation has finished by
-scheduling a second cron expression.
+When a successful ingestion or sync changes stored data, OCS records a durable `dataset.updated`
+event. Two things act on it, each with its own page:
 
-> For a new setup, use a [pipeline](web_interface.md#the-pipeline-pages-pipelines) instead: it
-> runs one workflow on the same dataset updates and adds validation, a dry-run gate, delivery
-> modes and run history. Workflow triggers and the named `exports` they deliver through remain
-> supported for existing configurations, but are due to be retired in favour of pipelines.
+- **Keep a derived dataset current.** An anomaly, a normal or another dataset a workflow
+  produces is computed again when the dataset it derives from updates. Give its dataset
+  template a recipe; see
+  [Keep a derived dataset current with a recipe](adding_custom_datasets.md#keep-a-derived-dataset-current-with-a-recipe).
+- **Deliver with a pipeline.** A [pipeline](web_interface.md#the-pipeline-pages-pipelines) runs
+  one workflow on its input dataset's updates, or by hand, and delivers the result to a
+  destination such as DHIS2, with validation, a dry-run gate and run history; see
+  [Importing to DHIS2](importing_to_dhis2.md).
 
-## Configure a trigger
+A refreshed derived dataset announces its own update, so a pipeline on it runs next: a sync of
+ERA5-Land monthly precipitation refreshes the anomaly, and the anomaly's update runs the
+pipeline that delivers it per district.
 
-Triggers are instance-owned bindings in `climate-service.yaml`:
+Workflows can still be run directly, without either: submit a process graph to `POST /jobs`,
+and save through a pipeline's named export with `save_result(..., options={"export":
+"<pipeline id>"})` to deliver the result with `POST /exports/{pipeline id}`.
 
-```yaml
-automation:
-  workflow_triggers:
-    - id: chirps-to-chap
-      on_update_of: chirps3_precipitation_daily
-      workflow_id: aggregate_to_chap_csv
-      arguments:
-        dataset_id: $event.dataset_id
-        temporal_extent: [$event.previous_end, $event.current_end]
-        geometries: { from_features: districts }
-        method: mean
-        period_type: day
-```
+## When an update is announced
 
-`on_update_of` names the managed source dataset and `workflow_id` names a workflow already
-available through `GET /process_graphs`. Trigger IDs must be unique within an instance.
-
-Arguments are the parameters passed to the workflow. Literal YAML values are preserved. These
-exact event references can be used at any nesting level:
-
-- `$event.dataset_id`
-- `$event.artifact_id`
-- `$event.action`: `ingest` for an ingestion, the sync planner's `append` or `rematerialize`, or
-  `full_rewrite` for a managed dataset an openEO job published
-- `$event.previous_end`: the coverage end before the update, or `null` when the whole store is new
-  or rewritten
-- `$event.current_start`: the coverage start after the update
-- `$event.current_end`: the coverage end after the update
-
-After an initial ingestion, `previous_end` is JSON/YAML `null`, because no periods were stored
-before. A temporal interval of `[$event.previous_end, $event.current_end]` is therefore open at
-the start and reads through `current_end` from the dataset's earliest available period. This
-means the first triggered workflow run processes the complete ingested history. An
-ingestion that rewrites the whole store, including `overwrite`, also uses `null` because every
-period was rewritten. After an append, `previous_end` is the old coverage boundary, so that
-interval includes the boundary and the newly appended periods. A workflow that always needs an
-explicit, non-null start can use `$event.current_start`, the start of the complete coverage after
-the update.
-
-**A trigger that publishes a managed dataset must compute its full range.** A workflow that ends in
-`save_result` with an `output_dataset_id` replaces that whole store on every run. Over
-`[$event.previous_end, $event.current_end]` it would compute only the newly appended periods and
-drop the rest of the published history, so OCS refuses a rewrite that would start later or end
-earlier than the published dataset (the job fails without committing, and nothing downstream
-runs). Bind such a trigger to the complete coverage instead:
-
-```yaml
-    - id: chirps-anomaly
-      on_update_of: chirps3_precipitation_monthly
-      workflow_id: climate_anomaly
-      arguments:
-        observed_dataset_id: $event.dataset_id
-        normal_dataset_id: chirps3_precipitation_monthly_normal_1991_2020
-        output_dataset_id: chirps3_precipitation_monthly_anomaly
-        variable: precip
-        temporal_extent: [$event.current_start, $event.current_end]
-```
-
-Appending to a derived dataset, which would let it compute only the new periods, is not
-supported yet.
-
-Managed-output triggers must also form an acyclic dataset graph. OCS rejects a trigger that
-writes its own source, including `output_dataset_id: $event.dataset_id`, and rejects chains such
-as A -> B -> A at startup. Every successful managed rewrite emits another durable update, so
-allowing such a cycle would create jobs indefinitely.
-
-The workflow definition remains reusable and deployment-independent. Operational bindings such
-as output dataset IDs, geometries, and DHIS2 identifiers remain in instance configuration.
-
-### Referencing a feature collection
-
-Within an automation trigger, `geometries: { from_features: districts }` names a feature
-collection declared under `plugins/vectors/` (see
-[Installable plugins](installable_plugins.md#package-layout)) instead of embedding a
-`FeatureCollection` inline. This shorthand is resolved by the automation service and is not a
-general openEO process-graph argument. Direct process graphs should call `load_features`
-explicitly. An inline `FeatureCollection` remains valid in either context.
-
-The reference is never resolved into geometry at submission. Instead OCS rewrites it into a
-sibling node in the process graph that the workflow calls `load_features` on:
-
-```json
-{
-  "features_districts": {
-    "process_id": "load_features",
-    "arguments": { "id": "districts", "version": "2026-09-01T06:00:00+00:00" }
-  },
-  "workflow": {
-    "process_id": "aggregate_to_chap_csv",
-    "arguments": { "geometries": { "from_node": "features_districts" } },
-    "result": true
-  }
-}
-```
-
-This keeps a country's whole org unit hierarchy out of the persisted job record. At submission,
-OCS resolves the current feature record and stores only the collection id, its refresh timestamp,
-and a `load_features` call. The timestamp pins execution to that record: if the collection is
-refreshed while the job is queued, the job refuses the stale binding instead of silently running
-against different geometry. The job description carries the same version (for example
-`against features districts@2026-09-01T06:00:00+00:00`), so it accurately explains why one run
-covered 47 districts and the next covered 48.
-
-A malformed reference or an id that no template declares fails at startup, like an unknown
-`workflow_id`. A declared collection must also be registered before an event can submit a job.
-
-## Delivery behavior
-
-A workflow is considered only after a successful ingestion, sync or openEO publication has
-persisted a `dataset.updated` event. Failed, cancelled and no-op runs do not trigger workflows, and neither
-does re-ingesting a dataset that is already current. Ingestion and sync, whether queued,
-scheduled, run inline, or started from the admin pages, all use the same path. Work run inline
-is recorded as a completed job under `/ingestions/jobs`, because that record is what makes
-its event durable after the operation returns. Unlike queued ingestion, inline execution has
-no pre-write job checkpoint: if the process stops after committing data but before recording
-the completed job, that update event cannot be recovered automatically.
+An update is recorded only after a successful ingestion, sync or openEO publication has
+persisted it. Failed, cancelled and no-op runs announce nothing, and neither does re-ingesting
+a dataset that is already current. Ingestion and sync, whether queued, scheduled, run inline,
+or started from the admin pages, all use the same path. Work run inline is recorded as a
+completed job under `/ingestions/jobs`, because that record is what makes its event durable
+after the operation returns. Unlike queued ingestion, inline execution has no pre-write job
+checkpoint: if the process stops after committing data but before recording the completed job,
+that update event cannot be recovered automatically.
 
 An ingestion job notes in its checkpoint that it is about to change stored data, before
 fetching anything. If OCS stops after the data is committed but before the job completes,
 the recovered job finds the data current and still emits the event it owed, exactly once.
 
-### Updates from derived datasets
+The event says what changed: `dataset_id`, `artifact_id`, `action` (`ingest`, the sync
+planner's `append` or `rematerialize`, or `full_rewrite` for a dataset an openEO job
+published), `previous_end` (the coverage end before the update, or `null` when the whole store
+is new or rewritten), and `current_start` and `current_end` (the coverage after it). A pipeline
+runs the interval the update affected; a recipe always recomputes the whole coverage.
 
-To keep a derived dataset itself current, give its template a recipe rather than a trigger; see
-[Keep a derived dataset current with a recipe](adding_custom_datasets.md#keep-a-derived-dataset-current-with-a-recipe).
-A trigger and a recipe that write the same dataset refuse startup.
+## Updates from derived datasets
 
 An openEO job whose graph ends in `save_result` as Zarr with a `dataset_id` publishes a managed
 dataset, and owns that publication and its `dataset.updated` event. Startup replay and the live
-consumers read events from the native and the openEO job stores alike, so a trigger or a
-pipeline on a derived dataset needs nothing special.
+consumers read events from the native and the openEO job stores alike, so a pipeline on a
+derived dataset needs nothing special.
 
 - **Only a published output is announced.** The event is recorded once the Icechunk commit has
   landed, the artifact is registered and its publication is settled, and it follows the stored
@@ -159,7 +62,7 @@ pipeline on a derived dataset needs nothing special.
   `producer_job_id` and `output_snapshot_id`, and its id is derived from the job, the artifact
   and the committed snapshot. Completing the same commit again, in a retry or at a restart, is
   the same logical update; a deliberate re-run of the job commits a new snapshot and is a new
-  update, which triggers and pipelines act on again.
+  update, which recipes and pipelines act on again.
 - **The snapshot is provenance, not a version.** `output_snapshot_id` is the physical Icechunk
   snapshot the job committed. The artifact records it under `provenance`, with the producing
   job and the execution evidence (process digest and input artifacts, source datasets and input
@@ -170,18 +73,17 @@ pipeline on a derived dataset needs nothing special.
   would read now is another artifact or another snapshot, so a dataset computed before its
   input's last sync says so; the dataset page shows the same. The STAC collection links each
   input as `derived_from` and names this instance as its `processor` provider, which carries the
-  processing time and OCS version. Nothing recomputes it: running the workflow again records new
-  provenance, and the earlier job stays.
+  processing time and OCS version.
 
 The job records its intent before writing, marks the publication `committing` at the
 cancellation gate just before the commit, and writes the outcome and event together after
 registration. A restart that finds it `committing` searches the store history above the
 attempt's starting snapshot for the commit message naming the job and attempt: found, it
 completes the publication with that snapshot; not found, nothing was published and the job runs
-again, whether a user or a trigger submitted it. A job that recorded its event but stopped
-before finishing is finished at restart and its event dispatched; one that finished but stopped
-before dispatching is found by startup replay. Cancellation before the gate publishes nothing;
-after it, and while a commit is unresolved, cancellation is refused.
+again, whoever submitted it. A job that recorded its event but stopped before finishing is
+finished at restart and its event dispatched; one that finished but stopped before dispatching
+is found by startup replay. Cancellation before the gate publishes nothing; after it, and while
+a commit is unresolved, cancellation is refused.
 
 An ordinary error after the gate (registering the artifact, publishing it, recording the
 outcome) never loses a commit that landed. The failing attempt completes the publication if it
@@ -190,42 +92,46 @@ it from the existing commit rather than computing and committing again. Startup 
 watching a pending final attempt while its dataset lock or another transient dependency is
 unavailable; once completion succeeds, the job is marked finished and its one event is emitted.
 
-Each event and trigger pair produces a deterministic openEO job ID. OCS replays persisted events
-at startup, but an already created, queued, running, or completed job is not duplicated. If OCS
-stopped after creating a job but before queueing it, startup queues that existing job.
+## Feature collections in workflow arguments
 
-A trigger is activated the first time OCS starts with it configured. By default
-(`replay_existing: false`), startup replay ignores events that predate the trigger's activation, so
-adding a new trigger does not backfill the workflow over every historical update. Set
-`replay_existing: true` to opt into replaying all persisted events for that trigger. Newly
-persisted events are always dispatched immediately, regardless of this flag.
+A pipeline binds a workflow's geometry parameter as `{ from_features: districts }`, naming a
+feature collection declared under `plugins/vectors/` (see
+[Installable plugins](installable_plugins.md#package-layout)) instead of embedding a
+`FeatureCollection`. This shorthand is resolved when the pipeline submits its job and is not a
+general openEO process-graph argument: direct process graphs call `load_features` explicitly.
 
-Workflow execution and status remain owned by the openEO batch-job service and are visible under
-`GET /jobs`. Workflows may also be submitted directly without a preceding dataset sync.
+The reference is never resolved into geometry at submission. Instead OCS rewrites it into a
+sibling node in the process graph that the workflow calls `load_features` on:
 
-Triggered jobs share the existing openEO job pool with manually submitted jobs — there is no
-separate automation queue or concurrency limit. A fan-out of several triggers therefore runs
-independently in that pool. Bounding total workflow concurrency is a general resource-policy
-concern left to later work; until then the per-store lock remains the write-safety boundary for
-workflows that publish managed datasets.
-
-## Retries and restarts
-
-A triggered workflow job runs up to `max_attempts` times, the first attempt included. The
-default is 3 and the bound is 10:
-
-```yaml
-automation:
-  workflow_triggers:
-    - id: chirps-to-dhis2
-      on_update_of: chirps3_precipitation_daily
-      workflow_id: aggregate_to_dhis2_json
-      max_attempts: 3
-      arguments: { ... }
+```json
+{
+  "features_districts": {
+    "process_id": "load_features",
+    "arguments": { "id": "districts", "version": "2026-09-01T06:00:00+00:00" }
+  },
+  "workflow": {
+    "process_id": "aggregate_by_features",
+    "arguments": { "geometries": { "from_node": "features_districts" } },
+    "result": true
+  }
+}
 ```
 
-Every attempt runs under the same deterministic job ID, so a retry is still the one job for
-that event and trigger, and replaying the event does not create another.
+This keeps a country's whole org unit hierarchy out of the persisted job record. At submission,
+OCS resolves the current feature record and stores only the collection id, its refresh timestamp,
+and a `load_features` call. The timestamp pins execution to that record: if the collection is
+refreshed while the job is queued, the job refuses the stale binding instead of silently running
+against different geometry.
+
+## Jobs, retries and restarts
+
+A pipeline run and a derived dataset refresh each run as an openEO batch job, visible under
+`GET /jobs` and sharing the job pool with jobs submitted directly; there is no separate
+automation queue or concurrency limit. Each job's id is derived from the event it answers and
+its owner, so replaying an event at startup finds the existing job instead of creating another.
+If OCS stopped after creating a job but before queueing it, startup queues that existing job.
+
+Such a job runs up to 3 times, the first attempt included, under the same job id.
 
 - **A failure while the workflow runs is retried after a backoff** of 1, 2, then 4 minutes.
   This covers an unreachable source, a timeout, a server error, a store another writer is
@@ -248,85 +154,17 @@ that event and trigger, and replaying the event does not create another.
 
 When the attempts run out, the job stays `error`. Its error names the attempt, for example
 `OSError: connection reset (attempt 3 of 3)`, and `GET /jobs/{job_id}/results` answers with it.
-The job's `logs` field lists every attempt with its time and outcome.
+The job's `logs` field lists every attempt with its time and outcome. Re-running a failed job
+with `POST /jobs/{job_id}/results` starts a fresh attempt budget.
 
-Only an attempt that finishes can deliver, so a trigger with `deliver` imports the result of
-the successful attempt, once. Re-running a failed job with `POST /jobs/{job_id}/results`
-starts a fresh attempt budget.
-
-Jobs submitted directly, not by a trigger, run once as before. A job still running in another
-OCS process, for example one that has not finished shutting down, is not marked failed at
-startup: it is left to that process, and taken over if the process exits without finishing it.
-
-## Deliver the result to DHIS2
-
-A trigger can deliver its job's result once the job finishes. The workflow must save through a
-[named export](export_plugins.md), and `deliver.export` names that same export:
-
-```yaml
-automation:
-  workflow_triggers:
-    - id: chirps-monthly-to-districts
-      on_update_of: chirps3_precipitation_monthly
-      workflow_id: aggregate_to_dhis2_json
-      arguments:
-        dataset_id: $event.dataset_id
-        temporal_extent: [$event.previous_end, $event.current_end]
-        geometries: { from_features: districts }
-        export: chirps-monthly-districts
-      deliver:
-        export: chirps-monthly-districts
-        dry_run: true   # the default; set false to import into DHIS2
-```
-
-When a job created by the trigger finishes, OCS submits a delivery exactly as
-[`POST /exports/{export_id}`](export_plugins.md#deliver-a-saved-export) does. Verification,
-chunking, checkpoints, the per-export lock, and the import report all come from that delivery
-job. The source job lists it under `usage.deliveries`. A job that fails or is canceled
-delivers nothing.
-
-`dry_run` defaults to `true`, so writing to DHIS2 is an explicit opt-in. Inspect the dry-run
-reports first, then set `dry_run: false`. Only jobs that finish after the change are imported.
-Jobs that finished earlier are never imported live, whether or not their dry run was delivered.
-
-Each finished job is delivered at most once per export and mode. The idempotency key is
-`auto:{job_id}:{export}:{dry-run|live}`, so replaying an event or restarting OCS creates no
-second delivery. A job records the delivery it owes in the same write that marks it finished.
-At startup OCS submits any recorded delivery missed because the process stopped after a job
-finished. If submission fails, the source job exposes the latest failure under
-`usage.delivery_error`; OCS retries it during the next startup reconciliation, not on an
-in-process timer. A workflow finishing during shutdown may likewise defer submission until
-the next startup reconciliation. A job keeps its delivery links when re-run by hand, so a
-delivered job is not delivered again, even after switching to live; submit the new result through
-`POST /exports/{export_id}` instead.
-
-Adding `deliver` to an existing trigger does not deliver its history. The delivery step has
-its own activation time, and only jobs that finish after it are delivered. Changing
-`deliver.export` or `deliver.dry_run`, or removing `deliver` and adding it back, starts a new
-activation. A job that finishes while its trigger has no active delivery step, for example
-while `deliver` is absent or the instance is read-only, owes nothing and is never delivered
-later. `replay_existing` applies to workflow submission only, never to delivery.
-
-Startup fails, naming the trigger, when `deliver.export` is not a configured export, is
-configured more than once, its plugin is not `dhis2`, it has no `connection`, that connection
-is not configured, its mapping is invalid, or a literal `arguments.export` differs from
-`deliver.export`. A read-only instance validates the same configuration but leaves delivery
-inactive, allowing writable and serving instances to share one tracked configuration.
-
-The export delivers what exists at its period. To deliver a monthly export from a daily
-dataset, let one trigger derive and publish the monthly dataset, and a second trigger on that
-dataset's update run the export. See
-[the export's period must be reachable](export_plugins.md#the-exports-period-must-be-reachable-from-the-datasets-cadence).
-
-Delivery needs the `dhis2` extra (`open-climate-service[dhis2]`) and the connection's token in
-the server environment. See
-[named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins).
+Jobs submitted directly run once. A job still running in another OCS process, for example one
+that has not finished shutting down, is not marked failed at startup: it is left to that
+process, and taken over if the process exits without finishing it.
 
 ## Current boundary
 
-This mechanism dispatches workflows owned by the same OCS instance. It does not provide workflow
-dependency graphs, cross-service retries, webhooks, or distributed event consumption. A delivery
-that ends partial, rejected, or unknown is reported on its delivery job but does not yet notify
-anyone, and a workflow job that exhausts its attempts is not reported beyond its own
-status. Exactly one writable OCS process should perform automation until the stores and
-leadership model become shared and transactional.
+Automation dispatches workflows owned by the same OCS instance. It does not provide
+cross-service retries or distributed event consumption. A failing scheduled sync or pipeline
+can post to a webhook (see [Scheduled sync](scheduled_sync.md)). Exactly one writable OCS
+process should perform automation until the stores and leadership model become shared and
+transactional.

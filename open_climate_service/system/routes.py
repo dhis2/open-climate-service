@@ -183,7 +183,7 @@ async def manage_ingest(request: Request) -> Response:
             on_progress=on_progress,
         )
         # Inline, like the HTTP route without `respond-async`: recorded as a completed job
-        # so the update reaches workflow automation.
+        # so the update reaches derived datasets and pipelines.
         if events:
             record_inline_update(
                 label="ingestion",

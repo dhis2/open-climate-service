@@ -110,6 +110,8 @@
       controller = new AbortController();
       var body = new FormData(form);
       body.set("q", query);
+      // Names the asking field, so a lookup in a row can follow that row's other choices.
+      body.set("field", hidden.name);
       status("Searching…");
       fetch(url + "/" + encodeURIComponent(lookup), {
         method: "POST",

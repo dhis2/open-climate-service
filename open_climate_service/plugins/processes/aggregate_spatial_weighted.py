@@ -117,7 +117,12 @@ def aggregate_spatial_weighted(
     from open_climate_service.data_manager.services.utils import get_x_y_dims
     from open_climate_service.shared.classes import cube_classes
     from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
-    from open_climate_service.shared.vectors import features_on_raster, single_raster, vector_result
+    from open_climate_service.shared.vectors import (
+        SPATIAL_REDUCER_ATTR,
+        features_on_raster,
+        single_raster,
+        vector_result,
+    )
 
     # Validate the reducer argument
     if not isinstance(reducer, str) or reducer not in REDUCERS:
@@ -160,4 +165,6 @@ def aggregate_spatial_weighted(
 
     # The named method, so a DHIS2 export can check the aggregation it declares against this one.
     record_spatial_aggregation(reducer)
-    return vector_result(vec_cube, raster, frame.index)
+    result = vector_result(vec_cube, raster, frame.index)
+    result.attrs[SPATIAL_REDUCER_ATTR] = reducer
+    return result

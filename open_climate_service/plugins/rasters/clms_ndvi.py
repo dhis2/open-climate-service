@@ -10,7 +10,7 @@ detect and trigger a full re-ingestion. Each dekad's STAC item carries its versi
 Items are found through the Copernicus Data Space Ecosystem (CDSE) STAC API, which needs no
 account. Each is a global cloud-optimised GeoTIFF on a 1/336 degree EPSG:4326 grid in the CDSE
 S3 store, of which only the window inside the extent is read. Reading needs free CDSE S3 keys in
-the ``cdse`` profile of ``~/.aws/credentials``; GDAL reads the profile itself.
+``CDSE_S3_ACCESS_KEY`` and ``CDSE_S3_SECRET_KEY``.
 
 Raw values 0-250 are NDVI, scaled with the file's own scale and offset (``0.004 * value - 0.08``);
 252 (unknown), 253 (snow), 254 (water) and 255 (missing) become NaN, and so does 251, which the
@@ -26,6 +26,7 @@ from typing import Any, cast
 import httpx
 import xarray as xr
 
+from open_climate_service.plugins.rasters.providers import cdse
 from open_climate_service.shared.time import dekad_period_ids
 from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
 
@@ -34,7 +35,6 @@ _COLLECTION = "clms_ndvi_global_300m_10daily_v3_cog"
 _NO_DATA = range(251, 256)
 _S3_ENV: dict[str, Any] = {
     "AWS_S3_ENDPOINT": "eodata.dataspace.copernicus.eu",
-    "AWS_PROFILE": "cdse",
     "AWS_VIRTUAL_HOSTING": "FALSE",
     "AWS_HTTPS": "YES",
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
@@ -97,7 +97,7 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
 
         # The read is lazy until load, so the whole of it has to happen inside the S3 environment.
         try:
-            with rasterio.Env(**_S3_ENV):
+            with rasterio.Env(session=cdse.rasterio_session(), **_S3_ENV):
                 da = rioxarray.open_rasterio(path, chunks=None, mask_and_scale=False)
                 if not isinstance(da, xr.DataArray):
                     raise TypeError(f"Expected DataArray from CLMS NDVI raster read, got {type(da).__name__}")
@@ -106,9 +106,8 @@ class CLMSNDVIDekadalPlugin(BaseDatasetPlugin):
             message = str(exc)
             if any(hint in message for hint in ("403", "AccessDenied", "InvalidAccessKeyId", "AWS_SECRET_ACCESS_KEY")):
                 raise PermissionError(
-                    f"CDSE S3 refused {path}. Create free CDSE S3 keys at "
-                    "https://eodata-s3keysmanager.dataspace.copernicus.eu and add them to a [cdse] profile "
-                    "in ~/.aws/credentials."
+                    f"CDSE S3 refused {path}. Check CDSE_S3_ACCESS_KEY and CDSE_S3_SECRET_KEY in .env; "
+                    "new keys can be created at https://eodata-s3keysmanager.dataspace.copernicus.eu."
                 ) from exc
             raise
 

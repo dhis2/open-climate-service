@@ -38,6 +38,14 @@ def get_config() -> dict[str, Any]:
     return _load_config()
 
 
+_RETIRED_KEYS = {
+    "automation": "keep a derived dataset current with a produced_by recipe in its dataset template, "
+    "and deliver with a pipeline (docs/workflow_automation.md)",
+    "exports": "a pipeline owns the named export under its own id; create a manual pipeline instead "
+    "(docs/importing_to_dhis2.md)",
+}
+"""Top-level keys removed by CLIM-1426, and what replaces each."""
+
 # Module-level cache — reset between tests via monkeypatch on _cache.
 _cache: dict[str, Any] | None = None
 
@@ -52,14 +60,12 @@ def _load_config() -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"CLIMATE_SERVICE_CONFIG not found: {path}")
     text = path.read_text(encoding="utf-8")
-    # Named connections and export mappings are validated as literal definitions.
-    # Reject environment interpolation inside only these two blocks before
-    # substitution, so a secret that happens to contain YAML syntax can never
-    # break parsing or be cached, while existing interpolation elsewhere (for
-    # example bbox: [${MINX}, ${MINY}]) keeps working.
-    for block in ("dhis2_connections", "exports"):
-        if _block_uses_interpolation(text, block):
-            raise ValueError(f"{block} does not support environment interpolation; use literal values")
+    # Named connections are validated as literal definitions. Reject environment interpolation
+    # inside that block before substitution, so a secret that happens to contain YAML syntax can
+    # never break parsing or be cached, while interpolation elsewhere (for example
+    # bbox: [${MINX}, ${MINY}]) keeps working.
+    if _block_uses_interpolation(text, "dhis2_connections"):
+        raise ValueError("dhis2_connections does not support environment interpolation; use literal values")
     loaded = yaml.safe_load(_substitute_env_vars(text))
     if loaded is not None and not isinstance(loaded, dict):
         raise ValueError(f"CLIMATE_SERVICE_CONFIG must be a YAML mapping at the top level: {path}")
@@ -67,10 +73,12 @@ def _load_config() -> dict[str, Any]:
         from open_climate_service.exports.dhis2_config import parse_connections
 
         parse_connections(loaded["dhis2_connections"])
-    if loaded is not None and "exports" in loaded:
-        from open_climate_service.exports.manifest import validate_public_mapping
-
-        validate_public_mapping(loaded["exports"])
+    retired = [key for key in _RETIRED_KEYS if loaded is not None and key in loaded]
+    if retired:
+        raise ValueError(
+            "CLIMATE_SERVICE_CONFIG has settings OCS no longer reads: "
+            + "; ".join(f"'{key}': {_RETIRED_KEYS[key]}" for key in retired)
+        )
     _cache = dict(loaded or {})
     return _cache
 
@@ -78,9 +86,9 @@ def _load_config() -> dict[str, Any]:
 def _block_uses_interpolation(text: str, key: str) -> bool:
     """Return True when the top-level ``key`` block contains ``${...}`` tokens.
 
-    Interpolation is disallowed inside ``dhis2_connections`` and ``exports``
-    because those definitions are validated as literals and a substituted secret
-    must never be cached. The scan stops at the next top-level key, so
+    Interpolation is disallowed inside ``dhis2_connections`` because its
+    definitions are validated as literals and a substituted secret must never be
+    cached. The scan stops at the next top-level key, so
     interpolation in other blocks remains supported.
     """
     lines = text.splitlines()
@@ -227,6 +235,14 @@ def get_features_root() -> Path:
     listing (CLIM-836).
     """
     return get_data_root() / "vectors"
+
+
+def get_tables_root() -> Path:
+    """Return the directory holding table datasets, one folder per dataset (CLIM-1553).
+
+    Like `vectors/`, not an inbox: a table exists because a record names its folder.
+    """
+    return get_data_root() / "tables"
 
 
 def get_utc_offset_hours() -> float:

@@ -209,7 +209,12 @@ def aggregate_spatial_classes(
     """
     from open_climate_service.shared.classes import cube_classes
     from open_climate_service.shared.provenance import record_features, record_spatial_aggregation
-    from open_climate_service.shared.vectors import features_on_raster, single_raster, vector_result
+    from open_climate_service.shared.vectors import (
+        SPATIAL_REDUCER_ATTR,
+        features_on_raster,
+        single_raster,
+        vector_result,
+    )
 
     if reducer not in REDUCERS:
         raise ValueError(f"aggregate_spatial_classes: reducer must be one of {', '.join(REDUCERS)}")
@@ -230,6 +235,10 @@ def aggregate_spatial_classes(
         )
     codes, labels = classification
 
+    # A class statistic is not in the input's unit: a share is a fraction and a majority a class
+    # code, so neither has one, and a total is in the weights' unit.
+    units: str | None = None
+
     # Prepare data for the requested reducer
     if reducer == "total":
         if weights is None:
@@ -237,6 +246,7 @@ def aggregate_spatial_classes(
 
         # Axes renamed before the one-grid check, so a weight on lon/lat is one grid, not a series.
         weight = _ensure_single_grid(_ensure_xy(single_raster(weights))).load()
+        units = weight.attrs.get("units")
 
         # The sums are on the weight grid, so the geometries are put in its CRS.
         frame = features_on_raster(geometries, weight)
@@ -268,4 +278,8 @@ def aggregate_spatial_classes(
 
     # Record aggregation method and return the results
     record_spatial_aggregation(reducer)
-    return vector_result(result, reference, frame.index)
+    aggregated = vector_result(result, reference, frame.index)
+    aggregated.attrs[SPATIAL_REDUCER_ATTR] = reducer
+    if units:
+        aggregated.attrs["units"] = units
+    return aggregated

@@ -1,4 +1,5 @@
 import os
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -435,6 +436,70 @@ def test_zarr_route_sees_a_record_write_the_modification_time_misses(
     assert isinstance(first, services.Response)
     assert isinstance(second, services.Response)
     assert (first.body, second.body) == (b"store", b"other")
+
+
+def test_a_record_write_never_leaves_readers_a_partial_records_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chunk requests read records.json without the lock; a write in progress must not show them half a file.
+
+    Seen as 500s on chunk requests while the startup statistics pass rewrote the file in place.
+    """
+    from open_climate_service.shared import persistence
+
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
+    monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", artifacts_dir / "records.json")
+    services._save_records([_artifact(artifact_id="first")])
+    seen_mid_write: list[list[str]] = []
+    replace = persistence.os.replace
+
+    def read_then_replace(source: str, target: Path) -> None:
+        seen_mid_write.append([record.artifact_id for record in services._load_records()])
+        replace(source, target)
+
+    monkeypatch.setattr(persistence.os, "replace", read_then_replace)
+    services._store_artifact_record(_artifact(artifact_id="second", end="2026-01-11"))
+
+    assert seen_mid_write == [["first"]]
+    assert [record.artifact_id for record in services._load_records()] == ["first", "second"]
+
+
+def test_a_replace_refused_while_a_reader_holds_the_file_is_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_climate_service.shared import persistence
+
+    refusals = [PermissionError("held by a reader")]
+    replace = persistence.os.replace
+
+    def refuse_once(source: str, target: Path) -> None:
+        if refusals:
+            raise refusals.pop()
+        replace(source, target)
+
+    monkeypatch.setattr(persistence.os, "replace", refuse_once)
+    persistence.atomic_text(tmp_path / "index.json", "[]")
+
+    assert (tmp_path / "index.json").read_text(encoding="utf-8") == "[]"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_record_write_keeps_the_records_file_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replacement is written through an owner-only temporary file; records.json must not become owner-only."""
+    umask = os.umask(0)
+    os.umask(umask)
+    artifacts_dir = tmp_path / "artifacts"
+    index_path = artifacts_dir / "records.json"
+    monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
+    monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", index_path)
+
+    services._save_records([_artifact(artifact_id="first")])
+    assert stat.S_IMODE(index_path.stat().st_mode) == 0o666 & ~umask
+
+    index_path.chmod(0o640)
+    services._save_records([_artifact(artifact_id="second")])
+    assert stat.S_IMODE(index_path.stat().st_mode) == 0o640
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:

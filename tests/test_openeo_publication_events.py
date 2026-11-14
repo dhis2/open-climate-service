@@ -12,8 +12,8 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
@@ -598,8 +598,7 @@ def test_a_crash_after_the_event_is_durable_finishes_without_a_second_event(
 def test_a_crash_after_finished_but_before_dispatch_is_delivered_by_startup_replay(
     service: Any, received: list[JobEvent], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.automation.config import AutomationConfig, WorkflowTrigger
-    from open_climate_service.automation.service import WorkflowAutomationService
+    from open_climate_service.jobs.events import persisted_events
 
     _job("job-1", 5.0, monkeypatch)
 
@@ -614,29 +613,8 @@ def test_a_crash_after_finished_but_before_dispatch_is_delivered_by_startup_repl
     # Normal recovery no longer looks at a FINISHED job.
     assert service._recover("job-1") is False and received == []
 
-    # Startup replay reads the event from the openEO job that owns it.
-    submitted: list[str] = []
-    fake = SimpleNamespace(
-        create_triggered_job=lambda body, *, source_event_id, trigger_id, max_attempts: (
-            submitted.append(source_event_id) or SimpleNamespace(id=f"job-for-{source_event_id}"),
-            True,
-        ),
-        start_triggered_job=lambda job_id: True,
-    )
-    config = AutomationConfig(
-        workflow_triggers=[
-            WorkflowTrigger(
-                id="after-derived",
-                on_update_of=_DATASET,
-                workflow_id="aggregate_by_features",
-                arguments={"dataset_id": "$event.dataset_id"},
-                replay_existing=True,
-            )
-        ]
-    )
-    automation = WorkflowAutomationService(config_loader=lambda: config, openeo_service=fake)  # type: ignore[arg-type]
-    automation.replay()
-    assert submitted == [event.event_id]
+    # Startup replay (derivations and pipelines alike) reads the event from the job that owns it.
+    assert event in persisted_events()
 
 
 # --- ordinary failures after the commit -----------------------------------------------------
@@ -988,6 +966,24 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     jsonschema.validate(collection, schema)
     [processor] = [provider for provider in collection["providers"] if "processor" in provider["roles"]]
     assert processor["processing:software"] == {"open-climate-service": __version__}
+    # As a STAC checker reads it: this instance is the one host, last; every link on this host,
+    # the relative README and AGENTS among them, answers HEAD; `proj:code` is declared at v2.0.0;
+    # and the Portolan profile is declared.
+    assert [provider["roles"] for provider in collection["providers"]][-2:] == [["processor"], ["host"]]
+    collection_url = f"http://testserver/stac/{_DATASET}/collection.json"
+    for link in collection["links"]:
+        href = urljoin(collection_url, link["href"])
+        if href.startswith("http://testserver/"):
+            assert client.head(href).status_code == 200, link
+    assert "https://stac-extensions.github.io/projection/v2.0.0/schema.json" in collection["stac_extensions"]
+    assert not any("projection/v1" in extension for extension in collection["stac_extensions"])
+    assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in collection["stac_extensions"]
+    # With this instance as host, the collection is a mirror, which records when it was last synced.
+    assert collection["updated"].endswith("Z")
+    readme = client.get(f"/stac/{_DATASET}/README.md").text
+    assert "(processor)" in readme and "(host)" in readme
+    agents = client.get(f"/stac/{_DATASET}/AGENTS.md").text
+    assert f'xr.open_zarr("http://testserver/zarr/{_DATASET}"' in agents
     assert client.get(f"/datasets/{source}").json()["provenance"] is None
 
     plugin.available.append("2026-01-03")

@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import calendar
 import json
 import logging
-import netrc
-import os
 from threading import Lock
 from time import monotonic
 from typing import Any, cast
 from urllib.error import HTTPError
-from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 import earthkit.transforms.climatology as ek_climatology
 import xarray as xr
 
+from open_climate_service.plugins.rasters.providers import edh
 from open_climate_service.streaming import BaseDatasetPlugin, cell_pad
 from open_climate_service.transforms.climatology import circular_rolling_mean
 from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, metres_to_mm
@@ -26,7 +23,6 @@ from open_climate_service.transforms.unit_conversion import kelvin_to_celsius, m
 logger = logging.getLogger(__name__)
 
 _EDH_DAILY_URL = "https://data.earthdatahub.destine.eu/era5/era5-land-daily-utc-v1.zarr"
-_EDH_API_KEY_ENV = "EDH_API_KEY"
 _EDH_UNKNOWN_TTL_SECONDS = 300.0
 _edh_is_v3_cache: dict[str, bool] = {}
 _edh_unknown_until: dict[str, float] = {}
@@ -47,7 +43,7 @@ def _edh_is_zarr_v3(url: str) -> bool | None:
 
     verdict: bool | None = None
     try:
-        request = Request(f"{url}/zarr.json", headers=_edh_auth_header(url))
+        request = Request(f"{url}/zarr.json", headers=edh.auth_headers())
         with urlopen(request, timeout=15) as response:  # noqa: S310  # fixed https EDH host
             document = json.loads(response.read())
         declared = document.get("zarr_format") if isinstance(document, dict) else None
@@ -85,41 +81,9 @@ def _require_zarr_v3(url: str, ds: xr.Dataset) -> None:
 
 
 def _edh_open_zarr(url: str) -> xr.Dataset:
-    """Open an EDH Zarr store with its documented Basic Auth options."""
-    opened = xr.open_zarr(
-        _edh_authenticated_url(url),
-        storage_options={"client_kwargs": {"trust_env": True}},
-    )
+    opened = xr.open_zarr(url, storage_options={"headers": edh.auth_headers()})
     _require_zarr_v3(url, opened)
     return opened  # type: ignore[no-any-return]
-
-
-def _edh_authenticated_url(url: str) -> str:
-    token = os.environ.get(_EDH_API_KEY_ENV, "")
-    if not token:
-        return url
-    parts = urlparse(url)
-    return urlunparse(parts._replace(netloc=f"edh:{token}@{parts.netloc}"))
-
-
-def _edh_auth_header(url: str) -> dict[str, str]:
-    token = os.environ.get(_EDH_API_KEY_ENV, "")
-    if token:
-        return _basic_auth("edh", token)
-    try:
-        host = urlparse(url).hostname or ""
-        credentials = netrc.netrc().authenticators(host)
-    except (OSError, netrc.NetrcParseError):
-        return {}
-    if not credentials:
-        return {}
-    login, _, password = credentials
-    return _basic_auth(login or "edh", password or "")
-
-
-def _basic_auth(login: str, password: str) -> dict[str, str]:
-    encoded = base64.b64encode(f"{login}:{password}".encode()).decode()
-    return {"Authorization": f"Basic {encoded}"}
 
 
 def _drop_auxiliary_variables(ds: xr.Dataset, variable: str) -> xr.Dataset:

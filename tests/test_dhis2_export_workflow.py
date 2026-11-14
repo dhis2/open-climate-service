@@ -29,8 +29,11 @@ from open_climate_service.openeo import execution
 from open_climate_service.openeo import jobs as openeo_jobs
 from open_climate_service.openeo import workflows as workflow_store
 from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_climate_service.pipelines import exports as pipeline_exports
 from open_climate_service.shared.provenance import capture_execution, record_source
 from open_climate_service.shared.time import utc_now
+
+from .conftest import named_exports
 
 _DATA_ELEMENT = "BXgDHhPdFVU"
 _OU_A = "ImspTQPwCqd"
@@ -103,18 +106,19 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[openeo
         config,
         "_cache",
         {
-            "exports": [
-                {
-                    "id": "rain-monthly",
-                    "plugin": "dhis2",
-                    "dataset": "rain_monthly",
-                    "connection": "hmis",
-                    "period_type": "monthly",
-                    "aggregation": "mean",
-                    "series": [{"data_element": _DATA_ELEMENT}],
-                }
-            ],
             "dhis2_connections": [{"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "TEST_TOKEN"}],
+        },
+    )
+    named_exports(
+        monkeypatch,
+        {
+            "id": "rain-monthly",
+            "plugin": "dhis2",
+            "dataset": "rain_monthly",
+            "connection": "hmis",
+            "period_type": "monthly",
+            "aggregation": "mean",
+            "series": [{"data_element": _DATA_ELEMENT}],
         },
     )
     base = execution._build_process_registry()
@@ -255,7 +259,7 @@ def test_workflow_rejects_method_contradicting_the_export(instance: openeo_jobs.
 
 
 def test_workflow_accepts_median_declared_by_the_export(instance: openeo_jobs.OpenEOJobService) -> None:
-    config.get_config()["exports"][0]["aggregation"] = "median"
+    pipeline_exports.pipeline_export_definitions()[0]["aggregation"] = "median"
     record = _run(instance, "agg-job", _process(_geometries(), method="median"))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
     with lease_export_input("rain-monthly", "agg-job") as verified:
@@ -263,7 +267,7 @@ def test_workflow_accepts_median_declared_by_the_export(instance: openeo_jobs.Op
 
 
 def test_undeclared_aggregation_accepts_any_method(instance: openeo_jobs.OpenEOJobService) -> None:
-    del config.get_config()["exports"][0]["aggregation"]
+    del pipeline_exports.pipeline_export_definitions()[0]["aggregation"]
     record = _run(instance, "agg-job", _process(_geometries(), method="max"))
     assert record.status == OpenEOJobStatus.FINISHED, record.error_message
 

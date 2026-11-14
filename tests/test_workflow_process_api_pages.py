@@ -132,8 +132,8 @@ def test_workflow_descriptions_are_escaped() -> None:
     assert str(context["blocks"][0]["html"]) == "&lt;script&gt;x&lt;/script&gt; <code>&lt;b&gt;</code>"
 
 
-def test_the_workflow_page_lists_outputs_and_triggers() -> None:
-    from open_climate_service.automation.config import WorkflowTrigger
+def test_the_workflow_page_lists_outputs_and_the_datasets_it_keeps_current() -> None:
+    from open_climate_service.data_registry.recipes import Recipe
 
     record = _workflow_record(id="climate_normal")
     templates = [
@@ -141,16 +141,20 @@ def test_the_workflow_page_lists_outputs_and_triggers() -> None:
         _template("normal_a", name="A normal", produced_by="climate_normal"),
         _template("other", produced_by="temporal_change"),
     ]
-    triggers = [
-        WorkflowTrigger(id="refresh", on_update_of="chirps_monthly", workflow_id="climate_normal", arguments={"x": 1}),
-        WorkflowTrigger(id="elsewhere", on_update_of="chirps_monthly", workflow_id="temporal_change"),
+    recipes = [
+        Recipe(output="normal_b", workflow="climate_normal", arguments={"x": "chirps_monthly"}, refresh_on="x"),
+        Recipe(output="normal_a", workflow="climate_normal", arguments={"x": "chirps_monthly"}, refresh_on="x"),
+        Recipe(output="change", workflow="temporal_change", arguments={"x": "chirps_monthly"}, refresh_on="x"),
+        Recipe(output="fixed", workflow="climate_normal", arguments={"x": "chirps_monthly"}),
     ]
 
-    context = landing._workflow_page_context(record, templates, [_record("normal_b")], triggers)
+    context = landing._workflow_page_context(record, templates, [_record("normal_b")], recipes)
 
     assert [(o["id"], o["ingested"]) for o in context["outputs"]] == [("normal_a", False), ("normal_b", True)]
-    assert [t["id"] for t in context["triggers"]] == ["refresh"]
-    assert context["triggers"][0]["held"] is False
+    # Only this workflow's recipes that refresh on an input, of derived datasets that exist, are kept current.
+    assert [(r["output"], r["input"], r["held"]) for r in context["refreshes"]] == [
+        ("normal_b", "chirps_monthly", False)
+    ]
 
 
 def test_the_workflow_page_is_served(client: TestClient) -> None:

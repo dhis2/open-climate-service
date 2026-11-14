@@ -69,7 +69,7 @@ Open Climate Service ships with ready-to-use workflows for aggregating **any pub
 
 | Workflow | Output |
 |---|---|
-| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a [named export](export_plugins.md), with a delivery manifest |
+| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a pipeline's [named export](export_plugins.md), with a delivery manifest |
 | `aggregate_to_chap_csv` | CHAP wide CSV (`time_period`, `location`, one column per variable) |
 | `aggregate_by_features` | The aggregated vector cube itself, saved by the caller; the workflow [pipelines](web_interface.md#the-pipeline-pages-pipelines) use |
 
@@ -82,11 +82,11 @@ The first two run `load_collection → aggregate_spatial_weighted → save_resul
 | `dataset_id` | both | — | Published GeoZarr collection to aggregate (see `/datasets`) |
 | `temporal_extent` | both | — | `[start, end]` ISO-8601 dates |
 | `geometries` | both | — | GeoJSON `FeatureCollection`; each feature's `id` is the org unit / location |
-| `export` | DHIS2 only | — | ID of a named DHIS2 export in the instance configuration |
+| `export` | DHIS2 only | — | ID of a pipeline whose destination is DHIS2; its named export is used |
 | `method` | both | `mean` | Spatial aggregation method: `mean`, `min`, `max`, `sum`, or `median` |
 | `period_type` | CHAP only | `month` | Period type used to format each time step: `day`, `week`, `month`, `quarter`, `year` |
 
-The DHIS2 workflow takes no data element or period type. The named export supplies
+The DHIS2 workflow takes no data element or period type. The pipeline's named export supplies
 the data element mapping, period type, and DHIS2 connection, so the workflow stays
 the same on every instance. When the export declares `aggregation`, the workflow's
 `method` must match it or the run fails.

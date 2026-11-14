@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
+import os
+import threading
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -57,13 +60,58 @@ def collection_path(dataset_id: str) -> str:
     return f"/stac/{path_segment(dataset_id)}/collection.json"
 
 
+def file_size(path: Path) -> dict[str, object]:
+    """`file:size` alone, for data files: hashing them on request would read all vector data on a cold cache.
+
+    Their checksums are to be computed when the writer writes the file (CLIM-1879).
+    """
+    return {"file:size": path.stat().st_size}
+
+
+def file_fields(path: Path) -> dict[str, object]:
+    """`file:size` and `file:checksum` of a single file an asset serves, as the file extension defines them.
+
+    Only for a file: a Zarr or Icechunk store is a directory of chunks, with neither one size nor
+    one checksum. The checksum is a sha256 multihash (`1220` and the hex digest), computed once
+    for each version of the file, as its inode, size and modification time identify it. Size and
+    checksum come from one open file, so a file replaced in between (a thumbnail refresh) can't
+    pair one version's size with the other's checksum.
+    """
+    with open(path, "rb") as handle:
+        stat = os.fstat(handle.fileno())
+        version = (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
+        with _CHECKSUMS_LOCK:
+            checksum = _CHECKSUMS.get(version)
+        if checksum is None:
+            # Hashed outside the lock, so one large file does not hold up every other request.
+            digest = hashlib.sha256()
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+            checksum = "1220" + digest.hexdigest()
+            with _CHECKSUMS_LOCK:
+                _CHECKSUMS[version] = checksum
+                while len(_CHECKSUMS) > 256:
+                    _CHECKSUMS.pop(next(iter(_CHECKSUMS)))
+    return {"file:size": stat.st_size, "file:checksum": checksum}
+
+
+_CHECKSUMS: dict[tuple[str, int, int, int], str] = {}
+"""Checksums by file version, oldest first; `file_fields` keeps the latest 256."""
+# Routes run in a thread pool, so two requests evicting at once could pop the same entry.
+_CHECKSUMS_LOCK = threading.Lock()
+
+
 CF_EXTENSION = "https://stac-extensions.github.io/cf/v1.0.0/schema.json"
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
-PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
+# v2.0.0, whose `proj:code` is the field written here; v1.1.0 named it `proj:epsg`.
+PROJECTION_EXTENSION = "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
 RENDER_EXTENSION = "https://stac-extensions.github.io/render/v2.0.0/schema.json"
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
 WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
+FILE_EXTENSION = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
+# The versioned profile URI is Portolan's only conformance signal; it defines no fields of its own.
+PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
@@ -154,6 +202,7 @@ def build_catalog(request: Request) -> dict[str, object]:
         )
     return {
         "stac_version": STAC_VERSION,
+        "stac_extensions": [PORTOLAN_SCHEMA],
         "type": "Catalog",
         "id": _get_catalog_id(),
         # The instance's own name, as in the web interface; "Open Climate Service" when unset.
@@ -228,7 +277,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     collection_payload["description"] = template.description
     collection_payload["title"] = template.title
     collection_payload["renders"] = _build_renders(artifact, source_dataset)
-    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION, RENDER_EXTENSION}
+    extensions = {DATACUBE_EXTENSION, ZARR_EXTENSION, RENDER_EXTENSION, PORTOLAN_SCHEMA}
     existing_extensions = collection_payload.get("stac_extensions", [])
     if isinstance(existing_extensions, list):
         collection_payload["stac_extensions"] = sorted({*existing_extensions, *extensions})
@@ -256,6 +305,14 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
                 "title": input_id,
             }
         )
+    # As for a feature collection: the original source this collection mirrors, and when the copy
+    # was last synced from it.
+    source_url = source_dataset.get("source_url")
+    if isinstance(source_url, str) and source_url.strip():
+        template_links.append({"rel": "via", "href": source_url.strip(), "type": "text/html", "title": "Source"})
+    collection_payload["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
+    # Relative, as for the catalog and feature collections, so they resolve beside the document.
+    template_links.extend(_document_links())
     collection_payload["links"] = template_links
     assets = collection_payload.setdefault("assets", {})
     zarr_from_xstac = assets.get("zarr", {}) if isinstance(assets, dict) else {}
@@ -285,7 +342,9 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             "type": "image/png",
             "title": "Thumbnail",
             "roles": ["thumbnail"],
+            **file_fields(thumbnail_path(dataset_id)),
         }
+        collection_payload["stac_extensions"] = sorted({*collection_payload["stac_extensions"], FILE_EXTENSION})
     if artifact.format == ArtifactFormat.ICECHUNK:
         collection_payload["assets"]["icechunk"] = {
             "href": absolute_url(request, f"/icechunk/{path_segment(dataset_id)}"),
@@ -306,14 +365,12 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             {*collection_payload.get("stac_extensions", []), STAC_CLASSIFICATION_EXTENSION}
         )
     collection_payload["license"] = template.license
-    providers = _build_providers(source_dataset)
-    if artifact.provenance is not None:
-        providers.append(_processor_provider(artifact, request))
+    processor = [_processor_provider(artifact, request)] if artifact.provenance is not None else []
+    if processor:
         collection_payload["stac_extensions"] = sorted(
             {*collection_payload.get("stac_extensions", []), PROCESSING_EXTENSION}
         )
-    if providers:
-        collection_payload["providers"] = providers
+    collection_payload["providers"] = _published_providers(source_dataset, request, processor)
     _remove_helper_variables(collection_payload)
     _add_band_statistics(collection_payload, artifact)
     _round_spatial_steps(collection_payload)
@@ -378,7 +435,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     # The CRS the geometry is actually stored in, which for a reprojected collection is not
     # WGS 84 even though the extent above is — `spatial_wgs84` exists for exactly that split.
     collection.extra_fields["proj:code"] = detail.crs
-    collection.stac_extensions.append(PROJECTION_EXTENSION)
+    collection.stac_extensions.extend([PROJECTION_EXTENSION, PORTOLAN_SCHEMA])
 
     # When the collection was last refreshed, which for a mirror of an upstream source is when
     # it was last synced from it.
@@ -393,6 +450,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
         source_dataset=source_dataset,
         version=artifact.version.value if artifact.version is not None else None,
     )
+    data_path = Path(str(artifact.path)) if artifact.path else None
     collection.add_asset(
         "data",
         pystac.Asset(
@@ -400,11 +458,12 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             media_type=PARQUET_MEDIA_TYPE,
             title="GeoParquet collection",
             roles=["data"],
+            extra_fields=file_size(data_path) if data_path is not None and data_path.is_file() else None,
         ),
     )
     # Vector tiles for display, when the refresh built them, and the style the viewer draws them
     # with. The `pmtiles` link is how web-map-links clients find the archive and its layer.
-    if artifact.path and tiles.archive_path(Path(str(artifact.path))).is_file():
+    if data_path is not None and tiles.archive_path(data_path).is_file():
         tiles_href = absolute_url(request, f"/features/{path_segment(dataset_id)}/data.pmtiles")
         collection.add_asset(
             "tiles",
@@ -413,6 +472,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 media_type=tiles.PMTILES_MEDIA_TYPE,
                 title="Vector tiles (PMTiles)",
                 roles=["visual"],
+                extra_fields=file_size(tiles.archive_path(data_path)),
             ),
         )
         collection.add_asset(
@@ -444,36 +504,48 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 media_type="image/png",
                 title="Thumbnail",
                 roles=["thumbnail"],
+                extra_fields=file_fields(thumbnail_path(dataset_id)),
             ),
         )
+
+    # As for a raster collection: declared only when an asset carries `file:*` fields, which a
+    # collection whose GeoParquet has gone missing does not.
+    if any("file:size" in asset.extra_fields for asset in collection.assets.values()):
+        collection.stac_extensions.append(FILE_EXTENSION)
 
     # `transform_hrefs=False` because every href here is already absolute. With it on, pystac
     # resolves the root link to rewrite relative ones — which means *fetching* the catalogue
     # over HTTP while serving a request for one of its children.
     payload = collection.to_dict(include_self_link=True, transform_hrefs=False)
     payload["stac_version"] = STAC_VERSION
-    payload["providers"] = _feature_providers(source_dataset, request)
+    payload["providers"] = _published_providers(source_dataset, request)
     return payload
 
 
-def _feature_providers(source_dataset: dict[str, Any], request: Request) -> list[dict[str, Any]]:
-    """The template's providers, then this instance as the one `host`, last.
+def _published_providers(
+    source_dataset: dict[str, Any], request: Request, processors: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """The template's providers, then any processor, then this instance as the one `host`, last.
 
-    The template names who made the data, and its `producer` role says so. Only this instance
-    hosts the copy being served, so a `host` role declared in a template is dropped rather than
-    published as a second host. The host's `url` is the instance itself, where its operator is
-    reached.
+    The template names who made the data, so a provider it declares without roles is the
+    `producer`. Only this instance hosts the copy being served, so a `host` role declared in a
+    template is dropped rather than published as a second host; a provider that was only a host
+    (an upstream mirror) stays listed without roles, since it need not have made the data. The
+    host's `url` is the instance itself, where its operator is reached. Raster and feature
+    collections share this, so both carry a producer and exactly one host, as STAC checkers expect.
     """
     from open_climate_service import config as api_config
 
     providers = []
     for provider in _build_providers(source_dataset):
         entry = {key: value for key, value in provider.items() if key != "roles"}
-        roles = [role for role in provider.get("roles", []) if role != "host"]
+        declared = provider.get("roles") or []
+        roles = [role for role in declared if role != "host"] if declared else ["producer"]
         if roles:
             entry["roles"] = roles
         providers.append(entry)
 
+    providers.extend(processors or [])
     providers.append({"name": api_config.get_name(), "roles": ["host"], "url": absolute_url(request, "/")})
     return providers
 
@@ -567,15 +639,18 @@ def _add_feature_collection_links(
             collection.add_link(
                 pystac.Link(rel="canonical", target=href, media_type="application/json", title="Source STAC collection")
             )
-    for rel, name, title in (("describedby", "README.md", "README"), ("agents", "AGENTS.md", "Guide for agents")):
+    for link in _document_links():
         collection.add_link(
-            pystac.Link(
-                rel=rel,
-                target=f"./{name}",
-                media_type=MARKDOWN_MEDIA_TYPE,
-                title=title,
-            )
+            pystac.Link(rel=link["rel"], target=link["href"], media_type=link["type"], title=link["title"])
         )
+
+
+def _document_links() -> list[dict[str, str]]:
+    """A collection's `README.md` and `AGENTS.md`, relative so they resolve beside its document."""
+    return [
+        {"rel": rel, "href": f"./{name}", "type": MARKDOWN_MEDIA_TYPE, "title": title}
+        for rel, name, title in (("describedby", "README.md", "README"), ("agents", "AGENTS.md", "Guide for agents"))
+    ]
 
 
 def _feature_collection_description(dataset_id: str, artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> str:

@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import mimetypes
-import os
 import shutil
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
@@ -65,6 +64,7 @@ from open_climate_service.publications.services import managed_dataset_id_for, p
 from open_climate_service.shared.compute import get_job_slots
 from open_climate_service.shared.crs import transform_bbox
 from open_climate_service.shared.licences import DatasetLicence
+from open_climate_service.shared.persistence import atomic_text, index_lock
 from open_climate_service.shared.raster_contract import TIME_ALIASES
 from open_climate_service.shared.statistics import measure_statistics
 from open_climate_service.shared.storage_size import stored_bytes
@@ -223,8 +223,11 @@ ARTIFACTS_INDEX_PATH = ARTIFACTS_DIR / "records.json"
 def ensure_store() -> None:
     """Create the artifact metadata store if it does not exist."""
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    if not ARTIFACTS_INDEX_PATH.exists():
-        ARTIFACTS_INDEX_PATH.write_text("[]\n", encoding="utf-8")
+    if ARTIFACTS_INDEX_PATH.exists():
+        return
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        if not ARTIFACTS_INDEX_PATH.exists():
+            atomic_text(ARTIFACTS_INDEX_PATH, "[]\n")
 
 
 def list_artifacts() -> ArtifactListResponse:
@@ -339,6 +342,15 @@ def openeo_collection_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
         dataset_id: artifact
         for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
         if artifact.format in OPENEO_COLLECTION_FORMATS
+    }
+
+
+def published_table_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the published table dataset for each dataset id, the record the rows API reads."""
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format == ArtifactFormat.PARQUET
     }
 
 
@@ -1897,7 +1909,12 @@ def _maybe_build_pyramid(
         return _StoreNormalizationResult(completed=True)
 
     try:
-        ds = open_icechunk_dataset(store_path)
+        # Stored chunks, one period each, not merged along time: topozarr sizes each level's
+        # time shards from the source's dask chunks, and a sync appends one period at a time,
+        # so a shard several periods wide would be rewritten on every append (CLIM-879).
+        # Splitting merged chunks afterwards instead made the build five times slower and
+        # larger in memory, since every split re-reads its merged block (CLIM-1765).
+        ds = open_icechunk_dataset(store_path, merge_time=False)
     except Exception:
         logger.warning("Could not open Icechunk store for GeoZarr write; skipping", exc_info=True)
         return _StoreNormalizationResult(completed=False)
@@ -2138,8 +2155,8 @@ def _latest_published_raster_artifacts_cached() -> dict[str, ArtifactRecord]:
     """Return `latest_published_raster_artifacts_by_dataset()`, recomputed only when records.json changes.
 
     A map view requests hundreds of chunks, and resolving the dataset from scratch reads, validates
-    and path-resolves every record on the instance each time. Record writes rewrite records.json in
-    place, so the cache is keyed on its path, modification time and size, which catches writes by
+    and path-resolves every record on the instance each time. Record writes replace records.json
+    whole, so the cache is keyed on its path, modification time and size, which catches writes by
     other processes, and on this process's write count, which catches writes the modification time
     cannot tell apart where it is coarse. A store deleted from disk without a record change stays in
     the result until the next write; serving it then fails as a missing path.
@@ -2477,8 +2494,9 @@ def _load_records() -> list[ArtifactRecord]:
 def _save_records(records: list[ArtifactRecord]) -> None:
     global _records_write_count
     ensure_store()
-    ARTIFACTS_INDEX_PATH.write_text(_encode_records(records), encoding="utf-8")
-    _records_write_count += 1
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        atomic_text(ARTIFACTS_INDEX_PATH, _encode_records(records))
+        _records_write_count += 1
 
 
 def _store_artifact_record(record: ArtifactRecord) -> ArtifactRecord:
@@ -2643,22 +2661,19 @@ def _fill_statistics(measured: ArtifactRecord, statistics: ArtifactStatistics) -
 
 
 def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
-    """Apply a read-modify-write mutation under an exclusive file lock."""
+    """Apply a read-modify-write mutation under an exclusive lock.
+
+    The lock is a sibling file and the index is replaced whole, so readers, which take no lock,
+    see the records before the write or after it and never a partly written file.
+    """
     global _records_write_count
     ensure_store()
-    with ARTIFACTS_INDEX_PATH.open("a+", encoding="utf-8") as handle:
-        portalocker.lock(handle, portalocker.LOCK_EX)
-        handle.seek(0)
-        raw = handle.read()
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        raw = ARTIFACTS_INDEX_PATH.read_text(encoding="utf-8")
         records = [_decode_record(item) for item in json.loads(raw or "[]")]
         result = mutation(records)
-        handle.seek(0)
-        handle.truncate()
-        handle.write(_encode_records(records))
-        handle.flush()
-        os.fsync(handle.fileno())
+        atomic_text(ARTIFACTS_INDEX_PATH, _encode_records(records))
         _records_write_count += 1
-        portalocker.unlock(handle)
         return result
 
 
@@ -2819,9 +2834,10 @@ def _find_replaceable_artifact(*, records: list[ArtifactRecord], record: Artifac
     recency test. Format is part of the match so this can never reach across a dataset id that
     holds both, which nothing produces today and nothing should silently start doing.
     """
-    if record.format == ArtifactFormat.GEOPARQUET:
+    # A table dataset keeps its history in its rows, not in records, so it has one record too.
+    if record.format in (ArtifactFormat.GEOPARQUET, ArtifactFormat.PARQUET):
         for stored in reversed(records):
-            if stored.dataset_id == record.dataset_id and stored.format == ArtifactFormat.GEOPARQUET:
+            if stored.dataset_id == record.dataset_id and stored.format == record.format:
                 return stored
         return None
     return _find_artifact_by_request_scope(
@@ -2917,11 +2933,13 @@ def _temporal_coverage_matches_streaming_request_scope(
 
 def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> DatasetRecord:
     latest = max(artifacts, key=lambda artifact: artifact.created_at)
-    source_dataset = (
-        feature_templates.get_feature_template(latest.dataset_id)
-        if latest.format == ArtifactFormat.GEOPARQUET
-        else registry_datasets.get_dataset(latest.dataset_id)
-    ) or {}
+    if latest.format == ArtifactFormat.GEOPARQUET:
+        source_dataset = feature_templates.get_feature_template(latest.dataset_id) or {}
+    elif latest.format == ArtifactFormat.PARQUET:
+        # Table templates come with CLIM-1556; until then a table has only its record.
+        source_dataset = {}
+    else:
+        source_dataset = registry_datasets.get_dataset(latest.dataset_id) or {}
     return DatasetRecord(
         dataset_id=dataset_id,
         source_dataset_id=latest.source_dataset_id or latest.dataset_id,
@@ -2931,7 +2949,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         item_type=_item_type_for(latest),
         variable=latest.variable,
         period_type=_dataset_period_type(latest, source_dataset),
-        units=_as_optional_str(source_dataset.get("units")),
+        units=_as_optional_str(source_dataset.get("units")) or latest.units,
         resolution=_as_optional_str(source_dataset.get("resolution")),
         source=_template_source(source_dataset),
         source_url=_as_optional_str(source_dataset.get("source_url")),
@@ -3066,6 +3084,8 @@ def _dataset_period_type(latest: ArtifactRecord, source_dataset: dict[str, Any])
     """
     if latest.format == ArtifactFormat.GEOPARQUET:
         return None
+    if latest.format == ArtifactFormat.PARQUET:
+        return latest.period_type
     declared = _as_optional_str(source_dataset.get("period_type")) or latest.period_type
     if declared is None and source_dataset and registry_datasets.is_timeless(source_dataset):
         # A static raster without a time axis (CLIM-1448): no period axis, like a feature collection.
@@ -3085,6 +3105,8 @@ def _item_type_for(artifact: ArtifactRecord) -> DatasetItemType:
     """
     if artifact.format == ArtifactFormat.GEOPARQUET:
         return DatasetItemType.FEATURE
+    if artifact.format == ArtifactFormat.PARQUET:
+        return DatasetItemType.TABLE
     return DatasetItemType.COVERAGE
 
 
@@ -3131,6 +3153,8 @@ def _dataset_links(
                 href=f"/features/{_segment(dataset_id)}", rel="features", title="Feature collection detail"
             )
         )
+    if published is not None and published.format == ArtifactFormat.PARQUET:
+        links.append(DatasetAccessLink(href=f"/tables/{_segment(dataset_id)}/rows", rel="rows", title="Table rows"))
     if latest.format == ArtifactFormat.NETCDF:
         links.append(
             DatasetAccessLink(

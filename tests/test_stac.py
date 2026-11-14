@@ -95,7 +95,7 @@ def test_stac_landing_returns_catalog(client: TestClient) -> None:
 
 
 def test_the_stac_documents_answer_head_as_a_static_host_does(client: TestClient) -> None:
-    """A link checker (Portolan's `rashid check`) sends HEAD to every link it does not fetch."""
+    """A STAC link checker sends HEAD to every link it does not fetch."""
     for path in ("/stac/catalog.json", "/stac/README.md", "/stac/AGENTS.md"):
         response = client.head(path)
         assert response.status_code == 200, path
@@ -150,6 +150,8 @@ def test_stac_landing_links_to_collections(client: TestClient) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert any(link["href"].endswith("/stac/catalog.json") for link in payload["links"] if link["rel"] == "root")
+    # The Portolan profile's versioned URI, its only conformance signal.
+    assert payload["stac_extensions"] == ["https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"]
 
 
 def test_catalog_self_link_reflects_request_path(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1366,7 +1368,10 @@ def test_providers_are_published(client: TestClient, monkeypatch: pytest.MonkeyP
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    assert payload["providers"] == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+    *declared, host = payload["providers"]
+    assert declared == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+    # This instance, last and alone in the role, as a static catalog's checker expects.
+    assert host["roles"] == ["host"] and host["url"] == "http://testserver/"
 
 
 def test_malformed_providers_are_dropped_rather_than_published(
@@ -1383,7 +1388,24 @@ def test_malformed_providers_are_dropped_rather_than_published(
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    assert payload["providers"] == [{"name": "Real"}]
+    # A provider declared without roles made the data, so it is published as the producer.
+    assert payload["providers"][:-1] == [{"name": "Real", "roles": ["producer"]}]
+
+
+def test_a_template_host_is_not_relabelled_as_producer(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An upstream mirror need not have made the data: it loses the host role, not its provenance."""
+    _stub_with_template(
+        monkeypatch,
+        _artifact(artifact_id="lic7"),
+        {
+            "period_type": "daily",
+            "license": "CC-BY-4.0",
+            "providers": [{"name": "Maker"}, {"name": "Mirror", "roles": ["host"]}],
+        },
+    )
+    payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
+    assert payload["providers"][:-1] == [{"name": "Maker", "roles": ["producer"]}, {"name": "Mirror"}]
+    assert [p.get("roles") for p in payload["providers"]].count(["host"]) == 1
 
 
 # --- reference_system (CLIM-1004) -------------------------------------------------------

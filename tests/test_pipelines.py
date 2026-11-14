@@ -26,11 +26,13 @@ from open_climate_service.exports.base import (
     BaseExportPlugin,
     DestinationCheck,
     DestinationContext,
+    LookupOption,
     PipelineSettingsForm,
     RenderedExport,
     SettingsFormField,
     SettingsFormSection,
 )
+from open_climate_service.features.services import registered_collections as _registered_collections
 from open_climate_service.openeo import workflows as workflow_store
 from open_climate_service.pipelines import forms, runner, service, store
 from open_climate_service.pipelines import workflow as workflow_binding
@@ -47,6 +49,7 @@ from .conftest import MountedClientFactory, WebhookReceiver
 
 _OU = ["ImspTQPwCqd", "O6uvpzGd5pu"]
 _ELEMENT = "LeePHYkZwBk"
+_FEMALE, _MALE, _AOC = "FemaleCOC01", "MaleCOC0001", "PartnerAOC1"
 _SETTINGS: dict[str, Any] = {"connection": "local", "data_set": "N63vVmt2uY0", "series": [{"data_element": _ELEMENT}]}
 _SPEC: dict[str, Any] = {
     "id": "rain-to-dhis2",
@@ -81,6 +84,7 @@ def _dataset(period_type: str = "monthly", published: bool = True, dataset_id: s
         dataset_name="Rain, monthly",
         variable="tp",
         period_type=period_type,
+        units="mm",
         item_type="coverage",
         extent=SimpleNamespace(temporal=SimpleNamespace(start="2025-01", end="2025-02")),
         publication=SimpleNamespace(status="published" if published else "unpublished"),
@@ -128,7 +132,7 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, datasets: list[Any
     monkeypatch.setattr(feature_services, "registered_collections", lambda: {"districts": SimpleNamespace()})
     monkeypatch.setattr(
         workflow_binding,
-        "_feature_versions",
+        "feature_versions",
         lambda arguments: {"districts": "2026-01-01T00:00:00"} if "districts" in json.dumps(arguments) else {},
     )
     monkeypatch.setattr(
@@ -169,7 +173,15 @@ def _dhis2(
             "id": "N63vVmt2uY0",
             "displayName": "OCS test",
             "periodType": period_type,
-            "dataSetElements": [{"dataElement": {"id": _ELEMENT}}],
+            "dataSetElements": [
+                {
+                    "dataElement": {
+                        "id": _ELEMENT,
+                        "categoryCombo": {"categoryOptionCombos": [{"id": _FEMALE}, {"id": _MALE}]},
+                    }
+                }
+            ],
+            "categoryCombo": {"categoryOptionCombos": [{"id": _AOC}]},
             "organisationUnits": [{"id": ou} for ou in (assigned if assigned is not None else _OU)],
         },
         summary
@@ -512,7 +524,6 @@ def test_validation_passes_when_everything_lines_up(instance: None, monkeypatch:
         "connection": "pass",
         "dhis2_metadata": "pass",
         "schedule": "skip",
-        "configuration": "pass",
         "delivery": "pass",
     }
     assert result.export == {
@@ -563,6 +574,34 @@ def test_validation_reports_dhis2_period_and_assignment(instance: None, monkeypa
     message = _by_id(service.validate_pipeline(store.create_record(_spec())))["dhis2_metadata"].message
     assert "period type is 'Daily', the export is Monthly" in message
     assert "1 of 2 organisation units are not assigned" in message
+
+    _dhis2(monkeypatch)
+    series = [{"data_element": _ELEMENT, "category_option_combo": _FEMALE, "attribute_option_combo": _AOC}]
+    combos = _spec(id="by-sex", destination={"plugin": "dhis2", "settings": {**_SETTINGS, "series": series}})
+    result = service.validate_pipeline(store.create_record(combos))
+    assert result.valid, result.checks
+    assert result.export is not None and result.export["series"] == [{"select": {}, **series[0]}]
+    foreign = [{**series[0], "category_option_combo": "OtherCOC001", "attribute_option_combo": "OtherAOC001"}]
+    wrong = _spec(id="wrong-combos", destination={"plugin": "dhis2", "settings": {**_SETTINGS, "series": foreign}})
+    message = _by_id(service.validate_pipeline(store.create_record(wrong)))["dhis2_metadata"].message
+    assert f"category option combo(s) not of their data element: OtherCOC001 (data element {_ELEMENT})" in message
+    assert "attribute option combo(s) not of the data set's attribute: OtherAOC001" in message
+
+    # A data set can give its element another category combo, whose option combos then count.
+    client = _dhis2(monkeypatch)
+    client.data_set["dataSetElements"][0]["categoryCombo"] = {"categoryOptionCombos": [{"id": "OtherCOC001"}]}
+    override = _spec(id="override", destination=wrong.destination)
+    message = _by_id(service.validate_pipeline(store.create_record(override)))["dhis2_metadata"].message
+    assert "category option combo" not in message
+
+    # Without a data set, a category option combo is still checked against its data element.
+    client.data_set = {"dataElements": [client.data_set["dataSetElements"][0]["dataElement"]]}
+    unset = {key: value for key, value in _SETTINGS.items() if key != "data_set"}
+    for spec_id, chosen, status in (("no-set", series, "pass"), ("no-set-wrong", foreign, "fail")):
+        spec = _spec(id=spec_id, destination={"plugin": "dhis2", "settings": {**unset, "series": chosen}})
+        check = _by_id(service.validate_pipeline(store.create_record(spec)))["dhis2_metadata"]
+        assert check.status == status, check.message
+    assert "OtherCOC001" in check.message
 
 
 def test_validation_rejects_wrong_connection_or_non_polygon_collection(
@@ -721,7 +760,7 @@ def _only_drop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(export_service, "load_export_plugins", lambda: {"drop": plugin})
 
 
-def test_approval_digest_includes_plugin_identity_and_resolved_export(
+def test_approval_digest_includes_plugin_identity_and_resolved_destination(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import open_climate_service.exports.registry as registry
@@ -964,7 +1003,6 @@ def test_the_core_needs_no_dhis2_identifiers(instance: None, monkeypatch: pytest
         "destination",
         "folder",
         "schedule",
-        "configuration",
         "delivery",
     ]
     assert result.export == {"dataset": "rain_monthly", "id": "rain-to-dhis2", "plugin": "drop"}
@@ -1151,6 +1189,12 @@ class _LookupClient(_FakeClient):
             return {"dataSets": [{"id": "N63vVmt2uY0", "displayName": "OCS test", "periodType": "Monthly"}]}
         if path == "/api/dataElements":
             return {"dataElements": [{"id": _ELEMENT, "displayName": "Rainfall total", "valueType": "NUMBER"}]}
+        combos = {f"/api/dataElements/{_ELEMENT}": ("Sex", {_FEMALE: "Female", _MALE: "Male"})}
+        combos["/api/dataSets/N63vVmt2uY0"] = ("Partner", {_AOC: "Partner A"})
+        if path in combos and str((params or {}).get("fields", "")).startswith("categoryCombo"):
+            name, options = combos[path]
+            entries = [{"id": uid, "displayName": label} for uid, label in options.items()]
+            return {"categoryCombo": {"displayName": name, "categoryOptionCombos": entries}}
         return super().get(path, params=params)
 
 
@@ -1230,6 +1274,25 @@ def test_dhis2_lookups_search_by_name_narrow_to_the_data_set_and_resolve_labels(
     assert dhis2_destination.lookup_labels("data_sets", {"connection": "local"}, []) == {}
     assert len(client.gets) == 4, "no values, no request"
 
+    # A disaggregation follows the data element chosen in the same row; an attribute, the data set.
+    row = {"data_element": _ELEMENT}
+    combos = dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "FEM", row)
+    assert [(o.value, o.label, o.detail) for o in combos] == [(_FEMALE, "Female", "Sex")]
+    assert len(dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", row)) == 2
+    attributes = dhis2_destination.lookup_options("attribute_option_combos", {"connection": "local", **_SETTINGS}, "")
+    assert [o.value for o in attributes] == [_AOC]
+    # In a data set that gives the element another category combo, that combo's option combos are offered.
+    client.data_set["dataSetElements"][0]["categoryCombo"] = {
+        "displayName": "Age",
+        "categoryOptionCombos": [{"id": "UnderFive01", "displayName": "Under 5"}],
+    }
+    in_set = dhis2_destination.lookup_options("category_option_combos", {"connection": "local", **_SETTINGS}, "", row)
+    assert [(o.value, o.label, o.detail) for o in in_set] == [("UnderFive01", "Under 5", "Age")]
+    with pytest.raises(ValueError, match="choose this series' data element first"):
+        dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", {})
+    with pytest.raises(ValueError, match="choose a data set first"):
+        dhis2_destination.lookup_options("attribute_option_combos", {"connection": "local"}, "")
+
     with pytest.raises(ValueError, match="choose a DHIS2 connection first"):
         dhis2_destination.lookup_options("data_sets", {}, "x")
     with pytest.raises(ValueError, match="not a configured DHIS2 connection"):
@@ -1254,6 +1317,18 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
         "dataSetElements.dataSet.id:eq:N63vVmt2uY0",
     ]
 
+    # The asking field names its row, so the search sees that row's data element.
+    row = {"dest.connection": "local", "dest.series.0.data_element": _ELEMENT, "dest.series.1.data_element": ""}
+    combos = client.post(
+        "/pipelines/lookups/dhis2/category_option_combos",
+        data={**row, "field": "dest.series.0.category_option_combo", "q": "male"},
+    )
+    assert [option["value"] for option in combos.json()["options"]] == [_FEMALE, _MALE]
+    empty_row = client.post(
+        "/pipelines/lookups/dhis2/category_option_combos", data={**row, "field": "dest.series.1.category_option_combo"}
+    )
+    assert empty_row.status_code == 400 and "data element first" in empty_row.json()["detail"]
+
     missing = client.post("/pipelines/lookups/dhis2/data_sets", data={"q": "rain"})
     assert missing.status_code == 400 and "choose a DHIS2 connection first" in missing.json()["detail"]
     unknown = client.post("/pipelines/lookups/dhis2/users", data={"dest.connection": "local"})
@@ -1267,6 +1342,35 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
     monkeypatch.setattr(fake, "get", _down)
     failed = client.post("/pipelines/lookups/dhis2/data_sets", data={"dest.connection": "local", "q": "x"})
     assert failed.status_code == 502 and "connection refused" in failed.json()["detail"]
+
+    class _LegacyLookupPlugin:
+        """A third-party destination implementing the original lookup hook."""
+
+        def destination_settings_schema(self) -> dict[str, Any]:
+            rule = {"type": "object", "properties": {"target": {"type": "string"}}}
+            return {
+                "type": "object",
+                "properties": {"folder": {"type": "string"}, "rules": {"type": "array", "items": rule}},
+            }
+
+        def pipeline_settings_form(self) -> PipelineSettingsForm:
+            return PipelineSettingsForm(
+                title="Legacy destination",
+                fields=(
+                    SettingsFormField(name="folder", widget="lookup", lookup="folders"),
+                    SettingsFormField(name="rules.target", widget="lookup", lookup="folders"),
+                ),
+            )
+
+        def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
+            return [LookupOption(value=settings.get("folder", ""), label=query, detail=lookup)]
+
+    monkeypatch.setattr(service, "destination_plugins", lambda: {"legacy": _LegacyLookupPlugin()})
+    legacy = client.post("/pipelines/lookups/legacy/folders", data={"dest.folder": "/srv/drop", "q": "archive"})
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json() == {"options": [{"value": "/srv/drop", "label": "archive", "detail": "folders"}]}
+    in_row = {"dest.folder": "/srv/drop", "dest.rules.0.target": "", "field": "dest.rules.0.target", "q": "archive"}
+    assert client.post("/pipelines/lookups/legacy/folders", data=in_row).json() == legacy.json()
 
     monkeypatch.setattr(api_config, "is_read_only", lambda: True)
     assert client.post("/pipelines/lookups/dhis2/data_sets", data={"dest.connection": "local"}).status_code == 403
@@ -1583,9 +1687,7 @@ def _approve(pipeline_id: str = "rain-to-dhis2", *, live: bool = False) -> Pipel
     return record
 
 
-def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
-    instance: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_validated_pipeline_owns_its_named_export(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
     from open_climate_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
@@ -1602,16 +1704,6 @@ def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
     store.update_record("rain-to-dhis2", _invalidate)
     with pytest.raises(ValueError, match="Unknown export"):
         resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
-
-    store.delete_record("rain-to-dhis2")
-    _validated()
-    api_config._cache["exports"] = [  # type: ignore[index]
-        {"id": "rain-to-dhis2", "plugin": "dhis2", "period_type": "monthly", "series": [{"data_element": _ELEMENT}]}
-    ]
-    with pytest.raises(ValueError, match="declared in the configuration and owned by the pipeline"):
-        resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
-    check = _by_id(service.validate_pipeline(store.get_record("rain-to-dhis2")))["configuration"]  # type: ignore[arg-type]
-    assert check.status == "fail" and "already configured" in check.message
 
 
 def test_save_refuses_an_invalid_pipeline(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3284,6 +3376,173 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         assert client.delete(polled["links"]["job"]).status_code == 204
         after = client.get(polled["links"]["self"]).json()
         assert after["status"] == "succeeded" and after["links"]["job"] is None, after
+    finally:
+        job_service.shutdown()
+        job_service_module.reset_job_service()
+
+
+_TABLE_SPEC: dict[str, Any] = {
+    **_SPEC,
+    "id": "rain-to-table",
+    "name": "Rain by district",
+    "destination": {"plugin": "table", "settings": {"dataset_id": "rain_districts", "name": "Rain by district"}},
+}
+
+
+def test_end_to_end_a_table_pipeline_keeps_rows_in_ocs_and_replaces_revised_values(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The built-in workflow through the real job service into the table store, read back over /tables (CLIM-1554).
+
+    Only data and feature loading are stubbed. The dry run writes nothing; a live run writes one
+    row per feature and period; a dataset update with revised values replaces them.
+    """
+    from openeo_pg_parser_networkx.process_registry import Process
+
+    from open_climate_service.features import services as feature_services
+    from open_climate_service.features import store as feature_store
+    from open_climate_service.ingestions import services as ingestion_services
+    from open_climate_service.jobs import service as job_service_module
+    from open_climate_service.jobs.models import JobStatus
+    from open_climate_service.openeo import execution
+    from open_climate_service.openeo import jobs as openeo_jobs
+    from open_climate_service.shared.provenance import record_source
+    from open_climate_service.shared.time import stamp_cadence
+
+    # A real registered collection and record index, so the rows are checked against its ids.
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", tmp_path / "data" / "artifacts")
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", tmp_path / "data" / "artifacts" / "records.json")
+    monkeypatch.setattr(feature_services, "registered_collections", _registered_collections)
+    geometries = [_box(0.5, 0.5, 2.5, 2.5), _box(3.5, 2.5, 5.5, 4.5)]
+    collection = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "properties": {"code": ou, "name": name}, "geometry": geometry}
+            for ou, name, geometry in zip(_OU, ("Bo", "Bombali"), geometries, strict=True)
+        ],
+    }
+    path, _count, geometry_column = feature_store.write_feature_collection(
+        dataset_id="districts", features=collection, id_property="code"
+    )
+    ingestion_services.create_feature_artifact(
+        template={"id": "districts", "name": "Districts", "id_property": "code"},
+        features=collection,
+        store_path=path,
+        crs=feature_store.WGS84,
+        primary_geometry=geometry_column,
+    )
+
+    scale = [1.0]
+
+    def load_collection(id: str | None = None, temporal_extent: Any = None, **_: Any) -> xr.DataArray:
+        record_source(str(id), SimpleNamespace(artifact_id="artifact-1", source_dataset_id=id, path=None))
+        values = np.arange(2 * 4 * 5, dtype="float32").reshape(2, 4, 5) * scale[0]
+        cube = xr.DataArray(
+            values,
+            dims=("t", "y", "x"),
+            coords={
+                "t": np.array(["2025-01-01", "2025-02-01"], dtype="datetime64[ns]"),
+                "y": [1.0, 2.0, 3.0, 4.0],
+                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            },
+            name="tp",
+        )
+        # As the real load_collection stamps the dataset's cadence.
+        return stamp_cadence(cube, "monthly")
+
+    def load_features(id: str, version: str | None = None, **_: Any) -> dict[str, Any]:
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "id": ou, "geometry": geometry}
+                for ou, geometry in zip(_OU, geometries, strict=True)
+            ],
+        }
+
+    mocked = execution._RegistryOverlay(
+        execution._build_process_registry(),
+        {
+            "load_collection": Process(spec={}, implementation=load_collection),
+            "load_features": Process(spec={}, implementation=load_features),
+        },
+    )
+    monkeypatch.setattr(execution, "_build_process_registry", lambda: mocked)
+    job_service = openeo_jobs.OpenEOJobService()
+    monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: job_service)
+    job_service.set_finished_listener(runner.on_job_finished)
+    native = job_service_module.get_job_service()
+    deadline = time.monotonic() + 30
+
+    def current() -> list[tuple[str, str, float]]:
+        rows = client.get("/tables/rain_districts/rows").json()["items"]
+        return [(row["feature_id"], row["period"], row["value"]) for row in rows]
+
+    try:
+        assert client.post("/pipelines", json=_TABLE_SPEC).status_code == 201
+        dry = client.post("/pipelines/rain-to-table/dry-run", json={"start": "2025-01-01", "end": "2025-02-28"}).json()
+        assert dry["error"] is None and dry["values"] == 4, dry
+        assert dry["periods"] == ["2025-01", "2025-02"]
+        assert dry["report"]["outcome"] == "dry_run"
+        assert dry["sample"][0]["feature"] == {"value": _OU[0], "label": "Bo"}
+        assert dry["sample"][0]["reducer"] == "mean"
+        # A dry run writes nothing.
+        assert not (tmp_path / "data" / "tables").exists()
+        assert "rain_districts" not in ingestion_services.group_datasets()
+        assert client.get("/tables/rain_districts/rows").status_code == 404
+
+        assert (
+            client.post("/pipelines/rain-to-table/mode/live", headers={"Accept": "application/json"}).status_code == 200
+        )
+        run = client.post(
+            "/pipelines/rain-to-table/runs", json={"start": "2025-01-01", "end": "2025-02-28", "mode": "live"}
+        )
+        assert run.status_code == 202, run.text
+        polled = run.json()
+        while polled["status"] not in {"succeeded", "needs_attention", "failed", "canceled"}:
+            assert time.monotonic() < deadline, polled
+            time.sleep(0.05)
+            polled = client.get(run.headers["Location"]).json()
+        assert polled["status"] == "succeeded" and polled["delivery_result"] == "delivered", polled
+
+        first = current()
+        assert [(feature, period) for feature, period, _ in first] == [
+            (_OU[0], "2025-01"),
+            (_OU[0], "2025-02"),
+            (_OU[1], "2025-01"),
+            (_OU[1], "2025-02"),
+        ]
+        row = client.get("/tables/rain_districts/rows").json()["items"][0]
+        assert row["feature_name"] == "Bo" and row["reducer"] == "mean" and row["collection_id"] == "districts"
+        listed = client.get("/datasets/rain_districts").json()
+        assert listed["itemType"] == "table" and listed["dataset_name"] == "Rain by district"
+        assert listed["period_type"] == "monthly" and listed["units"] == "mm"
+        # The record names the run that computed the rows, its graph and the dataset it read.
+        produced = listed["provenance"]
+        assert produced["producer_job_id"] == polled["job_id"], produced
+        assert produced["process_sha256"] and [item["dataset_id"] for item in produced["inputs"]] == ["rain_monthly"]
+
+        # The source is revised: the update runs the pipeline again, and the revised values are current.
+        scale[0] = 10.0
+        runner.consume([_update_event("evt-revised")])
+        automatic = None
+        while time.monotonic() < deadline:
+            record = store.get_record("rain-to-table")
+            automatic = next((run for run in record.runs if run.event_id == "evt-revised"), None) if record else None
+            if automatic is not None and automatic.delivery_job_id:
+                break
+            time.sleep(0.05)
+        assert automatic is not None and automatic.delivery_job_id is not None, automatic
+        delivery = native.get_job_or_404(automatic.delivery_job_id)
+        while delivery.status not in {JobStatus.SUCCESSFUL, JobStatus.FAILED, JobStatus.CANCELLED}:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+            delivery = native.get_job_or_404(automatic.delivery_job_id)
+        assert delivery.status == JobStatus.SUCCESSFUL, delivery.error
+
+        revised = current()
+        assert [value for _, _, value in revised] == [value * 10 for _, _, value in first]
+        # The revised values replace the first ones: still one row per feature and period.
+        assert len(revised) == 4
     finally:
         job_service.shutdown()
         job_service_module.reset_job_service()

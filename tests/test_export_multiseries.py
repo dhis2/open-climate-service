@@ -14,6 +14,8 @@ import xarray as xr
 from open_climate_service import config
 from open_climate_service.exports.service import render_named_export
 
+from .conftest import named_exports
+
 
 @pytest.mark.parametrize("field", ["category_option_combo", "attribute_option_combo"])
 def test_implicit_and_explicit_defaults_cannot_evade_duplicates(definition: dict[str, Any], field: str):
@@ -50,7 +52,8 @@ def definition(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             {"select": {"variable": "population"}, "data_element": "POPU0000001"},
         ],
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [definition]})
+    monkeypatch.setattr(config, "_cache", {})
+    named_exports(monkeypatch, definition)
     return definition
 
 

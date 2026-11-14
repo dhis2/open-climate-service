@@ -452,18 +452,91 @@ def test_the_agents_query_quotes_column_names_and_names_the_stored_crs(
 
 
 def test_a_feature_collections_documents_answer_head(client: TestClient, districts: ArtifactRecord) -> None:
-    """A link checker (Portolan's `rashid check`) sends HEAD to each collection's documents."""
+    """A STAC link checker sends HEAD to each collection's documents."""
     for name in ("collection.json", "README.md", "AGENTS.md"):
         response = client.head(f"/stac/districts/{name}")
         assert response.status_code == 200, name
         assert int(response.headers["content-length"]) > 0
+    # And to every link and asset on this host, the `alternate` link to /features among them.
+    from urllib.parse import urljoin
+
+    collection_url = "http://testserver/stac/districts/collection.json"
+    doc = client.get(collection_url).json()
+    for href in [link["href"] for link in doc["links"]] + [asset["href"] for asset in doc["assets"].values()]:
+        absolute = urljoin(collection_url, href)
+        if absolute.startswith("http://testserver/"):
+            assert client.head(absolute).status_code == 200, absolute
 
 
-def test_a_raster_or_unknown_collection_has_no_readme(client: TestClient) -> None:
+def test_an_unknown_collection_has_no_readme(client: TestClient) -> None:
     for name in ("README.md", "AGENTS.md"):
         response = client.get(f"/stac/nothing_here/{name}")
         assert response.status_code == 404
-        assert response.json()["detail"] == "No published feature collection 'nothing_here'"
+        assert response.json()["detail"] == "No published collection 'nothing_here'"
+
+
+def test_a_feature_collections_data_files_carry_their_size_but_are_not_hashed(
+    client: TestClient, districts: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hashing on request would read every GeoParquet and PMTiles file on a cold cache; only thumbnails are hashed."""
+    import hashlib
+
+    from open_climate_service.shared.thumbnails import thumbnail_path
+
+    hashed: list[int] = []
+    sha256 = hashlib.sha256
+
+    def counting_sha256(*args: object) -> object:
+        hashed.append(1)
+        return sha256(*args)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(stac_services.hashlib, "sha256", counting_sha256)
+    monkeypatch.setattr(stac_services, "_CHECKSUMS", {})
+    thumbnail_path("districts").unlink(missing_ok=True)
+
+    doc = client.get("/stac/districts/collection.json").json()
+    data = Path(str(districts.path))
+
+    assert doc["assets"]["data"]["file:size"] == data.stat().st_size
+    assert all("file:checksum" not in doc["assets"][key] for key in ("data", "tiles") if key in doc["assets"])
+    assert hashed == []
+    assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" in doc["stac_extensions"]
+    assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in doc["stac_extensions"]
+
+
+def test_a_collection_with_no_file_left_does_not_declare_the_file_extension(
+    client: TestClient, districts: ArtifactRecord
+) -> None:
+    """The extension is declared for the `file:*` fields an asset carries, as on a raster collection."""
+    from open_climate_service.features import tiles
+    from open_climate_service.shared.thumbnails import thumbnail_path
+
+    data = Path(str(districts.path))
+    tiles.archive_path(data).unlink(missing_ok=True)
+    thumbnail_path("districts").unlink(missing_ok=True)
+    data.unlink()
+
+    doc = client.get("/stac/districts/collection.json").json()
+
+    assert "file:size" not in doc["assets"]["data"]
+    assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" not in doc["stac_extensions"]
+
+
+def test_a_replaced_file_gets_its_new_size_and_checksum(tmp_path: Path) -> None:
+    """A thumbnail refresh replaces the file at the same path; the cached checksum is not reused."""
+    import hashlib
+    import os
+
+    from open_climate_service.stac.services import file_fields
+
+    path = tmp_path / "thumbnail.png"
+    path.write_bytes(b"old")
+    file_fields(path)
+    pending = tmp_path / "pending.png"
+    pending.write_bytes(b"newer")
+    os.replace(pending, path)
+
+    assert file_fields(path) == {"file:size": 5, "file:checksum": "1220" + hashlib.sha256(b"newer").hexdigest()}
 
 
 def test_the_catalog_guide_opens_a_raster_with_its_assets_open_kwargs(client: TestClient) -> None:

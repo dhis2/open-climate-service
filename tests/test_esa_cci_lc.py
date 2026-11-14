@@ -12,6 +12,16 @@ import xarray as xr
 from open_climate_service.plugins.rasters import esa_cci_lc
 
 
+@pytest.fixture(autouse=True)
+def _cds_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CDS_API_KEY", "mykey")
+
+
+class _Client:
+    def __init__(self, url: str, key: str) -> None:
+        self.url, self.key = url, key
+
+
 def test_fetch_period_reads_zipped_netcdf_and_masks_no_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     netcdf_path = tmp_path / "land_cover.nc"
     source = xr.Dataset(
@@ -41,7 +51,7 @@ def test_fetch_period_reads_zipped_netcdf_and_masks_no_data(monkeypatch: pytest.
         def download(self, target: str) -> None:
             Path(target).write_bytes(archive_bytes)
 
-    class Client:
+    class Client(_Client):
         def check_authentication(self) -> None:
             pass
 
@@ -71,11 +81,11 @@ def test_fetch_period_reads_zipped_netcdf_and_masks_no_data(monkeypatch: pytest.
 
 
 def test_periods_uses_years_allowed_by_cds(monkeypatch: Any) -> None:
-    requests: list[tuple[str, dict[str, Any]]] = []
+    requests: list[tuple[str, str, str, dict[str, Any]]] = []
 
-    class Client:
+    class Client(_Client):
         def apply_constraints(self, dataset: str, request: dict[str, Any]) -> dict[str, Any]:
-            requests.append((dataset, request))
+            requests.append((self.url, self.key, dataset, request))
             return {"year": ["2024", "1992", "2022", "2016"]}
 
     monkeypatch.setattr(esa_cci_lc, "_CdsClient", Client)
@@ -83,11 +93,11 @@ def test_periods_uses_years_allowed_by_cds(monkeypatch: Any) -> None:
     periods = asyncio.run(esa_cci_lc.ESACCILandCoverClassPlugin().periods("2015", "2025"))
 
     assert periods == ["2016", "2022", "2024"]
-    assert requests == [("satellite-land-cover", {})]
+    assert requests == [("https://cds.climate.copernicus.eu/api", "mykey", "satellite-land-cover", {})]
 
 
 def test_periods_returns_empty_when_request_has_no_available_years(monkeypatch: Any) -> None:
-    class Client:
+    class Client(_Client):
         def apply_constraints(self, dataset: str, request: dict[str, Any]) -> dict[str, Any]:
             assert dataset == "satellite-land-cover"
             assert request == {}
@@ -101,7 +111,7 @@ def test_periods_returns_empty_when_request_has_no_available_years(monkeypatch: 
 
 
 def test_periods_fails_if_cds_does_not_return_year_options(monkeypatch: Any) -> None:
-    class Client:
+    class Client(_Client):
         def apply_constraints(self, dataset: str, request: dict[str, Any]) -> dict[str, Any]:
             assert dataset == "satellite-land-cover"
             assert request == {}

@@ -15,6 +15,7 @@ class PipelineDataset:
     id: str
     variable: str | None
     cadence: str | None
+    units: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,11 @@ class DeliveryContext(Protocol):
     with a no-op implementation so their delivery code works standalone.
     """
 
+    source_job_id: str | None
+    """The job whose saved result is delivered; None when ``send`` runs standalone."""
+    source_provenance: dict[str, Any] | None
+    """That job's execution evidence from its export manifest: process graph digest, observed sources."""
+
     def report_progress(self, done: int | None = None, total: int | None = None, message: str | None = None) -> None:
         """Persist coarse progress (e.g. chunks sent) for one delivery job."""
         ...
@@ -160,6 +166,12 @@ class BaseExportPlugin(ABC):
     # True when sending the same payload twice leaves the destination as sending it once
     # (an upsert). Only then may an operator send a delivery again after an unconfirmed outcome.
     redelivery_safe: bool = False
+    # True when the plugin takes its period from the result's cadence rather than declaring one.
+    # The export's temporal checks then run against that cadence.
+    period_from_result: bool = False
+    # False when the mapping refuses ``incomplete_periods: drop``, so a partial period can only be
+    # refused, and the error does not suggest dropping it.
+    drops_incomplete_periods: bool = True
 
     # --- delivery target hooks (delivery plugins) -----------------------------------------
 
@@ -202,13 +214,18 @@ class BaseExportPlugin(ABC):
         """
         return None
 
-    def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
+    def lookup_options(
+        self, lookup: str, settings: dict[str, Any], query: str, row: dict[str, Any] | None = None
+    ) -> list[LookupOption]:
         """Search the destination for the choices of a lookup field, as the form types.
 
         ``lookup`` is the name a ``SettingsFormField`` declared; ``settings`` are the form's
         current values, incomplete and unvalidated, so the plugin reads from them only what the
-        search needs, such as the connection. May contact the destination. Raise ValueError
-        naming what is missing or what the destination answered.
+        search needs, such as the connection. For a column of a ``rows`` field, ``row`` holds the
+        values entered so far in the asking row, so a choice can follow its neighbour (a
+        disaggregation of the row's data element, say); it is None for any other field. May
+        contact the destination. Raise ValueError naming what is missing or what the destination
+        answered.
         """
         raise NotImplementedError(f"Export plugin '{self.id}' has no lookup '{lookup}'")
 
@@ -223,7 +240,7 @@ class BaseExportPlugin(ABC):
     def export_definition(self, settings: dict[str, Any], context: DestinationContext) -> dict[str, Any]:
         """Compile destination settings into this plugin's export definition, without ``id`` or ``plugin``.
 
-        The result is resolved like a configured named export, so it holds the mapping plus
+        The result is resolved as the pipeline's named export, so it holds the mapping plus
         any ``dataset``/``connection`` references. Raise ValueError naming what is wrong.
         Must be pure: no network calls.
         """

@@ -128,11 +128,14 @@ def get_ingestion(ingestion_id: str) -> IngestionResponse:
     return services.get_ingestion_or_404(ingestion_id)
 
 
+# GET and HEAD alike: a STAC collection links to these, and a link checker sends HEAD. HEAD is
+# kept out of the OpenAPI schema so each operation is listed once.
 @datasets_router.get(
     "",
     response_model=DatasetListResponse,
     responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
 )
+@datasets_router.head("", response_model=DatasetListResponse, include_in_schema=False)
 def list_datasets(request: Request, response: Response) -> DatasetListResponse | HTMLResponse:
     """List managed datasets.
 
@@ -155,6 +158,7 @@ def list_datasets(request: Request, response: Response) -> DatasetListResponse |
     response_model=DatasetDetailRecord,
     responses={200: {"content": {"text/html": {"schema": {"type": "string"}}}}},
 )
+@datasets_router.head("/{dataset_id}", response_model=DatasetDetailRecord, include_in_schema=False)
 def get_dataset(dataset_id: str, request: Request, response: Response) -> DatasetDetailRecord | HTMLResponse:
     """Get managed dataset metadata and available versions.
 
@@ -176,6 +180,7 @@ def get_dataset(dataset_id: str, request: Request, response: Response) -> Datase
 
 
 @datasets_router.get("/{dataset_id}/thumbnail.png", response_class=FileResponse)
+@datasets_router.head("/{dataset_id}/thumbnail.png", response_class=FileResponse, include_in_schema=False)
 def get_dataset_thumbnail(dataset_id: str) -> FileResponse:
     """Serve a dataset's thumbnail, the image its STAC collection points at.
 
@@ -220,7 +225,8 @@ def download_artifact_file(dataset_id: str) -> FileResponse:
     return FileResponse(artifact.path, media_type="application/x-netcdf", filename=f"{dataset_id}.nc")
 
 
-@zarr_router.api_route("/{dataset_id}/{relative_path:path}", methods=["GET", "HEAD"], response_model=None)
+@zarr_router.get("/{dataset_id}/{relative_path:path}", response_model=None)
+@zarr_router.head("/{dataset_id}/{relative_path:path}", response_model=None, include_in_schema=False)
 def get_canonical_zarr_store_file(
     request: Request, dataset_id: str, relative_path: str
 ) -> FileResponse | Response | dict[str, object]:
@@ -229,7 +235,8 @@ def get_canonical_zarr_store_file(
     return services.get_dataset_zarr_store_file_or_404(dataset_id, relative_path, range_header=range_header)
 
 
-@icechunk_router.api_route("/{dataset_id}/{file_path:path}", methods=["GET", "HEAD"], response_model=None)
+@icechunk_router.get("/{dataset_id}/{file_path:path}", response_model=None)
+@icechunk_router.head("/{dataset_id}/{file_path:path}", response_model=None, include_in_schema=False)
 def serve_icechunk_store_file(dataset_id: str, file_path: str) -> FileResponse:
     """Serve a raw Icechunk store file for native SDK access.
 
