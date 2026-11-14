@@ -1335,9 +1335,10 @@ def _add_band_statistics(collection: dict[str, Any], artifact: ArtifactRecord) -
         for name, value in (("minimum", recorded.min), ("maximum", recorded.max), ("mean", recorded.mean))
         if value is not None
     }
-    zarr = collection.get("assets", {}).get("zarr", {})
-    for band in zarr.get("bands", []):
-        if band["name"] == artifact.variable and statistics:
+    if not statistics:
+        return
+    for band in collection.get("assets", {}).get("zarr", {}).get("bands", []):
+        if band["name"] == artifact.variable:
             band["statistics"] = statistics
 
 

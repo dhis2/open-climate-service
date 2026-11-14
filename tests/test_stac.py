@@ -502,7 +502,11 @@ class DryDaysPlugin:
 def test_an_ingested_collection_publishes_measured_band_statistics(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Band statistics and nodata describe the stored data; the display hints stay in `renders`."""
+    """Band statistics and nodata describe the stored data; the display hints stay in `renders`.
+
+    Ingested as a store written before statistics were measured, so the startup backfill has to
+    fill them in past the cached store metadata.
+    """
     import yaml
 
     from open_climate_service.data_registry.services import datasets as registry
@@ -520,6 +524,8 @@ def test_an_ingested_collection_publishes_measured_band_statistics(
     }
     (tmp_path / "dry.yaml").write_text(yaml.safe_dump([template]), encoding="utf-8")
     monkeypatch.setattr(registry, "CONFIGS_DIR", tmp_path)
+    measure_statistics = ingestion_services.measure_statistics
+    monkeypatch.setattr(ingestion_services, "measure_statistics", lambda *_: None)
     response = client.post(
         "/ingestions",
         json={
@@ -538,6 +544,14 @@ def test_an_ingested_collection_publishes_measured_band_statistics(
     assert [band["name"] for band in bands] == list(collection["cube:variables"])
     # The store's own fill value, not the display's 0.0, which would mark every dry cell missing.
     assert bands[0]["nodata"] == "nan"
+    assert "statistics" not in bands[0]
+
+    monkeypatch.setattr(ingestion_services, "measure_statistics", measure_statistics)
+    assert ingestion_services.measure_missing_statistics() == 1
+
+    collection = client.get(f"/stac/{dataset_id}/collection.json").json()
+
+    bands = collection["assets"]["zarr"]["bands"]
     assert bands[0]["statistics"] == {"minimum": 0.0, "maximum": 6.0, "mean": pytest.approx(12.0 / 7)}
     assert collection["renders"]["default"]["nodata"] == 0.0
 
