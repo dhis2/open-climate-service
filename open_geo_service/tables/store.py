@@ -93,7 +93,7 @@ KEY = (
 )
 """The columns that identify one value: a write with the same key replaces the stored row."""
 
-PERIOD_TYPE_KEY = b"geoservice:period_type"
+PERIOD_TYPE_KEY = b"ogs:period_type"
 """Parquet metadata key holding the dataset's period type, so a reader of the files alone knows
 whether `period_start` starts a day, a month or a year."""
 

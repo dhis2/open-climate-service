@@ -36,7 +36,7 @@ _CLASS_FIELD = "class"
 _CLASS_LABEL_FIELD = "class_label"
 _MAPPING_FIELDS = ("dataset_id", "collection_id", "name", "period_type", "unit")
 # Dataset-level facts travel in the Parquet footer, so `send` needs nothing but the payload.
-_NAME_KEY = b"geoservice:dataset_name"
+_NAME_KEY = b"ogs:dataset_name"
 
 
 class TableDestinationSettings(BaseModel):
@@ -308,7 +308,7 @@ def _provenance(context: DeliveryContext | None) -> ArtifactProvenance | None:
     if context is None or context.source_job_id is None:
         return None
     return ArtifactProvenance(
-        producer_job_id=context.source_job_id, execution=context.source_provenance, geoservice_version=__version__
+        producer_job_id=context.source_job_id, execution=context.source_provenance, open_geo_service_version=__version__
     )
 
 

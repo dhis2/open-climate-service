@@ -3142,7 +3142,7 @@ def dataset_provenance(record: ArtifactRecord) -> DatasetProvenance | None:
         producer_job_id=provenance.producer_job_id,
         producer_job_href=f"/jobs/{_segment(provenance.producer_job_id)}",
         process_sha256=process_sha256 if isinstance(process_sha256, str) else None,
-        geoservice_version=provenance.geoservice_version,
+        open_geo_service_version=provenance.open_geo_service_version,
         output_snapshot_id=provenance.output_snapshot_id,
         inputs=inputs,
     )
