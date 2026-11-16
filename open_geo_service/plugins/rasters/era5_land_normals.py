@@ -74,7 +74,7 @@ def _require_zarr_v3(url: str, ds: xr.Dataset) -> None:
             logger.debug("Could not read the latest timestamp of %s", url, exc_info=True)
     ds.close()
     raise RuntimeError(
-        f"Earth Data Hub store {url} is not Zarr v3, and OCS reads only v3 stores. EDH applies "
+        f"Earth Data Hub store {url} is not Zarr v3, and Open Geo Service reads only v3 stores. EDH applies "
         f"updates only to its Zarr v3 stores, so this one no longer advances.{latest} "
         "Repoint it at the v3 store for this dataset."
     )

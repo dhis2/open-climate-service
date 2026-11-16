@@ -110,7 +110,7 @@ def test_zarr_route_echoes_origin_for_browser_access(client: TestClient, monkeyp
 def test_zarr_browser_headers_survive_a_mount_prefix(
     mounted_client_factory: MountedClientFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Under `ROOT_PATH=/ocs` the request path is `/ocs/zarr/...`; matched against the literal
+    """Under `ROOT_PATH=/ogs` the request path is `/ogs/zarr/...`; matched against the literal
     `/zarr`, the per-origin and private-network headers silently stop being added."""
     monkeypatch.setattr(
         ingestion_services,
@@ -118,7 +118,7 @@ def test_zarr_browser_headers_survive_a_mount_prefix(
         lambda _id, _path, range_header=None: {"zarr_format": 3, "node_type": "group", "attributes": {}},
     )
 
-    response = mounted_client_factory("/ocs").get(
+    response = mounted_client_factory("/ogs").get(
         "/zarr/dataset-1/zarr.json", headers={"Origin": "https://inspect.geozarr.org"}
     )
 

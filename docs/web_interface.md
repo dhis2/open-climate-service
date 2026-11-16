@@ -115,7 +115,7 @@ yet.
 ### The Schedules page (`/schedules`)
 
 The Schedules page lists everything on the instance's clock. Today that is one kind, a sync
-schedule: at each check time OCS submits a sync job, which adds new source data if any is
+schedule: at each check time Open Geo Service submits a sync job, which adds new source data if any is
 available. Each row names its kind in the first column, so the list can carry other kinds later.
 
 A sync schedule belongs to exactly one dataset, so it is set up and edited on the dataset page,
@@ -139,10 +139,10 @@ instance's `scheduler.timezone`. When the clock runs in another process, such as
 worker beside a read-only public instance, the page says so. When no process runs it,
 schedules can still be saved and are listed, and the page explains that an operator
 enables checks by setting `enabled: true` under `scheduler:` in `geoservice.yaml` and
-restarting OCS. If a change cannot be applied, the page shows why.
+restarting Open Geo Service. If a change cannot be applied, the page shows why.
 ### The pipeline pages (`/pipelines`)
 
-A pipeline runs a workflow on a dataset and delivers the result. It is the one way OCS delivers
+A pipeline runs a workflow on a dataset and delivers the result. It is the one way Open Geo Service delivers
 automatically; a derived dataset is kept current by its recipe instead (see
 [Dataset-update automation](workflow_automation.md)).
 
@@ -248,7 +248,7 @@ Each run moves through these states; the page shows them and the action each nee
 | delivery `failed` | the hand-off was refused (a changed export, a missing result) or its attempts ran out | **Deliver** retries it under the same key, so nothing is sent twice |
 | delivery `submitted` | handed to the delivery framework, not yet delivered | the delivery job's outcome is recorded on the run: `delivered` (or `validated` for a dry run) confirms it; `partial` (conflicts), `rejected`, `unknown` (no answer after sending, or the delivery job's record is gone), `failed` and `cancelled` need an operator: **Send again** where that is safe, or **Checked at the destination**, which records `acknowledged` and sends nothing |
 
-OCS recovers the automatic states at startup and every 15 minutes: it submits pending runs,
+Open Geo Service recovers the automatic states at startup and every 15 minutes: it submits pending runs,
 hands off finished jobs whose completion was missed, records jobs that ended without a result,
 retries transient hand-off failures, and releases held deliveries that have become eligible.
 A failure is permanent when repeating it can only fail the same way: an HTTP 4xx refusal (a
@@ -281,7 +281,7 @@ says changed, not the dataset's whole coverage:
   period, so the run covers the whole coverage after it, `current_start` to `current_end`.
 
 The run records which (`source.update`). Updates do not describe a correction of individual
-stored periods: OCS has no such update, so a pipeline cannot follow a revision of past data at
+stored periods: Open Geo Service has no such update, so a pipeline cannot follow a revision of past data at
 the source (for example a provisional value replaced by a final one) unless the dataset is
 rematerialised. Run that interval by hand. The interval's ends are passed to the workflow as the
 updates give them.
@@ -312,7 +312,7 @@ contacts the destination, and its delivery retries transient failures. Updates t
 paused are not run on resume: the checkpoint starts afresh, and the page lists them so an operator
 can run their intervals.
 
-At startup OCS decides any persisted update a pipeline missed, then moves the checkpoint forward
+At startup Open Geo Service decides any persisted update a pipeline missed, then moves the checkpoint forward
 only to the earliest of: the start of that pass, the creation of any ingestion still running, and
 any update still being retried; less 15 minutes. An ingestion's update carries its completion
 time, which is never earlier than the job's creation, so an update from a job that was running
@@ -396,7 +396,7 @@ There is no separate console: data is added from the page of the thing it concer
   a time, and up to how many attempts a sync job may make. Custom cron is available for
   advanced needs. The suggested check frequency reflects the data's period type, but the
   operator should choose a time after the source normally publishes; period type does not
-  tell OCS that release time. A schedule can be saved paused. Once saved, it shows the next
+  tell Open Geo Service that release time. A schedule can be saved paused. Once saved, it shows the next
   and last check and offers Edit, Pause or Resume, and Delete behind a confirmation.
   Editing does not silently change its publication setting. Every schedule on the
   instance is listed on the [Schedules page](#the-schedules-page-schedules).

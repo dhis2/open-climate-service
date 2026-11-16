@@ -102,7 +102,7 @@ for that binding.
 
 An export exports what exists. `period_type` labels; it never aggregates, and neither does
 anything else on the export path. So the export has to say how its period relates to the
-dataset it declares, and OCS checks it twice: when the pipeline validates, from the dataset
+dataset it declares, and Open Geo Service checks it twice: when the pipeline validates, from the dataset
 template's `period_type`, and at render time, from the spacing of the data actually being
 exported.
 
@@ -321,14 +321,14 @@ Each batch render writes a fresh payload generation and a versioned JSON manifes
 then atomically replaces `.export.json` as the pointer to that generation. The
 manifest records payload and mapping digests, renderer identity and version, record
 counts and periods, the source job, public configuration references, a credential-free
-target fingerprint, and execution provenance available from OCS processes. The
+target fingerprint, and execution provenance available from Open Geo Service processes. The
 payload and manifest are both exposed as job result assets. Synchronous rendering
 still returns the payload directly and remains available in read-only mode.
 
 Execution provenance records observed managed artifacts, Icechunk snapshot IDs, hashes of 
 inline spatial features, and the method of each spatial aggregation call — both built-in 
 `aggregate_spatial` and custom `aggregate_spatial_weighted` — where those inputs pass through 
-native OCS processes. The manifest explicitly lists evidence that is unavailable; declarations
+native Open Geo Service processes. The manifest explicitly lists evidence that is unavailable; declarations
 alone do not prove aggregation semantics or per-output lineage.
 
 The delivery-input validator accepts only completed jobs with intact payloads and
@@ -375,7 +375,7 @@ values, including uncertain writes, rather than the full planned payload.
 
 Delivery and reports require a writable instance and are closed in read-only mode.
 Writable deployments must put these endpoints behind an operator access boundary;
-OCS does not yet provide per-user authorization. Downloaded JSON remains usable
+Open Geo Service does not yet provide per-user authorization. Downloaded JSON remains usable
 through the existing client workflow.
 
 ## Map multiple series

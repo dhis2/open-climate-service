@@ -21,7 +21,7 @@ data_dir: ./data
 # a config set later, by a fixture, comes too late: they would already name the developer's
 # `data_dir` from `.env`, or the XDG fallback without one. `load_dotenv` does not overwrite a
 # variable that is already set, so `.env` cannot take this back.
-_TEST_INSTANCE = Path(tempfile.mkdtemp(prefix="ocs-test-instance-"))
+_TEST_INSTANCE = Path(tempfile.mkdtemp(prefix="ogs-test-instance-"))
 atexit.register(shutil.rmtree, _TEST_INSTANCE, ignore_errors=True)
 TEST_CONFIG_FILE = _TEST_INSTANCE / "geoservice.yaml"
 TEST_DATA_ROOT = _TEST_INSTANCE / "data"
@@ -199,13 +199,13 @@ def mounted_client_factory() -> MountedClientFactory:
     """Build a client that reaches the app the way uvicorn does under `--root-path`.
 
     Uvicorn sets `scope["root_path"]` *and* prepends it to `scope["path"]`, so `/manage` under
-    `/ocs` arrives as `/ocs/manage`. `TestClient(root_path=...)` only sets the former, which
+    `/ogs` arrives as `/ogs/manage`. `TestClient(root_path=...)` only sets the former, which
     makes any prefix-stripping code a no-op under test and lets a test pass with the strip
     removed. The prefix is passed verbatim, so a trailing slash reaches the app as it would in
     production.
     """
 
-    def make(root_path: str = "/ocs", target: ASGIApp = app) -> TestClient:
+    def make(root_path: str = "/ogs", target: ASGIApp = app) -> TestClient:
         async def uvicorn_shaped(scope: Scope, receive: Receive, send: Send) -> None:
             if scope["type"] == "http":
                 scope = {**scope, "root_path": root_path, "path": root_path + scope["path"]}
@@ -242,7 +242,7 @@ def webhook(monkeypatch: pytest.MonkeyPatch) -> WebhookReceiver:
         receiver.posts.append((status, headers["Idempotency-Key"], json))
         return httpx.Response(status)
 
-    monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ocs" if receiver.enabled else None)
+    monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ogs" if receiver.enabled else None)
     monkeypatch.setattr(notifications.httpx, "post", post)
     monkeypatch.setattr(notifications, "_kick", notifications.send_due)
     return receiver

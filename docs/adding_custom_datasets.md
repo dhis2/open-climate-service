@@ -59,7 +59,7 @@ values in STAC describe stored coordinates; they do not change ingestion policy.
 
 For a contiguous existing store, a forward extension queries only the missing
 delta, beginning at the next period after committed coverage. The source need not
-retain older periods already stored by OCS. Requests wholly within committed
+retain older periods already stored by Open Geo Service. Requests wholly within committed
 coverage do not query the source. Extending backwards or repairing an existing gap
 requires the source to reproduce the complete union, including committed history.
 
@@ -106,7 +106,7 @@ plugin import surface), alongside `BaseDatasetPlugin`.
 - **`daily_period_ids(start, end)`** — enumerate the inclusive ISO day strings for a daily
   `periods()` implementation; apply your own availability clamp around it (accepts ISO
   strings or `date` objects, returns `[]` when `start > end`).
-- **Credentials** — read a key the source needs from an environment variable, which OCS fills
+- **Credentials** — read a key the source needs from an environment variable, which Open Geo Service fills
   from `.env`. Read it when the plugin opens the source, not at import or in `__init__`, so that
   listing data sources needs no key, and pass it in a header or the reader's own session rather
   than in the URL, where it leaks into error messages and logs. The built-in plugins share theirs
@@ -263,7 +263,7 @@ it is made, and `GET /data-sources` reports it. A template that declares `produc
 
 #### Keep a derived dataset current with a recipe
 
-Give `produced_by` the whole recipe instead, and OCS can run it:
+Give `produced_by` the whole recipe instead, and Open Geo Service can run it:
 
 ```yaml
 - id: era5land_precipitation_monthly_anomaly_1991_2020
@@ -280,16 +280,16 @@ Give `produced_by` the whole recipe instead, and OCS can run it:
 
 - `arguments` are the fixed parameters that define the product. Changing one makes another
   dataset, with another id.
-- `output_dataset_id` is not given: OCS passes the template's own id. A recipe's workflow must
+- `output_dataset_id` is not given: Open Geo Service passes the template's own id. A recipe's workflow must
   declare that parameter and publish its result through it, with `save_result` as Zarr and
   `dataset_id: {from_parameter: output_dataset_id}`, as `climate_normal`, `climate_anomaly` and
   `temporal_change` do.
 - `refresh_on` names the argument holding the dataset that drives this one. When that dataset
-  updates, by a sync or by another recipe, OCS runs the workflow again over that dataset's full
+  updates, by a sync or by another recipe, Open Geo Service runs the workflow again over that dataset's full
   coverage, filling the workflow's one temporal-interval parameter, which the recipe leaves out.
   Updates of the other datasets it reads, such as the normal above, do not refresh it.
 - Without `refresh_on` the recipe has a fixed range: set the temporal-interval parameter in
-  `arguments`, as for a normal. OCS checks such a recipe at startup but never runs it; an
+  `arguments`, as for a normal. Open Geo Service checks such a recipe at startup but never runs it; an
   operator runs the workflow when the dataset is needed.
 
 Only a derived dataset that exists is kept current: create it once by running the workflow over
@@ -302,7 +302,7 @@ the recipe or the workflow makes the next reconciliation refresh the dataset aga
 of a dataset runs at a time: updates that arrive meanwhile are taken up when it finishes, as one
 run over the newest coverage, or, when it fails, at the next reconciliation. A refresh that
 fails is not retried by itself beyond its job's attempts; the next update of its input starts a
-new one. Updates missed while OCS was stopped are caught up at startup and every 15 minutes.
+new one. Updates missed while Open Geo Service was stopped are caught up at startup and every 15 minutes.
 
 The recipe is checked at startup, against the registered workflows: an unknown workflow or
 argument, a missing argument, a time range set where `refresh_on` should fill it (or left open
@@ -353,7 +353,7 @@ the revision so sync can see it:
 ```
 
 Both halves are required, because the pair is the identity: `R2025A` on its own does not say
-whose `R2025A` it is, and OCS may later publish its own releases of derived datasets under the
+whose `R2025A` it is, and Open Geo Service may later publish its own releases of derived datasets under the
 `ocs` authority. `value` is passed through verbatim and never parsed — its syntax belongs to
 the source — so a blank or padded value (`" R2025A "`) is rejected rather than trimmed, since
 trimming would make the stored identity differ from the declared one. `authority` is a
@@ -598,7 +598,7 @@ curl -s http://127.0.0.1:9000/stac/catalog.json | jq '.links[] | select(.rel == 
 
 ## Contributing a data source
 
-A data source added to OCS core is maintained by the team rather than by one instance, so it needs a little more than a working plugin. Check before you start:
+A data source added to Open Geo Service core is maintained by the team rather than by one instance, so it needs a little more than a working plugin. Check before you start:
 
 - **Open access.** The source can be fetched with a free account at most, from the provider itself.
 - **Maintained.** The provider still updates and supports the dataset.

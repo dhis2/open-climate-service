@@ -7,7 +7,7 @@ collections to an instance, and they complement each other:
   instance-specific customisation, one-off datasets, or overriding a built-in. No packaging.
   See [Extensibility](extensibility.md) and [Adding custom datasets](adding_custom_datasets.md).
 - **Installable packages** — package a plugin and publish it, so any instance can `uv add` it
-  and OCS discovers it automatically.
+  and Open Geo Service discovers it automatically.
   Ideal for a **reusable** plugin shared across countries or organisations, versioned independently.
 
 This guide covers the installable-package option. It is purely additive — `plugins_dir`
@@ -63,7 +63,7 @@ example = "osc_example_plugin"
 ```
 
 Declare `open-geo-service` as a dependency, but **do not** pin its VCS source — the consuming
-instance decides which OCS revision to run:
+instance decides which Open Geo Service revision to run:
 
 ```toml
 dependencies = ["open-geo-service"]
@@ -85,7 +85,7 @@ An operator installs the package — nothing else, no `plugins_dir` wiring:
 uv add osc-example-plugin
 ```
 
-OCS auto-discovers every installed package in the `open_geo_service.plugins` group and loads
+Open Geo Service auto-discovers every installed package in the `open_geo_service.plugins` group and loads
 its `rasters/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
 `workflows/*.json` (openEO UDPs), its `exports/` renderers (see [Export plugins](export_plugins.md)),
 and its `vectors/*.yaml` templates and `@feature_provider`-decorated callables. The ingestion

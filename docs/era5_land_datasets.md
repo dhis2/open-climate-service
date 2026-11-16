@@ -25,7 +25,7 @@ EDH_API_KEY=<your-standard-api-key>
 CDS_API_KEY=<your-cds-api-key>
 ```
 
-**Set up before this release?** OCS no longer reads `~/.netrc` or `~/.ecmwfdatastoresrc`; move both keys into `.env`. The daily datasets read from CDS, so they need the CDS key even where they once needed only Earth Data Hub.
+**Set up before this release?** Open Geo Service no longer reads `~/.netrc` or `~/.ecmwfdatastoresrc`; move both keys into `.env`. The daily datasets read from CDS, so they need the CDS key even where they once needed only Earth Data Hub.
 
 ### Ingest your first ERA5-Land dataset
 

@@ -3,7 +3,7 @@
 Open Geo Service can periodically check whether an existing managed dataset has new
 source periods and submit an asynchronous sync job when work is required. The scheduler is
 a clock only: planning, retries, execution, progress, and restart recovery remain owned by
-the native OCS job service.
+the native Open Geo Service job service.
 
 ## Configure schedules
 
@@ -18,7 +18,7 @@ scheduler:
 Create and edit schedules from each dataset's **Schedule** tab, or through the
 `/schedules/sync` API. All dataset schedules live together in
 `<data_dir>/schedules.json`, keyed by dataset id. This file can be prepared before
-starting OCS, though the UI/API is recommended for validation and atomic writes.
+starting Open Geo Service, though the UI/API is recommended for validation and atomic writes.
 Only one schedule is allowed per dataset. The schedule's `cron` is a standard
 five-field expression interpreted in the configured IANA timezone. UTC is the
 default and is recommended for checks that follow upstream publication times.
@@ -46,7 +46,7 @@ For pre-start provisioning, one file contains all datasets, for example:
 
 The map key and `dataset_id` must match. The optional `enabled` field defaults to
 true; the second example stays paused until an operator resumes it. When editing
-the JSON outside the UI, stop OCS or replace the complete file atomically so the
+the JSON outside the UI, stop Open Geo Service or replace the complete file atomically so the
 clock never reads a partial write.
 
 For a development instance with `scheduler.dataset_sync` in YAML, remove that block
@@ -90,7 +90,7 @@ sync engine ingests.
 
 - The configuration file controls the global clock switch and timezone, read at startup;
   the JSON store controls every dataset schedule. Editing that store through the UI/API
-  takes effect without restarting OCS.
+  takes effect without restarting Open Geo Service.
 - A stored entry has a pause switch, `enabled`. Pausing keeps the entry and stops it firing.
 - Every change reloads the clock. The reload parses the store, then resolves every effective
   entry's dataset and builds its trigger, before any job is touched. When the store cannot be
@@ -141,7 +141,7 @@ a dataset not yet ingested is saved and its checks finish as `not_materialized` 
 Changing schedules changes when data moves into the instance, and a sync can refresh derived
 datasets and run the pipelines on them, including live deliveries. These routes are closed on a
 read-only instance, but read-only mode is not authentication: an instance that exposes the
-page must be deployed privately or behind reverse-proxy authentication until OCS has its
+page must be deployed privately or behind reverse-proxy authentication until Open Geo Service has its
 own write authentication.
 
 ## Inspect status
@@ -166,7 +166,7 @@ are follow-up work for the persistent job-store implementation.
 
 ## Failure alerts
 
-OCS can post to a webhook when a scheduled sync or a pipeline starts failing, and again when
+Open Geo Service can post to a webhook when a scheduled sync or a pipeline starts failing, and again when
 that ends. Set the URL in `geoservice.yaml`:
 
 ```yaml
@@ -174,7 +174,7 @@ notifications:
   webhook_url: ${GEOSERVICE_WEBHOOK_URL}
 ```
 
-OCS sends an HTTP JSON POST. A directly compatible receiver displays the `text` field, ignores
+Open Geo Service sends an HTTP JSON POST. A directly compatible receiver displays the `text` field, ignores
 fields it does not recognise, and carries its authentication in the webhook URL, because custom
 headers cannot be configured. Slack and Mattermost incoming webhooks meet this contract. Strict
 receivers, and services that require their own payload format such as Google Chat, Microsoft
@@ -207,12 +207,12 @@ The body is JSON, posted with the header `Idempotency-Key` set to the outcome's 
   "time": "2026-11-06T06:00:12+00:00",
   "automation": "pipeline",
   "id": "rainfall-to-dhis2",
-  "link": "https://ocs.example.org/pipelines/rainfall-to-dhis2",
+  "link": "https://geoservice.example.org/pipelines/rainfall-to-dhis2",
   "run": "8f1c...",
-  "details": "https://ocs.example.org/pipelines/rainfall-to-dhis2/runs/8f1c...",
+  "details": "https://geoservice.example.org/pipelines/rainfall-to-dhis2/runs/8f1c...",
   "stage": "delivery",
   "message": "DHIS2 refused the payload",
-  "text": "Pipeline 'rainfall-to-dhis2' failed at delivery: DHIS2 refused the payload https://ocs.example.org/pipelines/rainfall-to-dhis2"
+  "text": "Pipeline 'rainfall-to-dhis2' failed at delivery: DHIS2 refused the payload https://geoservice.example.org/pipelines/rainfall-to-dhis2"
 }
 ```
 
@@ -234,7 +234,7 @@ nothing.
 
 ## Deployment constraints
 
-Exactly one OCS process or replica may set `scheduler.enabled: true`. Active-job detection
+Exactly one Open Geo Service process or replica may set `scheduler.enabled: true`. Active-job detection
 and submission are not an atomic cross-process operation, and the store write lock is
 process-local. Enabling the clock in multiple replicas could therefore submit concurrent
 writers for the same store. API-only replicas must leave scheduling disabled; they may still

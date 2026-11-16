@@ -76,7 +76,7 @@ def _load_config() -> dict[str, Any]:
     retired = [key for key in _RETIRED_KEYS if loaded is not None and key in loaded]
     if retired:
         raise ValueError(
-            "GEOSERVICE_CONFIG has settings OCS no longer reads: "
+            "GEOSERVICE_CONFIG has settings Open Geo Service no longer reads: "
             + "; ".join(f"'{key}': {_RETIRED_KEYS[key]}" for key in retired)
         )
     _cache = dict(loaded or {})

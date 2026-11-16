@@ -265,7 +265,7 @@ dedicated instance Docker guide is planned.
 ### Compute limits
 
 Background jobs share the machine with the web server, and usually with the rest of a
-laptop, so OCS bounds how much of it they take. The defaults are chosen for a laptop.
+laptop, so Open Geo Service bounds how much of it they take. The defaults are chosen for a laptop.
 
 | Setting | Default | Bounds |
 | --- | --- | --- |

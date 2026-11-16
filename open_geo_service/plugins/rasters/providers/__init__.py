@@ -12,5 +12,5 @@ def require_env(name: str, *, hint: str) -> str:
     """Return a non-empty environment variable, or raise naming it and how to get one."""
     value = os.environ.get(name, "").strip()
     if not value:
-        raise PermissionError(f"{name} is not set. {hint} Then set {name} in .env and restart OCS.")
+        raise PermissionError(f"{name} is not set. {hint} Then set {name} in .env and restart Open Geo Service.")
     return value

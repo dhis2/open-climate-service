@@ -215,7 +215,7 @@ def test_no_derived_builtin_declares_away_its_sources_obligations(derived_id: st
     """
     licences = _builtin_licences()
     derived, source = licences[derived_id], licences[source_id]
-    assert derived.known and source.known, "a shipped licence OCS cannot parse"
+    assert derived.known and source.known, "a shipped licence OGS cannot parse"
     assert source.obligations <= derived.obligations, (
         f"{derived_id} drops {sorted(source.obligations - derived.obligations)} required by {source_id}"
     )

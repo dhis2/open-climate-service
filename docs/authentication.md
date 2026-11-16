@@ -1,16 +1,16 @@
 # Authentication and authorization
 
-This note records how OCS will authenticate callers and decide what they may do. It is a design,
-not a description of current behaviour: **OCS has no authentication today.** Every route is open
+This note records how Open Geo Service will authenticate callers and decide what they may do. It is a design,
+not a description of current behaviour: **Open Geo Service has no authentication today.** Every route is open
 to anyone who can reach the instance, including ingestion, pipelines and delivery to DHIS2. Until
 the first step below ships, deploy an instance privately or behind reverse-proxy authentication,
 or run it read-only (see [Read-only instances](instance_guide.md#read-only-instances)).
 
 ## The principle
 
-OCS is a resource server, not an identity provider. It never stores a password. Identity comes
+Open Geo Service is a resource server, not an identity provider. It never stores a password. Identity comes
 from outside: named tokens for machine clients, an OIDC provider for people, and, when a DHIS2
-app needs it, a trusted DHIS2 route. Authorization, ownership and audit stay inside OCS, decided
+app needs it, a trusted DHIS2 route. Authorization, ownership and audit stay inside Open Geo Service, decided
 once, in one middleware, over one table of routes.
 
 Authentication stays optional. It is on when at least one token or OIDC provider is configured,
@@ -21,7 +21,7 @@ and off otherwise:
   for a laptop.
 - **On:** a request without a valid credential is `anonymous` and gets the public tier only.
 
-## Who calls OCS
+## Who calls Open Geo Service
 
 Identity and permission are separate. A **principal** says who is calling; a **tier** says what
 that principal may do. Every principal is granted exactly one tier.
@@ -32,7 +32,7 @@ that principal may do. Every principal is granted exactly one tier.
 | Machine client: CAPS, a script, a cron job | a named static token | `token:<id>` |
 | Person, in the web interface or an openEO client | an OIDC token, or a session after sign-in | a local id mapped from the provider's issuer and subject |
 | App inside DHIS2, when one needs it | a DHIS2 route's secret | `route:<id>` |
-| The scheduler and pipeline runner | none; they run inside OCS | `service:scheduler`, `service:pipeline-runner` |
+| The scheduler and pipeline runner | none; they run inside Open Geo Service | `service:scheduler`, `service:pipeline-runner` |
 
 Usernames and email addresses are never principal ids: they change, and they are not unique
 across providers.
@@ -103,15 +103,15 @@ authentication:
 
 A client sends `Authorization: Bearer <secret>`. The token id is stable and not secret, and it is
 written to every record the client creates, so CAPS and a script are told apart in job and
-delivery history. Secrets are compared in constant time and never logged. OCS refuses to start
+delivery history. Secrets are compared in constant time and never logged. Open Geo Service refuses to start
 when two ids or two secrets repeat, or when a secret is shorter than 32 characters. The principal
 appears in audit records and in structured request logs, and repeated authentication failures
 are logged at a limited rate.
 
 openEO clients use `GET /credentials/basic`, with the token id as the username and the secret as
-the password. OCS checks the pair and returns the same secret as `access_token`; it mints no
+the password. Open Geo Service checks the pair and returns the same secret as `access_token`; it mints no
 second token and keeps no session. The client then sends `Authorization: Bearer basic//<secret>`,
-which OCS maps to the same `token:<id>` principal as a bare `Bearer <secret>`. The openEO Python
+which Open Geo Service maps to the same `token:<id>` principal as a bare `Bearer <secret>`. The openEO Python
 client and Web Editor work unchanged.
 
 Named tokens are permanent. They remain the credential for machine clients after OIDC ships.
@@ -123,14 +123,14 @@ sign-in page. It sets a session cookie marked `HttpOnly`, `Secure` and `SameSite
 signed session id, never the secret. Every write made with the cookie carries a CSRF token.
 Signed out, the pages stay readable and their action panels say what signing in would allow.
 
-The cookie serves only the OCS interface on its own origin. A client on another origin, such as a
+The cookie serves only the Open Geo Service interface on its own origin. A client on another origin, such as a
 browser app or the openEO Web Editor, sends a bearer token. Cross-site cookies, which would need
 `SameSite=None`, wait until a real client needs them.
 
 ## People: OIDC
 
 Providers are listed in configuration and advertised at `/credentials/oidc`, so openEO clients
-discover them. OCS validates each token's signature against the provider's published keys, along
+discover them. Open Geo Service validates each token's signature against the provider's published keys, along
 with the issuer, the audience, the expiry and the token type. It maps the issuer and subject to a
 local principal id. The operator tier comes from a claim the provider sends, or from a small local
 mapping.
@@ -147,27 +147,27 @@ DHIS2 from 2.42 is a full OIDC provider. Without a configured keystore it genera
 key at every start, which invalidates every token, so a production DHIS2 used this way needs a
 persistent keystore.
 
-DHIS2 is an identity source, never a dependency. OCS runs without DHIS2, and signing in through
-DHIS2 never implies the right to operate OCS. A DHIS2 role grants an OCS tier only through an
+DHIS2 is an identity source, never a dependency. Open Geo Service runs without DHIS2, and signing in through
+DHIS2 never implies the right to operate Open Geo Service. A DHIS2 role grants an Open Geo Service tier only through an
 explicit mapping.
 
 ## Apps inside DHIS2
 
-An app running inside DHIS2 can reach OCS through a DHIS2 route without a second login. A route
-is not the general way into OCS: it accepts only `GET` and `POST`, times out after at most
+An app running inside DHIS2 can reach Open Geo Service through a DHIS2 route without a second login. A route
+is not the general way into Open Geo Service: it accepts only `GET` and `POST`, times out after at most
 60 seconds and caps transfers at 5 minutes. So synchronous sync, large `POST /result` requests,
 most of openEO and data delivery cannot be assumed to work through it.
 
 Route support will be built when the first DHIS2 app names the operations it needs, and scoped to
-those operations. Until then, a deployment that only DHIS2 calls can keep OCS on the internal
+those operations. Until then, a deployment that only DHIS2 calls can keep Open Geo Service on the internal
 network, as CHAP does.
 
 When it is built:
 
 - The route adds a secret header through its `api-headers` authentication, and a custom DHIS2
   authority controls who may run it.
-- The secret identifies the principal `route:<id>`, whose tier is set in OCS.
-- OCS reads the `X-Forwarded-User` header that DHIS2 adds only after the secret matches, and
+- The secret identifies the principal `route:<id>`, whose tier is set in Open Geo Service.
+- Open Geo Service reads the `X-Forwarded-User` header that DHIS2 adds only after the secret matches, and
   records it as the acting person for audit. On its own the header is trivially forged and is
   ignored.
 - Records created through a route belong to `route:<id>`, never to the forwarded username.
@@ -180,13 +180,13 @@ Listing and changing them is limited to the owner unless the caller has the oper
 `GET /me` reports the caller.
 
 The scheduler and the pipeline runner act as service principals, so an unattended delivery is as
-attributable as one started by hand. The credentials OCS uses for upstream sources and DHIS2
+attributable as one started by hand. The credentials Open Geo Service uses for upstream sources and DHIS2
 connections are unchanged.
 
 ## Private data
 
 Per-dataset access will use signed links, which work in QGIS, Python and browser readers alike,
-where a cookie would serve only the OCS web interface. A Zarr store gets one signed path prefix,
+where a cookie would serve only the Open Geo Service web interface. A Zarr store gets one signed path prefix,
 carried in the path because Zarr clients build chunk URLs by appending to the store path and drop
 a query string. PMTiles, GeoParquet and thumbnails get short-lived signed URLs. This waits until
 a dataset needs it.
@@ -218,5 +218,5 @@ Each step ships on its own and is useful alone; no later step redoes an earlier 
   authorization code and refresh token, or need a provider with the device flow.
 - Which DHIS2 versions the target countries run.
 - For routes: whether DHIS2 replaces an `X-Forwarded-User` header the client sent, and which
-  request headers, such as `Range`, reach OCS.
+  request headers, such as `Range`, reach Open Geo Service.
 - Whether any kind of deployment should gate reads by default.

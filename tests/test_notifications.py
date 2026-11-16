@@ -50,7 +50,7 @@ def test_replay_starts_delivery_without_posting_in_the_startup_thread(
     from open_geo_service.jobs import events as job_events
 
     kicked: list[bool] = []
-    monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ocs")
+    monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ogs")
     monkeypatch.setattr(job_events, "persisted_events", lambda: [])
     monkeypatch.setattr(notifications, "_kick", lambda: kicked.append(True))
     monkeypatch.setattr(notifications, "send_due", lambda: pytest.fail("replay posted synchronously"))
@@ -168,9 +168,9 @@ def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_i
 @pytest.mark.parametrize(
     ("base_url", "root_path", "link"),
     [
-        ("https://ocs.example.org", "/ocs", "https://ocs.example.org/ocs/pipelines/rain"),
-        ("https://example.org/climate", "/ocs", "https://example.org/climate/pipelines/rain"),
-        ("", "/ocs", "/ocs/pipelines/rain"),
+        ("https://ogs.example.org", "/ogs", "https://ogs.example.org/ogs/pipelines/rain"),
+        ("https://example.org/climate", "/ogs", "https://example.org/climate/pipelines/rain"),
+        ("", "/ogs", "/ogs/pipelines/rain"),
         ("", "", "/pipelines/rain"),
     ],
 )

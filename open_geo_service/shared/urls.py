@@ -103,7 +103,7 @@ def configured_root_path() -> str:
 
     Read by `create_app`, so it applies under every launcher rather than only the
     `geoservice` entry point. Normalised because uvicorn joins `root_path + path`
-    verbatim: a trailing slash would put `/ocs//manage` on the scope, which routes but no
+    verbatim: a trailing slash would put `/ogs//manage` on the scope, which routes but no
     longer matches a closed prefix in read-only mode.
     """
     value = os.getenv(ROOT_PATH_ENV, "").strip().strip("/")
@@ -212,7 +212,7 @@ def strip_mount(path: str, prefix: str) -> str:
 
     The same rule Starlette routes by: `/stac` under a `/st` prefix stays `/stac`. Given the
     raw `root_path`, a trailing slash in it consumes the slash that uvicorn's `root_path + path`
-    join doubles, so `/ocs//manage` under `/ocs/` is `/manage`. Returns `/` rather than `""`
+    join doubles, so `/ogs//manage` under `/ogs/` is `/manage`. Returns `/` rather than `""`
     for an exact match.
     """
     if not prefix or not path.startswith(prefix):
@@ -226,8 +226,8 @@ def strip_mount(path: str, prefix: str) -> str:
 def route_path(request: Request) -> str:
     """The request path as the app's routes see it: `request.url.path` less the ASGI prefix.
 
-    Uvicorn sets `scope["path"] = root_path + path`, so under `--root-path /ocs` a request for
-    `/manage` arrives as `/ocs/manage`. Anything that matches the incoming path against a
+    Uvicorn sets `scope["path"] = root_path + path`, so under `--root-path /ogs` a request for
+    `/manage` arrives as `/ogs/manage`. Anything that matches the incoming path against a
     declared route must use this rather than `request.url.path`, or it fails to match under a
     prefix. The raw `root_path` is used, not `asgi_prefix`, so that a trailing slash in it
     strips the same way Starlette strips it.

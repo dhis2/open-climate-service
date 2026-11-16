@@ -316,7 +316,7 @@ def _service_on(http: httpx.Client, base_url: str = "http://testserver") -> GeoS
 
 def _service_replying(status_code: int, **response: Any) -> GeoService:
     transport = httpx.MockTransport(lambda request: httpx.Response(status_code, **response))
-    return _service_on(httpx.Client(transport=transport), "http://ocs.example")
+    return _service_on(httpx.Client(transport=transport), "http://ogs.example")
 
 
 def test_an_unknown_collection_names_what_was_missing(client: TestClient) -> None:

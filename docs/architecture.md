@@ -62,10 +62,10 @@ This is a deliberate design constraint: each instance serves one place. A Sierra
 
 ## Operational ownership and access
 
-OCS owns its operational capabilities, policy, and state. An instance must remain
-operable without DHIS2. The DHIS2 Climate App is an optional client of the OCS API:
+Open Geo Service owns its operational capabilities, policy, and state. An instance must remain
+operable without DHIS2. The DHIS2 Climate App is an optional client of the Open Geo Service API:
 it may provide DHIS2-specific presentation, mappings, and interaction flows, but
-must not duplicate OCS lifecycle rules or maintain a parallel copy of operational
+must not duplicate Open Geo Service lifecycle rules or maintain a parallel copy of operational
 state.
 
 Domain services and persistent stores are the source of truth. HTTP routes, the
@@ -74,14 +74,14 @@ than implement separate lifecycle rules. External clients use the HTTP API.
 
 ### Built-in web surfaces
 
-OCS owns two web surfaces with distinct purposes:
+Open Geo Service owns two web surfaces with distinct purposes:
 
 - **The landing page (`/`) provides public discovery.** It presents the instance,
   published data, available templates, exploration tools, and documentation, and
   must remain useful without DHIS2. The root URL serves HTML to browsers and JSON
   discovery metadata to API clients through content negotiation.
 - **The `/manage` console provides operator administration.** It supports ingestion
-  and synchronization and is the OCS surface for dataset administration. It is
+  and synchronization and is the Open Geo Service surface for dataset administration. It is
   unavailable when the instance is configured as read-only.
 
 See [Using the web interface](web_interface.md) for the available views and actions.
@@ -93,7 +93,7 @@ The access model distinguishes three classes:
 | Access class | Intended responsibility |
 | --- | --- |
 | Public read | Discover and consume published datasets and instance metadata through the public API and landing page. |
-| Operator read and write | Inspect operational state and perform ingestion, synchronization, and lifecycle actions through the OCS API and `/manage`. |
+| Operator read and write | Inspect operational state and perform ingestion, synchronization, and lifecycle actions through the Open Geo Service API and `/manage`. |
 | Host operator | Configure the instance, including read-only policy and schedule definitions, and perform host maintenance. |
 
 Network-exposed operator reads and writes must be protected by authentication and

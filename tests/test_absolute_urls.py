@@ -16,7 +16,7 @@ from open_geo_service.shared.urls import BASE_URL_ENV
 
 from .conftest import MountedClientFactory
 
-_CONFIGURED = "https://ocs-demo-nepal.dhis2.org"
+_CONFIGURED = "https://ogs-demo-nepal.dhis2.org"
 # `?f=html` because the URL answers JSON by default: these tests are about the page.
 _SOURCE_PAGE = "/data-sources/chirps3_precipitation_daily?f=html"
 
@@ -219,10 +219,10 @@ def test_a_base_url_that_is_only_slashes_falls_back_to_the_request(
 def test_the_self_link_does_not_double_a_mount_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ordinary mounted deployment, not an exotic one.
 
-    Uvicorn sets `scope["path"] = root_path + path`, so with `--root-path /ocs` behind a
-    stripping proxy a request for `/stac` arrives with `request.url.path == "/ocs/stac"` while
-    the fallback origin `request.base_url` already ends in `/ocs/`. Appending that unstripped
-    gives `/ocs/ocs/stac` for `self` while every other link stays correct, and a STAC client
+    Uvicorn sets `scope["path"] = root_path + path`, so with `--root-path /ogs` behind a
+    stripping proxy a request for `/stac` arrives with `request.url.path == "/ogs/stac"` while
+    the fallback origin `request.base_url` already ends in `/ogs/`. Appending that unstripped
+    gives `/ogs/ogs/stac` for `self` while every other link stays correct, and a STAC client
     following `self` 404s.
 
     The scope is built by hand rather than through `mounted_client` because
@@ -232,8 +232,8 @@ def test_the_self_link_does_not_double_a_mount_prefix(monkeypatch: pytest.Monkey
     from open_geo_service.shared.urls import self_url
 
     monkeypatch.delenv(BASE_URL_ENV, raising=False)
-    request = _fake_request("http://host/", "/ocs/stac", root_path="/ocs")
-    assert self_url(request) == "http://host/ocs/stac"
+    request = _fake_request("http://host/", "/ogs/stac", root_path="/ogs")
+    assert self_url(request) == "http://host/ogs/stac"
 
 
 def test_a_configured_origin_is_unaffected_by_a_mount_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -241,9 +241,9 @@ def test_a_configured_origin_is_unaffected_by_a_mount_prefix(monkeypatch: pytest
     includes it must not have it stripped or doubled."""
     from open_geo_service.shared.urls import self_url
 
-    monkeypatch.setenv(BASE_URL_ENV, "https://example.org/ocs")
-    request = _fake_request("http://host/", "/ocs/stac", root_path="/ocs")
-    assert self_url(request) == "https://example.org/ocs/stac"
+    monkeypatch.setenv(BASE_URL_ENV, "https://example.org/ogs")
+    request = _fake_request("http://host/", "/ogs/stac", root_path="/ogs")
+    assert self_url(request) == "https://example.org/ogs/stac"
 
 
 # -- mount prefix ----------------------------------------------------------------------------
@@ -258,34 +258,34 @@ def test_a_configured_origin_is_unaffected_by_a_mount_prefix(monkeypatch: pytest
 
 @pytest.fixture
 def mounted_client(monkeypatch: pytest.MonkeyPatch, mounted_client_factory: MountedClientFactory) -> TestClient:
-    """Served under `/ocs` the way uvicorn does it, with a configured public origin that is
+    """Served under `/ogs` the way uvicorn does it, with a configured public origin that is
     *not* the request's and that carries no path of its own."""
     monkeypatch.setenv(BASE_URL_ENV, _CONFIGURED)
-    return mounted_client_factory("/ocs")
+    return mounted_client_factory("/ogs")
 
 
 def test_an_origin_only_base_url_composes_with_the_asgi_prefix(mounted_client: TestClient) -> None:
-    """`ROOT_PATH=/ocs` with `GEOSERVICE_BASE_URL=https://host` is the documented pairing.
+    """`ROOT_PATH=/ogs` with `GEOSERVICE_BASE_URL=https://host` is the documented pairing.
 
-    Returning the configured value verbatim put the HTML links under `/ocs` while every STAC
+    Returning the configured value verbatim put the HTML links under `/ogs` while every STAC
     and openEO href named the origin root: one document, two service roots, and the absolute
     half 404s at the proxy.
     """
     payload = mounted_client.get("/stac/catalog.json").json()
     for link in payload["links"]:
         # `describedby` and `agents` are relative, so they resolve under any base.
-        assert link["href"].startswith((f"{_CONFIGURED}/ocs/", "./")), link
+        assert link["href"].startswith((f"{_CONFIGURED}/ogs/", "./")), link
 
     well_known = mounted_client.get("/.well-known/openeo").json()
-    assert all(v["url"].startswith(f"{_CONFIGURED}/ocs") for v in well_known["versions"]), well_known
+    assert all(v["url"].startswith(f"{_CONFIGURED}/ogs") for v in well_known["versions"]), well_known
 
 
 def test_the_ingest_form_posts_under_the_mount_prefix(mounted_client: TestClient) -> None:
-    """A page served under `/ocs` that posts to `/manage/ingest` reaches the proxy, not the
+    """A page served under `/ogs` that posts to `/manage/ingest` reaches the proxy, not the
     app, and gets a 404."""
     body = mounted_client.get(_SOURCE_PAGE).text
 
-    assert 'action="/ocs/manage/ingest"' in body
+    assert 'action="/ogs/manage/ingest"' in body
     assert 'action="/manage/ingest"' not in body
     # Still no origin: the prefix is a path, so the page's own scheme and host are inherited.
     assert _CONFIGURED not in body
@@ -294,7 +294,7 @@ def test_the_ingest_form_posts_under_the_mount_prefix(mounted_client: TestClient
 def test_the_landing_page_links_under_the_mount_prefix(mounted_client: TestClient) -> None:
     body = mounted_client.get("/", headers={"Accept": "text/html"}).text
 
-    assert 'href="/ocs/map"' in body
+    assert 'href="/ogs/map"' in body
     assert 'href="/map"' not in body
     assert _CONFIGURED not in body
 
@@ -304,12 +304,12 @@ def test_the_viewer_fetches_under_the_mount_prefix(mounted_client: TestClient) -
     empty, which looks like missing data rather than a broken URL."""
     body = mounted_client.get("/map").text
 
-    assert 'fetch("/ocs/extent")' in body
-    assert 'fetch("/ocs/collections")' in body
+    assert 'fetch("/ogs/extent")' in body
+    assert 'fetch("/ogs/collections")' in body
     # The per-collection href too, not just the two literal fetch targets: a viewer that lists
     # datasets under the mount and then resolves each one outside it shows a catalogue where every
     # entry 404s on selection.
-    assert "`/ocs/collections/${col.id}`" in body
+    assert "`/ogs/collections/${col.id}`" in body
     assert _CONFIGURED not in body
 
 
@@ -321,7 +321,7 @@ def test_an_unmounted_instance_gains_no_prefix(https_client: TestClient) -> None
     assert "//manage" not in body, "empty prefix must not leave a doubled slash"
 
 
-@pytest.mark.parametrize(("reported", "expected"), [("/ocs/", "/ocs"), ("/ocs", "/ocs"), ("/", ""), ("", "")])
+@pytest.mark.parametrize(("reported", "expected"), [("/ogs/", "/ogs"), ("/ogs", "/ogs"), ("/", ""), ("", "")])
 def test_mount_prefix_strips_a_trailing_slash(reported: str, expected: str) -> None:
     """`f"{mount_prefix(request)}/manage"` has to be right for every form the server reports."""
     from open_geo_service.shared.urls import mount_prefix
@@ -331,11 +331,11 @@ def test_mount_prefix_strips_a_trailing_slash(reported: str, expected: str) -> N
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("/ocs", "/ocs"), ("/ocs/", "/ocs"), ("ocs", "/ocs"), (" /ocs/ ", "/ocs"), ("/", ""), ("", ""), ("  ", "")],
+    [("/ogs", "/ogs"), ("/ogs/", "/ogs"), ("ogs", "/ogs"), (" /ogs/ ", "/ogs"), ("/", ""), ("", ""), ("  ", "")],
 )
 def test_the_root_path_setting_is_normalised(monkeypatch: pytest.MonkeyPatch, raw: str, expected: str) -> None:
-    """Uvicorn joins `root_path + path` verbatim, so `ROOT_PATH=/ocs/` would put `/ocs//manage`
-    on the scope, and `ocs` would render relative links. Both are the operator's most likely
+    """Uvicorn joins `root_path + path` verbatim, so `ROOT_PATH=/ogs/` would put `/ogs//manage`
+    on the scope, and `ogs` would render relative links. Both are the operator's most likely
     spellings after the canonical one."""
     from open_geo_service.shared.urls import configured_root_path
 
@@ -348,37 +348,37 @@ def test_the_app_reads_the_root_path_itself(monkeypatch: pytest.MonkeyPatch) -> 
     through `cli.py`. The app owns the setting, so every launcher gets it."""
     from open_geo_service.main import create_app
 
-    monkeypatch.setenv("ROOT_PATH", "/ocs/")
+    monkeypatch.setenv("ROOT_PATH", "/ogs/")
     client = TestClient(create_app())
 
-    assert 'action="/ocs/manage/ingest"' in client.get(_SOURCE_PAGE).text
+    assert 'action="/ogs/manage/ingest"' in client.get(_SOURCE_PAGE).text
     self_href = next(link["href"] for link in client.get("/stac/catalog.json").json()["links"] if link["rel"] == "self")
-    assert self_href == "http://testserver/ocs/stac/catalog.json"
+    assert self_href == "http://testserver/ogs/stac/catalog.json"
 
 
-@pytest.mark.parametrize("root_path", ["/ocs", "/ocs/"])
+@pytest.mark.parametrize("root_path", ["/ogs", "/ogs/"])
 def test_the_route_path_strips_the_prefix_the_way_starlette_does(root_path: str) -> None:
     """A trailing slash in `root_path` doubles the slash on the joined path. Starlette routes
-    `/ocs//manage` under `/ocs/` to `/manage`; the read-only policy must see the same path."""
+    `/ogs//manage` under `/ogs/` to `/manage`; the read-only policy must see the same path."""
     from open_geo_service.shared.urls import route_path, self_url
 
     request = _fake_request("http://host/", root_path + "/manage", root_path=root_path)
     assert route_path(request) == "/manage"
-    assert self_url(request) == "http://host/ocs/manage"
+    assert self_url(request) == "http://host/ogs/manage"
 
 
 def test_the_mount_prefix_falls_back_to_the_base_url_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The deployment that declares its prefix only in `GEOSERVICE_BASE_URL`.
 
     Without the fallback, in-page links come out unprefixed: an instance behind
-    `https://host/ocs/` renders `/map`, which 404s at the proxy. `ROOT_PATH` states this more
+    `https://host/ogs/` renders `/map`, which 404s at the proxy. `ROOT_PATH` states this more
     directly and `root_path` wins whenever set, but the fallback has to keep working for
     deployments that cannot set it.
     """
     from open_geo_service.shared.urls import mount_prefix
 
-    monkeypatch.setenv(BASE_URL_ENV, "https://host/ocs")
-    assert mount_prefix(_fake_request("https://host/", "/")) == "/ocs"
+    monkeypatch.setenv(BASE_URL_ENV, "https://host/ogs")
+    assert mount_prefix(_fake_request("https://host/", "/")) == "/ogs"
 
     monkeypatch.setenv(BASE_URL_ENV, "https://host")
     assert mount_prefix(_fake_request("https://host/", "/")) == ""
@@ -387,8 +387,8 @@ def test_the_mount_prefix_falls_back_to_the_base_url_path(monkeypatch: pytest.Mo
 def test_the_self_link_keeps_the_prefix_of_an_embedding_mount(monkeypatch: pytest.MonkeyPatch) -> None:
     """Under an embedding mount the fallback origin needs the prefix added to it.
 
-    Starlette builds `base_url` from `app_root_path`, which under `Mount("/ocs", app)` is the
-    outer root with no prefix at all, while `request.url.path` carries `/ocs`. Stripping the
+    Starlette builds `base_url` from `app_root_path`, which under `Mount("/ogs", app)` is the
+    outer root with no prefix at all, while `request.url.path` carries `/ogs`. Stripping the
     prefix off the path without adding it to the origin drops it altogether and `self` comes
     back as `/stac` — a 404.
     """
@@ -398,10 +398,10 @@ def test_the_self_link_keeps_the_prefix_of_an_embedding_mount(monkeypatch: pytes
     from open_geo_service.main import app as inner
 
     monkeypatch.delenv(BASE_URL_ENV, raising=False)
-    outer = Starlette(routes=[Mount("/ocs", app=inner)])
-    payload = TestClient(outer).get("/ocs/stac/catalog.json").json()
+    outer = Starlette(routes=[Mount("/ogs", app=inner)])
+    payload = TestClient(outer).get("/ogs/stac/catalog.json").json()
     self_href = next(link["href"] for link in payload["links"] if link["rel"] == "self")
-    assert self_href == "http://testserver/ocs/stac/catalog.json"
+    assert self_href == "http://testserver/ogs/stac/catalog.json"
 
 
 def test_stripping_a_prefix_respects_segment_boundaries() -> None:
@@ -409,10 +409,10 @@ def test_stripping_a_prefix_respects_segment_boundaries() -> None:
     from open_geo_service.shared.urls import strip_mount
 
     assert strip_mount("/stac", "/st") == "/stac"
-    assert strip_mount("/ocs/stac", "/ocs") == "/stac"
-    assert strip_mount("/ocs", "/ocs") == "/"
+    assert strip_mount("/ogs/stac", "/ogs") == "/stac"
+    assert strip_mount("/ogs", "/ogs") == "/"
     assert strip_mount("/stac", "") == "/stac"
-    assert strip_mount("/ocs//stac", "/ocs/") == "/stac", "a trailing-slash prefix consumes the doubled slash"
+    assert strip_mount("/ogs//stac", "/ogs/") == "/stac", "a trailing-slash prefix consumes the doubled slash"
 
 
 def test_the_self_link_does_not_double_a_configured_path_under_an_embedding_mount(
@@ -422,19 +422,19 @@ def test_the_self_link_does_not_double_a_configured_path_under_an_embedding_moun
     twice.
 
     Varying how much of the prefix comes off the path by which origin it is appended to leaves
-    the prefix on the path under `Mount("/ocs", app)` while the configured path supplies it a
-    second time: `https://public.example/ocs/ocs/stac`.
+    the prefix on the path under `Mount("/ogs", app)` while the configured path supplies it a
+    second time: `https://public.example/ogs/ogs/stac`.
     """
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
     from open_geo_service.main import app as inner
 
-    monkeypatch.setenv(BASE_URL_ENV, "https://public.example/ocs")
-    outer = Starlette(routes=[Mount("/ocs", app=inner)])
-    payload = TestClient(outer).get("/ocs/stac/catalog.json").json()
+    monkeypatch.setenv(BASE_URL_ENV, "https://public.example/ogs")
+    outer = Starlette(routes=[Mount("/ogs", app=inner)])
+    payload = TestClient(outer).get("/ogs/stac/catalog.json").json()
     self_href = next(link["href"] for link in payload["links"] if link["rel"] == "self")
-    assert self_href == "https://public.example/ocs/stac/catalog.json"
+    assert self_href == "https://public.example/ogs/stac/catalog.json"
 
 
 def test_every_link_of_one_document_agrees_under_an_embedding_mount(
@@ -443,7 +443,7 @@ def test_every_link_of_one_document_agrees_under_an_embedding_mount(
     """`self` is not the only link in the document, and the others are built differently.
 
     `root` and the child links come from `absolute_base` rather than the request path, so an
-    origin without the prefix puts both forms in one STAC document — `self` with `/ocs`, `root`
+    origin without the prefix puts both forms in one STAC document — `self` with `/ogs`, `root`
     without — and a client following `root` gets a 404.
     """
     from starlette.applications import Starlette
@@ -452,33 +452,33 @@ def test_every_link_of_one_document_agrees_under_an_embedding_mount(
     from open_geo_service.main import app as inner
 
     monkeypatch.delenv(BASE_URL_ENV, raising=False)
-    outer = Starlette(routes=[Mount("/ocs", app=inner)])
-    payload = TestClient(outer).get("/ocs/stac/catalog.json").json()
+    outer = Starlette(routes=[Mount("/ogs", app=inner)])
+    payload = TestClient(outer).get("/ogs/stac/catalog.json").json()
 
     for link in payload["links"]:
-        assert link["href"].startswith(("http://testserver/ocs/", "./")), link
+        assert link["href"].startswith(("http://testserver/ogs/", "./")), link
 
 
 def test_a_host_named_like_the_prefix_does_not_lose_it(monkeypatch: pytest.MonkeyPatch) -> None:
     """Deciding whether `base_url` already carries the prefix by `endswith` compared a URL
-    against a path: `http://ocs` ends with `/ocs`, so a compose service named after its mount
-    served `self` as `http://ocs/stac`."""
+    against a path: `http://ogs` ends with `/ogs`, so a compose service named after its mount
+    served `self` as `http://ogs/stac`."""
     from open_geo_service.shared.urls import self_url
 
     monkeypatch.delenv(BASE_URL_ENV, raising=False)
-    request = _fake_request("http://ocs/", "/ocs/stac", root_path="/ocs", app_root_path="")
-    assert self_url(request) == "http://ocs/ocs/stac"
+    request = _fake_request("http://ogs/", "/ogs/stac", root_path="/ogs", app_root_path="")
+    assert self_url(request) == "http://ogs/ogs/stac"
 
 
 def test_a_mount_inside_a_root_path_carries_both_prefixes_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`--root-path /api` with `Mount("/ocs", app)` inside it: Starlette composes the child
-    `root_path` as `/api/ocs` while `base_url` stops at the outer `/api`. Appending the whole
-    child prefix to that gave `/api/api/ocs`."""
+    """`--root-path /api` with `Mount("/ogs", app)` inside it: Starlette composes the child
+    `root_path` as `/api/ogs` while `base_url` stops at the outer `/api`. Appending the whole
+    child prefix to that gave `/api/api/ogs`."""
     from open_geo_service.shared.urls import self_url
 
     monkeypatch.delenv(BASE_URL_ENV, raising=False)
-    request = _fake_request("http://host/", "/api/ocs/stac", root_path="/api/ocs", app_root_path="/api")
-    assert self_url(request) == "http://host/api/ocs/stac"
+    request = _fake_request("http://host/", "/api/ogs/stac", root_path="/api/ogs", app_root_path="/api")
+    assert self_url(request) == "http://host/api/ogs/stac"
 
 
 # -- unusable configuration ------------------------------------------------------------------
@@ -486,7 +486,7 @@ def test_a_mount_inside_a_root_path_carries_both_prefixes_once(monkeypatch: pyte
 
 @pytest.mark.parametrize(
     "configured",
-    ["ocs-demo-nepal.dhis2.org", "ocs-demo-nepal.dhis2.org/ocs", "https://", "//host/ocs"],
+    ["ocs-demo-nepal.dhis2.org", "ocs-demo-nepal.dhis2.org/ogs", "https://", "//host/ogs"],
 )
 def test_a_base_url_without_a_scheme_and_host_falls_back_to_the_request(
     monkeypatch: pytest.MonkeyPatch, configured: str
@@ -505,19 +505,19 @@ def test_a_base_url_without_a_scheme_and_host_falls_back_to_the_request(
     assert absolute_base(_fake_request("http://localhost:9000/", "/stac")) == "http://localhost:9000"
 
 
-@pytest.mark.parametrize("configured", ["https://host/ocs?x=1", "https://host/ocs#frag", "https://host/ocs/#"])
+@pytest.mark.parametrize("configured", ["https://host/ogs?x=1", "https://host/ogs#frag", "https://host/ogs/#"])
 def test_a_base_url_is_parsed_rather_than_trimmed(monkeypatch: pytest.MonkeyPatch, configured: str) -> None:
     """A query string or fragment otherwise lands in the middle of every absolute URL.
 
-    `https://host/ocs?x=1` gives `https://host/ocs?x=1/stac` while in-page links stay correct,
+    `https://host/ogs?x=1` gives `https://host/ogs?x=1/stac` while in-page links stay correct,
     because two readings of one variable disagree. Both go through the same parse.
     """
     from open_geo_service.shared.urls import absolute_url, mount_prefix
 
     monkeypatch.setenv(BASE_URL_ENV, configured)
     request = _fake_request("http://internal:9000/", "/stac")
-    assert absolute_url(request, "/stac") == "https://host/ocs/stac"
-    assert mount_prefix(request) == "/ocs"
+    assert absolute_url(request, "/stac") == "https://host/ogs/stac"
+    assert mount_prefix(request) == "/ogs"
 
 
 def test_an_unusable_base_url_is_logged_once(monkeypatch: pytest.MonkeyPatch) -> None:

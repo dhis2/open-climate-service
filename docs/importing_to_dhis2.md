@@ -26,7 +26,7 @@ There are three ways to get the values into DHIS2:
 
 ## Named connections for server-side plugins
 
-Exporters and feature providers running inside an OCS instance can share a named
+Exporters and feature providers running inside an Open Geo Service instance can share a named
 DHIS2 connection. Configure it in the file referenced by `GEOSERVICE_CONFIG`:
 
 ```yaml
@@ -58,7 +58,7 @@ installs it. An instance managed with uv names the extra beside `server` in its 
 time with a `RuntimeError` naming the extra.
 
 An independently installed provider can use the public accessor without reading
-OCS configuration or handling credentials itself:
+Open Geo Service configuration or handling credentials itself:
 
 ```python
 from contextlib import closing
@@ -109,7 +109,7 @@ For reusable destination mappings and pure rendering through `save_result`, see
 Pull the org unit boundaries as GeoJSON. Each feature's `id` is the org unit UID, which the workflow uses as the `orgUnit`.
 
 !!! tip
-    On a running instance, let OCS fetch and store them instead, with the built-in `dhis2` feature provider: see [DHIS2 organisation units](built_in_datasets.md#dhis2-organisation-units-feature-collection). A workflow then takes them as a `load_collection` node passed as `geometries`, or, in a pipeline, as `{from_features: districts}`. The collection id on its own is not geometry, so it cannot replace `org_units` in the example below.
+    On a running instance, let Open Geo Service fetch and store them instead, with the built-in `dhis2` feature provider: see [DHIS2 organisation units](built_in_datasets.md#dhis2-organisation-units-feature-collection). A workflow then takes them as a `load_collection` node passed as `geometries`, or, in a pipeline, as `{from_features: districts}`. The collection id on its own is not geometry, so it cannot replace `org_units` in the example below.
 
 ```python
 from dhis2_client import DHIS2Client
@@ -267,7 +267,7 @@ This is the aggregation the built-in workflows run: each cell is weighted by the
 an org unit covers. openEO's standard `aggregate_spatial`, with a reducer process such as
 `mean`, counts a cell wholly or not at all instead. This is a lower-level escape hatch for
 experiments and one-off imports. The payload
-is downloadable but has no delivery manifest, so OCS cannot deliver it.
+is downloadable but has no delivery manifest, so Open Geo Service cannot deliver it.
 
 ## Producing a CHAP CSV instead
 

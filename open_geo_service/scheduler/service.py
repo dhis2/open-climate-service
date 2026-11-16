@@ -249,7 +249,7 @@ class SchedulerService:
             self._report_refusals(plan.refused, already=set())
             logger.warning(
                 "Dataset scheduler enabled in process %d with %d schedule(s); "
-                "exactly one OCS process may enable scheduling",
+                "exactly one Open Geo Service process may enable scheduling",
                 os.getpid(),
                 len(plan.runnable),
             )

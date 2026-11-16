@@ -171,7 +171,7 @@ def _dhis2(
     client = _FakeClient(
         {
             "id": "N63vVmt2uY0",
-            "displayName": "OCS test",
+            "displayName": "OGS test",
             "periodType": period_type,
             "dataSetElements": [
                 {
@@ -1186,7 +1186,7 @@ class _LookupClient(_FakeClient):
     def get(self, path: str, *, params: Any = None) -> dict[str, Any]:
         self.gets.append((path, dict(params or {})))
         if path == "/api/dataSets":
-            return {"dataSets": [{"id": "N63vVmt2uY0", "displayName": "OCS test", "periodType": "Monthly"}]}
+            return {"dataSets": [{"id": "N63vVmt2uY0", "displayName": "OGS test", "periodType": "Monthly"}]}
         if path == "/api/dataElements":
             return {"dataElements": [{"id": _ELEMENT, "displayName": "Rainfall total", "valueType": "NUMBER"}]}
         combos = {f"/api/dataElements/{_ELEMENT}": ("Sex", {_FEMALE: "Female", _MALE: "Male"})}
@@ -1251,7 +1251,7 @@ def test_dhis2_lookups_search_by_name_narrow_to_the_data_set_and_resolve_labels(
     client = _dhis2_lookups(monkeypatch)
 
     sets = dhis2_destination.lookup_options("data_sets", {"connection": "local"}, " child ")
-    assert [(o.value, o.label, o.detail) for o in sets] == [("N63vVmt2uY0", "OCS test", "monthly")]
+    assert [(o.value, o.label, o.detail) for o in sets] == [("N63vVmt2uY0", "OGS test", "monthly")]
     path, params = client.gets[-1]
     assert path == "/api/dataSets" and params["filter"] == ["identifiable:token:child"]
     assert params["pageSize"] == 20 and "periodType" in params["fields"]
@@ -1392,7 +1392,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     record = store.get_record("rain-to-dhis2")
     assert record is not None and record.validation is not None
     assert record.validation.labels == {
-        "data_set": {"N63vVmt2uY0": "OCS test"},
+        "data_set": {"N63vVmt2uY0": "OGS test"},
         "series.data_element": {_ELEMENT: "Rainfall total"},
     }
     label_requests = [params for path, params in fake.gets if path in {"/api/dataSets", "/api/dataElements"}]
@@ -1401,7 +1401,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     shown = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "text/html"})
     assert shown.status_code == 200
     assert "<dt>Data set</dt>" in shown.text
-    assert 'OCS test <span class="mono note">N63vVmt2uY0</span>' in shown.text
+    assert 'OGS test <span class="mono note">N63vVmt2uY0</span>' in shown.text
     assert f'Rainfall total <span class="mono note">{_ELEMENT}</span>' in shown.text
     assert "Settings as JSON" in shown.text and "&#34;data_element&#34;: &#34;LeePHYkZwBk&#34;" in shown.text
     assert "<dt>Connection</dt>" in shown.text and '<span class="mono">local</span>' in shown.text
@@ -1410,14 +1410,14 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     assert destination["plugin"] == "dhis2" and destination["title"] == "DHIS2"
     assert [(item["name"], item["value"], item["label"]) for item in destination["settings"][:2]] == [
         ("connection", "local", None),
-        ("data_set", "N63vVmt2uY0", "OCS test"),
+        ("data_set", "N63vVmt2uY0", "OGS test"),
     ]
     assert destination["settings"][2]["rows"] == [
         [{"name": "data_element", "title": "Data element", "value": _ELEMENT, "label": "Rainfall total", "rows": None}]
     ]
 
     edit_page = client.get("/pipelines/rain-to-dhis2/edit", headers={"Accept": "text/html"})
-    assert 'value="N63vVmt2uY0" data-lookup="data_sets" data-label="OCS test"' in edit_page.text
+    assert 'value="N63vVmt2uY0" data-lookup="data_sets" data-label="OGS test"' in edit_page.text
     assert f'value="{_ELEMENT}" data-lookup="data_elements" data-label="Rainfall total"' in edit_page.text
     assert 'name="dest.series.1.data_element" value="" data-lookup="data_elements" data-label=""' in edit_page.text
 
@@ -1433,7 +1433,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     monkeypatch.setattr(store, "get_record", lambda pipeline_id: record.model_copy(update={"validation": validation}))
     shown = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "text/html"})
     assert '<span class="mono">N63vVmt2uY0</span>' in shown.text
-    assert 'OCS test <span class="mono note">' not in shown.text
+    assert 'OGS test <span class="mono note">' not in shown.text
 
 
 def test_page_folds_a_green_validation_and_opens_a_red_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1984,20 +1984,20 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     assert [item["run_id"] for item in client.get(as_json["links"]["runs"]).json()["items"]] == [run["run_id"]]
 
     # Behind a proxy prefix every link leads into OGS, as the Location header does.
-    mounted = mounted_client_factory("/ocs")
+    mounted = mounted_client_factory("/ogs")
     prefixed = mounted.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-02-01", "end": "2025-02-28"})
     links = prefixed.json()["links"]
     assert (
         prefixed.headers["Location"]
         == links["self"]
-        == f"/ocs/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
+        == f"/ogs/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
     )
-    assert links["job"] == f"/ocs/jobs/{prefixed.json()['job_id']}"
+    assert links["job"] == f"/ogs/jobs/{prefixed.json()['job_id']}"
     listed = mounted.get("/pipelines/rain-to-dhis2/runs").json()["items"]
-    assert listed[1]["links"]["delivery"] == "/ocs/exports/rain-to-dhis2/jobs/delivery-1"
+    assert listed[1]["links"]["delivery"] == "/ogs/exports/rain-to-dhis2/jobs/delivery-1"
     assert mounted.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["links"] == {
-        "self": "/ocs/pipelines/rain-to-dhis2",
-        "runs": "/ocs/pipelines/rain-to-dhis2/runs",
+        "self": "/ogs/pipelines/rain-to-dhis2",
+        "runs": "/ogs/pipelines/rain-to-dhis2/runs",
     }
     operation = client.get("/openapi.json").json()["paths"]["/pipelines/{pipeline_id}/runs"]["post"]
     body = operation["requestBody"]["content"]["application/json"]["schema"]

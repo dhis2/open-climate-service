@@ -33,7 +33,7 @@ def _artifact(name: str = "Relative Wealth Index") -> ArtifactRecord:
 def test_template_description_becomes_the_collection_description() -> None:
     caveat = (
         "Values are relative WITHIN a single country, not globally, so they cannot be compared "
-        "between countries or between OCS instances."
+        "between countries or between OGS instances."
     )
     assert _collection_description("rwi", _artifact(), {"description": caveat}) == caveat
 

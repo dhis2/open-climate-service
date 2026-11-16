@@ -186,7 +186,7 @@ class ArtifactVersion(BaseModel):
         max_length=AUTHORITY_MAX_LENGTH,
         description=(
             "The release identifier itself, verbatim as the authority publishes it "
-            "(for example 'R2025A' or '2026-08-19.0'). Opaque to OCS: not parsed, ordered, "
+            "(for example 'R2025A' or '2026-08-19.0'). Opaque to Open Geo Service: not parsed, ordered, "
             "or normalized, because its syntax belongs to the authority. Surrounding "
             "whitespace is rejected rather than trimmed, so 'verbatim' stays true and a "
             "padded declaration cannot compare unequal to the same release declared cleanly."

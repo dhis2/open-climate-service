@@ -55,12 +55,12 @@ Before handing work back, fix and format only the files you changed (`uv run ruf
 - **Test through the entry point.** Drive the route, `fetch_period`, or the publish path, not the helper underneath. Bugs found in review usually sit in a caller that bypassed a correct, well-tested helper.
 - **Count the places that enforce a rule.** If the same rule is checked in more than one place, decide it once and call that.
 - **Run the real path once.** Ingest a period or call the route on a local instance and read the output. Implausible values and leaked metadata show up there, not in unit tests. Point `GEOSERVICE_CONFIG` at a copy of the config with its own `data_dir`, so a developer's data is left alone.
-- **Size defaults for a laptop.** OCS normally runs on one. Concurrency, thread pools and memory-heavy work default low; servers raise them through settings. Before raising concurrency, run a short test: if 4 concurrent fetches are no faster than 2, use 2.
+- **Size defaults for a laptop.** Open Geo Service normally runs on one. Concurrency, thread pools and memory-heavy work default low; servers raise them through settings. Before raising concurrency, run a short test: if 4 concurrent fetches are no faster than 2, use 2.
 - **Start from the sibling plugins.** Before writing or porting a dataset plugin, read the plugins in `plugins/rasters/` or `plugins/vectors/` closest to it and match how they cache, find their cutoff, name helpers and set defaults. Port external or AI-written code onto those patterns rather than keeping its own. Add a feature no other plugin has (clamping the start of a range, say) only if this data source truly needs it; if it would help every plugin, suggest it as a change across all of them instead of implementing it in one.
-- **Build the simplest version first.** Add server-side machinery for speed or size only when the plain approach is too slow where OCS runs, and name the optimisation as a follow-up instead.
+- **Build the simplest version first.** Add server-side machinery for speed or size only when the plain approach is too slow where Open Geo Service runs, and name the optimisation as a follow-up instead.
 - **Remove the cause, not the symptom.** When a design hits a limit (a 429, a timeout, too many requests), change the design so it stops reaching it before adding retries, caches, hooks or framework changes around it. Retrying past a provider's limit by design risks the account.
 - **Be frugal with external services.** Make as few requests as the source allows. Where you can, search the extent once per ingestion, keep the result on the plugin instance and look up each period in it, rather than searching per period (see `clms_ndvi.py`). This is not premature optimisation; it keeps a provider's limits and goodwill. Balance speed against memory rather than maximising either. The same goes for your own tests and benchmarks against a provider: keep them small, a few periods rather than years.
-- **Act on review findings that can happen.** Before adding code for a Copilot or reviewer finding, check that the stores and plugins OCS has can produce the case. Answer a hypothetical one in the thread instead.
+- **Act on review findings that can happen.** Before adding code for a Copilot or reviewer finding, check that the stores and plugins Open Geo Service has can produce the case. Answer a hypothetical one in the thread instead.
 - **Extend a test before adding one.** A new case is often one more assertion, or one more variable, in the test beside it. A second test with copied setup doubles what a reader has to check.
 - **Explain at the level of the reader.** Comments state the intent or reason where the code alone does not make it plain, and may mark important steps in a longer flow; they do not narrate obvious code. Put information needed by callers in the docstring and user-facing behavior in the docs. Each level explains what its reader needs without copying the detail below it. A decision spread across several files is explained in the docs, with code pointing to it where useful.
 - **Read the diff before pushing.** When the tests and comments are several times longer than the code change, look for a test that could be merged and an explanation copied from one level to another.
@@ -101,8 +101,8 @@ Before starting new code work or submitting new Jira tasks (e.g. a system change
 When writing a Jira epic or issue, follow the [write-issue guide](https://github.com/dhis2-chap/claude-plugins/blob/main/plugins/write-issue/skills/write-issue/SKILL.md). Filing details for this repo:
 
 - Project `CLIM`, component `Climate Service`.
-- Parent: the area epic, named "OCS: <area>" (for example CLIM-802 "OCS: Processing and workflows").
-- Label: `ch-obj-open-geo-service` on every issue, as a placeholder until the OCS objectives are in Jira.
+- Parent: the area epic, named "Open Geo Service: <area>" (for example CLIM-802 "Open Geo Service: Processing and workflows").
+- Label: `ch-obj-open-geo-service` on every issue, as a placeholder until the Open Geo Service objectives are in Jira.
 - Sprint: the current sprint for work being done now; no sprint for work filed for later.
 - Assignee: none.
 

@@ -412,8 +412,8 @@ def test_api_creates_reads_updates_pauses_and_deletes(
         refused = client.put("/schedules/sync/era5", json={setting: None})
         assert refused.status_code == 422 and refused.json()["detail"][0]["loc"] == ["body", setting], refused.text
     assert client.get("/schedules/sync/era5").json()["cron"] == "0 6 * * *"
-    mounted = mounted_client_factory("/ocs")
-    assert mounted.get("/schedules/sync/era5").json()["links"]["self"] == "/ocs/schedules/sync/era5"
+    mounted = mounted_client_factory("/ogs")
+    assert mounted.get("/schedules/sync/era5").json()["links"]["self"] == "/ogs/schedules/sync/era5"
     operations = client.get("/openapi.json").json()["paths"]
     for method, path, model in (
         ("post", "/schedules/sync", "ScheduleCreate"),
@@ -925,7 +925,7 @@ def test_pages_show_the_checks_of_a_clock_in_another_process(
 
     page = client.get("/schedules", headers={"Accept": BROWSER}).text
     assert "Scheduled in another process" in page and "Not running" not in page
-    assert "reset when OCS restarts" not in page
+    assert "reset when OGS restarts" not in page
     assert 'href="/ingestions/jobs/job-9"' in page
     dataset_page = client.get("/datasets/era5", headers={"Accept": BROWSER}).text
     assert 'href="/ingestions/jobs/job-9"' in dataset_page

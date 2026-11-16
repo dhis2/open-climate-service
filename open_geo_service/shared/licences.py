@@ -306,7 +306,7 @@ def _contradiction(identifier: str | None, name: str | None) -> str | None:
     if identifier is None or _obligations_for_name(name) is None:
         return None
     return (
-        f"declares SPDX identifier {identifier} together with the name {name!r}, which OCS "
+        f"declares SPDX identifier {identifier} together with the name {name!r}, which Open Geo Service "
         f"knows as a licence in its own right with no SPDX identifier; the two name different "
         f"instruments, so the licence is treated as undeclared. Declare whichever one describes "
         f"the terms, not both."
@@ -356,7 +356,7 @@ def licence_declaration_problem(declared: Any) -> str | None:
         # one outcome this module exists to make impossible.
         return (
             f"declares the licence {text!r}, which is neither an SPDX identifier nor a licence "
-            f"name OCS knows. It publishes as 'other' with no licence link, so it cannot be told "
+            f"name Open Geo Service knows. It publishes as 'other' with no licence link, so it cannot be told "
             f"apart from declaring nothing — a mistyped identifier such as 'CC-BY-4.O' vanishes "
             f"silently. Use the SPDX identifier if the licence has one, or the mapping form "
             f"'{{name, url}}' so the collection can at least link to the terms."
@@ -379,7 +379,7 @@ def licence_declaration_problem(declared: Any) -> str | None:
         declared_obligations = sorted(str(o).strip().lower() for o in declared["obligations"] if str(o).strip())
         return (
             f"declares explicit 'obligations' {declared_obligations} alongside {supplier}, which "
-            f"OCS knows to require {sorted(known_obligations) or 'nothing'}; the list is ignored. "
+            f"Open Geo Service knows to require {sorted(known_obligations) or 'nothing'}; the list is ignored. "
             f"Remove it, or give the licence a name of its own if its terms genuinely differ from "
             f"the licence it is named after."
         )

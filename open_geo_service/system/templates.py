@@ -499,7 +499,7 @@ def _dataset_page_context(
                 for item in provenance.inputs
             ),
             ("Process graph digest", provenance.process_sha256 or "", None),
-            ("OCS version", provenance.ocs_version or "", None),
+            ("Open Geo Service version", provenance.ocs_version or "", None),
         ]
 
     return {
@@ -1089,7 +1089,7 @@ def _load_workflows() -> list[Any]:
 
 
 _PROCESS_ORIGINS = {
-    "ocs": "OCS",
+    "ocs": "Open Geo Service",
     "xclim": "Climate indicators (xclim)",
     "earthkit": "Meteorology (earthkit)",
     "core": "openEO core",
