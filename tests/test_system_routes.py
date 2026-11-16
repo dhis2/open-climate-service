@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from jinja2 import TemplateNotFound
 from starlette.responses import StreamingResponse
 
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.system import routes as system_routes
-from open_climate_service.system import templates as system_templates
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.system import routes as system_routes
+from open_geo_service.system import templates as system_templates
 
 
 class _FakeRequest:
@@ -206,11 +206,11 @@ async def test_manage_ingest_strips_string_inputs_and_treats_blank_end_as_none(
     monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
     monkeypatch.setattr(ingestion_services, "create_artifact", fake_create_artifact)
     monkeypatch.setattr(
-        "open_climate_service.data_registry.services.datasets.get_dataset",
+        "open_geo_service.data_registry.services.datasets.get_dataset",
         lambda dataset_id: template if dataset_id == template["id"] else None,
     )
     monkeypatch.setattr(
-        "open_climate_service.extents.services.get_extent_or_404",
+        "open_geo_service.extents.services.get_extent_or_404",
         lambda: {"bbox": [0.0, 1.0, 2.0, 3.0], "country_code": "SLE"},
     )
 
@@ -245,7 +245,7 @@ async def test_manage_ingest_strips_string_inputs_and_treats_blank_end_as_none(
 @pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
 async def test_manage_ingest_rejects_blank_start(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "open_climate_service.data_registry.services.datasets.get_dataset",
+        "open_geo_service.data_registry.services.datasets.get_dataset",
         # Ingestability is checked before the stream opens, so the stub needs a plugin.
         lambda dataset_id: {
             "id": dataset_id,
@@ -256,7 +256,7 @@ async def test_manage_ingest_rejects_blank_start(monkeypatch: pytest.MonkeyPatch
         },
     )
     monkeypatch.setattr(
-        "open_climate_service.extents.services.get_extent_or_404",
+        "open_geo_service.extents.services.get_extent_or_404",
         lambda: {"bbox": [0.0, 1.0, 2.0, 3.0], "country_code": "SLE"},
     )
 

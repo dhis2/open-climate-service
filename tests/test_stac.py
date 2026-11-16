@@ -10,8 +10,8 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -22,8 +22,8 @@ from open_climate_service.ingestions.schemas import (
     CoverageTemporal,
     PublicationStatus,
 )
-from open_climate_service.openeo import collections as openeo_collections
-from open_climate_service.stac import services as stac_services
+from open_geo_service.openeo import collections as openeo_collections
+from open_geo_service.stac import services as stac_services
 
 
 @pytest.fixture(autouse=True)
@@ -340,7 +340,7 @@ def test_collections_logs_skipped_dataset_failures(client: TestClient, monkeypat
 
 
 def test_collection_uses_configured_base_url(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "https://climate.example.org")
+    monkeypatch.setenv("GEOSERVICE_BASE_URL", "https://climate.example.org")
     monkeypatch.setattr(
         ingestion_services,
         "list_artifacts",
@@ -476,7 +476,7 @@ def test_collection_uses_root_href_for_icechunk_store(
     # it is measured still gets every hint that does not need it.
     render = payload["renders"]["default"]
     assert render.get("rescale") == rescale
-    assert (render["colormap_name"], render["nodata"], render["open_climate_service:variable"]) == (
+    assert (render["colormap_name"], render["nodata"], render["open_geo_service:variable"]) == (
         "blues",
         -9999.0,
         "precip",
@@ -509,7 +509,7 @@ def test_an_ingested_collection_publishes_measured_band_statistics(
     """
     import yaml
 
-    from open_climate_service.data_registry.services import datasets as registry
+    from open_geo_service.data_registry.services import datasets as registry
 
     dataset_id = "dry_days_band_test"
     template = {
@@ -990,7 +990,7 @@ def test_build_collection_emits_crs_render_hints_for_projected_store(tmp_path: P
     assert payload["proj:code"] == "EPSG:32633"
     # The non-standard proj4 hint is retired (CLIM-833): zarr-layer resolves the code
     # through proj4's own registry, so only standard fields are published now.
-    assert "open_climate_service:proj4" not in payload
+    assert "open_geo_service:proj4" not in payload
     assert payload["proj:wkt2"].startswith("PROJCRS")  # WKT2, not WKT1 (PROJCS)
     # proj:projjson — same CRS as a PROJJSON object (EPSG:32633 = UTM zone 33N)
     assert payload["proj:projjson"]["type"] == "ProjectedCRS"
@@ -1036,7 +1036,7 @@ def test_build_collection_omits_crs_render_hints_for_wgs84(tmp_path: Path) -> No
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
     assert payload["proj:code"] == "EPSG:4326"
-    assert "open_climate_service:proj4" not in payload
+    assert "open_geo_service:proj4" not in payload
     assert "proj:wkt2" not in payload
     assert "proj:bbox" not in payload
 
@@ -1131,7 +1131,7 @@ def test_build_collection_normalizes_crs84_alias_to_epsg4326(tmp_path: Path) -> 
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
     assert payload["proj:code"] == "EPSG:4326"  # normalized from OGC:CRS84
-    assert "open_climate_service:proj4" not in payload  # built-in → no hint
+    assert "open_geo_service:proj4" not in payload  # built-in → no hint
     assert "proj:wkt2" not in payload
 
 
@@ -1150,7 +1150,7 @@ def test_build_collection_normalizes_crs84_alias_to_epsg4326(tmp_path: Path) -> 
     ],
 )
 def test_canonical_crs_code(code: str | int, expected: str) -> None:
-    from open_climate_service.shared.crs import canonical_crs_code
+    from open_geo_service.shared.crs import canonical_crs_code
 
     assert canonical_crs_code(code) == expected
 
@@ -1186,7 +1186,7 @@ def test_build_collection_crs_render_hints_use_store_wkt(tmp_path: Path) -> None
 
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
-    assert "open_climate_service:proj4" not in payload
+    assert "open_geo_service:proj4" not in payload
     assert payload["proj:wkt2"].startswith("PROJCRS")
 
 
@@ -1467,7 +1467,7 @@ def test_reference_system_for_falls_back_to_4326_and_warns_on_an_uninterpretable
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Nothing honest can be published for a CRS we cannot parse, so say so in the log."""
-    # `startup.py` sets `propagate = False` on the `open_climate_service` logger, so caplog's
+    # `startup.py` sets `propagate = False` on the `open_geo_service` logger, so caplog's
     # root handler never sees these records and `caplog.text` stays empty. Attaching its
     # handler to the emitting logger works whatever the propagation policy is.
     emitting = logging.getLogger(stac_services.__name__)

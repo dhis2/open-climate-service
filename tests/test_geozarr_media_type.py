@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.stac.media_types import (
+from open_geo_service.stac.media_types import (
     MULTISCALES_CONVENTION_UUID,
     WEB_OPTIMIZED_ZARR_MEDIA_TYPE,
     ZARR_V3_MEDIA_TYPE,
@@ -127,7 +127,7 @@ class TestZarrMediaType:
         def _boom(*_args: object, **_kwargs: object) -> dict[str, Any]:
             raise RuntimeError("store is locked")
 
-        monkeypatch.setattr("open_climate_service.stac.media_types.read_root_attributes", _boom)
+        monkeypatch.setattr("open_geo_service.stac.media_types.read_root_attributes", _boom)
         assert zarr_media_type("/tmp/whatever.icechunk", icechunk=True) == ZARR_V3_MEDIA_TYPE
 
 
@@ -157,7 +157,7 @@ class TestIcechunkDetectionEndToEnd:
 
     def _write(self, tmp_path: Path, ny: int, nx: int) -> str:
         pytest.importorskip("icechunk")
-        from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+        from open_geo_service.data_manager.services.downloader import write_to_icechunk_store
 
         store_path = tmp_path / f"{ny}x{nx}.icechunk"
         write_to_icechunk_store(self._cube(ny, nx), store_path, t_dim="t", crs="EPSG:4326")

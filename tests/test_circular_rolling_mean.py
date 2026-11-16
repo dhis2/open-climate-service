@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.transforms.climatology import circular_rolling_mean
+from open_geo_service.transforms.climatology import circular_rolling_mean
 
 
 def _cube(n: int, dim: str = "dayofyear", seed: int = 0) -> xr.DataArray:

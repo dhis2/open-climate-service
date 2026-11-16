@@ -1,6 +1,6 @@
 # Using the web interface
 
-Every Open Climate Service instance ships with a small built-in web interface — no
+Every Open Geo Service instance ships with a small built-in web interface — no
 separate application to install. Once the instance is running, open its root URL
 (`http://127.0.0.1:9000` by default) and the landing page links to everything below.
 
@@ -127,7 +127,7 @@ Resume, and Delete, which asks for confirmation in a dialog.
 
 Only one schedule is allowed per dataset. All schedules are stored in one file,
 `<data_dir>/schedules.json`, and can be managed from the UI or API. The instance-wide
-clock switch and timezone remain in `climate-service.yaml`. A static or forecast
+clock switch and timezone remain in `geoservice.yaml`. A static or forecast
 dataset cannot take a schedule, and the API refuses it with the reason.
 
 Each row shows a readable check time (or cron for a custom schedule) and timezone,
@@ -138,7 +138,7 @@ that shares it; the sync jobs a check submits are linked from the row. The timez
 instance's `scheduler.timezone`. When the clock runs in another process, such as a writable
 worker beside a read-only public instance, the page says so. When no process runs it,
 schedules can still be saved and are listed, and the page explains that an operator
-enables checks by setting `enabled: true` under `scheduler:` in `climate-service.yaml` and
+enables checks by setting `enabled: true` under `scheduler:` in `geoservice.yaml` and
 restarting OCS. If a change cannot be applied, the page shows why.
 ### The pipeline pages (`/pipelines`)
 
@@ -402,7 +402,7 @@ There is no separate console: data is added from the page of the thing it concer
   instance is listed on the [Schedules page](#the-schedules-page-schedules).
 
 You do **not** enter a bounding box — ingestion always uses the spatial extent configured
-for the instance in `climate-service.yaml`. On a read-only instance neither form is shown.
+for the instance in `geoservice.yaml`. On a read-only instance neither form is shown.
 
 ---
 

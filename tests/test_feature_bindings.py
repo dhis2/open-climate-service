@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service.features import bindings
-from open_climate_service.features import services as feature_services
-from open_climate_service.features import templates as feature_templates
-from open_climate_service.ingestions import services as ingestion_services
+from open_geo_service import config as api_config
+from open_geo_service.features import bindings
+from open_geo_service.features import services as feature_services
+from open_geo_service.features import templates as feature_templates
+from open_geo_service.ingestions import services as ingestion_services
 
 DISTRICTS_TEMPLATE: dict[str, object] = {
     "id": "districts",
@@ -75,7 +75,7 @@ def test_the_pinned_node_executes_through_the_real_process_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Exercise the executor boundary that normalizes timezone-qualified string arguments."""
-    from open_climate_service.openeo.execution import run_process_graph
+    from open_geo_service.openeo.execution import run_process_graph
 
     _declare(monkeypatch, DISTRICTS_TEMPLATE)
     feature_templates.reset_feature_template_caches()

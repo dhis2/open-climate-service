@@ -1,6 +1,6 @@
 # Instance guide
 
-An **instance repository** packages the configuration and plugins for a specific operational context — a country, a region, or an organisation — and references open-climate-service as a versioned dependency rather than including it directly.
+An **instance repository** packages the configuration and plugins for a specific operational context — a country, a region, or an organisation — and references open-geo-service as a versioned dependency rather than including it directly.
 
 This keeps the core service separate from context-specific concerns, and means your configuration lives in its own repository that can be versioned, shared, and deployed independently.
 
@@ -8,25 +8,25 @@ This keeps the core service separate from context-specific concerns, and means y
 
 Use an instance repository when you:
 
-- Want to add custom datasets not included in open-climate-service (e.g. national meteorological data)
-- Want to track your configuration in version control separately from the open-climate-service codebase
-- Want to pin your service to a specific version of open-climate-service and upgrade deliberately
+- Want to add custom datasets not included in open-geo-service (e.g. national meteorological data)
+- Want to track your configuration in version control separately from the open-geo-service codebase
+- Want to pin your service to a specific version of open-geo-service and upgrade deliberately
 - Want to share your configuration with others, or deploy across multiple environments
 
-This is the recommended path for running an actual climate service. If you only want to
-try Open Climate Service locally with the built-in datasets, the [quick start](setup_guide.md)
-(cloning open-climate-service directly) is faster.
+This is the recommended path for running an actual geoservice instance. If you only want to
+try Open Geo Service locally with the built-in datasets, the [quick start](setup_guide.md)
+(cloning open-geo-service directly) is faster.
 
 ---
 
 ## Repository structure
 
 ```
-my-climate-service/
-├── pyproject.toml          # declares open-climate-service as a dependency
+my-geoservice/
+├── pyproject.toml          # declares open-geo-service as a dependency
 ├── uv.lock                 # locked dependency tree for reproducible installs
 ├── Makefile                # install / run shortcuts
-├── climate-service.yaml        # instance config: extent, CRS, data_dir, plugins_dir
+├── geoservice.yaml        # instance config: extent, CRS, data_dir, plugins_dir
 ├── .env.example            # committed template for environment variables
 ├── .gitignore
 ├── plugins/
@@ -47,23 +47,23 @@ my-climate-service/
 ## Step 1: Create the repository
 
 ```bash
-mkdir my-climate-service
-cd my-climate-service
+mkdir my-geoservice
+cd my-geoservice
 git init
 ```
 
-## Step 2: Declare open-climate-service as a dependency
+## Step 2: Declare open-geo-service as a dependency
 
 Create `pyproject.toml`:
 
 ```toml
 [project]
-name = "my-climate-service"
+name = "my-geoservice"
 version = "0.1.0"
 requires-python = ">=3.12"
-description = "Open Climate Service instance for [context]"
+description = "Open Geo Service instance for [context]"
 dependencies = [
-    "open-climate-service[server,dhis2]==0.1.1",  # dhis2: the DHIS2 org unit provider and delivery
+    "open-geo-service[server,dhis2]==0.1.1",  # dhis2: the DHIS2 org unit provider and delivery
 ]
 
 [tool.uv]
@@ -88,7 +88,7 @@ override-dependencies = [
 ]
 ```
 
-The `package = false` setting tells uv that this repository is not itself a Python package — it only declares dependencies. It depends on `open-climate-service[server,dhis2]` from PyPI, pinned here to `0.1.1`; the `dhis2` extra is available from that release. Bump the version to upgrade. The `override-dependencies` block is required for uv to resolve the `[server]` extra (see the comment above) — this is also why `pip install` is not a supported install path for `[server]`. To track the latest unreleased code instead of a release, add a `[tool.uv.sources]` entry pinning open-climate-service to git (`open-climate-service = { git = "https://github.com/dhis2/open-climate-service.git", branch = "main" }`) and change the dependency to `open-climate-service[server,dhis2]`.
+The `package = false` setting tells uv that this repository is not itself a Python package — it only declares dependencies. It depends on `open-geo-service[server,dhis2]` from PyPI, pinned here to `0.1.1`; the `dhis2` extra is available from that release. Bump the version to upgrade. The `override-dependencies` block is required for uv to resolve the `[server]` extra (see the comment above) — this is also why `pip install` is not a supported install path for `[server]`. To track the latest unreleased code instead of a release, add a `[tool.uv.sources]` entry pinning open-geo-service to git (`open-geo-service = { git = "https://github.com/dhis2/open-geo-service.git", branch = "main" }`) and change the dependency to `open-geo-service[server,dhis2]`.
 
 Install dependencies:
 
@@ -111,16 +111,16 @@ install: ## Install dependencies with uv
 
 run: ## Start the API with uvicorn
 	set -a && . ./.env && set +a && \
-		uv run uvicorn open_climate_service.main:app --reload --reload-include "*.yaml" --reload-include "*.yml" --port 9000
+		uv run uvicorn open_geo_service.main:app --reload --reload-include "*.yaml" --reload-include "*.yml" --port 9000
 ```
 
 ## Step 4: Configure the instance
 
-Create `climate-service.yaml`:
+Create `geoservice.yaml`:
 
 ```yaml
-id: rwanda-climate-service             # unique identifier for this instance
-name: Rwanda Climate Service           # display name shown in the web UI
+id: rwanda-geoservice             # unique identifier for this instance
+name: Rwanda Geo Service           # display name shown in the web UI
 
 extent:
   name: Rwanda
@@ -133,8 +133,8 @@ plugins_dir: ./plugins/
 
 | Field | Required | Description |
 | ----- | -------- | ----------- |
-| `id` | No | Unique instance identifier used as the STAC catalog id. Lowercase, hyphen-separated (e.g. `rwanda-climate-service`). Defaults to `open-climate-service` |
-| `name` | No | Display name shown in the web UI. Defaults to `Open Climate Service` |
+| `id` | No | Unique instance identifier used as the STAC catalog id. Lowercase, hyphen-separated (e.g. `rwanda-geoservice`). Defaults to `open-geo-service` |
+| `name` | No | Display name shown in the web UI. Defaults to `Open Geo Service` |
 | `extent.bbox` | Yes | Bounding box in WGS84 decimal degrees |
 | `extent.name` | No | Human-readable label shown in API responses |
 | `extent.country_code` | No | ISO 3166-1 alpha-3 — required for WorldPop downloads |
@@ -148,13 +148,13 @@ To find the bounding box for a region, [bboxfinder.com](http://bboxfinder.com) i
 Create `.env`:
 
 ```bash
-CLIMATE_SERVICE_CONFIG=/absolute/path/to/my-climate-service/climate-service.yaml
+GEOSERVICE_CONFIG=/absolute/path/to/my-geoservice/geoservice.yaml
 ```
 
 And a committed `.env.example` as a template:
 
 ```bash
-CLIMATE_SERVICE_CONFIG=/path/to/my-climate-service/climate-service.yaml
+GEOSERVICE_CONFIG=/path/to/my-geoservice/geoservice.yaml
 ```
 
 ## Step 5: Add a .gitignore
@@ -206,22 +206,22 @@ See [Extensibility](extensibility.md) for the plugin types, and [Adding custom d
 
 ### Upgrading
 
-To move to a newer release, bump the pin in `pyproject.toml` (e.g. `open-climate-service[server]==0.2.0`), then:
+To move to a newer release, bump the pin in `pyproject.toml` (e.g. `open-geo-service[server]==0.2.0`), then:
 
 ```bash
-uv lock --upgrade-package open-climate-service
+uv lock --upgrade-package open-geo-service
 uv sync
 ```
 
 Commit the updated `uv.lock` so everyone gets the same versions.
 
-> **`uv sync` alone does not upgrade.** It only makes the environment match the lockfile. To actually move to a newer version you must re-lock first (`uv lock --upgrade-package open-climate-service`) — this is true both for a pinned release and for a git source.
+> **`uv sync` alone does not upgrade.** It only makes the environment match the lockfile. To actually move to a newer version you must re-lock first (`uv lock --upgrade-package open-geo-service`) — this is true both for a pinned release and for a git source.
 
-If you track the latest unreleased code via a `[tool.uv.sources]` git entry, `uv lock --upgrade-package open-climate-service` re-resolves to the current branch head. To pin to a specific commit instead:
+If you track the latest unreleased code via a `[tool.uv.sources]` git entry, `uv lock --upgrade-package open-geo-service` re-resolves to the current branch head. To pin to a specific commit instead:
 
 ```toml
 [tool.uv.sources]
-open-climate-service = { git = "https://github.com/dhis2/open-climate-service.git", rev = "abc1234" }
+open-geo-service = { git = "https://github.com/dhis2/open-geo-service.git", rev = "abc1234" }
 ```
 
 Pinning to a released version (`==X.Y.Z`) is recommended over tracking `main`: a release is reproducible, whereas `main`'s dependency tree shifts over time and can change under you between syncs.
@@ -232,9 +232,9 @@ Pinning to a released version (`==X.Y.Z`) is recommended over tracking `main`: a
 
 - **Never `pip install` into the venv.** `uv sync` makes the environment *exactly* match the lockfile and removes anything else — so hand-installed packages disappear on the next sync, and a missing package "comes back" after every upgrade. If something is genuinely needed, add it to `[project] dependencies` (or the right extra/group) and re-lock.
 
-- **`ModuleNotFoundError` for `xvec`, `odc`, `dask_geopandas`, `planetary_computer`, `pystac_client`, `stac_validator`, … when running a job** means the `[server]` extra is not fully installed. `openeo-processes-dask` eagerly imports its whole implementation stack, so all of these must be present. Don't add them one by one — the `[server]` extra is the complete, maintained set. Ensure your dependency is `open-climate-service[server]` (with the extra), then:
+- **`ModuleNotFoundError` for `xvec`, `odc`, `dask_geopandas`, `planetary_computer`, `pystac_client`, `stac_validator`, … when running a job** means the `[server]` extra is not fully installed. `openeo-processes-dask` eagerly imports its whole implementation stack, so all of these must be present. Don't add them one by one — the `[server]` extra is the complete, maintained set. Ensure your dependency is `open-geo-service[server]` (with the extra), then:
   ```bash
-  uv lock --upgrade-package open-climate-service
+  uv lock --upgrade-package open-geo-service
   uv sync
   ```
   Verify the stack is complete:
@@ -242,7 +242,7 @@ Pinning to a released version (`==X.Y.Z`) is recommended over tracking `main`: a
   uv run python -c "import xvec, odc.geo, dask_geopandas, planetary_computer, pystac_client, stac_validator; print('ok')"
   ```
 
-- **`pip install open-climate-service[server]` does not work** — the `[server]` extra needs dependency overrides (for upstream version caps) that `uv` applies but `pip` cannot. Install the server stack with **uv** (this guide) or **Docker**. The base client and `[xarray]` extras install fine with `pip`.
+- **`pip install open-geo-service[server]` does not work** — the `[server]` extra needs dependency overrides (for upstream version caps) that `uv` applies but `pip` cannot. Install the server stack with **uv** (this guide) or **Docker**. The base client and `[xarray]` extras install fine with `pip`.
 
 ---
 
@@ -251,14 +251,14 @@ Pinning to a released version (`==X.Y.Z`) is recommended over tracking `main`: a
 For production deployments, the same repository can be used directly on a server:
 
 ```bash
-git clone https://github.com/your-org/my-climate-service.git
-cd my-climate-service
+git clone https://github.com/your-org/my-geoservice.git
+cd my-geoservice
 cp .env.example .env   # fill in absolute paths and credentials
 uv sync
 make run
 ```
 
-For containerised deployment, the core open-climate-service repository ships a `Dockerfile`
+For containerised deployment, the core open-geo-service repository ships a `Dockerfile`
 and a `compose.yml` that can serve as a starting point for packaging an instance. A
 dedicated instance Docker guide is planned.
 
@@ -270,7 +270,7 @@ laptop, so OCS bounds how much of it they take. The defaults are chosen for a la
 | Setting | Default | Bounds |
 | --- | --- | --- |
 | `DASK_NUM_WORKERS` | half the cores | Threads for all dask computation in the process, shared by every job and request |
-| `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` | 2 | Ingestion, sync, feature refresh, export delivery and openEO batch jobs running at once, together |
+| `GEOSERVICE_MAX_CONCURRENT_JOBS` | 2 | Ingestion, sync, feature refresh, export delivery and openEO batch jobs running at once, together |
 | `TOKIO_WORKER_THREADS` | cores | Worker threads of Icechunk's storage runtime |
 
 A job beyond the limit waits queued (`accepted` for ingestion jobs, with the message
@@ -279,7 +279,7 @@ Synchronous requests such as `POST /result` are not counted as jobs, but their c
 uses the same dask threads.
 
 Memory runs out before CPU does: a zonal statistics job over a country can peak at about
-3 GB. On a machine with 8 GB or less, keep `CLIMATE_SERVICE_MAX_CONCURRENT_JOBS` at 1 or 2.
+3 GB. On a machine with 8 GB or less, keep `GEOSERVICE_MAX_CONCURRENT_JOBS` at 1 or 2.
 Docker Desktop gives its VM only part of the machine's memory, and `compose.yml` sets no
 limit of its own, so size the limit to what the VM has. A dedicated server can raise both
 settings; more dask threads than half the cores rarely makes reads faster.
@@ -312,7 +312,7 @@ Read-only applies to HTTP only, so ingestion becomes an operator task on the hos
 CLI command exists, run it inside the container or virtualenv:
 
 ```python
-from open_climate_service.ingestions.processes import execute_ingestion
+from open_geo_service.ingestions.processes import execute_ingestion
 
 execute_ingestion(dataset_id="era5land_temperature_monthly", start="2016-01", end="2016-12")
 ```

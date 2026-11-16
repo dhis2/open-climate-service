@@ -26,12 +26,12 @@ RUN groupadd --gid 999 ocs && \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock .python-version ./
-COPY open_climate_service/ open_climate_service/
+COPY open_geo_service/ open_geo_service/
 COPY README.md LICENSE ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra server --extra dhis2 && \
-    python -m compileall -q open_climate_service/
+    python -m compileall -q open_geo_service/
 
 RUN mkdir -p /app/data/pygeoapi /app/data/artifacts && \
     printf '[]\n' > /app/data/artifacts/records.json && \
@@ -48,6 +48,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # exec form (JSON) so the server is PID 1 and receives signals directly, with no
-# shell process between init and uvicorn. The climate-service entry point reads
+# shell process between init and uvicorn. The geoservice entry point reads
 # HOST and PORT from the environment (PORT defaults to 9000, set above).
-CMD ["climate-service"]
+CMD ["geoservice"]

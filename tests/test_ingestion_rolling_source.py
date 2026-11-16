@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
-from open_climate_service.ingestions import services
-from open_climate_service.ingestions.schemas import ArtifactVersion, CoverageTemporal
-from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
+from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
+from open_geo_service.ingestions import services
+from open_geo_service.ingestions.schemas import ArtifactVersion, CoverageTemporal
+from open_geo_service.streaming import BaseDatasetPlugin, normalize_period
 
 
 class _RollingPlugin(BaseDatasetPlugin):

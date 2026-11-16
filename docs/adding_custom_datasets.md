@@ -1,8 +1,8 @@
 # Adding custom datasets
 
-This guide explains how to add a new dataset source to your Open Climate Service instance — for example a national meteorological service, a regional satellite product, or a custom model output.
+This guide explains how to add a new dataset source to your Open Geo Service instance — for example a national meteorological service, a regional satellite product, or a custom model output.
 
-The built-in dataset templates (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `climate-service.yaml` at a plugins directory.
+The built-in dataset templates (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `geoservice.yaml` at a plugins directory.
 
 ## Overview
 
@@ -28,9 +28,9 @@ concurrency, store commits, artifact registration, and publication.
 
 ```python
 # plugins/rasters/enacts.py
-# Everything you need to write a plugin is importable from open_climate_service.streaming.
+# Everything you need to write a plugin is importable from open_geo_service.streaming.
 import xarray as xr
-from open_climate_service.streaming import BaseDatasetPlugin, daily_period_ids, normalize_period
+from open_geo_service.streaming import BaseDatasetPlugin, daily_period_ids, normalize_period
 
 
 class ENACTSRainfallPlugin(BaseDatasetPlugin):
@@ -87,7 +87,7 @@ multiple variables.
 
 ### Helpers, grid inference, and tuning
 
-The helpers below are all importable from `open_climate_service.streaming` (the single
+The helpers below are all importable from `open_geo_service.streaming` (the single
 plugin import surface), alongside `BaseDatasetPlugin`.
 
 - **`normalize_period(obj, *, variable, period=None, nodata=None, bbox=None, bbox_crs="EPSG:4326", ...)`**
@@ -110,7 +110,7 @@ plugin import surface), alongside `BaseDatasetPlugin`.
   from `.env`. Read it when the plugin opens the source, not at import or in `__init__`, so that
   listing data sources needs no key, and pass it in a header or the reader's own session rather
   than in the URL, where it leaks into error messages and logs. The built-in plugins share theirs
-  per provider in `open_climate_service/plugins/rasters/providers`; a plugin of your own need not use it.
+  per provider in `open_geo_service/plugins/rasters/providers`; a plugin of your own need not use it.
 - **Tuning** — set the class attributes `max_concurrency` (default 1) and
   `commit_batch_size` (default 1) only when the defaults don't fit.
 - **Grid inference** — the framework infers the store grid from the
@@ -205,7 +205,7 @@ question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* i
 
 | Field                  | Required | Description                                                                                                                                     |
 | ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
+| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
 | `ingestion.params`     | No       | Extra keyword arguments forwarded to `fetch_period` as `**params`, and to the plugin constructor                                                |
 | `ingestion.resampling` | No       | Pyramid coarsening for large layers: `mean` (default; continuous data), `max`/`min`/`sum`, or `mode`/`nearest` for categorical data — see below |
 
@@ -214,14 +214,14 @@ Multiple templates can share the same plugin class and differ only in `params`:
 ```yaml
 - id: era5land_temperature_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
+    plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
       variable: t2m
       temporal_aggregation: mean
 
 - id: era5land_precipitation_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
+    plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
       variable: tp
       temporal_aggregation: sum
@@ -458,7 +458,7 @@ Levels are aggregated from the full-resolution data, and `ingestion.resampling` 
 
 `mean`/`max`/`min`/`sum`/`nearest` are computed by [topozarr](https://github.com/carbonplan/topozarr), which builds each level from the one above. That is valid for all five because they are _composable_ — for `nearest`, taking the corner of each corner gives the same cell as taking every nth cell of the original.
 
-`mode` is not composable: mode-of-modes is not mode-of-native, since a locally dominant class can win at coarse zoom even when it is globally rare. So Open Climate Service resamples `mode` levels from the native resolution itself. A first-class `mode` upstream is still open as [carbonplan/topozarr#26](https://github.com/carbonplan/topozarr/issues/26); when it lands, that local path can go.
+`mode` is not composable: mode-of-modes is not mode-of-native, since a locally dominant class can win at coarse zoom even when it is globally rare. So Open Geo Service resamples `mode` levels from the native resolution itself. A first-class `mode` upstream is still open as [carbonplan/topozarr#26](https://github.com/carbonplan/topozarr/issues/26); when it lands, that local path can go.
 
 ### Spatial and temporal extents
 
@@ -560,7 +560,7 @@ it is loaded.
 
 ## Step 3: Point the instance at your plugins directory
 
-Add `plugins_dir` to your `climate-service.yaml`:
+Add `plugins_dir` to your `geoservice.yaml`:
 
 ```yaml
 extent:
@@ -577,7 +577,7 @@ Since `plugins_dir` is added to `sys.path`, the plugin class at `rasters.enacts.
 
 ## Step 4: Ingest and publish
 
-Once the API is running with `CLIMATE_SERVICE_CONFIG` pointing to your updated config:
+Once the API is running with `GEOSERVICE_CONFIG` pointing to your updated config:
 
 ```bash
 curl -s -X POST http://127.0.0.1:9000/ingestions \
@@ -619,5 +619,5 @@ The `plugins_dir` above is ideal for instance-specific customisation. To make a 
 [Installable plugins](installable_plugins.md) guide. The layout mirrors `plugins_dir`, so migrating
 is mostly moving the files into a package and declaring one entry point.
 
-The [seNorge plugin](https://github.com/dhis2/open-climate-service-senorge-plugin) is the reference
+The [seNorge plugin](https://github.com/dhis2/open-geo-service-senorge-plugin) is the reference
 implementation.

@@ -1,4 +1,4 @@
-# Open Climate Service
+# Open Geo Service
 
 ## Climate Data & Earth Observation Integration Platform
 
@@ -10,7 +10,7 @@ _Project Description · 2026_
 
 Climate change and extreme weather events pose severe threats to low- and middle-income countries, but data fragmentation makes it difficult to analyze these threats and forecast future impacts in an accurate and timely way. Climate and earth observation data is distributed across dozens of providers — each with different APIs, data formats, and access mechanisms. Integrating this fragmented landscape into operational systems requires specialised expertise for every data source, a barrier that limits its use across sectors in low- and middle-income countries.
 
-This project develops the Open Climate Service — an open-source, standards-based, and decentralised integration platform that unifies this fragmented space behind a single, consistent interface. By abstracting data access across heterogeneous sources and harmonising outputs into a common format, the platform enables organisations to automatically ingest, process, and analyse global, national, and local climate and environmental data without requiring specialised expertise for each data provider. Although developed in close alignment with DHIS2 to support seamless integration with national health information systems, the platform is designed to operate independently of any specific software platform, and can serve as shared infrastructure for any sector that requires systematic access to harmonised climate and environmental data — including health, agriculture, land management, and forest monitoring.
+This project develops the Open Geo Service — an open-source, standards-based, and decentralised integration platform that unifies this fragmented space behind a single, consistent interface. By abstracting data access across heterogeneous sources and harmonising outputs into a common format, the platform enables organisations to automatically ingest, process, and analyse global, national, and local climate and environmental data without requiring specialised expertise for each data provider. Although developed in close alignment with DHIS2 to support seamless integration with national health information systems, the platform is designed to operate independently of any specific software platform, and can serve as shared infrastructure for any sector that requires systematic access to harmonised climate and environmental data — including health, agriculture, land management, and forest monitoring.
 
 A key design principle is data sovereignty: the platform is deployable on national or regional infrastructure without dependency on proprietary services, ensuring that countries retain full control over their data. Outputs are stored and served using open geospatial standards, making the platform an open foundation rather than a closed system. Local data providers and developers can connect their own data sources, build custom analytical workflows, and extend the platform to address specific needs. This openness and interoperability is a deliberate design choice — the goal is not a single monolithic tool, but shared infrastructure that countries and communities can adapt and innovate upon.
 
@@ -20,29 +20,29 @@ The platform is being developed in close collaboration with HISP groups in the c
 
 ## 2. Overview
 
-The Open Climate Service is a data integration platform that enables earth observation (EO) and climate data from multiple upstream sources to be downloaded, processed, harmonised, and loaded into DHIS2 and the CHAP Modelling Platform.
+The Open Geo Service is a data integration platform that enables earth observation (EO) and climate data from multiple upstream sources to be downloaded, processed, harmonised, and loaded into DHIS2 and the CHAP Modelling Platform.
 
 The platform is built as a Python-based REST API (FastAPI) and exposes native REST endpoints together with a STAC catalogue for discovery. Data is stored in cloud-native GeoZarr format and can be consumed by the DHIS2 Climate App, the DHIS2 Maps App, DHIS2 Climate Tools, the CHAP Modelling Platform, and third-party tools such as QGIS.
 
-The Open Climate Service is envisioned as the shared data infrastructure layer for the DHIS2 climate and health ecosystem — a single, well-defined source of spatiotemporal raster data that any DHIS2 application or external tool can build on.
+The Open Geo Service is envisioned as the shared data infrastructure layer for the DHIS2 climate and health ecosystem — a single, well-defined source of spatiotemporal raster data that any DHIS2 application or external tool can build on.
 
 ### 2.1 Relationship to existing DHIS2 climate work
 
-The Open Climate Service supplements and extends the existing DHIS2 climate data integration work documented at dhis2.org/climate/climate-data/. The platform wraps climate and earth observation workflows in a standardised API so that data access, processing, and publication can be configured and run without writing code.
+The Open Geo Service supplements and extends the existing DHIS2 climate data integration work documented at dhis2.org/climate/climate-data/. The platform wraps climate and earth observation workflows in a standardised API so that data access, processing, and publication can be configured and run without writing code.
 
 ### 2.2 Scope of this document
 
-This document describes the project vision, design constraints, user stories, functional requirements, technical architecture, and data pipeline approach. It is intended for technical contributors, DHIS2 country implementers, and stakeholders evaluating the Open Climate Service for deployment.
+This document describes the project vision, design constraints, user stories, functional requirements, technical architecture, and data pipeline approach. It is intended for technical contributors, DHIS2 country implementers, and stakeholders evaluating the Open Geo Service for deployment.
 
 ---
 
 ## 3. Vision and goals
 
-The Open Climate Service aims to:
+The Open Geo Service aims to:
 
 - Provide a unified API through which EO and climate data can be requested, downloaded, processed, and uploaded to DHIS2 — with all complexity handled behind the scenes.
 - Serve as a no-code alternative to DHIS2 Climate Tools for standard data integration workflows, built on the same underlying libraries.
-- Allow DHIS2 Climate/Maps app and CHAP to act as frontends consuming the Open Climate Service.
+- Allow DHIS2 Climate/Maps app and CHAP to act as frontends consuming the Open Geo Service.
 - Support custom orchestration — users can build pipelines with pre- and post-processing steps.
 - Work independently of a DHIS2 instance.
 - Follow the requirements for being a Digital Public Good (DPG) and adhere to the FAIR principles (Findable, Accessible, Interoperable, Reusable).
@@ -63,11 +63,11 @@ The Open Climate Service aims to:
 
 ## 5. Design constraints
 
-The following constraints apply to the first version of the Open Climate Service. They represent deliberate architectural decisions and are open for discussion as the platform matures.
+The following constraints apply to the first version of the Open Geo Service. They represent deliberate architectural decisions and are open for discussion as the platform matures.
 
 ### 5.1 Single spatial extent
 
-Each Open Climate Service instance is configured with one or more named extents, defined at setup time. Each extent has a required `id` and `bbox`, and an optional `org_unit_id` for linking to a DHIS2 org unit.
+Each Open Geo Service instance is configured with one or more named extents, defined at setup time. Each extent has a required `id` and `bbox`, and an optional `org_unit_id` for linking to a DHIS2 org unit.
 
 Extents are not expected to change after setup. For the first version, only a single extent is supported. Larger countries may configure a sub-national extent (e.g. a district) to limit initial download volume. The `extent_id` is passed as a parameter to ingestion alongside the `dataset_id` — ingestion is not tied to a DHIS2 instance.
 
@@ -85,11 +85,11 @@ Each dataset ID maps to exactly one output artifact in the form of a GeoZarr sto
 
 ### 5.5 DHIS2-independent operation
 
-Core parts of the Open Climate Service must function without a connected DHIS2 instance. Spatial extent is defined via instance configuration rather than a DHIS2 org unit query. Aggregation accepts GeoJSON features from any source and outputs CSV or JSON as well as DHIS2 data values.
+Core parts of the Open Geo Service must function without a connected DHIS2 instance. Spatial extent is defined via instance configuration rather than a DHIS2 org unit query. Aggregation accepts GeoJSON features from any source and outputs CSV or JSON as well as DHIS2 data values.
 
 ### 5.6 Data sources and published datasets
 
-Internally, the Open Climate Service distinguishes between data sources and published datasets:
+Internally, the Open Geo Service distinguishes between data sources and published datasets:
 
 - **Data sources** — upstream datasets, each described by a dataset template: YAML with the source, variable, period type and processing steps. They are listed at `GET /data-sources` and act as blueprints for ingestion.
 - **Published datasets** — actualised, ingested datasets for a specific extent and time range, exposed under `/datasets` and `/stac`. These are what end users and client applications discover and consume.
@@ -143,7 +143,7 @@ This mirrors the approach used in the CHAP Modelling Platform, where generic mod
 
 ## 7. Supported data sources
 
-The Open Climate Service ingests data from multiple upstream Earth Observation and climate sources. Current and planned sources include:
+The Open Geo Service ingests data from multiple upstream Earth Observation and climate sources. Current and planned sources include:
 
 - **CHIRPS** (Climate Hazards Group InfraRed Precipitation with Station data) — daily and pentadal precipitation.
 - **ERA5 / Climate Data Store** (Copernicus CDS) — temperature, humidity, wind, and other atmospheric variables at multiple temporal resolutions.
@@ -194,7 +194,7 @@ Managed datasets are written through Icechunk, which opens every store on the lo
 
 ### 8.3 Data pipeline model
 
-The Open Climate Service follows an ETL (Extract, Transform, Load) pattern — transformation occurs on the processing server before data is loaded into DHIS2. An ELT approach (transformation in a cloud data warehouse) may be supported in a future version.
+The Open Geo Service follows an ETL (Extract, Transform, Load) pattern — transformation occurs on the processing server before data is loaded into DHIS2. An ELT approach (transformation in a cloud data warehouse) may be supported in a future version.
 
 The pipeline stages are:
 
@@ -208,7 +208,7 @@ Long-running jobs (ingestion, sync, aggregation) are executed asynchronously. Th
 
 ### 8.4 Technology stack
 
-| Technology                                        | Role in the Open Climate Service                                                                                                                                                              |
+| Technology                                        | Role in the Open Geo Service                                                                                                                                                              |
 | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | FastAPI (Python)                                  | Core REST API framework. Handles ingestion, sync, dataset, processing, and STAC endpoints. Each pipeline step is exposed as a separate endpoint.                                              |
 | Xarray + Zarr                                     | In-memory dataset model and cloud-native chunked storage format. GeoZarr conventions applied for geospatial metadata and multiscale pyramid support.                                          |
@@ -229,7 +229,7 @@ Long-running jobs (ingestion, sync, aggregation) are executed asynchronously. Th
 
 ## 9. Standards compliance
 
-The Open Climate Service favours open, widely-supported standards over bespoke interfaces:
+The Open Geo Service favours open, widely-supported standards over bespoke interfaces:
 
 - **GeoZarr specification**: geospatial metadata conventions for cloud-native, chunked, multiscale Zarr stores.
 - **STAC** (SpatioTemporal Asset Catalog): dataset discovery and asset linking.
@@ -243,7 +243,7 @@ The Open Climate Service favours open, widely-supported standards over bespoke i
 
 ## 10. Deployment and sovereignty
 
-The Open Climate Service is distributed as a Docker image and can be deployed in several configurations:
+The Open Geo Service is distributed as a Docker image and can be deployed in several configurations:
 
 - **Hosted by HISP Centre** — a centrally managed instance for demo purposes.
 - **Country-hosted** — deployed within a country's own infrastructure, with local storage or the nearest available regional cloud provider (AWS af-south-1 for Africa, AWS ap-southeast-1 for Southeast Asia).
@@ -257,7 +257,7 @@ The storage backend is configured entirely via environment variables — no code
 
 | Resource                    | Link / Description                            |
 | --------------------------- | --------------------------------------------- |
-| Open Climate Service GitHub | https://github.com/dhis2/open-climate-service |
+| Open Geo Service GitHub | https://github.com/dhis2/open-geo-service |
 | DHIS2 climate data          | https://dhis2.org/climate/climate-data/       |
 | CHAP Modelling Platform     | https://chap.dhis2.org/                       |
 | dhis2-python-client         | https://github.com/dhis2/dhis2-python-client  |

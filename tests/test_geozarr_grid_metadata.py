@@ -30,13 +30,13 @@ pytest.importorskip("icechunk")
 pytest.importorskip("rioxarray")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.shared.geozarr import (  # noqa: E402
+from open_geo_service.shared.geozarr import (  # noqa: E402
     check_grid_description,
     gdal_geotransform,
     grid_geometry,
 )
-from open_climate_service.streaming.protocol import GridSpec  # noqa: E402
-from open_climate_service.streaming.store import write_geozarr_attrs  # noqa: E402
+from open_geo_service.streaming.protocol import GridSpec  # noqa: E402
+from open_geo_service.streaming.store import write_geozarr_attrs  # noqa: E402
 
 # The real CHIRPS-over-Norway grid: 0.05° cells, and the source GeoTIFF's own GeoTransform
 # is "2.9500027261674404 0.05000000074505806 0.0 60.0 0.0 -0.05000000074505806".
@@ -205,7 +205,7 @@ def test_streaming_store_stamps_the_gdal_geotransform(tmp_path: Path) -> None:
 def _write_icechunk(tmp_path: Path, ds: Any, name: str, crs: str) -> Any:
     import icechunk
 
-    from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+    from open_geo_service.data_manager.services.downloader import write_to_icechunk_store
 
     path = tmp_path / f"{name}.icechunk"
     write_to_icechunk_store(ds, path, t_dim="t", crs=crs)

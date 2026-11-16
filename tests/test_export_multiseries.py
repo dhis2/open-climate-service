@@ -11,8 +11,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from open_climate_service import config
-from open_climate_service.exports.service import render_named_export
+from open_geo_service import config
+from open_geo_service.exports.service import render_named_export
 
 from .conftest import named_exports
 
@@ -178,8 +178,8 @@ def test_multi_series_ambiguous_empty_selector_rejected(definition: dict[str, An
 def test_multi_series_captures_all_contributing_sources(definition: dict[str, Any], tmp_path: Path):
     import hashlib
 
-    from open_climate_service.exports.manifest import ExportManifest
-    from open_climate_service.exports.service import write_named_export
+    from open_geo_service.exports.manifest import ExportManifest
+    from open_geo_service.exports.service import write_named_export
 
     definition["series"] = [
         {"select": {"variable": "temperature"}, "data_element": "TEMP0000001"},

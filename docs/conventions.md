@@ -29,7 +29,7 @@ through the engine is physically `(…, y, x)` regardless.
 ## What the framework guarantees
 
 These are properties of a _published store_, not of any one source, so they are enforced once
-at the write boundary — see [`shared/raster_contract.py`](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/shared/raster_contract.py).
+at the write boundary — see [`shared/raster_contract.py`](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/shared/raster_contract.py).
 A plugin may return data in whatever orientation and naming its source delivers.
 
 1. **The temporal dimension is named `t`.** Sources spelling it `time`, `valid_time`, `date`

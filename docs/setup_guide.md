@@ -1,13 +1,13 @@
 # Quick start
 
-This is the fastest way to try Open Climate Service locally with the built-in datasets:
+This is the fastest way to try Open Geo Service locally with the built-in datasets:
 clone the repository, configure an extent, start the service, then ingest and view data
 from the web interface.
 
 !!! tip "Running a service for a country?"
     For an operational deployment — custom datasets, version pinning, configuration kept
     in its own repository — the [instance guide](instance_guide.md) is the recommended
-    path. Most people running a real climate service should start there. This quick start
+    path. Most people running a real geoservice instance should start there. This quick start
     is for evaluating the service or developing against the core repository.
 
 ## Prerequisites
@@ -25,24 +25,24 @@ instead — in its own repository, without cloning this one — follow the
 [instance guide](instance_guide.md).
 
 ```bash
-git clone https://github.com/dhis2/open-climate-service.git
-cd open-climate-service
+git clone https://github.com/dhis2/open-geo-service.git
+cd open-geo-service
 make sync
 ```
 
 ## Step 2: Configure the spatial extent
 
-The repo includes `climate-service.yaml.example` with Sierra Leone as a starting point.
-Copy it to `climate-service.yaml` (which is gitignored, so your local extent stays out of
+The repo includes `geoservice.yaml.example` with Sierra Leone as a starting point.
+Copy it to `geoservice.yaml` (which is gitignored, so your local extent stays out of
 version control) and replace the entry with your area of interest:
 
 ```bash
-cp climate-service.yaml.example climate-service.yaml
+cp geoservice.yaml.example geoservice.yaml
 ```
 
 ```yaml
-id: rwanda-climate-service
-name: Rwanda Climate Service
+id: rwanda-geoservice
+name: Rwanda Geo Service
 
 extent:
   name: Rwanda
@@ -62,7 +62,7 @@ configuration fields, see the [instance guide](instance_guide.md#step-4-configur
 cp .env.example .env
 ```
 
-`CLIMATE_SERVICE_CONFIG=./climate-service.yaml` is already set, and the remaining defaults
+`GEOSERVICE_CONFIG=./geoservice.yaml` is already set, and the remaining defaults
 are enough to run the API and ingest CHIRPS3 and WorldPop data. For ERA5-Land downloads,
 see [ERA5-Land datasets](era5_land_datasets.md).
 

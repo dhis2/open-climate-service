@@ -11,10 +11,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.plugins.rasters import chirps3
-from open_climate_service.plugins.rasters.chirps3 import CHIRPS3MonthlyPlugin
-from open_climate_service.shared.time import monthly_period_ids
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.plugins.rasters import chirps3
+from open_geo_service.plugins.rasters.chirps3 import CHIRPS3MonthlyPlugin
+from open_geo_service.shared.time import monthly_period_ids
 
 _NODATA = -9999.0
 

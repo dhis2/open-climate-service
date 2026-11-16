@@ -11,11 +11,11 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo.execution import SaveResultEnvelope
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.time import utc_now
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo.execution import SaveResultEnvelope
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.time import utc_now
 
 # `instance_fixture` registers the `instance` fixture.
 from tests.test_triggered_jobs import (
@@ -99,7 +99,7 @@ def test_a_retry_waits_out_its_backoff_without_a_worker(
 
 
 def _invalid_graph() -> BaseException:
-    from open_climate_service.openeo.execution import InvalidProcessGraph
+    from open_geo_service.openeo.execution import InvalidProcessGraph
 
     try:
         raise InvalidProcessGraph(status_code=400, detail="Invalid process graph: unknown process") from KeyError("x")
@@ -167,7 +167,7 @@ def test_cooperative_cancellation_is_not_retried(
     instance: dict[str, Any], monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     """The cancellation scope must survive the distinction between graph and save failures."""
-    from open_climate_service.shared.cancellation import raise_if_cancelled
+    from open_geo_service.shared.cancellation import raise_if_cancelled
 
     openeo = instance["openeo"]
     calls: list[str] = []
@@ -497,7 +497,7 @@ def test_executor_distinguishes_invalid_graphs_from_runtime_value_errors(
 ) -> None:
     from unittest.mock import MagicMock
 
-    from open_climate_service.openeo import workflows
+    from open_geo_service.openeo import workflows
 
     failure = JSONDecodeError("Expecting value", "", 0)
     graph_factory = MagicMock()
@@ -527,7 +527,7 @@ def test_executor_distinguishes_invalid_graphs_from_runtime_value_errors(
 def test_create_triggered_job_refuses_an_attempt_limit_outside_the_bounds(
     instance: dict[str, Any], invalid: Any
 ) -> None:
-    from open_climate_service.openeo.schemas import OpenEOJobCreate
+    from open_geo_service.openeo.schemas import OpenEOJobCreate
 
     body = OpenEOJobCreate(process={"process_graph": {"result": {"process_id": "constant"}}})
     with pytest.raises(ValueError, match="max_attempts must be an integer from 1 to 10"):

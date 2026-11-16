@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.processes.aggregate_dekads import aggregate_dekads
-from open_climate_service.shared.time import dekad_period_ids
+from open_geo_service.plugins.processes.aggregate_dekads import aggregate_dekads
+from open_geo_service.shared.time import dekad_period_ids
 
 
 @pytest.fixture
@@ -26,11 +26,11 @@ def ocs_logs(caplog: pytest.LogCaptureFixture) -> Any:
     ``startup.py`` sets ``propagate = False`` on it, so caplog's root handler never sees
     the records. Same shim as tests/test_raster_contract.py.
     """
-    package_logger = logging.getLogger("open_climate_service")
+    package_logger = logging.getLogger("open_geo_service")
     previous = package_logger.propagate
     package_logger.propagate = True
     try:
-        with caplog.at_level(logging.WARNING, logger="open_climate_service"):
+        with caplog.at_level(logging.WARNING, logger="open_geo_service"):
             yield caplog
     finally:
         package_logger.propagate = previous
@@ -163,11 +163,11 @@ def test_the_process_is_registered_and_the_workflow_wires_to_it() -> None:
     import json
     from pathlib import Path
 
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     assert "aggregate_dekads" in _build_process_registry().store["predefined"]
 
-    path = Path("open_climate_service/plugins/workflows/aggregate_dekads_to_period.json")
+    path = Path("open_geo_service/plugins/workflows/aggregate_dekads_to_period.json")
     graph = json.loads(path.read_text())["process_graph"]
     # A literal process_id, not one parameterised through `from_parameter` — the latter is
     # not openEO-spec-compliant and was removed from the other aggregate workflows.

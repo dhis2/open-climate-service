@@ -17,9 +17,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service.data_registry.recipes import producing_workflow
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.ingestions import services as ingestion_services
+from open_geo_service.data_registry.recipes import producing_workflow
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.ingestions import services as ingestion_services
 
 
 def _template(**overrides: Any) -> dict[str, Any]:
@@ -86,8 +86,8 @@ def test_the_async_ingest_refuses_before_it_enqueues(client: TestClient, monkeyp
     record. A check that lived only in `create_artifact` therefore accepted the request, ran in
     the worker, and failed the job — logging a traceback for a client mistake and putting the
     400 somewhere the caller was not looking."""
-    from open_climate_service.extents import services as extent_services
-    from open_climate_service.jobs import service as job_service
+    from open_geo_service.extents import services as extent_services
+    from open_geo_service.jobs import service as job_service
 
     monkeypatch.setattr(
         extent_services, "get_extent_or_404", lambda: {"bbox": [-13.5, 6.9, -10.1, 10.0], "country_code": "SLE"}
@@ -114,7 +114,7 @@ def test_the_async_ingest_still_accepts_an_ingestable_template(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The guard must not close the door on the ordinary case."""
-    from open_climate_service.extents import services as extent_services
+    from open_geo_service.extents import services as extent_services
 
     monkeypatch.setattr(
         extent_services, "get_extent_or_404", lambda: {"bbox": [-13.5, 6.9, -10.1, 10.0], "country_code": "SLE"}
@@ -162,7 +162,7 @@ def test_every_built_in_derived_template_names_a_built_in_workflow() -> None:
     the instance's own `plugins_dir`, so a checkout with plugins configured would test someone
     else's templates — which may legitimately name a workflow this repo does not ship.
     """
-    from open_climate_service.openeo.workflows import _load_builtin_workflows
+    from open_geo_service.openeo.workflows import _load_builtin_workflows
 
     workflow_ids = {workflow["id"] for workflow in _load_builtin_workflows()}
     derived = [t for t in registry._load_builtin_datasets() if not registry.is_ingestable(t)]

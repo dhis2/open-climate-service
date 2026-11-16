@@ -1,6 +1,6 @@
-# Open Climate Service Managed Data Guide
+# Open Geo Service Managed Data Guide
 
-This guide describes the current native FastAPI surface for Open Climate Service and how datasets are published as STAC collections.
+This guide describes the current native FastAPI surface for Open Geo Service and how datasets are published as STAC collections.
 
 The current public story is:
 
@@ -51,7 +51,7 @@ Operational note:
 
 ## 1. Discover the configured extent
 
-The configured extent is setup-time Open Climate Service configuration. It is read-only at runtime.
+The configured extent is setup-time Open Geo Service configuration. It is read-only at runtime.
 
 Example:
 
@@ -289,7 +289,7 @@ What this means:
   sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
   name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
   the collection object; `coverage` is convention rather than conformance, since OGC API -
-  Coverages is a candidate draft and silent on the field. `/datasets` is Open Climate Service's
+  Coverages is a candidate draft and silent on the field. `/datasets` is Open Geo Service's
   own API, so do not infer the rest of an OGC collection object from the borrowed name.
 - `variable` and `period_type` are both nullable, and are `null` together for a feature
   collection: a boundary set measures nothing and has no temporal axis. Read `itemType` rather
@@ -739,9 +739,9 @@ rather than returning `waiting_for_source`.
 
 Configured availability policies:
 
-- CHIRPS3 daily uses `open_climate_service.providers.availability.chirps3_daily_latest_available`; this clamps sync targets to the latest complete released source month
-- ERA5-Land hourly uses `open_climate_service.providers.availability.lagged_latest_available` with a YAML-declared `lag_hours`
-- WorldPop yearly uses `open_climate_service.providers.availability.worldpop_release_latest_available`; this can allow configured future projection years
+- CHIRPS3 daily uses `open_geo_service.providers.availability.chirps3_daily_latest_available`; this clamps sync targets to the latest complete released source month
+- ERA5-Land hourly uses `open_geo_service.providers.availability.lagged_latest_available` with a YAML-declared `lag_hours`
+- WorldPop yearly uses `open_geo_service.providers.availability.worldpop_release_latest_available`; this can allow configured future projection years
 
 Example dry-run plan:
 
@@ -814,7 +814,7 @@ Expected planning response:
 - `delta_start` is `2024-02-01`
 - `delta_end` is `2024-02-10`
 
-`append` here means Open Climate Service reuses the planner's source-available delta and
+`append` here means Open Geo Service reuses the planner's source-available delta and
 writes only missing periods to the existing Icechunk store. A rollback snapshot protects
 the previously committed store until normalization and artifact registration succeed.
 Progress counts the new periods in this append, excluding already committed history.
@@ -1024,4 +1024,4 @@ The public contract is now:
 - discover published Zarr-backed datasets with `/stac/catalog.json`
 - access raw native data with `/zarr/{dataset_id}`
 
-Artifacts remain internal because Open Climate Service still needs storage and provenance records behind ingestion and publication, but those internals are no longer exposed as first-class public resources.
+Artifacts remain internal because Open Geo Service still needs storage and provenance records behind ingestion and publication, but those internals are no longer exposed as first-class public resources.

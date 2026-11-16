@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import open_climate_service.main as main
+import open_geo_service.main as main
 
 
 @pytest.mark.anyio
@@ -53,7 +53,7 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(main, "get_openeo_job_service", lambda: FakeOpenEOJobService())
     monkeypatch.setattr(main, "get_scheduler_service", lambda: FakeSchedulerService())
 
-    from open_climate_service.openeo import processes
+    from open_geo_service.openeo import processes
 
     # The real warm-up, around a registry build that blocks its worker thread until released.
     loading = threading.Event()
@@ -102,7 +102,7 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.anyio
 async def test_the_process_registry_is_loaded_in_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.openeo import processes
+    from open_geo_service.openeo import processes
 
     loaded_on: list[str] = []
     monkeypatch.setattr(
@@ -119,7 +119,7 @@ async def test_the_process_registry_is_loaded_in_a_worker_thread(monkeypatch: py
 async def test_a_failed_warm_up_is_logged_and_left_to_first_use(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from open_climate_service.openeo import processes
+    from open_geo_service.openeo import processes
 
     def broken() -> list[dict[str, object]]:
         raise RuntimeError("plugin import failed")
@@ -143,7 +143,7 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
     import asyncio
     import threading
 
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     # The startup sweep returns at once. The first periodic one, which runs in a worker
     # thread, reports that it started and then waits to be released, so the app can be

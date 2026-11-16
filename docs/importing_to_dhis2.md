@@ -1,6 +1,6 @@
 # Importing data to DHIS2 and Chap
 
-This guide shows the full round-trip: pull organisation unit boundaries from DHIS2, aggregate a published dataset to those org units with Open Climate Service, and import the result back into DHIS2 as data values.
+This guide shows the full round-trip: pull organisation unit boundaries from DHIS2, aggregate a published dataset to those org units with Open Geo Service, and import the result back into DHIS2 as data values.
 
 The DHIS2 mapping (data elements, their category and attribute option combos, the period and the connection) is a pipeline's destination. A pipeline owns the named export under its own id, and the built-in [`aggregate_to_dhis2_json`](workflows.md#built-in-workflows) workflow saves its result through it. Because each org unit's GeoJSON `id` is its DHIS2 UID, the result imports without any remapping.
 
@@ -12,22 +12,22 @@ There are three ways to get the values into DHIS2:
 
 ## Prerequisites
 
-- A running Open Climate Service instance with the dataset published (see [Accessing data](user_guide.md)).
+- A running Open Geo Service instance with the dataset published (see [Accessing data](user_guide.md)).
 - A DHIS2 instance whose organisation units have geometry, plus a data element to import into. The data element referenced in the payload must already exist in DHIS2 — see the DHIS2 Climate Tools [Prepare metadata](https://climate-tools.dhis2.org/guides/import-data/prepare-metadata/) guide for creating it.
 - The two clients, installed together through the `dhis2` extra:
 
   ```bash
-  pip install "open-climate-service[dhis2]>=0.1.1"
+  pip install "open-geo-service[dhis2]>=0.1.1"
   ```
 
-  `open-climate-service` ships the `ClimateService` client; the extra adds
+  `open-geo-service` ships the `GeoService` client; the extra adds
   [dhis2-client](https://pypi.org/project/dhis2-client/), which handles the DHIS2 Web API calls.
   From a checkout of this repository, use `uv run --extra dhis2` for a client-side script.
 
 ## Named connections for server-side plugins
 
 Exporters and feature providers running inside an OCS instance can share a named
-DHIS2 connection. Configure it in the file referenced by `CLIMATE_SERVICE_CONFIG`:
+DHIS2 connection. Configure it in the file referenced by `GEOSERVICE_CONFIG`:
 
 ```yaml
 dhis2_connections:
@@ -54,7 +54,7 @@ available.
 
 The client is the `dhis2` extra, `dhis2-client>=0.3.2` from PyPI. The official Docker image
 installs it. An instance managed with uv names the extra beside `server` in its dependency,
-`open-climate-service[server,dhis2]`, and re-locks; without it, named connections fail at use
+`open-geo-service[server,dhis2]`, and re-locks; without it, named connections fail at use
 time with a `RuntimeError` naming the extra.
 
 An independently installed provider can use the public accessor without reading
@@ -63,7 +63,7 @@ OCS configuration or handling credentials itself:
 ```python
 from contextlib import closing
 
-from open_climate_service.exports.dhis2 import get_connection
+from open_geo_service.exports.dhis2 import get_connection
 
 with closing(get_connection("national-hmis")) as dhis2:
     org_units = dhis2.get_org_units_geojson(level=2)
@@ -130,14 +130,14 @@ print(len(org_units["features"]), "org units")
 !!! note
 `admin` / `district` are the public DHIS2 demo credentials, shown for illustration — point the client at your own instance and credentials.
 
-## 3. Aggregate on Open Climate Service
+## 3. Aggregate on Open Geo Service
 
-Run the `aggregate_to_dhis2_json` workflow with `ClimateService.execute()`. It loads the dataset over the time range, aggregates it within each org-unit polygon, and returns the `dataValueSet` rendered by the named export.
+Run the `aggregate_to_dhis2_json` workflow with `GeoService.execute()`. It loads the dataset over the time range, aggregates it within each org-unit polygon, and returns the `dataValueSet` rendered by the named export.
 
 ```python
-from open_climate_service import ClimateService
+from open_geo_service import GeoService
 
-service = ClimateService("http://127.0.0.1:9000")
+service = GeoService("http://127.0.0.1:9000")
 
 data_value_set = service.execute(
     {

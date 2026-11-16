@@ -55,18 +55,18 @@ package is mostly moving the files into a package and adding the entry point bel
 ## Declare the entry point
 
 In the package's `pyproject.toml`, point an [entry point](https://packaging.python.org/en/latest/specifications/entry-points/)
-in the `open_climate_service.plugins` group at the top-level package:
+in the `open_geo_service.plugins` group at the top-level package:
 
 ```toml
-[project.entry-points."open_climate_service.plugins"]
+[project.entry-points."open_geo_service.plugins"]
 example = "osc_example_plugin"
 ```
 
-Declare `open-climate-service` as a dependency, but **do not** pin its VCS source — the consuming
+Declare `open-geo-service` as a dependency, but **do not** pin its VCS source — the consuming
 instance decides which OCS revision to run:
 
 ```toml
-dependencies = ["open-climate-service"]
+dependencies = ["open-geo-service"]
 ```
 
 The `ingestion.plugin` in a dataset template uses the class's **full dotted path** (not a
@@ -85,7 +85,7 @@ An operator installs the package — nothing else, no `plugins_dir` wiring:
 uv add osc-example-plugin
 ```
 
-OCS auto-discovers every installed package in the `open_climate_service.plugins` group and loads
+OCS auto-discovers every installed package in the `open_geo_service.plugins` group and loads
 its `rasters/*.yaml` templates, its `processes/` (`@process`-decorated callables), its
 `workflows/*.json` (openEO UDPs), its `exports/` renderers (see [Export plugins](export_plugins.md)),
 and its `vectors/*.yaml` templates and `@feature_provider`-decorated callables. The ingestion

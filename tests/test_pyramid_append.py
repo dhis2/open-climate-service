@@ -18,10 +18,10 @@ icechunk = pytest.importorskip("icechunk")
 pytest.importorskip("topozarr")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset  # noqa: E402
-from open_climate_service.data_manager.services import downloader  # noqa: E402
-from open_climate_service.ingestions import services  # noqa: E402
-from open_climate_service.streaming import BaseDatasetPlugin, normalize_period  # noqa: E402
+from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset  # noqa: E402
+from open_geo_service.data_manager.services import downloader  # noqa: E402
+from open_geo_service.ingestions import services  # noqa: E402
+from open_geo_service.streaming import BaseDatasetPlugin, normalize_period  # noqa: E402
 
 # Odd sizes, so every level trims a trailing row or column.
 NY, NX = 101, 75

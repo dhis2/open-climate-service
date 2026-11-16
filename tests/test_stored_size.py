@@ -19,14 +19,14 @@ import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activat
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.features import services as feature_services
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import ArtifactStatistics
-from open_climate_service.shared import storage_size
-from open_climate_service.shared.storage_size import stored_bytes
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.features import services as feature_services
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import ArtifactStatistics
+from open_geo_service.shared import storage_size
+from open_geo_service.shared.storage_size import stored_bytes
+from open_geo_service.system import templates as landing
 
 
 @pytest.fixture(autouse=True)
@@ -158,8 +158,8 @@ def test_a_streaming_ingest_records_the_size_and_statistics_of_the_published_sto
 def test_an_openeo_publish_records_the_size_and_statistics_of_the_store_it_wrote(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.data_registry.services import datasets as registry
-    from open_climate_service.openeo import jobs
+    from open_geo_service.data_registry.services import datasets as registry
+    from open_geo_service.openeo import jobs
 
     configs = tmp_path / "plugins" / "rasters"
     configs.mkdir(parents=True)
@@ -263,8 +263,8 @@ def _published_without_statistics(
 
     *cleared* is what the record is left holding: None, or an object missing a statistic, as a
     record measured before a statistic was added loads."""
-    from open_climate_service.data_registry.services import datasets as registry
-    from open_climate_service.openeo import jobs
+    from open_geo_service.data_registry.services import datasets as registry
+    from open_geo_service.openeo import jobs
 
     configs = tmp_path / "plugins" / "rasters"
     configs.mkdir(parents=True)

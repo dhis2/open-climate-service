@@ -16,11 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from open_climate_service import config as api_config
-from open_climate_service.features import services as feature_services
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.shared import thumbnails
-from open_climate_service.shared.thumbnails import THUMBNAIL_LONG_SIDE_PIXELS, thumbnail_path
+from open_geo_service import config as api_config
+from open_geo_service.features import services as feature_services
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.shared import thumbnails
+from open_geo_service.shared.thumbnails import THUMBNAIL_LONG_SIDE_PIXELS, thumbnail_path
 
 TEMPLATE = {"id": "districts", "name": "District boundaries", "id_property": "code"}
 

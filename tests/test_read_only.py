@@ -8,9 +8,9 @@ from collections.abc import Generator, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.main import app
-from open_climate_service.read_only import is_blocked
+from open_geo_service import config as api_config
+from open_geo_service.main import app
+from open_geo_service.read_only import is_blocked
 
 from .conftest import MountedClientFactory
 
@@ -98,8 +98,8 @@ def read_only() -> Iterator[None]:
 
 @pytest.fixture
 def ro_client(read_only: None) -> Generator[TestClient, None, None]:
-    from open_climate_service.jobs.service import reset_job_service
-    from open_climate_service.openeo.jobs import reset_openeo_job_service
+    from open_geo_service.jobs.service import reset_job_service
+    from open_geo_service.openeo.jobs import reset_openeo_job_service
 
     with TestClient(app) as client:
         yield client
@@ -353,12 +353,12 @@ def test_read_only_still_refuses_manage_under_a_mount_prefix(
 
 
 def test_a_configured_base_url_path_cannot_bypass_read_only(read_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The policy reads the ASGI path, never the path of `CLIMATE_SERVICE_BASE_URL`.
+    """The policy reads the ASGI path, never the path of `GEOSERVICE_BASE_URL`.
 
     That path is a statement about the public origin, not about the incoming path. Stripping
     it would let a base URL of `https://public.example/jobs` take `/jobs` off the real route.
     """
-    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "https://public.example/jobs")
+    monkeypatch.setenv("GEOSERVICE_BASE_URL", "https://public.example/jobs")
     client = TestClient(app)
 
     assert client.get("/jobs").status_code == 403

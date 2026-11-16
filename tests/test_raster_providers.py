@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
-from open_climate_service.plugins.rasters.providers import cds, cdse, edh
+from open_geo_service.plugins.rasters.providers import cds, cdse, edh
 
 _KEYS = ("EDH_API_KEY", "CDS_API_KEY", "CDSE_S3_ACCESS_KEY", "CDSE_S3_SECRET_KEY")
 

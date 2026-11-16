@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters import esa_cci_lc
+from open_geo_service.plugins.rasters import esa_cci_lc
 
 
 @pytest.fixture(autouse=True)

@@ -87,17 +87,17 @@ Checks that depend on who owns a record, such as deleting a job, run in the serv
 
 ## Machine clients: named tokens
 
-Each machine client gets its own token, listed in `climate-service.yaml` with the secret in the
+Each machine client gets its own token, listed in `geoservice.yaml` with the secret in the
 environment, the same way `dhis2_connections` holds DHIS2 tokens:
 
 ```yaml
 authentication:
   tokens:
     - id: caps
-      token_env: OCS_CAPS_TOKEN
+      token_env: GEOSERVICE_CAPS_TOKEN
       tier: operator
     - id: national-sync
-      token_env: OCS_SYNC_TOKEN
+      token_env: GEOSERVICE_SYNC_TOKEN
       tier: operator
 ```
 

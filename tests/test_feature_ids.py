@@ -24,12 +24,12 @@ pytest.importorskip("xvec")
 from openeo_pg_parser_networkx.process_registry import Process  # noqa: E402
 from shapely.geometry import box  # noqa: E402
 
-from open_climate_service.exports.delivery_input import lease_export_input  # noqa: E402
-from open_climate_service.exports.service import render_named_export  # noqa: E402
-from open_climate_service.openeo import execution  # noqa: E402
-from open_climate_service.openeo import jobs as openeo_jobs  # noqa: E402
-from open_climate_service.openeo.schemas import OpenEOJobStatus  # noqa: E402
-from open_climate_service.shared.vectors import (  # noqa: E402
+from open_geo_service.exports.delivery_input import lease_export_input  # noqa: E402
+from open_geo_service.exports.service import render_named_export  # noqa: E402
+from open_geo_service.openeo import execution  # noqa: E402
+from open_geo_service.openeo import jobs as openeo_jobs  # noqa: E402
+from open_geo_service.openeo.schemas import OpenEOJobStatus  # noqa: E402
+from open_geo_service.shared.vectors import (  # noqa: E402
     FEATURE_ID_COORD,
     attach_feature_ids,
     geometries_to_frame,

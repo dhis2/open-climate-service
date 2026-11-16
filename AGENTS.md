@@ -1,10 +1,10 @@
-# Open Climate Service
+# Open Geo Service
 
-Agent context for the `open-climate-service` repository. Provider-agnostic — intended to be readable by any AI coding assistant.
+Agent context for the `open-geo-service` repository. Provider-agnostic — intended to be readable by any AI coding assistant.
 
 ## Project overview
 
-The Open Climate Service is a FastAPI-based REST API that downloads, processes, and serves climate and Earth Observation data as GeoZarr stores.
+The Open Geo Service is a FastAPI-based REST API that downloads, processes, and serves climate and Earth Observation data as GeoZarr stores.
 
 Key concepts:
 
@@ -17,7 +17,7 @@ Key concepts:
 ## Repository layout
 
 ```
-open_climate_service/
+open_geo_service/
   data_manager/     # download and zarr build (downloader.py)
   data_accessor/    # open zarr / netcdf for read (accessor.py)
   data_registry/    # raster dataset template loading
@@ -28,8 +28,8 @@ open_climate_service/
   shared/           # dhis2 adapter, time utils
   streaming/        # BaseDatasetPlugin, ingest orchestrator, normalize_period
   main.py           # FastAPI app, CORS middleware, route registration
-open_climate_service/plugins/rasters/   # built-in raster dataset templates (chirps3.yaml, worldpop.yaml, …)
-open_climate_service/plugins/vectors/   # built-in vector dataset templates and providers
+open_geo_service/plugins/rasters/   # built-in raster dataset templates (chirps3.yaml, worldpop.yaml, …)
+open_geo_service/plugins/vectors/   # built-in vector dataset templates and providers
 tests/
 docs/
 ```
@@ -54,7 +54,7 @@ Before handing work back, fix and format only the files you changed (`uv run ruf
 
 - **Test through the entry point.** Drive the route, `fetch_period`, or the publish path, not the helper underneath. Bugs found in review usually sit in a caller that bypassed a correct, well-tested helper.
 - **Count the places that enforce a rule.** If the same rule is checked in more than one place, decide it once and call that.
-- **Run the real path once.** Ingest a period or call the route on a local instance and read the output. Implausible values and leaked metadata show up there, not in unit tests. Point `CLIMATE_SERVICE_CONFIG` at a copy of the config with its own `data_dir`, so a developer's data is left alone.
+- **Run the real path once.** Ingest a period or call the route on a local instance and read the output. Implausible values and leaked metadata show up there, not in unit tests. Point `GEOSERVICE_CONFIG` at a copy of the config with its own `data_dir`, so a developer's data is left alone.
 - **Size defaults for a laptop.** OCS normally runs on one. Concurrency, thread pools and memory-heavy work default low; servers raise them through settings. Before raising concurrency, run a short test: if 4 concurrent fetches are no faster than 2, use 2.
 - **Start from the sibling plugins.** Before writing or porting a dataset plugin, read the plugins in `plugins/rasters/` or `plugins/vectors/` closest to it and match how they cache, find their cutoff, name helpers and set defaults. Port external or AI-written code onto those patterns rather than keeping its own. Add a feature no other plugin has (clamping the start of a range, say) only if this data source truly needs it; if it would help every plugin, suggest it as a change across all of them instead of implementing it in one.
 - **Build the simplest version first.** Add server-side machinery for speed or size only when the plain approach is too slow where OCS runs, and name the optimisation as a follow-up instead.
@@ -86,7 +86,7 @@ Each YAML file in `plugins/rasters/` holds raster dataset templates, one per dat
 
 ```yaml
 ingestion:
-  plugin: open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin
+  plugin: open_geo_service.plugins.rasters.worldpop.WorldPopYearlyPlugin
   params: {} # passed to the plugin
 ```
 
@@ -102,7 +102,7 @@ When writing a Jira epic or issue, follow the [write-issue guide](https://github
 
 - Project `CLIM`, component `Climate Service`.
 - Parent: the area epic, named "OCS: <area>" (for example CLIM-802 "OCS: Processing and workflows").
-- Label: `ch-obj-open-climate-service` on every issue, as a placeholder until the OCS objectives are in Jira.
+- Label: `ch-obj-open-geo-service` on every issue, as a placeholder until the OCS objectives are in Jira.
 - Sprint: the current sprint for work being done now; no sprint for work filed for later.
 - Assignee: none.
 

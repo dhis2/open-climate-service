@@ -12,9 +12,9 @@ import pystac
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service import config as api_config
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -25,8 +25,8 @@ from open_climate_service.ingestions.schemas import (
     CoverageTemporal,
     PublicationStatus,
 )
-from open_climate_service.shared.geoparquet import PARQUET_MEDIA_TYPE
-from open_climate_service.stac import services as stac_services
+from open_geo_service.shared.geoparquet import PARQUET_MEDIA_TYPE
+from open_geo_service.stac import services as stac_services
 
 DATACUBE_FIELDS = ("cube:dimensions", "cube:variables")
 ZARR_EXTENSION = "https://stac-extensions.github.io/zarr/v1.1.0/schema.json"
@@ -70,7 +70,7 @@ def isolated_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 @pytest.fixture
 def districts(monkeypatch: pytest.MonkeyPatch) -> ArtifactRecord:
     """A real GeoParquet on disk, registered the way a provider run registers one."""
-    from open_climate_service.features import services as feature_services
+    from open_geo_service.features import services as feature_services
 
     record = feature_services.refresh_feature_collection(
         template={"id": "districts", "name": "District boundaries", "id_property": "orgUnitCode"},
@@ -180,7 +180,7 @@ def test_a_projected_collection_reports_the_crs_it_is_stored_in(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The extent stays WGS 84 as STAC requires; `proj:code` says where the geometry really is."""
-    from open_climate_service.features import services as feature_services
+    from open_geo_service.features import services as feature_services
 
     feature_services.refresh_feature_collection(
         template={"id": "districts", "name": "District boundaries", "id_property": "orgUnitCode"},
@@ -311,7 +311,7 @@ def test_an_undeclared_licence_is_not_invented(
     assert not [link for link in doc["links"] if link["rel"] == "license"]
 
 
-HOST = {"name": "Open Climate Service", "roles": ["host"], "url": "http://testserver/"}
+HOST = {"name": "Open Geo Service", "roles": ["host"], "url": "http://testserver/"}
 
 
 def test_this_instance_is_the_one_host_listed_last(
@@ -411,10 +411,10 @@ def test_the_catalog_and_a_feature_collection_link_a_readme_and_agents_guide(
     catalog = client.get("/stac/README.md").text
     assert "[District boundaries](http://testserver/stac/districts/collection.json) (vector)" in catalog
     # Headed by the instance's own name, not the product's.
-    monkeypatch.setattr("open_climate_service.config.get_name", lambda: "Malawi Climate Service")
-    assert client.get("/stac/README.md").text.startswith("# Malawi Climate Service\n")
-    assert client.get("/stac/AGENTS.md").text.startswith("# Reading the Malawi Climate Service catalog\n")
-    assert client.get("/stac/catalog.json").json()["title"] == "Malawi Climate Service"
+    monkeypatch.setattr("open_geo_service.config.get_name", lambda: "Malawi Geo Service")
+    assert client.get("/stac/README.md").text.startswith("# Malawi Geo Service\n")
+    assert client.get("/stac/AGENTS.md").text.startswith("# Reading the Malawi Geo Service catalog\n")
+    assert client.get("/stac/catalog.json").json()["title"] == "Malawi Geo Service"
 
 
 def test_the_readme_lists_the_same_providers_as_the_stac_with_one_host(
@@ -426,14 +426,14 @@ def test_the_readme_lists_the_same_providers_as_the_stac_with_one_host(
 
     assert "- Upstream (producer)\n" in readme
     assert readme.count("(host)") == 1
-    assert "- [Open Climate Service](http://testserver/) (host)" in readme
+    assert "- [Open Geo Service](http://testserver/) (host)" in readme
 
 
 def test_the_agents_query_quotes_column_names_and_names_the_stored_crs(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A column name with a space stays one name, and a projected collection's bounds are projected."""
-    from open_climate_service.features import services as feature_services
+    from open_geo_service.features import services as feature_services
 
     payload = _collection_payload()
     for feature in payload["features"]:
@@ -481,7 +481,7 @@ def test_a_feature_collections_data_files_carry_their_size_but_are_not_hashed(
     """Hashing on request would read every GeoParquet and PMTiles file on a cold cache; only thumbnails are hashed."""
     import hashlib
 
-    from open_climate_service.shared.thumbnails import thumbnail_path
+    from open_geo_service.shared.thumbnails import thumbnail_path
 
     hashed: list[int] = []
     sha256 = hashlib.sha256
@@ -508,8 +508,8 @@ def test_a_collection_with_no_file_left_does_not_declare_the_file_extension(
     client: TestClient, districts: ArtifactRecord
 ) -> None:
     """The extension is declared for the `file:*` fields an asset carries, as on a raster collection."""
-    from open_climate_service.features import tiles
-    from open_climate_service.shared.thumbnails import thumbnail_path
+    from open_geo_service.features import tiles
+    from open_geo_service.shared.thumbnails import thumbnail_path
 
     data = Path(str(districts.path))
     tiles.archive_path(data).unlink(missing_ok=True)
@@ -527,7 +527,7 @@ def test_a_replaced_file_gets_its_new_size_and_checksum(tmp_path: Path) -> None:
     import hashlib
     import os
 
-    from open_climate_service.stac.services import file_fields
+    from open_geo_service.stac.services import file_fields
 
     path = tmp_path / "thumbnail.png"
     path.write_bytes(b"old")
@@ -617,7 +617,7 @@ def test_the_asset_route_resolves_through_the_record_not_the_directory(
     client: TestClient, districts: ArtifactRecord, isolated_store: Path
 ) -> None:
     """A file nothing registered is not a collection, so it cannot be fetched through this route."""
-    from open_climate_service.features import store
+    from open_geo_service.features import store
 
     written, _count, _geometry = store.write_feature_collection(
         dataset_id="unregistered", features=_collection_payload(), id_property="orgUnitCode"
@@ -630,7 +630,7 @@ def test_the_asset_route_resolves_through_the_record_not_the_directory(
 
 def test_the_asset_route_refuses_an_unpublished_collection(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """STAC advertises only published collections, so this must not hand out what it withholds."""
-    from open_climate_service.features import services as feature_services
+    from open_geo_service.features import services as feature_services
 
     feature_services.refresh_feature_collection(
         template={"id": "districts", "name": "District boundaries", "id_property": "orgUnitCode"},
@@ -714,9 +714,9 @@ def test_the_openeo_job_result_path_emits_the_settled_parquet_media_type(tmp_pat
     Two spellings for one format meant a client reading a STAC asset and a client reading a job
     result saw different types for the same bytes, so both now read the shared constant.
     """
-    from open_climate_service.openeo.jobs import _VECTOR_FORMATS, _result_assets
-    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.openeo.jobs import _VECTOR_FORMATS, _result_assets
+    from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_geo_service.shared.time import utc_now
 
     output = tmp_path / "result.parquet"
     output.write_bytes(b"PAR1")
@@ -730,8 +730,8 @@ def test_the_openeo_job_result_path_emits_the_settled_parquet_media_type(tmp_pat
 
 def test_no_module_still_advertises_the_old_parquet_spelling() -> None:
     """One constant, so the catalogue and the job-result path cannot drift apart again."""
-    import open_climate_service.openeo.jobs as jobs
-    import open_climate_service.openeo.routes as openeo_routes
+    import open_geo_service.openeo.jobs as jobs
+    import open_geo_service.openeo.routes as openeo_routes
 
     for module in (jobs, openeo_routes):
         source = Path(module.__file__ or "").read_text(encoding="utf-8")
@@ -775,7 +775,7 @@ def test_a_collection_id_that_could_not_be_a_url_segment_is_refused(rejected: st
     `/features/districts` plus a query string, so the link resolves somewhere else and nothing
     reports an error.
     """
-    from open_climate_service.features import store
+    from open_geo_service.features import store
 
     with pytest.raises(ValueError, match="invalid feature collection id"):
         store.validate_collection_id(rejected)
@@ -784,7 +784,7 @@ def test_a_collection_id_that_could_not_be_a_url_segment_is_refused(rejected: st
 @pytest.mark.parametrize("accepted", ["districts", "worldpop_population_global2_100m", "a.b-c_1", "A1"])
 def test_an_ordinary_collection_id_is_still_accepted(accepted: str) -> None:
     """The allowlist has to admit the ids real templates use, or it is the wrong allowlist."""
-    from open_climate_service.features import store
+    from open_geo_service.features import store
 
     assert store.validate_collection_id(accepted) == accepted
     assert store.new_collection_file(accepted).name.startswith(f"{accepted}.")
@@ -799,7 +799,7 @@ def test_every_generated_link_escapes_the_id_as_one_segment() -> None:
     """
     from urllib.parse import urlsplit
 
-    from open_climate_service.shared.urls import path_segment
+    from open_geo_service.shared.urls import path_segment
 
     assert path_segment("districts?west") == "districts%3Fwest"
     assert path_segment("districts#west") == "districts%23west"
@@ -916,7 +916,7 @@ def test_a_dataset_template_id_that_cannot_be_a_url_segment_is_refused(rejected:
     `a/b` is the case escaping cannot rescue: ASGI decodes the path before routing, so `%2F`
     splits into two segments and no single-segment route matches.
     """
-    from open_climate_service.data_registry.services.datasets import _validate_dataset_template
+    from open_geo_service.data_registry.services.datasets import _validate_dataset_template
 
     template = {"id": rejected, "sync": {"kind": "static"}}
 
@@ -926,8 +926,8 @@ def test_a_dataset_template_id_that_cannot_be_a_url_segment_is_refused(rejected:
 
 def test_every_built_in_template_id_is_already_routable() -> None:
     """The allowlist has to admit the templates that ship, or it is the wrong allowlist."""
-    from open_climate_service.data_registry.services.datasets import list_datasets
-    from open_climate_service.shared.urls import is_segment_safe_id
+    from open_geo_service.data_registry.services.datasets import list_datasets
+    from open_geo_service.shared.urls import is_segment_safe_id
 
     templates = list_datasets()
 
@@ -937,7 +937,7 @@ def test_every_built_in_template_id_is_already_routable() -> None:
 
 def test_a_percent_encoded_slash_does_not_route_back(client: TestClient, districts: ArtifactRecord) -> None:
     """Why the id is constrained rather than merely escaped: `%2F` decodes before routing."""
-    from open_climate_service.shared.urls import path_segment
+    from open_geo_service.shared.urls import path_segment
 
     assert path_segment("a/b") == "a%2Fb"
     assert client.get("/features/a%2Fb").status_code == 404
@@ -945,7 +945,7 @@ def test_a_percent_encoded_slash_does_not_route_back(client: TestClient, distric
 
 def test_a_trailing_newline_is_not_a_safe_segment() -> None:
     """`$` also matches before a trailing newline, so this needs `fullmatch` rather than `match`."""
-    from open_climate_service.shared.urls import is_segment_safe_id
+    from open_geo_service.shared.urls import is_segment_safe_id
 
     assert not is_segment_safe_id("districts\n")
     assert is_segment_safe_id("districts")
@@ -956,7 +956,7 @@ def test_a_trailing_newline_is_not_a_safe_segment() -> None:
 
 def test_an_unknown_crs_is_refused_even_when_no_transform_is_needed() -> None:
     """The identity shortcut must not skip the validation this helper promises."""
-    from open_climate_service.shared.crs import transform_bbox
+    from open_geo_service.shared.crs import transform_bbox
 
     with pytest.raises(ValueError, match="is not a CRS this service can resolve"):
         transform_bbox((0.0, 0.0, 1.0, 1.0), source="EPSG:999999", target="EPSG:999999")
@@ -964,7 +964,7 @@ def test_an_unknown_crs_is_refused_even_when_no_transform_is_needed() -> None:
 
 def test_a_non_finite_bbox_is_refused_even_when_no_transform_is_needed() -> None:
     """A window of infinities silently matches everything, so it is refused before it is used."""
-    from open_climate_service.shared.crs import transform_bbox
+    from open_geo_service.shared.crs import transform_bbox
 
     with pytest.raises(ValueError, match="not a finite box"):
         transform_bbox((0.0, 0.0, float("inf"), 1.0), source="EPSG:4326", target="EPSG:4326")
@@ -972,7 +972,7 @@ def test_a_non_finite_bbox_is_refused_even_when_no_transform_is_needed() -> None
 
 def test_a_same_crs_bbox_still_passes_through_unchanged() -> None:
     """The shortcut still exists; it just no longer skips the checks."""
-    from open_climate_service.shared.crs import transform_bbox
+    from open_geo_service.shared.crs import transform_bbox
 
     assert transform_bbox((-13.5, 6.9, -10.1, 10.0), source="epsg:4326", target="EPSG:4326") == (
         -13.5,
@@ -986,7 +986,7 @@ def test_a_same_crs_bbox_still_passes_through_unchanged() -> None:
 
 
 def test_an_omitted_crs_reads_as_the_geoparquet_default(tmp_path: Path) -> None:
-    from open_climate_service.shared import geoparquet
+    from open_geo_service.shared import geoparquet
 
     written = _write_parquet(tmp_path / "omitted.parquet", crs="EPSG:4326", drop_crs_key=True)
 
@@ -995,7 +995,7 @@ def test_an_omitted_crs_reads_as_the_geoparquet_default(tmp_path: Path) -> None:
 
 def test_an_explicit_null_crs_reads_as_unknown_not_as_wgs84(tmp_path: Path) -> None:
     """A file of undefined coordinates must not register as degrees and then be windowed as degrees."""
-    from open_climate_service.shared import geoparquet
+    from open_geo_service.shared import geoparquet
 
     written = _write_parquet(tmp_path / "unknown.parquet", crs=None)
 

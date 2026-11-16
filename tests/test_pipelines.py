@@ -20,9 +20,9 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.exports import dhis2_destination
-from open_climate_service.exports.base import (
+from open_geo_service import config as api_config
+from open_geo_service.exports import dhis2_destination
+from open_geo_service.exports.base import (
     BaseExportPlugin,
     DestinationCheck,
     DestinationContext,
@@ -32,11 +32,11 @@ from open_climate_service.exports.base import (
     SettingsFormField,
     SettingsFormSection,
 )
-from open_climate_service.features.services import registered_collections as _registered_collections
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.pipelines import forms, runner, service, store
-from open_climate_service.pipelines import workflow as workflow_binding
-from open_climate_service.pipelines.schemas import (
+from open_geo_service.features.services import registered_collections as _registered_collections
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.pipelines import forms, runner, service, store
+from open_geo_service.pipelines import workflow as workflow_binding
+from open_geo_service.pipelines.schemas import (
     Check,
     DryRunResult,
     PipelineRecord,
@@ -102,14 +102,14 @@ def datasets() -> list[Any]:
 
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, datasets: list[Any]) -> None:
-    from open_climate_service.features import services as feature_services
-    from open_climate_service.ingestions import services as ingestion_services
-    from open_climate_service.system import templates as system_templates
+    from open_geo_service.features import services as feature_services
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.system import templates as system_templates
 
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
     # Event replay reads both job stores: keep them inside this test's directory.
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.openeo import jobs as openeo_jobs
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.openeo import jobs as openeo_jobs
 
     monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
@@ -191,7 +191,7 @@ def _dhis2(
             "conflicts": [],
         },
     )
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: client)
     return client
@@ -199,7 +199,7 @@ def _dhis2(
 
 def _schedule(dataset_id: str, cron: str, *, enabled: bool = True) -> None:
     """Store a sync schedule the way the Schedules page does, in this test's data directory."""
-    from open_climate_service.scheduler import store as schedule_store
+    from open_geo_service.scheduler import store as schedule_store
 
     schedule_store.save_schedule(
         schedule_store.StoredSchedule(dataset_id=dataset_id, cron=cron, publish=True, max_attempts=3, enabled=enabled),
@@ -662,7 +662,7 @@ def test_validation_reports_an_invalid_scheduler_configuration(instance: None, m
 
 
 def test_validation_reports_an_unreadable_schedule_store(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.scheduler import store as schedule_store
+    from open_geo_service.scheduler import store as schedule_store
 
     _dhis2(monkeypatch)
     api_config._cache["scheduler"] = {"enabled": True}  # type: ignore[index]
@@ -689,7 +689,7 @@ def test_validation_names_the_source_schedule_and_the_delivery_policy(
 def test_validation_fails_when_declared_dhis2_dataset_cannot_be_read(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
     check = _by_id(service.validate_pipeline(store.create_record(_spec())))["dhis2_metadata"]
@@ -752,8 +752,8 @@ class _DropPlugin(BaseExportPlugin):
 
 
 def _only_drop(monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
+    import open_geo_service.exports.registry as registry
+    import open_geo_service.exports.service as export_service
 
     plugin = _DropPlugin()
     monkeypatch.setattr(registry, "load_export_plugins", lambda: {"drop": plugin})
@@ -763,8 +763,8 @@ def _only_drop(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_approval_digest_includes_plugin_identity_and_resolved_destination(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
+    import open_geo_service.exports.registry as registry
+    import open_geo_service.exports.service as export_service
 
     plugin = _DropPlugin()
     plugin.version = "1"
@@ -1034,7 +1034,7 @@ def test_destination_settings_are_validated_by_the_plugin_schema(
 
 
 def _envelope(frame: pd.DataFrame) -> Any:
-    from open_climate_service.openeo.execution import SaveResultEnvelope
+    from open_geo_service.openeo.execution import SaveResultEnvelope
 
     envelope = SaveResultEnvelope(frame, "DHIS2JSON", {"export": "rain-to-dhis2"})
     envelope.provenance = {"sources": [{"collection_id": "rain_monthly"}], "spatial_aggregations": ["mean"]}
@@ -1054,7 +1054,7 @@ def _frame() -> pd.DataFrame:
 @pytest.fixture
 def executed(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Synchronous graph execution returning a monthly frame; records the graphs it ran."""
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     graphs: list[dict[str, Any]] = []
 
@@ -1093,7 +1093,7 @@ def test_dry_run_executes_the_run_graph_and_folds_the_report(
 
 
 def test_dry_run_applies_the_export_data_cadence_gate(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     daily = pd.DataFrame(
         {"geometry": [_OU[0], _OU[0]], "t": pd.to_datetime(["2025-01-01", "2025-01-02"]), "tp": [1.5, 2.0]}
@@ -1118,7 +1118,7 @@ def test_dry_run_of_a_destination_without_dry_run_support_only_renders(
 
 @pytest.fixture
 def client(instance: None) -> TestClient:
-    from open_climate_service.main import app
+    from open_geo_service.main import app
 
     return TestClient(app)
 
@@ -1199,7 +1199,7 @@ class _LookupClient(_FakeClient):
 
 
 def _dhis2_lookups(monkeypatch: pytest.MonkeyPatch) -> _LookupClient:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     original = _dhis2(monkeypatch)
     client = _LookupClient(original.data_set, original.summary)
@@ -1208,7 +1208,7 @@ def _dhis2_lookups(monkeypatch: pytest.MonkeyPatch) -> _LookupClient:
 
 
 def test_lookup_widget_applies_only_to_plain_string_fields() -> None:
-    from open_climate_service.exports.base import PipelineSettingsForm, SettingsFormField
+    from open_geo_service.exports.base import PipelineSettingsForm, SettingsFormField
 
     schema = {
         "type": "object",
@@ -1688,7 +1688,7 @@ def _approve(pipeline_id: str = "rain-to-dhis2", *, live: bool = False) -> Pipel
 
 
 def test_a_validated_pipeline_owns_its_named_export(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_geo_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
     with pytest.raises(ValueError, match="Unknown export"):
@@ -1707,7 +1707,7 @@ def test_a_validated_pipeline_owns_its_named_export(instance: None, monkeypatch:
 
 
 def test_save_refuses_an_invalid_pipeline(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
     refused = client.post("/pipelines", json=_SPEC)
@@ -1732,7 +1732,7 @@ def test_edit_keeps_the_approval_only_for_the_same_bindings(
     renamed = client.put("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Renamed", "revision": 1})
     assert renamed.status_code == 200 and renamed.json()["approved"] is True
 
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     good = dhis2_module.get_connection
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
@@ -1804,7 +1804,7 @@ class _FakeOpenEO:
     """A job service that records what it was asked to run and finishes nothing by itself."""
 
     def __init__(self) -> None:
-        from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+        from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 
         self.jobs: dict[str, OpenEOJobRecord] = {}
         self.started: list[str] = []
@@ -1815,7 +1815,7 @@ class _FakeOpenEO:
     def create_triggered_job(
         self, body: Any, *, source_event_id: str, trigger_id: str, max_attempts: int = 1
     ) -> tuple[Any, bool]:
-        from open_climate_service.openeo.jobs import triggered_job_id
+        from open_geo_service.openeo.jobs import triggered_job_id
 
         job_id = triggered_job_id(source_event_id, trigger_id)
         pipeline_id = trigger_id.removeprefix(runner.TRIGGER_PREFIX)
@@ -1855,7 +1855,7 @@ class _FakeOpenEO:
 
 @pytest.fixture
 def openeo(monkeypatch: pytest.MonkeyPatch) -> _FakeOpenEO:
-    import open_climate_service.openeo.jobs as jobs_module
+    import open_geo_service.openeo.jobs as jobs_module
 
     fake = _FakeOpenEO()
     monkeypatch.setattr(jobs_module, "get_openeo_job_service", lambda: fake)
@@ -1879,7 +1879,7 @@ class _Deliveries(list[tuple[str, str, bool, str]]):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail=f"Job '{delivery_id}' not found")
-        from open_climate_service.jobs.models import JobError, JobStatus
+        from open_geo_service.jobs.models import JobError, JobStatus
 
         error = JobError(type="ExportError", message="DHIS2 refused the payload") if status == "failed" else None
         return SimpleNamespace(status=JobStatus(status), result=result, error=error)
@@ -1887,8 +1887,8 @@ class _Deliveries(list[tuple[str, str, bool, str]]):
 
 @pytest.fixture
 def deliveries(monkeypatch: pytest.MonkeyPatch) -> _Deliveries:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.jobs import service as job_service_module
+    import open_geo_service.exports.delivery as delivery_module
+    from open_geo_service.jobs import service as job_service_module
 
     calls = _Deliveries()
 
@@ -2012,7 +2012,7 @@ def test_a_failed_hand_off_is_recorded_and_recoverable(
 ) -> None:
     from fastapi import HTTPException
 
-    import open_climate_service.exports.delivery as delivery_module
+    import open_geo_service.exports.delivery as delivery_module
 
     def refuse(export_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
         raise HTTPException(status_code=409, detail="No result for this job")
@@ -2101,7 +2101,7 @@ def test_delivery_hand_off_recovers_transient_failures_and_stops_on_permanent_on
 ) -> None:
     from fastapi import HTTPException
 
-    import open_climate_service.exports.delivery as delivery_module
+    import open_geo_service.exports.delivery as delivery_module
 
     _dhis2(monkeypatch)
     _validated()
@@ -2239,7 +2239,7 @@ def test_redelivery_is_refused_where_a_repeat_could_duplicate(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2294,8 +2294,8 @@ def test_a_failing_pipeline_posts_once_and_again_when_it_recovers_or_is_resolved
     webhook: WebhookReceiver,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.jobs.events import persisted_events
-    from open_climate_service.notifications import webhook as notifications
+    from open_geo_service.jobs.events import persisted_events
+    from open_geo_service.notifications import webhook as notifications
 
     _dhis2(monkeypatch)
     _validated()
@@ -2363,7 +2363,7 @@ def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2403,8 +2403,8 @@ def test_a_refused_redelivery_leaves_the_earlier_round_unchanged(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    import open_geo_service.exports.delivery as delivery_module
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2513,8 +2513,8 @@ def test_only_refusals_are_permanent(status: int, permanent: bool) -> None:
 def test_a_busy_result_or_export_is_retried_not_given_up(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.exports.retention import ResourceBusy
+    import open_geo_service.exports.delivery as delivery_module
+    from open_geo_service.exports.retention import ResourceBusy
 
     assert not runner._is_permanent(ResourceBusy("Source job results are currently in use"))
     _dhis2(monkeypatch)
@@ -2612,7 +2612,7 @@ def test_live_runs_and_deliveries_follow_the_mode(
 
 
 def _update_event(event_id: str = "evt-1", *, dataset_id: str = "rain_monthly", when: datetime | None = None) -> Any:
-    from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
+    from open_geo_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
 
     return JobEvent(
         event_id=event_id,
@@ -2671,7 +2671,7 @@ def test_paused_or_manual_pipelines_ignore_updates(
 
 def _job_with(*events: Any, status: str = "successful", created: datetime | None = None) -> Any:
     """A native job record as the update log holds it."""
-    from open_climate_service.jobs.models import JobStatus
+    from open_geo_service.jobs.models import JobStatus
 
     return SimpleNamespace(events=list(events), status=JobStatus(status), created_at=created or datetime.now(UTC))
 
@@ -2682,7 +2682,7 @@ def test_reconcile_finishes_what_a_restart_interrupted(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2772,7 +2772,7 @@ def test_a_rewrite_runs_the_whole_coverage(
 def test_out_of_order_and_delayed_updates_are_each_run_once(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2811,7 +2811,7 @@ def test_pruned_history_and_restarts_never_replay_an_update(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2845,7 +2845,7 @@ def test_pruned_history_and_restarts_never_replay_an_update(
 def test_an_update_that_failed_to_dispatch_is_retried_and_holds_the_checkpoint(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2926,7 +2926,7 @@ def test_manual_and_update_runs_share_the_bindings_and_the_export(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_geo_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
     record = _validated()
@@ -2982,7 +2982,7 @@ def test_a_refused_update_is_listed_with_its_interval(
 def test_an_unreachable_destination_does_not_stop_an_update_run(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     _dhis2(monkeypatch)
     _validated()
@@ -2995,7 +2995,7 @@ def test_an_unreachable_destination_does_not_stop_an_update_run(
 def test_dispatch_errors_are_bounded_or_skipped_at_once(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -3045,10 +3045,10 @@ def test_an_update_older_than_the_checkpoint_is_not_run_but_listed(
 
 def _openeo_owned_update(event_id: str, *, dataset_id: str = "rain_monthly") -> Any:
     """A full-rewrite update persisted on the openEO job that published the dataset."""
-    from open_climate_service.ingestions.processes import FULL_REWRITE_EVENT_ACTION, dataset_update_event
-    from open_climate_service.jobs.models import JobEvent
-    from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_geo_service.ingestions.processes import FULL_REWRITE_EVENT_ACTION, dataset_update_event
+    from open_geo_service.jobs.models import JobEvent
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 
     draft = dataset_update_event(
         dataset_id=dataset_id,
@@ -3147,8 +3147,8 @@ class _WarehousePlugin(_DropPlugin):
         return f"warehouse://{binding['database']}"
 
     def send(self, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None) -> Any:
-        from open_climate_service.exports.report import ExportOutcome, ExportReport
-        from open_climate_service.shared.time import utc_now
+        from open_geo_service.exports.report import ExportOutcome, ExportReport
+        from open_geo_service.shared.time import utc_now
 
         self.sent.append((target, dry_run))
         return ExportReport(
@@ -3164,10 +3164,10 @@ class _WarehousePlugin(_DropPlugin):
 def test_the_delivery_target_belongs_to_the_plugin(
     instance: None, monkeypatch: pytest.MonkeyPatch, executed: list[dict[str, Any]]
 ) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.manifest import target_binding
+    import open_geo_service.exports.registry as registry
+    import open_geo_service.exports.service as export_service
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.manifest import target_binding
 
     plugin = _WarehousePlugin()
     monkeypatch.setattr(registry, "load_export_plugins", lambda: {"warehouse": plugin})
@@ -3194,7 +3194,7 @@ def test_the_delivery_target_belongs_to_the_plugin(
 
 
 def test_a_check_for_an_older_revision_is_never_installed(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_geo_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
     _validated()
@@ -3245,15 +3245,15 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
     """The real job service and workflow engine, the built-in workflow, and the DHIS2 delivery path with a fake send."""
     from openeo_pg_parser_networkx.process_registry import Process
 
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.report import ExportOutcome, ExportReport
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobStatus
-    from open_climate_service.openeo import execution
-    from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.shared.provenance import record_source
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.report import ExportOutcome, ExportReport
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobStatus
+    from open_geo_service.openeo import execution
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.shared.provenance import record_source
+    from open_geo_service.shared.time import utc_now
 
     monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
@@ -3343,7 +3343,7 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         assert len(live["payload"]["dataValues"]) == 4
 
         # A dataset update goes through the same runner, job service and delivery path.
-        from open_climate_service.exports.delivery_input import lease_export_input
+        from open_geo_service.exports.delivery_input import lease_export_input
 
         runner.consume([_update_event("evt-e2e")])
         automatic = None
@@ -3399,15 +3399,15 @@ def test_end_to_end_a_table_pipeline_keeps_rows_in_ocs_and_replaces_revised_valu
     """
     from openeo_pg_parser_networkx.process_registry import Process
 
-    from open_climate_service.features import services as feature_services
-    from open_climate_service.features import store as feature_store
-    from open_climate_service.ingestions import services as ingestion_services
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs.models import JobStatus
-    from open_climate_service.openeo import execution
-    from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.shared.provenance import record_source
-    from open_climate_service.shared.time import stamp_cadence
+    from open_geo_service.features import services as feature_services
+    from open_geo_service.features import store as feature_store
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs.models import JobStatus
+    from open_geo_service.openeo import execution
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.shared.provenance import record_source
+    from open_geo_service.shared.time import stamp_cadence
 
     # A real registered collection and record index, so the rows are checked against its ids.
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", tmp_path / "data" / "artifacts")
@@ -3558,18 +3558,18 @@ def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
     """
     from openeo_pg_parser_networkx.process_registry import Process
 
-    from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
-    from open_climate_service.data_registry.services import datasets as registry
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.report import ExportOutcome, ExportReport
-    from open_climate_service.ingestions import services as ingestion_services
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs.models import JobStatus
-    from open_climate_service.openeo import execution
-    from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-    from open_climate_service.shared.provenance import record_source
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
+    from open_geo_service.data_registry.services import datasets as registry
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.report import ExportOutcome, ExportReport
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs.models import JobStatus
+    from open_geo_service.openeo import execution
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_geo_service.shared.provenance import record_source
+    from open_geo_service.shared.time import utc_now
 
     # A temporary template registry and store directory, as `managed_instance` provides.
     configs = tmp_path / "managed" / "plugins" / "rasters"
@@ -3584,14 +3584,14 @@ def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
         "  sync:\n"
         "    kind: temporal\n"
         "  ingestion:\n"
-        "    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
+        "    plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
     registry.reset_template_caches()
     (tmp_path / "managed" / "rasters").mkdir()
     monkeypatch.setattr(
-        "open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "managed" / "rasters"
+        "open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "managed" / "rasters"
     )
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", tmp_path / "artifacts" / "records.json")
@@ -3804,7 +3804,7 @@ def test_feature_names_read_only_the_id_and_name_columns(monkeypatch: pytest.Mon
     import pyarrow.parquet as pq
     from shapely.geometry import Point
 
-    from open_climate_service.features import services as feature_services
+    from open_geo_service.features import services as feature_services
 
     path = tmp_path / "districts.parquet"
     gpd.GeoDataFrame(

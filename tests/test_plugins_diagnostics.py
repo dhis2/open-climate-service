@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service import plugins_diagnostics as pd
+from open_geo_service import config as api_config
+from open_geo_service import plugins_diagnostics as pd
 
 
 @pytest.fixture
 def capture(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCaptureFixture]:
-    # The "open_climate_service" logger has propagate=False, so attach caplog's
+    # The "open_geo_service" logger has propagate=False, so attach caplog's
     # handler directly to capture its records.
     original_level = pd.logger.level
     pd.logger.addHandler(caplog.handler)
@@ -40,7 +40,7 @@ def test_warns_on_missing_subdir_and_counts_files(
     (plugins / "processes").mkdir()
     (plugins / "rasters" / "x.yaml").write_text("- id: x\n")
     # workflows/ intentionally absent
-    config_path = tmp_path / "climate-service.yaml"
+    config_path = tmp_path / "geoservice.yaml"
     config_path.write_text("plugins_dir: ./plugins/\n")
     monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": "./plugins/"})
     monkeypatch.setattr(api_config, "get_config_path", lambda: config_path)
@@ -55,7 +55,7 @@ def test_warns_on_missing_subdir_and_counts_files(
 def test_warns_when_plugins_dir_missing(
     monkeypatch: pytest.MonkeyPatch, capture: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
-    config_path = tmp_path / "climate-service.yaml"
+    config_path = tmp_path / "geoservice.yaml"
     config_path.write_text("plugins_dir: ./plugins/\n")
     monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": "./does-not-exist/"})
     monkeypatch.setattr(api_config, "get_config_path", lambda: config_path)

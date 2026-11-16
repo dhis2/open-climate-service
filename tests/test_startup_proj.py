@@ -1,4 +1,4 @@
-"""Tests for the PROJ database self-heal in open_climate_service.startup."""
+"""Tests for the PROJ database self-heal in open_geo_service.startup."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def test_ensure_proj_database_pins_bundled_db_when_resolution_fails(monkeypatch:
     """When the inherited PROJ env can't resolve EPSG:4326, pin the bundled pyproj db."""
     from pyproj import CRS
 
-    from open_climate_service import startup
+    from open_geo_service import startup
 
     bundled = _bundled_proj_dir()
     if not os.path.exists(os.path.join(bundled, "proj.db")):
@@ -49,7 +49,7 @@ def test_ensure_proj_database_is_noop_when_resolution_works(monkeypatch: pytest.
     """When CRS resolution already works the env is left untouched."""
     from pyproj import CRS
 
-    from open_climate_service import startup
+    from open_geo_service import startup
 
     touched: dict[str, str] = {}
     monkeypatch.setattr(pyproj.datadir, "set_data_dir", lambda d: touched.update(dir=d))

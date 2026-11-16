@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.ingestions.schemas import ArtifactRecord
-from open_climate_service.stac.services import _collection_description, _sanitize_variable_attrs
+from open_geo_service.ingestions.schemas import ArtifactRecord
+from open_geo_service.stac.services import _collection_description, _sanitize_variable_attrs
 
 _GENERATED_PREFIX = "Published GeoZarr dataset for"
 
@@ -152,7 +152,7 @@ def test_datasets_description_is_stripped_and_blank_becomes_null() -> None:
     Without this, `/datasets` published "   " where the STAC collection fell back to the
     generated sentence — and `description: >-` folded YAML routinely leaves a trailing newline.
     """
-    from open_climate_service.ingestions.services import _as_optional_text
+    from open_geo_service.ingestions.services import _as_optional_text
 
     assert _as_optional_text("  Caveat.\n") == "Caveat."
     for blank in ("", "   ", "\n\t "):

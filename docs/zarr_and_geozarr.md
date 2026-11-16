@@ -1,6 +1,6 @@
 # Zarr and GeoZarr
 
-This document explains why the Open Climate Service uses Zarr as its primary storage format, how Zarr stores are structured and served, and how GeoZarr root attributes enable map rendering.
+This document explains why the Open Geo Service uses Zarr as its primary storage format, how Zarr stores are structured and served, and how GeoZarr root attributes enable map rendering.
 
 ---
 
@@ -31,7 +31,7 @@ Climate datasets are large, multi-dimensional arrays: a daily precipitation data
 
 ## ARCO: Analysis-Ready, Cloud-Optimized
 
-The stores produced by the Open Climate Service are an instance of the **ARCO** pattern — a term from the climate science community describing datasets that are simultaneously ready for analysis and optimised for cloud access.
+The stores produced by the Open Geo Service are an instance of the **ARCO** pattern — a term from the climate science community describing datasets that are simultaneously ready for analysis and optimised for cloud access.
 
 The two halves of the term map directly onto the choices described in this document:
 
@@ -43,7 +43,7 @@ The two halves of the term map directly onto the choices described in this docum
 
 **Cloud-optimized** means the data can be accessed efficiently over HTTP without downloading the whole file. The Zarr and GeoZarr formats provide all the necessary properties — chunk-level access, HTTP-native serving, multiscale pyramids, and cloud compatibility.
 
-The Open Climate Service targets the same access pattern at country scale for arbitrary source datasets.
+The Open Geo Service targets the same access pattern at country scale for arbitrary source datasets.
 
 ---
 
@@ -136,7 +136,7 @@ Every level of an ingested pyramid holds one time step per shard. A sync appends
 
 ## CRS handling
 
-The Open Climate Service **does not reproject** data during ingestion — each dataset is
+The Open Geo Service **does not reproject** data during ingestion — each dataset is
 stored as its source delivers it, so the stored coordinates keep the source's native CRS.
 The framework records that CRS in the GeoZarr metadata (the `proj:code` root attribute and
 the per-variable `spatial_ref` coordinate) so clients and the map viewer can position the
@@ -219,7 +219,7 @@ shipped as the spec evolved — Private Network Access and its successor Local N
 an allowlist of origins that already includes the two viewers above. Add others with:
 
 ```
-CLIMATE_SERVICE_ZARR_BROWSER_ORIGINS="https://inspect.geozarr.org,https://your-viewer.example"
+GEOSERVICE_ZARR_BROWSER_ORIGINS="https://inspect.geozarr.org,https://your-viewer.example"
 ```
 
 **Browser side, yours to grant.** Current Chrome additionally requires *user permission* to reach
@@ -243,7 +243,7 @@ network.
 
 ## How Zarr stores are served
 
-The Open Climate Service provides two endpoints for accessing the same Icechunk store:
+The Open Geo Service provides two endpoints for accessing the same Icechunk store:
 
 ### `/zarr/{dataset_id}` — vanilla zarr clients (web maps, xarray)
 

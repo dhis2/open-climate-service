@@ -11,7 +11,7 @@ import httpx
 import numpy as np
 import pytest
 
-from open_climate_service.plugins.rasters.clms_ndvi import CLMSNDVIDekadalPlugin
+from open_geo_service.plugins.rasters.clms_ndvi import CLMSNDVIDekadalPlugin
 
 _BBOX = [29.0, -2.0, 30.0, -1.0]
 

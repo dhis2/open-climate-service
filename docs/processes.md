@@ -1,6 +1,6 @@
 # Processes
 
-The Open Climate Service exposes two complementary processing interfaces:
+The Open Geo Service exposes two complementary processing interfaces:
 
 - **openEO process graphs** — the primary interface for data analysis. Submit a DAG of composable operations via `POST /result` (synchronous) or `POST /jobs` (batch). 120+ standard processes are available out of the box. See the [openEO guide](openeo.md).
 - **Plugin processes** — custom named processes registered via the `@process` decorator, discoverable at `GET /processes` and callable directly by `process_id` in any openEO process graph. See [Extensibility — Processes](extensibility.md#processes).

@@ -16,24 +16,24 @@ extent:
 data_dir: ./data
 """
 
-# The suite's own instance, set before anything from open_climate_service is imported. Store
+# The suite's own instance, set before anything from open_geo_service is imported. Store
 # paths such as ARTIFACTS_DIR are resolved from the config when their module is imported, so
 # a config set later, by a fixture, comes too late: they would already name the developer's
 # `data_dir` from `.env`, or the XDG fallback without one. `load_dotenv` does not overwrite a
 # variable that is already set, so `.env` cannot take this back.
 _TEST_INSTANCE = Path(tempfile.mkdtemp(prefix="ocs-test-instance-"))
 atexit.register(shutil.rmtree, _TEST_INSTANCE, ignore_errors=True)
-TEST_CONFIG_FILE = _TEST_INSTANCE / "climate-service.yaml"
+TEST_CONFIG_FILE = _TEST_INSTANCE / "geoservice.yaml"
 TEST_DATA_ROOT = _TEST_INSTANCE / "data"
 # The caller's own value, restored when a session ends, so a process that runs pytest and then
 # carries on (an IDE calling pytest.main(), a notebook) is not left pointing at the test instance.
-_CALLERS_CONFIG = os.environ.get("CLIMATE_SERVICE_CONFIG")
+_CALLERS_CONFIG = os.environ.get("GEOSERVICE_CONFIG")
 
 
 def _use_test_instance() -> None:
     TEST_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     TEST_CONFIG_FILE.write_text(_TEST_CONFIG, encoding="utf-8")
-    os.environ["CLIMATE_SERVICE_CONFIG"] = str(TEST_CONFIG_FILE)
+    os.environ["GEOSERVICE_CONFIG"] = str(TEST_CONFIG_FILE)
 
 
 _use_test_instance()
@@ -42,13 +42,13 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.types import ASGIApp, Receive, Scope, Send  # noqa: E402
 
-from open_climate_service import config as api_config  # noqa: E402
-from open_climate_service import plugin_discovery  # noqa: E402
-from open_climate_service.features import tiles  # noqa: E402
-from open_climate_service.ingestions import services as ingestion_services  # noqa: E402
-from open_climate_service.main import app  # noqa: E402
-from open_climate_service.openeo import earthkit_processes, xclim_processes  # noqa: E402
-from open_climate_service.shared import compute, urls  # noqa: E402
+from open_geo_service import config as api_config  # noqa: E402
+from open_geo_service import plugin_discovery  # noqa: E402
+from open_geo_service.features import tiles  # noqa: E402
+from open_geo_service.ingestions import services as ingestion_services  # noqa: E402
+from open_geo_service.main import app  # noqa: E402
+from open_geo_service.openeo import earthkit_processes, xclim_processes  # noqa: E402
+from open_geo_service.shared import compute, urls  # noqa: E402
 
 _connect = socket.socket.connect
 _connect_ex = socket.socket.connect_ex
@@ -110,9 +110,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     socket.socket.connect_ex = _connect_ex  # type: ignore[method-assign]
     socket.getaddrinfo = _getaddrinfo
     if _CALLERS_CONFIG is None:
-        os.environ.pop("CLIMATE_SERVICE_CONFIG", None)
+        os.environ.pop("GEOSERVICE_CONFIG", None)
     else:
-        os.environ["CLIMATE_SERVICE_CONFIG"] = _CALLERS_CONFIG
+        os.environ["GEOSERVICE_CONFIG"] = _CALLERS_CONFIG
 
 
 @pytest.fixture(autouse=True)
@@ -170,7 +170,7 @@ def _no_vector_tiles(monkeypatch: pytest.MonkeyPatch) -> None:
 def _unset_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Serve tests from the request's own origin, whatever the developer's environment says.
 
-    `CLIMATE_SERVICE_BASE_URL` is documented in `.env.example` and loaded by compose via
+    `GEOSERVICE_BASE_URL` is documented in `.env.example` and loaded by compose via
     `env_file`, so it is routinely exported on a machine that runs an instance. Every route
     that builds an absolute URL reads it, so with it set the assertions that pin
     `http://testserver/...` fail — a test run whose result depends on the shell it was started
@@ -181,7 +181,7 @@ def _unset_configured_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     fixture runs, and unsetting the variable alone leaves every route rendering it. The
     attribute is reset too, since FastAPI copies `app.root_path` into each request scope.
     """
-    monkeypatch.delenv("CLIMATE_SERVICE_BASE_URL", raising=False)
+    monkeypatch.delenv("GEOSERVICE_BASE_URL", raising=False)
     monkeypatch.delenv("ROOT_PATH", raising=False)
     monkeypatch.setattr(app, "root_path", "")
 
@@ -233,7 +233,7 @@ def webhook(monkeypatch: pytest.MonkeyPatch) -> WebhookReceiver:
     """Notifications configured, posted in the calling thread to a receiver that records them."""
     import httpx
 
-    from open_climate_service.notifications import webhook as notifications
+    from open_geo_service.notifications import webhook as notifications
 
     receiver = WebhookReceiver()
 
@@ -254,7 +254,7 @@ def named_exports(monkeypatch: pytest.MonkeyPatch, *definitions: dict[str, Any])
     A pipeline owns the named export under its id. Tests about rendering or delivering an export
     need the definition resolvable by name, not a stored, validated pipeline behind it.
     """
-    from open_climate_service.pipelines import exports as pipeline_exports
+    from open_geo_service.pipelines import exports as pipeline_exports
 
     owned = list(definitions)
     monkeypatch.setattr(pipeline_exports, "pipeline_export_definitions", lambda: owned)

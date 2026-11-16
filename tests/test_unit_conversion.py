@@ -3,7 +3,7 @@ import logging
 import pytest
 import xarray as xr
 
-from open_climate_service.transforms.unit_conversion import amount_as_rate, is_accumulated
+from open_geo_service.transforms.unit_conversion import amount_as_rate, is_accumulated
 
 
 @pytest.mark.parametrize(("step_type", "expected"), [("accum", True), ("instant", False)])

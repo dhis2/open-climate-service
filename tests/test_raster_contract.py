@@ -21,7 +21,7 @@ import pytest
 xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.shared.raster_contract import (  # noqa: E402
+from open_geo_service.shared.raster_contract import (  # noqa: E402
     ContractViolation,
     _axis_units,
     normalize_dim_layout,
@@ -48,11 +48,11 @@ def ocs_logs(caplog: pytest.LogCaptureFixture) -> Any:
     ``startup.py`` sets ``propagate = False`` on it so the app owns its own handler, which
     means caplog's root handler never sees the records. Re-enable propagation for the test.
     """
-    package_logger = logging.getLogger("open_climate_service")
+    package_logger = logging.getLogger("open_geo_service")
     previous = package_logger.propagate
     package_logger.propagate = True
     try:
-        with caplog.at_level(logging.WARNING, logger="open_climate_service"):
+        with caplog.at_level(logging.WARNING, logger="open_geo_service"):
             yield caplog
     finally:
         package_logger.propagate = previous
@@ -276,7 +276,7 @@ def test_crs84_aliases_are_canonicalised() -> None:
 
 def test_the_instance_config_crs_is_never_consulted(monkeypatch: pytest.MonkeyPatch) -> None:
     """The config CRS as a fallback is what created the mismatch in the first place."""
-    from open_climate_service import config as api_config
+    from open_geo_service import config as api_config
 
     monkeypatch.setattr(api_config, "get_crs", lambda: "EPSG:32633")
     assert resolve_store_crs(_degree_grid(), None) == "EPSG:4326"
@@ -396,7 +396,7 @@ def test_written_store_satisfies_the_contract(tmp_path: Path) -> None:
     import icechunk
 
     pytest.importorskip("rioxarray")
-    from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+    from open_geo_service.data_manager.services.downloader import write_to_icechunk_store
 
     # (time, x, y) order, a `time` dim, 0…360 longitudes, and a projected CRS over degrees.
     ds = xr.Dataset(
@@ -430,8 +430,8 @@ def test_ingest_refuses_to_append_to_a_pre_contract_store(tmp_path: Path) -> Non
     actionable message beats silently corrupting the store, and the fix is a re-ingest.
     """
     pytest.importorskip("icechunk")
-    from open_climate_service.streaming.orchestrator import _assert_appendable_axes
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.streaming.orchestrator import _assert_appendable_axes
+    from open_geo_service.streaming.store import open_or_create_repo
 
     store_path = tmp_path / "south_up.icechunk"
     ascending = xr.Dataset(
@@ -456,8 +456,8 @@ def test_ingest_refuses_to_append_to_a_pre_contract_store(tmp_path: Path) -> Non
 
 def test_ingest_appends_happily_to_a_conforming_store(tmp_path: Path) -> None:
     pytest.importorskip("icechunk")
-    from open_climate_service.streaming.orchestrator import _assert_appendable_axes
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.streaming.orchestrator import _assert_appendable_axes
+    from open_geo_service.streaming.store import open_or_create_repo
 
     store_path = tmp_path / "north_up.icechunk"
     descending = xr.Dataset(
@@ -478,7 +478,7 @@ def test_ingest_appends_happily_to_a_conforming_store(tmp_path: Path) -> None:
 
 def test_a_missing_store_is_not_a_blocker(tmp_path: Path) -> None:
     """Nothing committed yet means nothing to disagree with — the first write must not fail."""
-    from open_climate_service.streaming.orchestrator import _assert_appendable_axes
+    from open_geo_service.streaming.orchestrator import _assert_appendable_axes
 
     ds = _cube(dims=("t", "y", "x"), sizes={"t": 1, "y": 2, "x": 2}, coords={"y": [60.0, 59.0]})
     _assert_appendable_axes(tmp_path / "absent.icechunk", ds, x_dim="x", y_dim="y")

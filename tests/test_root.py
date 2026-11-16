@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.system.schemas import HealthStatus
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.system.schemas import HealthStatus
 
 from .conftest import MountedClientFactory
 
@@ -11,7 +11,7 @@ def test_root_returns_html_for_browser_request(client: TestClient) -> None:
     response = client.get("/", headers={"accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
-    assert "Open Climate Service" in response.text
+    assert "Open Geo Service" in response.text
 
 
 def test_root_html_shows_extent(client: TestClient) -> None:

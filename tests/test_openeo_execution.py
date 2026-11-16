@@ -17,8 +17,8 @@ import xarray as xr
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service.ingestions.schemas import ArtifactFormat
-from open_climate_service.openeo.execution import (
+from open_geo_service.ingestions.schemas import ArtifactFormat
+from open_geo_service.openeo.execution import (
     SaveResultEnvelope,
     _augment_with_workflows,
     _bbox_to_dict,
@@ -28,7 +28,7 @@ from open_climate_service.openeo.execution import (
     _temporal_to_list,
     run_process_graph,
 )
-from open_climate_service.openeo.jobs import (
+from open_geo_service.openeo.jobs import (
     OpenEOJobService,
     _build_chap_csv_frame,
     _build_dhis2_json_payload,
@@ -41,8 +41,8 @@ from open_climate_service.openeo.jobs import (
     _to_dhis2_value_string,
     _write_dataset_tabular_export,
 )
-from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.time import utc_now
+from open_geo_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.time import utc_now
 
 _RASTER_ARTIFACT = SimpleNamespace(format=ArtifactFormat.ICECHUNK)
 """A stub published artifact: `load_collection` reads only its format before opening it."""
@@ -176,8 +176,8 @@ def test_ensure_crs_is_idempotent_and_preserves_existing_crs() -> None:
 def test_load_collection_returns_georegistered_cube(monkeypatch: pytest.MonkeyPatch) -> None:
     import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
-    monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
+    monkeypatch.setattr("open_geo_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
+    monkeypatch.setattr("open_geo_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     cube = _load_collection_impl("pop_collection")
     assert isinstance(cube, xr.DataArray), "a raster collection loads as a datacube"
@@ -190,8 +190,8 @@ def test_load_collection_returns_georegistered_cube(monkeypatch: pytest.MonkeyPa
 
 def test_load_collection_empty_temporal_extent_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     # The mock cube only covers 2021; a 2030 extent selects zero timesteps.
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
-    monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
+    monkeypatch.setattr("open_geo_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
+    monkeypatch.setattr("open_geo_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     with pytest.raises(HTTPException) as excinfo:
         _load_collection_impl("pop_collection", temporal_extent=["2030-01-01", "2030-12-31"])
@@ -206,8 +206,8 @@ def test_load_collection_empty_temporal_extent_raises_clear_error(monkeypatch: p
 
 
 def test_load_collection_overlapping_temporal_extent_returns_data(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("open_climate_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
-    monkeypatch.setattr("open_climate_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
+    monkeypatch.setattr("open_geo_service.openeo.execution._get_published_artifact", lambda _id: _RASTER_ARTIFACT)
+    monkeypatch.setattr("open_geo_service.openeo.execution._open_artifact", lambda _a: _streaming_style_cube())
 
     cube = _load_collection_impl("pop_collection", temporal_extent=["2021-01-01", "2021-12-31"])
 
@@ -221,7 +221,7 @@ def test_load_collection_overlapping_temporal_extent_returns_data(monkeypatch: p
 
 
 def test_augment_with_workflows_returns_base_when_no_udps(monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.openeo.workflows as workflow_module
+    import open_geo_service.openeo.workflows as workflow_module
 
     monkeypatch.setattr(workflow_module, "list_workflows", lambda: MagicMock(processes=[]))
     base = object()
@@ -230,7 +230,7 @@ def test_augment_with_workflows_returns_base_when_no_udps(monkeypatch: pytest.Mo
 
 
 def test_augment_with_workflows_registers_udp(monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.openeo.workflows as workflow_module
+    import open_geo_service.openeo.workflows as workflow_module
 
     udp = MagicMock()
     udp.id = "my_udp"
@@ -256,11 +256,11 @@ def test_augment_with_workflows_registers_udp(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.fixture()
 def job_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OpenEOJobService:
-    monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.openeo.jobs._JOBS_DIR", tmp_path)
     # The managed writer reads the artifact index; keep it in this test's directory.
-    monkeypatch.setattr("open_climate_service.ingestions.services.ARTIFACTS_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr("open_geo_service.ingestions.services.ARTIFACTS_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.ARTIFACTS_INDEX_PATH", tmp_path / "artifacts" / "records.json"
+        "open_geo_service.ingestions.services.ARTIFACTS_INDEX_PATH", tmp_path / "artifacts" / "records.json"
     )
     return OpenEOJobService(max_workers=1)
 
@@ -386,7 +386,7 @@ def test_openeo_job_service_create_execute_and_get_results(
     job_service: OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         lambda process: {"ignored": True},
     )
     monkeypatch.setattr(
@@ -454,7 +454,7 @@ def test_result_assets_none_output_returns_empty() -> None:
 def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyPatch) -> None:
     # Unpublished: dataset + zarr links, no STAC.
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.latest_published_raster_artifacts_by_dataset",
+        "open_geo_service.ingestions.services.latest_published_raster_artifacts_by_dataset",
         lambda: {},
     )
     assets = _result_assets(_record("managed://my_aggregate"))
@@ -464,7 +464,7 @@ def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyP
 
     # Published: STAC collection link is added.
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.latest_published_raster_artifacts_by_dataset",
+        "open_geo_service.ingestions.services.latest_published_raster_artifacts_by_dataset",
         lambda: {"my_aggregate": object()},
     )
     published = _result_assets(_record("managed://my_aggregate"))
@@ -473,9 +473,9 @@ def test_result_assets_managed_dataset_exposes_links(monkeypatch: pytest.MonkeyP
 
 def _store_finished_job(job_id: str) -> None:
     """Result files are only served for a finished job (CLIM-1221)."""
-    from open_climate_service.openeo.jobs import store_create_job
-    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.openeo.jobs import store_create_job
+    from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_geo_service.shared.time import utc_now
 
     store_create_job(OpenEOJobRecord(id=job_id, status=OpenEOJobStatus.FINISHED, created=utc_now()))
 
@@ -483,7 +483,7 @@ def _store_finished_job(job_id: str) -> None:
 def test_download_result_file_serves_geojson_with_geojson_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.openeo.jobs._JOBS_DIR", tmp_path)
     _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
@@ -499,7 +499,7 @@ def test_download_result_file_serves_geojson_with_geojson_media_type(
 def test_download_result_file_serves_json_with_json_media_type(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.openeo.jobs._JOBS_DIR", tmp_path)
     _store_finished_job("job-1")
     results_dir = tmp_path / "job-1" / "results"
     results_dir.mkdir(parents=True)
@@ -628,7 +628,7 @@ def test_run_process_graph_keeps_runtime_failures_as_500(monkeypatch: pytest.Mon
 
 def test_result_route_rejects_synchronous_zarr_datacube(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         lambda process, request=None: xr.Dataset(
             {"temperature": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}
         ),
@@ -663,7 +663,7 @@ def test_result_route_rejects_formats_a_raster_cube_cannot_produce(
     route then tried to read as a file: `IsADirectoryError`, surfaced as 500 (CLIM-909).
     """
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         lambda process, request=None: SaveResultEnvelope(
             xr.Dataset({"temperature": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}),
             fmt,
@@ -691,7 +691,7 @@ def test_result_route_still_serves_raster_formats(
         coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
     )
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         lambda process, request=None: SaveResultEnvelope(ds, fmt),
     )
 
@@ -717,7 +717,7 @@ def test_result_route_returns_geojson_payload_for_synchronous_vector_result(
         return SaveResultEnvelope(gdf, "GEOJSON")
 
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         return_geojson_result,
     )
 
@@ -745,7 +745,7 @@ def test_result_route_reprojects_geojson_payload_to_wgs84(client: TestClient, mo
         return SaveResultEnvelope(gdf, "GEOJSON")
 
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         return_geojson_result,
     )
 
@@ -788,7 +788,7 @@ def test_result_route_returns_chap_csv_payload(client: TestClient, monkeypatch: 
         return SaveResultEnvelope(ds, "CHAPCSV", {"period_type": "monthly"})
 
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         return_chap_result,
     )
 
@@ -834,7 +834,7 @@ def test_result_route_returns_dhis2_json_payload(client: TestClient, monkeypatch
         )
 
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         return_dhis2_result,
     )
 
@@ -898,7 +898,7 @@ def test_result_route_returns_400_for_missing_dhis2_option(client: TestClient, m
         )
 
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         return_invalid_result,
     )
 
@@ -1015,7 +1015,7 @@ def test_build_chap_csv_frame_requires_location_field() -> None:
 def test_feature_id_field_reads_feature_ids_beside_shapes(requested: str) -> None:
     from shapely.geometry import Point
 
-    from open_climate_service.shared.vectors import feature_id_field
+    from open_geo_service.shared.vectors import feature_id_field
 
     frame = pd.DataFrame({"geometry": [Point(0, 0)], "feature_id": ["OU_A"], "t": ["2024-01"]})
 
@@ -1027,7 +1027,7 @@ def test_feature_id_field_refuses_shapes_as_ids(requested: str) -> None:
     """A time series repeats each shape per period; shapes are never written out as ids."""
     from shapely.geometry import Point
 
-    from open_climate_service.shared.vectors import feature_id_field
+    from open_geo_service.shared.vectors import feature_id_field
 
     shapes = [Point(0, 0), Point(1, 1)]
     column = "regions" if requested == "regions" else "geometry"
@@ -1038,7 +1038,7 @@ def test_feature_id_field_refuses_shapes_as_ids(requested: str) -> None:
 
 
 def test_feature_id_field_keys_on_plain_geometry_labels_without_feature_ids() -> None:
-    from open_climate_service.shared.vectors import feature_id_field
+    from open_geo_service.shared.vectors import feature_id_field
 
     frame = pd.DataFrame({"geometry": ["OU_A", "OU_B"], "t": ["2024-01", "2024-01"]})
 
@@ -1133,7 +1133,7 @@ def test_process_registry_builds_with_full_server_impl_stack() -> None:
     # Triggers the eager import of the full implementation stack.
     importlib.import_module("openeo_processes_dask.process_implementations")
 
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     predefined = _build_process_registry()[("predefined", None)]
     assert predefined  # registry built and non-empty
@@ -1147,7 +1147,7 @@ def test_registry_build_missing_server_dep_raises_actionable_error(monkeypatch: 
     ModuleNotFoundError mid-job (#289)."""
     import importlib
 
-    import open_climate_service.openeo.execution as ex
+    import open_geo_service.openeo.execution as ex
 
     monkeypatch.setattr(ex, "_registry", None)  # bypass the singleton so the import runs
     real_import = importlib.import_module
@@ -1163,7 +1163,7 @@ def test_registry_build_missing_server_dep_raises_actionable_error(monkeypatch: 
 
 
 def test_merge_cubes_wrapper_preserves_named_dataarrays_on_cube_axis() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     reg = _build_process_registry()
     merge = reg["merge_cubes"].implementation
@@ -1186,7 +1186,7 @@ def test_merge_cubes_wrapper_preserves_named_dataarrays_on_cube_axis() -> None:
 
 
 def test_merge_cubes_wrapper_appends_third_named_predictor() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     reg = _build_process_registry()
     merge = reg["merge_cubes"].implementation
@@ -1222,7 +1222,7 @@ def test_merge_cubes_wrapper_appends_third_named_predictor() -> None:
 
 
 def test_merge_cubes_wrapper_combines_three_zonal_datasets_as_chap_csv() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     reg = _build_process_registry()
     merge = reg["merge_cubes"].implementation
@@ -1266,7 +1266,7 @@ def test_merge_cubes_wrapper_combines_three_zonal_datasets_as_chap_csv() -> None
 
 
 def test_merge_cubes_wrapper_rejects_misaligned_predictor_indexes() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     reg = _build_process_registry()
     merge = reg["merge_cubes"].implementation
@@ -1291,7 +1291,7 @@ def test_merge_cubes_wrapper_rejects_misaligned_predictor_indexes() -> None:
 
 @pytest.mark.parametrize("reverse", [False, True])
 def test_merge_cubes_wrapper_combines_two_named_predictor_groups(reverse: bool) -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     predictors = [
@@ -1310,7 +1310,7 @@ def test_merge_cubes_wrapper_combines_two_named_predictor_groups(reverse: bool) 
 
 @pytest.mark.parametrize("missing", ["dimension", "index"])
 def test_merge_cubes_wrapper_does_not_broadcast_missing_predictor_axes(missing: str) -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray(
@@ -1334,7 +1334,7 @@ def test_merge_cubes_wrapper_does_not_broadcast_missing_predictor_axes(missing: 
     [("geometry", ["B", "A"], 0.0), ("y", [2.0, 1.0], 0.0), ("y", [2.0, 1.0], 1e-9)],
 )
 def test_merge_cubes_wrapper_aligns_reordered_predictors(dimension: str, labels: list[Any], noise: float) -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray([10.0, 20.0], dims=dimension, coords={dimension: labels}, name="precip")
@@ -1351,7 +1351,7 @@ def test_merge_cubes_wrapper_aligns_reordered_predictors(dimension: str, labels:
 
 @pytest.mark.parametrize("offset", [1e-9, 1e-4])
 def test_merge_cubes_wrapper_uses_upstream_coordinate_tolerance(offset: float) -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray([1.0, 2.0], dims="x", coords={"x": [10.0, 11.0]}, name="precip")
@@ -1367,7 +1367,7 @@ def test_merge_cubes_wrapper_uses_upstream_coordinate_tolerance(offset: float) -
 
 @pytest.mark.parametrize("extra_side", ["stacked", "third"])
 def test_merge_cubes_wrapper_rejects_extra_index_labels(extra_side: str) -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray([1.0, 2.0], dims="geometry", coords={"geometry": ["A", "B"]}, name="precip")
@@ -1390,7 +1390,7 @@ def test_merge_cubes_wrapper_rejects_extra_index_labels(extra_side: str) -> None
 
 @pytest.mark.parametrize("grouped", [False, True])
 def test_merge_cubes_wrapper_rejects_resolver_when_extending_group(grouped: bool) -> None:
-    from open_climate_service.openeo.execution import _make_named_merge_cubes
+    from open_geo_service.openeo.execution import _make_named_merge_cubes
 
     cube = xr.DataArray([[1.0], [2.0]], dims=("__cubes__", "t"), coords={"__cubes__": ["precip", "t2m"], "t": [0]})
     other = xr.DataArray([3.0], dims="t", coords={"t": [0]}, name="population")
@@ -1407,7 +1407,7 @@ def test_merge_cubes_wrapper_rejects_resolver_when_extending_group(grouped: bool
 def test_merge_cubes_registry_passes_context_and_overlap_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
     import openeo_processes_dask.process_implementations as implementations
 
-    import open_climate_service.openeo.execution as execution
+    import open_geo_service.openeo.execution as execution
 
     captured: dict[str, Any] = {}
     expected = xr.DataArray([3.0], dims="t", coords={"t": [0]})
@@ -1439,7 +1439,7 @@ def test_merge_cubes_registry_passes_context_and_overlap_resolver(monkeypatch: p
 
 
 def test_merge_cubes_wrapper_accepts_equivalent_datetime_units() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     daily = xr.DataArray(
@@ -1463,7 +1463,7 @@ def test_merge_cubes_wrapper_accepts_equivalent_datetime_units() -> None:
 
 @pytest.mark.parametrize("right_scalar", [None, "EPSG:3857"])
 def test_merge_cubes_wrapper_ignores_non_index_scalar_coordinate_differences(right_scalar: str | None) -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray([1.0], dims="t", coords={"t": [0], "spatial_ref": "EPSG:4326"}, name="precip")
@@ -1478,7 +1478,7 @@ def test_merge_cubes_wrapper_ignores_non_index_scalar_coordinate_differences(rig
 
 
 def test_merge_cubes_wrapper_preserves_shared_auxiliary_and_drops_right_only_auxiliary() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray(
@@ -1500,7 +1500,7 @@ def test_merge_cubes_wrapper_preserves_shared_auxiliary_and_drops_right_only_aux
 
 
 def test_merge_cubes_wrapper_accepts_matching_unsorted_duplicate_index() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray([1.0, 2.0, 3.0], dims="t", coords={"t": [1, 0, 1]}, name="precip")
@@ -1512,7 +1512,7 @@ def test_merge_cubes_wrapper_accepts_matching_unsorted_duplicate_index() -> None
 
 
 def test_merge_cubes_wrapper_rejects_different_duplicate_index() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     first = xr.DataArray([1.0, 2.0, 3.0], dims="t", coords={"t": [0, 1, 2]}, name="precip")
@@ -1524,7 +1524,7 @@ def test_merge_cubes_wrapper_rejects_different_duplicate_index() -> None:
 
 
 def test_merge_cubes_wrapper_preserves_same_variable_dataset_type_and_attrs() -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     first = xr.Dataset({"temperature": ("t", [1.0])}, coords={"t": [0]}, attrs={"source": "first"})
@@ -1538,7 +1538,7 @@ def test_merge_cubes_wrapper_preserves_same_variable_dataset_type_and_attrs() ->
 
 @pytest.mark.parametrize("kind", ["unnamed", "duplicate"])
 def test_merge_cubes_wrapper_reports_invalid_third_predictor_name(kind: str) -> None:
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     merge = _build_process_registry()["merge_cubes"].implementation
     cube = xr.DataArray([1.0], dims="t", coords={"t": [0]}, name="precip")
@@ -1631,11 +1631,11 @@ def test_persist_result_writes_icechunk_when_dataset_id_in_options(
     ds = _small_dataset()
     envelope = SaveResultEnvelope(ds, "Zarr", {"dataset_id": "my_aggregate"})
 
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
     registered: list[Any] = []
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: registered.append((record, publish)) or record,
     )
 
@@ -1659,11 +1659,11 @@ def test_persist_result_covers_a_projected_result_in_its_own_crs(
 
     ds = _small_dataset().assign_coords(x=500000 + _small_dataset().x * 1000, y=6000000 + _small_dataset().y * 1000)
     envelope = SaveResultEnvelope(ds.rio.write_crs("EPSG:32633"), "Zarr", {"dataset_id": "utm_aggregate"})
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
     registered: list[Any] = []
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: registered.append(record) or record,
     )
 
@@ -1679,7 +1679,7 @@ def test_persist_result_stamps_cf_attrs_from_template(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """CF attributes from the dataset template are persisted onto the managed store variable (#280)."""
-    from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
+    from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
 
     def _cf_template(dataset_id: str) -> dict[str, Any]:
         return {
@@ -1689,10 +1689,10 @@ def test_persist_result_stamps_cf_attrs_from_template(
             "cell_methods": "time: sum",
         }
 
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _cf_template)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _cf_template)
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: record,
     )
 
@@ -1716,7 +1716,7 @@ def test_persist_result_replaces_a_process_s_labels_with_the_template_s(
 
     Only on the selected variable: another variable in the result keeps its own attributes.
     """
-    from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
+    from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
 
     def _template(dataset_id: str) -> dict[str, Any]:
         return {
@@ -1738,10 +1738,10 @@ def test_persist_result_replaces_a_process_s_labels_with_the_template_s(
     )
     result["wbgt_max"] = result["precip"].copy(deep=True)
     result["wbgt_max"].attrs = {"units": "degC", "standard_name": "air_temperature", "long_name": "Daily maximum WBGT"}
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _template)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _template)
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: record,
     )
 
@@ -1766,11 +1766,11 @@ def test_persist_result_does_not_publish_when_publish_false(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     envelope = SaveResultEnvelope(_small_dataset(), "Zarr", {"dataset_id": "ds", "publish": False})
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
     registered: list[Any] = []
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: registered.append((record, publish)) or record,
     )
 
@@ -1784,11 +1784,11 @@ def test_persist_result_publishes_to_stac_when_publish_true(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     envelope = SaveResultEnvelope(_small_dataset(), "Zarr", {"dataset_id": "ds", "publish": True})
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
     registered: list[Any] = []
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: registered.append((record, publish)) or record,
     )
 
@@ -1802,11 +1802,11 @@ def test_persist_result_uses_icechunk_when_pyramid_needed(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "open_climate_service.data_manager.services.downloader._needs_pyramid",
+        "open_geo_service.data_manager.services.downloader._needs_pyramid",
         lambda ds, x, y: True,
     )
     monkeypatch.setattr(
-        "open_climate_service.data_manager.services.downloader._pyramid_levels",
+        "open_geo_service.data_manager.services.downloader._pyramid_levels",
         lambda ds, x, y: 2,
     )
 
@@ -1825,14 +1825,14 @@ def test_persist_result_uses_icechunk_when_pyramid_needed(
 
     monkeypatch.setattr("topozarr.coarsen.create_pyramid", lambda *a, **kw: _FakePyramid())
     monkeypatch.setattr(
-        "open_climate_service.data_manager.services.downloader._write_root_time_coordinate",
+        "open_geo_service.data_manager.services.downloader._write_root_time_coordinate",
         lambda *a, **kw: None,
     )
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
     registered: list[Any] = []
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: registered.append((record, publish)) or record,
     )
 
@@ -1867,11 +1867,11 @@ def test_persist_result_rejects_dataset_id_with_path_separators(job_service: Ope
 def test_persist_result_rejects_unknown_dataset_id(
     job_service: OpenEOJobService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service import config as api_config
+    from open_geo_service import config as api_config
 
     monkeypatch.setattr(api_config, "_cache", None)
-    monkeypatch.delenv("CLIMATE_SERVICE_CONFIG", raising=False)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", lambda _id: None)
+    monkeypatch.delenv("GEOSERVICE_CONFIG", raising=False)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", lambda _id: None)
     envelope = SaveResultEnvelope(_small_dataset(), "Zarr", {"dataset_id": "no_such_dataset"})
     with pytest.raises(ValueError, match="plugins_dir is not configured"):
         job_service._persist_result("job-unknown", envelope)
@@ -1880,21 +1880,21 @@ def test_persist_result_rejects_unknown_dataset_id(
 def test_persist_result_auto_registers_missing_template(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service import config as api_config
-    from open_climate_service.data_registry.services import datasets as dataset_registry
+    from open_geo_service import config as api_config
+    from open_geo_service.data_registry.services import datasets as dataset_registry
 
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {plugins_dir}\n", encoding="utf-8")
 
     monkeypatch.setattr(api_config, "_cache", None)
     monkeypatch.setattr(dataset_registry, "CONFIGS_DIR", None)
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
     registered: list[Any] = []
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: registered.append((record, publish)) or record,
     )
 
@@ -1931,18 +1931,18 @@ def test_persist_result_auto_registers_missing_template(
 def test_persist_result_reloads_template_after_concurrent_create(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service import config as api_config
-    from open_climate_service.data_registry.services import datasets as dataset_registry
+    from open_geo_service import config as api_config
+    from open_geo_service.data_registry.services import datasets as dataset_registry
 
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {plugins_dir}\n", encoding="utf-8")
 
     monkeypatch.setattr(api_config, "_cache", None)
     monkeypatch.setattr(dataset_registry, "CONFIGS_DIR", None)
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
 
     real_get_dataset = dataset_registry.get_dataset
     real_write_dataset_template = dataset_registry.write_dataset_template
@@ -1962,7 +1962,7 @@ def test_persist_result_reloads_template_after_concurrent_create(
     monkeypatch.setattr(dataset_registry, "get_dataset", _get_dataset)
     monkeypatch.setattr(dataset_registry, "write_dataset_template", _write_dataset_template)
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.register_artifact_record",
+        "open_geo_service.ingestions.services.register_artifact_record",
         lambda record, publish: record,
     )
 
@@ -1989,10 +1989,10 @@ def test_persist_result_rejects_non_boolean_publish_option(
     job_service: OpenEOJobService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     writes: list[int] = []
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr("open_climate_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr("open_geo_service.data_registry.services.datasets.get_dataset", _stub_get_dataset)
     monkeypatch.setattr(
-        "open_climate_service.data_manager.services.downloader.write_to_icechunk_store",
+        "open_geo_service.data_manager.services.downloader.write_to_icechunk_store",
         lambda *args, **kwargs: writes.append(1),
     )
     envelope = SaveResultEnvelope(_small_dataset(), "Zarr", {"dataset_id": "ds", "publish": "false"})
@@ -2055,7 +2055,7 @@ def _axis(ids: list[str]) -> xr.Dataset:
 
 def test_infer_period_type_reads_a_real_dekadal_axis_as_dekadal() -> None:
     """The 32-day monthly bucket used to swallow dekads, mislabelling them monthly."""
-    from open_climate_service.shared.time import dekad_period_ids
+    from open_geo_service.shared.time import dekad_period_ids
 
     assert _infer_period_type(_axis(dekad_period_ids("2026-01-01", "2026-12-31")), "t") == "dekadal"
 
@@ -2192,7 +2192,7 @@ def _reduced_dataset() -> Any:
 @pytest.mark.parametrize("fmt", ["NETCDF", "ZARR"])
 def test_write_xarray_scrubs_attrs_no_writer_can_encode(tmp_path: Path, fmt: str) -> None:
     """netCDF rejects a dict attr outright; Zarr rejects it as non-JSON (CLIM-825)."""
-    from open_climate_service.openeo.jobs import _write_xarray
+    from open_geo_service.openeo.jobs import _write_xarray
 
     output = _write_xarray(_reduced_dataset(), tmp_path, fmt)
 
@@ -2221,7 +2221,7 @@ def test_netcdf_attr_filter_matches_what_the_writer_accepts(
     tmp_path: Path, label: str, value: object, netcdf_can_encode: bool
 ) -> None:
     """The filter must keep exactly what netCDF can write — no more, no less."""
-    from open_climate_service.openeo.jobs import _netcdf_safe_attrs
+    from open_geo_service.openeo.jobs import _netcdf_safe_attrs
 
     ds = xr.Dataset({"v": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])})
     ds.attrs["probe"] = value
@@ -2239,7 +2239,7 @@ def test_netcdf_attr_filter_matches_what_the_writer_accepts(
 
 def test_write_xarray_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None:
     """A dict of plain strings survives a JSON scrub but still breaks to_netcdf."""
-    from open_climate_service.openeo.jobs import _write_xarray
+    from open_geo_service.openeo.jobs import _write_xarray
 
     ds = _reduced_dataset()
     ds.attrs["json_safe_dict"] = {"t": "2025-01-01"}
@@ -2256,7 +2256,7 @@ def test_write_xarray_netcdf_drops_a_json_safe_dict_attr(tmp_path: Path) -> None
 
 def test_write_xarray_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path: Path) -> None:
     """netCDF writes arrays and numpy scalars happily; the JSON scrub would discard them."""
-    from open_climate_service.openeo.jobs import _write_xarray
+    from open_geo_service.openeo.jobs import _write_xarray
 
     ds = _reduced_dataset()
     ds.attrs["valid_range"] = np.array([0.0, 100.0], dtype="float32")
@@ -2275,7 +2275,7 @@ def test_write_xarray_netcdf_keeps_array_attrs_a_json_scrub_would_drop(tmp_path:
 
 def test_write_xarray_keeps_attrs_the_writer_can_encode(tmp_path: Path) -> None:
     """The scrub must drop only what cannot be written, not all metadata."""
-    from open_climate_service.openeo.jobs import _write_xarray
+    from open_geo_service.openeo.jobs import _write_xarray
 
     output = _write_xarray(_reduced_dataset(), tmp_path, "NETCDF")
     assert output is not None
@@ -2292,7 +2292,7 @@ def test_write_xarray_keeps_attrs_the_writer_can_encode(tmp_path: Path) -> None:
 def test_result_route_serves_netcdf_after_reduce_dimension(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The reported symptom: a graph ending in reduce_dimension, exported as NETCDF, 500d."""
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         lambda process, request=None: SaveResultEnvelope(_reduced_dataset(), "NETCDF"),
     )
 
@@ -2319,7 +2319,7 @@ def test_batch_job_with_unwritable_format_errors_without_a_result_asset(
         coords={"y": [1.0, 0.0], "x": [0.0, 1.0]},
     )
     monkeypatch.setattr(
-        "open_climate_service.openeo.execution.run_process_graph",
+        "open_geo_service.openeo.execution.run_process_graph",
         lambda process: SaveResultEnvelope(ds, "GEOJSON"),
     )
 
@@ -2350,7 +2350,7 @@ def test_derived_anomaly_colormap_runs_the_way_the_variable_is_read(units: str, 
     Defaulting every signed output to one direction rendered a temperature anomaly with warm
     in blue, or precipitation with wet in red — plausible-looking maps that invert the reading.
     """
-    from open_climate_service.openeo.jobs import _derive_display_config
+    from open_geo_service.openeo.jobs import _derive_display_config
 
     ds = xr.Dataset(
         {"value": xr.DataArray(np.array([[-1.0, 1.0]], dtype=np.float32), dims=("y", "x"))},
@@ -2365,7 +2365,7 @@ def test_derived_anomaly_colormap_runs_the_way_the_variable_is_read(units: str, 
 def test_a_derived_output_inherits_how_its_source_is_read_but_not_its_range() -> None:
     """A monthly total of daily rainfall seldom spans its source's 0-20 mm; the store's own
     statistics give the range, while the colormap, midpoint and nodata still apply."""
-    from open_climate_service.openeo.jobs import _derive_display_config
+    from open_geo_service.openeo.jobs import _derive_display_config
 
     ds = xr.Dataset({"value": xr.DataArray(np.array([[0.0, 310.0]], dtype=np.float32), dims=("y", "x"))})
     source = {"display": {"colormap": "blues", "range": [0.0, 20.0], "midpoint": 5.0, "nodata": -9999.0}}

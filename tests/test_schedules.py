@@ -13,24 +13,24 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.scheduler import service as scheduler_service
-from open_climate_service.scheduler import store
-from open_climate_service.scheduler.config import (
+from open_geo_service import config as api_config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.scheduler import service as scheduler_service
+from open_geo_service.scheduler import store
+from open_geo_service.scheduler.config import (
     DatasetSyncSchedule,
     SchedulerConfig,
     effective_schedules,
     get_scheduler_config,
 )
-from open_climate_service.scheduler.presets import (
+from open_geo_service.scheduler.presets import (
     cron_from_form,
     form_values,
     schedule_description,
     suggested_frequency,
 )
-from open_climate_service.scheduler.service import SchedulerService
-from open_climate_service.scheduler.store import ScheduleStoreUnreadable, StoredSchedule
+from open_geo_service.scheduler.service import SchedulerService
+from open_geo_service.scheduler.store import ScheduleStoreUnreadable, StoredSchedule
 
 from .conftest import MountedClientFactory
 
@@ -69,7 +69,7 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
     monkeypatch.setattr(api_config, "_cache", {"scheduler": {"enabled": False}})
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: _TEMPLATES.get(dataset_id))
-    import open_climate_service.ingestions.services as ingestion_services
+    import open_geo_service.ingestions.services as ingestion_services
 
     monkeypatch.setattr(
         ingestion_services, "list_datasets", lambda: SimpleNamespace(items=[_dataset("chirps"), _dataset("era5")])
@@ -88,7 +88,7 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 @pytest.fixture
 def client(instance: None) -> TestClient:
-    from open_climate_service.main import app
+    from open_geo_service.main import app
 
     return TestClient(app)
 
@@ -169,8 +169,8 @@ def _fake_scheduler(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     scheduler = MagicMock()
     scheduler.get_jobs.return_value = []
     scheduler.get_job.return_value = None
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     return scheduler
 
 
@@ -466,7 +466,7 @@ def test_api_refuses_what_the_clock_could_not_run(client: TestClient, monkeypatc
 
 
 def test_managed_schedule_uses_its_source_template(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.ingestions.services as ingestion_services
+    import open_geo_service.ingestions.services as ingestion_services
 
     managed = _dataset("managed-era5")
     managed.source_dataset_id = "era5"
@@ -524,7 +524,7 @@ def test_a_saved_schedule_reaches_the_running_clock(client: TestClient, monkeypa
 @pytest.fixture
 def dataset_pages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """The dataset page for era5 and chirps, served the way the app serves it."""
-    import open_climate_service.ingestions.services as ingestion_services
+    import open_geo_service.ingestions.services as ingestion_services
     from tests.test_dataset_page import _record
 
     def record(dataset_id: str) -> Any:
@@ -901,9 +901,9 @@ def test_pages_show_the_checks_of_a_clock_in_another_process(
     dataset_pages: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A process without the clock reports what the clock's process ran (CLIM-1490)."""
-    from open_climate_service.jobs.models import JobRecord, JobStatus
-    from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult
-    from open_climate_service.scheduler.results import SharedResultsStore
+    from open_geo_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.scheduler.dispatcher import CheckOutcome, CheckResult
+    from open_geo_service.scheduler.results import SharedResultsStore
 
     client = dataset_pages
     store.save_schedule(_stored("era5"), create=True)
@@ -939,8 +939,6 @@ def test_pages_show_the_checks_of_a_clock_in_another_process(
         created_at=datetime.now(timezone.utc),
         request={"dataset_id": "era5"},
     )
-    monkeypatch.setattr(
-        "open_climate_service.jobs.store.get_job_record", lambda job_id: job if job_id == "job-9" else None
-    )
+    monkeypatch.setattr("open_geo_service.jobs.store.get_job_record", lambda job_id: job if job_id == "job-9" else None)
     followed = client.get("/ingestions/jobs/job-9")
     assert followed.status_code == 200 and followed.json()["jobID"] == "job-9"

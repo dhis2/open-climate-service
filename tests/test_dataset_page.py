@@ -12,9 +12,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.system import templates as landing
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -53,7 +53,7 @@ def _visible_text(html: str) -> str:
 
 
 def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
-    from open_climate_service.ingestions.schemas import DatasetDetailRecord
+    from open_geo_service.ingestions.schemas import DatasetDetailRecord
 
     values: dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -102,7 +102,7 @@ def test_the_dataset_endpoint_serves_a_page_only_to_clients_that_ask_for_one(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, accept: str, query: str, html: bool
 ) -> None:
     """Scripts that send `*/*` or no Accept header keep the JSON they always got."""
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
     headers = {"Accept": accept} if accept else {}
@@ -123,7 +123,7 @@ def test_both_representations_declare_that_they_vary_by_accept(
     Without `Vary: Accept` a shared proxy can hand an API client the HTML page it cached for a
     browser, which is exactly the JSON compatibility this endpoint promises to keep.
     """
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
 
@@ -144,7 +144,7 @@ def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
     all but the most-synced dataset the table was also a single row. The field stays in the
     JSON, which is an API contract; only the table is gone.
     """
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
 
@@ -212,7 +212,7 @@ def test_an_empty_dataset_list_points_to_the_data_sources(client: TestClient, mo
 
 def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
 
@@ -241,7 +241,7 @@ def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp(monkeypatch: pytes
 
 
 def test_a_dataset_with_a_thumbnail_links_it() -> None:
-    from open_climate_service.shared.thumbnails import thumbnail_path
+    from open_geo_service.shared.thumbnails import thumbnail_path
 
     path = thumbnail_path("rendered_dataset")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,9 +382,9 @@ def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
     collection, since a refresh may only overwrite what its own provider fetched."""
     from types import SimpleNamespace
 
-    from open_climate_service.features import providers as feature_providers
-    from open_climate_service.features import services as feature_services
-    from open_climate_service.features import templates as feature_templates
+    from open_geo_service.features import providers as feature_providers
+    from open_geo_service.features import services as feature_services
+    from open_geo_service.features import templates as feature_templates
 
     template = {"id": "districts", "name": "Districts", "license": "ODbL-1.0"}
     if provider:

@@ -8,9 +8,9 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service.openeo.plugin_processes import load_plugin_processes
-from open_climate_service.plugins.processes.climate_indices import spi
-from open_climate_service.process import get_process_metadata
+from open_geo_service.openeo.plugin_processes import load_plugin_processes
+from open_geo_service.plugins.processes.climate_indices import spi
+from open_geo_service.process import get_process_metadata
 
 
 @pytest.fixture()
@@ -210,7 +210,7 @@ def test_cdd_via_process_graph(client: TestClient, daily_precip: xr.DataArray) -
         result = cdd_fn(pr=daily_precip, thresh="1 mm/day")
         return {"cdd": float(result.mean().item())}  # type: ignore[union-attr]
 
-    with patch("open_climate_service.openeo.execution.run_process_graph", mock_run):
+    with patch("open_geo_service.openeo.execution.run_process_graph", mock_run):
         resp = client.post(
             "/result",
             json={

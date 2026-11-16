@@ -11,22 +11,22 @@ import pytest
 import xarray as xr
 from fastapi import HTTPException
 
-from open_climate_service import config
-from open_climate_service.exports.delivery_input import lease_export_input
-from open_climate_service.exports.manifest import ExportManifest
-from open_climate_service.exports.service import write_named_export
-from open_climate_service.ingestions.schemas import ArtifactFormat
-from open_climate_service.openeo import jobs
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus, OpenEOJobUpdate
-from open_climate_service.pipelines import exports as pipeline_exports
-from open_climate_service.shared.provenance import (
+from open_geo_service import config
+from open_geo_service.exports.delivery_input import lease_export_input
+from open_geo_service.exports.manifest import ExportManifest
+from open_geo_service.exports.service import write_named_export
+from open_geo_service.ingestions.schemas import ArtifactFormat
+from open_geo_service.openeo import jobs
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus, OpenEOJobUpdate
+from open_geo_service.pipelines import exports as pipeline_exports
+from open_geo_service.shared.provenance import (
     capture_execution,
     json_digest,
     record_features,
     record_snapshot,
     record_source,
 )
-from open_climate_service.shared.time import utc_now
+from open_geo_service.shared.time import utc_now
 
 from .conftest import named_exports
 
@@ -111,7 +111,7 @@ def test_changed_bindings_are_conflicts(saved: Path, monkeypatch: pytest.MonkeyP
     elif change == "reference":
         definition["dataset"] = "other"
     elif change == "version":
-        monkeypatch.setattr("open_climate_service.exports.dhis2_renderer.Dhis2ExportPlugin.version", "2")
+        monkeypatch.setattr("open_geo_service.exports.dhis2_renderer.Dhis2ExportPlugin.version", "2")
     else:
         # Construct a fresh manifest with the original graph digest, then change the job graph.
         path = write_named_export(
@@ -212,7 +212,7 @@ def test_lease_blocks_mutation_and_releases_after_exception(saved: Path):
 
 
 def test_failed_publication_keeps_previous_generation(saved: Path, monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.exports import manifest as module
+    from open_geo_service.exports import manifest as module
 
     original = module.atomic_write
     old_metadata = (saved.parent / ".export.json").read_bytes()
@@ -264,7 +264,7 @@ def test_feature_and_snapshot_evidence_is_execution_scoped():
 
 
 def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     artifact = SimpleNamespace(
         path="/source", artifact_id="artifact-1", source_dataset_id="rain", format=ArtifactFormat.ICECHUNK

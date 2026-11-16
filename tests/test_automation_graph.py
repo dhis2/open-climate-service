@@ -9,20 +9,20 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service.automation.graph import AutomationGraph, layout
-from open_climate_service.data_registry.recipes import Recipe
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.derivations import service as derivations
-from open_climate_service.features import services as feature_services
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.main import app
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.pipelines import store as pipeline_store
-from open_climate_service.pipelines.schemas import PipelineRecord, PipelineRun, PipelineSpec
-from open_climate_service.scheduler import service as scheduler_service
-from open_climate_service.scheduler.dispatcher import CheckOutcome
-from open_climate_service.scheduler.schemas import ScheduleListResponse, ScheduleStatus
-from open_climate_service.system.templates import page_nav
+from open_geo_service.automation.graph import AutomationGraph, layout
+from open_geo_service.data_registry.recipes import Recipe
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.derivations import service as derivations
+from open_geo_service.features import services as feature_services
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.main import app
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.pipelines import store as pipeline_store
+from open_geo_service.pipelines.schemas import PipelineRecord, PipelineRun, PipelineSpec
+from open_geo_service.scheduler import service as scheduler_service
+from open_geo_service.scheduler.dispatcher import CheckOutcome
+from open_geo_service.scheduler.schemas import ScheduleListResponse, ScheduleStatus
+from open_geo_service.system.templates import page_nav
 
 CHECKED = datetime(2026, 10, 21, 6, 0, tzinfo=UTC)
 NEXT = datetime(2026, 10, 22, 6, 0, tzinfo=UTC)

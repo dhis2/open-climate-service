@@ -154,7 +154,7 @@ instance named `plugin` in each discoverable module:
 ```python
 import json
 
-from open_climate_service.exports import BaseExportPlugin, RenderedExport
+from open_geo_service.exports import BaseExportPlugin, RenderedExport
 
 
 class SummaryExport(BaseExportPlugin):
@@ -189,7 +189,7 @@ network calls, credential resolution, file writes, or delivery. Keep invocation
 state local because plugin instances may be shared by concurrent jobs.
 
 For an installed package, put the module in `<package>/exports/` and include
-`__init__.py`. Use the same `open_climate_service.plugins` entry point as other
+`__init__.py`. Use the same `open_geo_service.plugins` entry point as other
 [installable plugins](installable_plugins.md). No separate export entry point is
 needed. For an instance, put it in `plugins_dir/exports/`; relative helper imports
 are supported. Prefix helper filenames with `_` so discovery skips them.
@@ -232,8 +232,8 @@ built-in `table` destination does for this instance's own table store.
 
 `context` is a `DestinationContext`: the pipeline's export id, the datasets its workflow binds
 (id, variable, cadence, units) and the feature collections it binds. The built-in DHIS2 plugin
-implements all of them in `open_climate_service/exports/dhis2_destination.py`; the `table`
-destination, which keeps the result as a table dataset, in `open_climate_service/exports/table.py`.
+implements all of them in `open_geo_service/exports/dhis2_destination.py`; the `table`
+destination, which keeps the result as a table dataset, in `open_geo_service/exports/table.py`.
 
 ### Configure the plugin's pipeline settings
 
@@ -243,7 +243,7 @@ validation. `pipeline_settings_form()` only controls presentation. It returns
 overrides:
 
 ```python
-from open_climate_service.exports import (
+from open_geo_service.exports import (
     PipelineSettingsForm,
     SettingsFormField,
     SettingsFormSection,

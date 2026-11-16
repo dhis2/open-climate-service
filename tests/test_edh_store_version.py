@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters import era5_land_normals as era5_land
+from open_geo_service.plugins.rasters import era5_land_normals as era5_land
 
 _STORE = "https://api.earthdatahub.destine.eu/era5/store.zarr"
 
@@ -29,12 +29,12 @@ _STORE = "https://api.earthdatahub.destine.eu/era5/store.zarr"
 def _clean_probe_state(monkeypatch: pytest.MonkeyPatch) -> Any:
     """Start each test with cold caches and an EDH key, and let `caplog` see the package logger.
 
-    `startup.py` sets `propagate = False` on the `open_climate_service` logger so the package
+    `startup.py` sets `propagate = False` on the `open_geo_service` logger so the package
     owns its handler and does not double-log under uvicorn. That also means caplog, which
     attaches at the root, sees nothing — the record is emitted and the assertion still fails.
     Re-enabled per test rather than weakened in the package.
     """
-    package_logger = logging.getLogger("open_climate_service")
+    package_logger = logging.getLogger("open_geo_service")
     previous = package_logger.propagate
     package_logger.propagate = True
     era5_land._edh_is_v3_cache.clear()

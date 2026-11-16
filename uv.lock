@@ -2273,7 +2273,7 @@ wheels = [
 ]
 
 [[package]]
-name = "open-climate-service"
+name = "open-geo-service"
 version = "0.1.1"
 source = { editable = "." }
 dependencies = [

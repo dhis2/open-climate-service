@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.openeo import earthkit_processes
-from open_climate_service.openeo.plugin_processes import load_plugin_processes
-from open_climate_service.process import get_process_metadata
+from open_geo_service.openeo import earthkit_processes
+from open_geo_service.openeo.plugin_processes import load_plugin_processes
+from open_geo_service.process import get_process_metadata
 
 
 def _cube(value: float, units: str | None, name: str = "var") -> xr.DataArray:
@@ -98,7 +98,7 @@ def test_resolvable_and_callable_through_the_openeo_execution_registry() -> None
     A process graph reaches the implementation via ``registry[process_id]``, so this is the
     path that decides whether the process is actually usable rather than merely advertised.
     """
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     execution._registry = None  # the registry is a module-level singleton
     try:
@@ -113,7 +113,7 @@ def test_resolvable_and_callable_through_the_openeo_execution_registry() -> None
 
 
 def test_ids_do_not_collide_with_xclim_or_standard_processes() -> None:
-    from open_climate_service.openeo import xclim_processes
+    from open_geo_service.openeo import xclim_processes
 
     earthkit_ids = {get_process_metadata(f)["id"] for f in earthkit_processes.scan()}  # type: ignore[index]
     xclim_ids = {get_process_metadata(f)["id"] for f in xclim_processes.scan()}  # type: ignore[index]

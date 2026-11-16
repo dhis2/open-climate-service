@@ -11,14 +11,14 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.data_registry import recipes
-from open_climate_service.data_registry.recipes import Recipe
-from open_climate_service.derivations import service as derivations
-from open_climate_service.jobs import dispatch
-from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo import workflows
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.data_registry import recipes
+from open_geo_service.data_registry.recipes import Recipe
+from open_geo_service.derivations import service as derivations
+from open_geo_service.jobs import dispatch
+from open_geo_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo import workflows
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 from tests.test_managed_publish_units import managed_instance  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from tests.test_openeo_publication_events import (
     _DATASET,
@@ -153,7 +153,7 @@ class _Instance:
 
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _Instance:
-    from open_climate_service.jobs import events as job_events
+    from open_geo_service.jobs import events as job_events
 
     state = _Instance()
     monkeypatch.setattr(derivations.api_config, "get_data_root", lambda: tmp_path)
@@ -228,7 +228,7 @@ def test_a_refresh_loads_a_feature_collection_bound_by_id_at_its_current_version
 ) -> None:
     from types import SimpleNamespace
 
-    from open_climate_service.features import services as feature_services
+    from open_geo_service.features import services as feature_services
 
     refreshed = datetime(2026, 9, 1, 6, tzinfo=UTC)
     monkeypatch.setattr(
@@ -278,7 +278,7 @@ def test_a_caller_held_before_the_lock_refreshes_the_update_that_arrived_meanwhi
     range after B arrived, and publishing that would shrink the dataset's coverage."""
     from contextlib import contextmanager
 
-    from open_climate_service.shared import persistence
+    from open_geo_service.shared import persistence
 
     instance.created.add("rain_anomaly")
     waiting, release = threading.Event(), threading.Event()
@@ -352,10 +352,10 @@ def test_an_input_update_refreshes_the_derived_dataset_and_its_pipeline_hears_of
     and `test_run_once_stores_its_intent_first_and_delivers_once` in test_pipelines.py.
     """
     first_process = request.getfixturevalue("service")
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobRecord, JobStatus
-    from open_climate_service.pipelines import runner
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.pipelines import runner
+    from open_geo_service.shared.time import utc_now
 
     recipe = replace(_ANOMALY, output=_DATASET)
     monkeypatch.setattr(derivations, "list_recipes", lambda: [recipe])

@@ -14,8 +14,8 @@ import xarray as xr
 from rasterio.enums import Resampling
 from shapely.geometry import box
 
-from open_climate_service.openeo import execution
-from open_climate_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
+from open_geo_service.openeo import execution
+from open_geo_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
 
 
 def _lonlat_grid() -> xr.DataArray:
@@ -70,7 +70,7 @@ def test_a_raster_in_metres_read_as_degrees_warns(aggregate: Any, caplog: pytest
     untagged = _lonlat_grid().rio.reproject("EPSG:3857", nodata=np.nan).drop_vars("spatial_ref")
     assert untagged.rio.crs is None
 
-    with caplog.at_level("WARNING", logger="open_climate_service.shared.vectors"):
+    with caplog.at_level("WARNING", logger="open_geo_service.shared.vectors"):
         result = aggregate(untagged, _DISTRICTS)
     assert all(np.isnan(value) for value in _by_id(result).values())
     assert "None of the 2 geometries overlaps the raster" in caplog.text
@@ -83,7 +83,7 @@ def test_geometries_that_miss_the_raster_warn_naming_both_crses(
     projected = _lonlat_grid().rio.reproject("EPSG:3857", nodata=np.nan)
     elsewhere = {"type": "Feature", "id": "far", "properties": {}, "geometry": box(10, 50, 11, 51).__geo_interface__}
 
-    with caplog.at_level("WARNING", logger="open_climate_service.shared.vectors"):
+    with caplog.at_level("WARNING", logger="open_geo_service.shared.vectors"):
         result = aggregate(projected, elsewhere)
     assert np.isnan(_by_id(result)["far"])
     assert re.search(r"None of the 1 geometries overlaps the raster.*EPSG:4326.*EPSG:3857", caplog.text)

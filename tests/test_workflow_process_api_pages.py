@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.system import templates as landing
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -23,7 +23,7 @@ def _template(template_id: str, **fields: Any) -> dict[str, Any]:
 
 
 def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
-    from open_climate_service.ingestions.schemas import DatasetDetailRecord
+    from open_geo_service.ingestions.schemas import DatasetDetailRecord
 
     values: dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -88,7 +88,7 @@ def _visible_text(html: str) -> str:
 
 
 def _workflow_record(**fields: Any) -> Any:
-    from open_climate_service.openeo.schemas import WorkflowRecord
+    from open_geo_service.openeo.schemas import WorkflowRecord
 
     values: dict[str, Any] = {
         "id": "aggregate_to_chap_csv",
@@ -133,7 +133,7 @@ def test_workflow_descriptions_are_escaped() -> None:
 
 
 def test_the_workflow_page_lists_outputs_and_the_datasets_it_keeps_current() -> None:
-    from open_climate_service.data_registry.recipes import Recipe
+    from open_geo_service.data_registry.recipes import Recipe
 
     record = _workflow_record(id="climate_normal")
     templates = [
@@ -198,7 +198,7 @@ def test_processes_are_tagged_with_their_origin() -> None:
 
 
 def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
+    from open_geo_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
 
     def indicator() -> None: ...
 

@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from shapely.geometry import GeometryCollection, Point, Polygon, mapping
 
-from open_climate_service.ingestions import services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service.ingestions import services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -27,8 +27,8 @@ from open_climate_service.ingestions.schemas import (
     FeatureDetail,
     PublicationStatus,
 )
-from open_climate_service.openeo import execution as openeo_execution
-from open_climate_service.stac import services as stac_services
+from open_geo_service.openeo import execution as openeo_execution
+from open_geo_service.stac import services as stac_services
 
 BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 

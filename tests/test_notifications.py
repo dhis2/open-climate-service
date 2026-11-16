@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service.jobs.models import AUTOMATION_FAILED_EVENT_TYPE, AUTOMATION_SUCCEEDED_EVENT_TYPE, JobEvent
-from open_climate_service.notifications import webhook as notifications
+from open_geo_service import config as api_config
+from open_geo_service.jobs.models import AUTOMATION_FAILED_EVENT_TYPE, AUTOMATION_SUCCEEDED_EVENT_TYPE, JobEvent
+from open_geo_service.notifications import webhook as notifications
 
 from .conftest import WebhookReceiver
 
@@ -47,7 +47,7 @@ def _outcome(pipeline_id: str, number: int, clock: _Clock, *, failed: bool) -> J
 def test_replay_starts_delivery_without_posting_in_the_startup_thread(
     clock: _Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import events as job_events
+    from open_geo_service.jobs import events as job_events
 
     kicked: list[bool] = []
     monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ocs")
@@ -63,7 +63,7 @@ def test_replay_starts_delivery_without_posting_in_the_startup_thread(
 def test_replay_reconstructs_transitions_when_an_older_failure_appears_late(
     clock: _Clock, webhook: WebhookReceiver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import events as job_events
+    from open_geo_service.jobs import events as job_events
 
     # Startup established the notification boundary before either outcome.
     notifications._decide([], since=clock.now)
@@ -116,7 +116,7 @@ def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_i
     again after the next failure is dropped, and must not count as that failure's ending. A
     failure dropped while its recovery and a newer failure wait behind it takes only the
     recovery: the newer episode is still posted."""
-    from open_climate_service.jobs import events as job_events
+    from open_geo_service.jobs import events as job_events
 
     log: list[JobEvent] = []
     monkeypatch.setattr(job_events, "persisted_events", lambda: list(log))
@@ -177,7 +177,7 @@ def test_a_refused_automation_holds_up_only_itself_and_a_dropped_failure_takes_i
 def test_links_name_the_public_root_and_the_deployment_prefix(
     clock: _Clock, webhook: WebhookReceiver, monkeypatch: pytest.MonkeyPatch, base_url: str, root_path: str, link: str
 ) -> None:
-    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", base_url)
+    monkeypatch.setenv("GEOSERVICE_BASE_URL", base_url)
     monkeypatch.setenv("ROOT_PATH", root_path)
     notifications.consume([_outcome("rain", 1, clock, failed=True)])
 

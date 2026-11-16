@@ -51,14 +51,14 @@ data_dir: ./data
 
 def _use_temporary_instance(root: Path) -> Path:
     """Point OCS at an instance under *root*, before anything from it is imported; returns its data root."""
-    config = root / "climate-service.yaml"
+    config = root / "geoservice.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
-    os.environ["CLIMATE_SERVICE_CONFIG"] = str(config)
+    os.environ["GEOSERVICE_CONFIG"] = str(config)
     return root / "data"
 
 
 def _write_store(root: Path) -> tuple[Path, list[str]]:
-    from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+    from open_geo_service.data_manager.services.downloader import write_to_icechunk_store
 
     times = pd.date_range("2023-01-01", periods=1096, freq="D")
     ds = xr.Dataset(
@@ -79,8 +79,8 @@ def _write_store(root: Path) -> tuple[Path, list[str]]:
 
 
 def _register(store_path: Path) -> None:
-    from open_climate_service.ingestions import services
-    from open_climate_service.ingestions.schemas import (
+    from open_geo_service.ingestions import services
+    from open_geo_service.ingestions.schemas import (
         ArtifactCoverage,
         ArtifactFormat,
         ArtifactPublication,
@@ -119,7 +119,7 @@ def _register(store_path: Path) -> None:
 
 
 def _serve() -> tuple[str, uvicorn.Server, threading.Thread]:
-    from open_climate_service.main import app
+    from open_geo_service.main import app
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))

@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters import era5_land_normals as cn
-from open_climate_service.plugins.rasters.era5_land_normals import ERA5LandNormalsPlugin
+from open_geo_service.plugins.rasters import era5_land_normals as cn
+from open_geo_service.plugins.rasters.era5_land_normals import ERA5LandNormalsPlugin
 
 
 def _synthetic_region(*, var: str = "t2m", time_dim: str = "valid_time", years: tuple[str, str] = ("1991", "1992")):
@@ -128,7 +128,7 @@ def test_param_validation_rejects_malformed_period() -> None:
 def test_plugin_declares_dayofyear_stepping_dimension() -> None:
     # After the BaseDatasetPlugin migration the orchestrator reads time_dim from the
     # class attribute (probe() is gone), so it must point at the dayofyear axis.
-    from open_climate_service.streaming import BaseDatasetPlugin
+    from open_geo_service.streaming import BaseDatasetPlugin
 
     plugin = _edh_plugin()
     assert isinstance(plugin, BaseDatasetPlugin)

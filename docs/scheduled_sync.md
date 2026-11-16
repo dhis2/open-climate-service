@@ -1,13 +1,13 @@
 # Scheduled dataset synchronization
 
-Open Climate Service can periodically check whether an existing managed dataset has new
+Open Geo Service can periodically check whether an existing managed dataset has new
 source periods and submit an asynchronous sync job when work is required. The scheduler is
 a clock only: planning, retries, execution, progress, and restart recovery remain owned by
 the native OCS job service.
 
 ## Configure schedules
 
-`climate-service.yaml` controls whether the instance clock runs and its timezone:
+`geoservice.yaml` controls whether the instance clock runs and its timezone:
 
 ```yaml
 scheduler:
@@ -167,11 +167,11 @@ are follow-up work for the persistent job-store implementation.
 ## Failure alerts
 
 OCS can post to a webhook when a scheduled sync or a pipeline starts failing, and again when
-that ends. Set the URL in `climate-service.yaml`:
+that ends. Set the URL in `geoservice.yaml`:
 
 ```yaml
 notifications:
-  webhook_url: ${OCS_WEBHOOK_URL}
+  webhook_url: ${GEOSERVICE_WEBHOOK_URL}
 ```
 
 OCS sends an HTTP JSON POST. A directly compatible receiver displays the `text` field, ignores
@@ -220,7 +220,7 @@ The body is JSON, posted with the header `Idempotency-Key` set to the outcome's 
 failure, which is not a success; only pipelines have this). A receiver that only opens and closes
 alerts can treat `recovered` and `resolved` alike. `automation` is `pipeline` or `schedule`; a scheduled sync
 names its `job` instead of a `run`. `text` is the one-line summary that chat tools show. Links
-are absolute when `CLIMATE_SERVICE_BASE_URL` is set, and paths otherwise; either way they carry
+are absolute when `GEOSERVICE_BASE_URL` is set, and paths otherwise; either way they carry
 the deployment prefix, the base URL's path or else `ROOT_PATH`.
 
 The outcomes are durable events, persisted with the job or run that reached them, and each alert

@@ -18,7 +18,7 @@ pytest.importorskip("topozarr")
 pytest.importorskip("rioxarray")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.data_manager.services.downloader import (  # noqa: E402
+from open_geo_service.data_manager.services.downloader import (  # noqa: E402
     _coarsen_native,
     _normalize_resampling_method,
     needs_pyramid,
@@ -122,7 +122,7 @@ def test_nearest_is_delegated_to_topozarr() -> None:
     (what topozarr does) and level-from-native (what OCS used to do) agree. Verified
     byte-identical across a real 3-level pyramid when the delegation was made.
     """
-    from open_climate_service.data_manager.services.downloader import (
+    from open_geo_service.data_manager.services.downloader import (
         _COMPOSABLE_METHODS,
         _NATIVE_RESAMPLE_METHODS,
     )

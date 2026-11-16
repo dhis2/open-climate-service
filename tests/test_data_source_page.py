@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.system import templates as landing
 
 # What a browser sends: `text/html` ahead of anything else.
 BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -58,7 +58,7 @@ def _visible_text(html: str) -> str:
 
 
 def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
-    from open_climate_service.ingestions.schemas import DatasetDetailRecord
+    from open_geo_service.ingestions.schemas import DatasetDetailRecord
 
     values: dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -169,7 +169,7 @@ def test_the_display_range_is_shown_as_the_template_states_it(display: dict[str,
 
 
 def test_every_statistic_a_range_can_name_has_hover_text() -> None:
-    from open_climate_service.ingestions.schemas import ArtifactStatistics
+    from open_geo_service.ingestions.schemas import ArtifactStatistics
 
     assert set(landing.STATISTIC_TITLES) == set(ArtifactStatistics.model_fields)
 
@@ -370,7 +370,7 @@ def test_the_old_dataset_templates_paths_are_gone(client: TestClient, path: str)
 
 def test_every_api_group_has_a_note() -> None:
     """The /api page explains each group by its OpenAPI tag, so a renamed tag needs its note renamed."""
-    from open_climate_service.main import app
+    from open_geo_service.main import app
 
     tags = {tag for item in app.openapi()["paths"].values() for op in item.values() for tag in op.get("tags", [])}
 

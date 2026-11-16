@@ -14,11 +14,11 @@ import dask.config
 import dask.threaded
 import pytest
 
-from open_climate_service.jobs.models import JobRecord, JobStatus
-from open_climate_service.jobs.service import JobService, ThreadProcessExecutor
-from open_climate_service.openeo.jobs import OpenEOJobService
-from open_climate_service.shared import compute
-from open_climate_service.shared.compute import JobSlots, SharedDaskPool
+from open_geo_service.jobs.models import JobRecord, JobStatus
+from open_geo_service.jobs.service import JobService, ThreadProcessExecutor
+from open_geo_service.openeo.jobs import OpenEOJobService
+from open_geo_service.shared import compute
+from open_geo_service.shared.compute import JobSlots, SharedDaskPool
 
 _ran = threading.Event()
 _release = threading.Event()
@@ -68,18 +68,18 @@ _REAL_ENQUEUE = JobService._enqueue_job
 @pytest.fixture
 def persisted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, JobRecord]:
     records: dict[str, JobRecord] = {}
-    monkeypatch.setattr("open_climate_service.jobs.store.JOBS_DIR", tmp_path / "jobs")  # execution leases
-    monkeypatch.setattr("open_climate_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
+    monkeypatch.setattr("open_geo_service.jobs.store.JOBS_DIR", tmp_path / "jobs")  # execution leases
+    monkeypatch.setattr("open_geo_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
     monkeypatch.setattr(
-        "open_climate_service.jobs.store.create_job_record", lambda record: records.setdefault(record.job_id, record)
+        "open_geo_service.jobs.store.create_job_record", lambda record: records.setdefault(record.job_id, record)
     )
-    monkeypatch.setattr("open_climate_service.jobs.store.get_job_record", lambda job_id: records.get(job_id))
+    monkeypatch.setattr("open_geo_service.jobs.store.get_job_record", lambda job_id: records.get(job_id))
 
     def mutate(job_id: str, mutation: Callable[[JobRecord], JobRecord]) -> JobRecord:
         records[job_id] = mutation(records[job_id])
         return records[job_id]
 
-    monkeypatch.setattr("open_climate_service.jobs.store.mutate_job_record", mutate)
+    monkeypatch.setattr("open_geo_service.jobs.store.mutate_job_record", mutate)
     monkeypatch.setattr(compute, "_SLOT_POLL_SECONDS", 0.05)
     return records
 
@@ -375,7 +375,7 @@ def _failed_once_and_backing_off(
     """A job whose first attempt failed, left waiting out a `delay`-second backoff."""
     enqueued: list[str] = []
     monkeypatch.setattr(JobService, "_enqueue_job", lambda self, job_id: enqueued.append(job_id))
-    monkeypatch.setattr("open_climate_service.jobs.service._retry_delay_seconds", lambda attempt: delay)
+    monkeypatch.setattr("open_geo_service.jobs.service._retry_delay_seconds", lambda attempt: delay)
     service = JobService()
     job = service.submit_callable_job(func=_fails_once_callable, label="sync", request={}, max_attempts=2)
     enqueued.clear()
@@ -429,7 +429,7 @@ def test_a_cancellation_that_beats_the_timer_still_ends_the_job(
     cancellation must not be refused as a duplicate of the worker that is still finishing.
     """
     monkeypatch.setattr(JobService, "_enqueue_job", _REAL_ENQUEUE)
-    monkeypatch.setattr("open_climate_service.jobs.service._retry_delay_seconds", lambda attempt: 60)
+    monkeypatch.setattr("open_geo_service.jobs.service._retry_delay_seconds", lambda attempt: 60)
     original = JobService._schedule_retry
 
     def cancel_first(self: JobService, job_id: str, seconds: int) -> None:
@@ -463,11 +463,11 @@ def queued_openeo_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`openeo-1` reads as QUEUED and due, so `_run_job` hands it to `_execute` under its lease."""
     from types import SimpleNamespace
 
-    from open_climate_service.openeo.schemas import OpenEOJobStatus
+    from open_geo_service.openeo.schemas import OpenEOJobStatus
 
-    monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path / "openeo_jobs")
+    monkeypatch.setattr("open_geo_service.openeo.jobs._JOBS_DIR", tmp_path / "openeo_jobs")
     monkeypatch.setattr(
-        "open_climate_service.openeo.jobs.store_get_job",
+        "open_geo_service.openeo.jobs.store_get_job",
         lambda job_id: SimpleNamespace(status=OpenEOJobStatus.QUEUED, retry_at=None, cancel_requested=False),
     )
 
@@ -483,7 +483,7 @@ def test_openeo_and_native_jobs_share_the_slots(
     openeo = OpenEOJobService(max_workers=1)
     executed: list[str] = []
     monkeypatch.setattr(openeo, "_execute", executed.append)
-    monkeypatch.setattr("open_climate_service.openeo.jobs._cancel_requested", lambda job_id: False)
+    monkeypatch.setattr("open_geo_service.openeo.jobs._cancel_requested", lambda job_id: False)
     openeo_runner = _run_in_background(lambda: openeo._run_job("openeo-1"))
     time.sleep(0.2)
     assert executed == [], "the openEO job ran while the ingest held the only slot"
@@ -503,7 +503,7 @@ def test_an_openeo_job_cancelled_while_waiting_is_recorded_without_a_slot(
     openeo = OpenEOJobService(max_workers=1)
     executed: list[str] = []
     monkeypatch.setattr(openeo, "_execute", executed.append)
-    monkeypatch.setattr("open_climate_service.openeo.jobs._cancel_requested", lambda job_id: True)
+    monkeypatch.setattr("open_geo_service.openeo.jobs._cancel_requested", lambda job_id: True)
 
     openeo._run_job("openeo-1")
 
@@ -521,7 +521,7 @@ def test_an_openeo_job_still_waiting_at_shutdown_is_left_queued(
     openeo = OpenEOJobService(max_workers=1)
     executed: list[str] = []
     monkeypatch.setattr(openeo, "_execute", executed.append)
-    monkeypatch.setattr("open_climate_service.openeo.jobs._cancel_requested", lambda job_id: False)
+    monkeypatch.setattr("open_geo_service.openeo.jobs._cancel_requested", lambda job_id: False)
 
     runner = _run_in_background(lambda: openeo._run_job("openeo-1"))
     time.sleep(0.1)
