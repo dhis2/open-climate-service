@@ -13,6 +13,6 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: uv build --no-sources
       - uses: pypa/gh-action-pypi-publish@release/v1
