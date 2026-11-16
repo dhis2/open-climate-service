@@ -332,7 +332,7 @@ def _as_utc(value: datetime) -> datetime:
 
 def triggered_job_id(source_event_id: str, trigger_id: str) -> str:
     """The deterministic id of the one job a durable event and trigger may create."""
-    return str(uuid5(NAMESPACE_URL, f"ocs:{source_event_id}:{trigger_id}"))
+    return str(uuid5(NAMESPACE_URL, f"geoservice:{source_event_id}:{trigger_id}"))
 
 
 class OpenEOJobService:
@@ -1494,9 +1494,8 @@ def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobReco
     if publication.state == "completed":
         return job
     planned = ArtifactRecord.model_validate(publication.record)
-    provenance = (planned.provenance or ArtifactProvenance(producer_job_id=job_id, ocs_version=__version__)).model_copy(
-        update={"output_snapshot_id": snapshot_id}
-    )
+    provenance = planned.provenance or ArtifactProvenance(producer_job_id=job_id, geoservice_version=__version__)
+    provenance = provenance.model_copy(update={"output_snapshot_id": snapshot_id})
     record = planned.model_copy(
         update={**_measured_after_commit(Path(publication.store_path), planned.variable), "provenance": provenance}
     )
@@ -1752,7 +1751,7 @@ def _write_managed_zarr(
         # The execution evidence as the graph produced it; the output snapshot is added once
         # the commit has landed.
         provenance=(
-            ArtifactProvenance(producer_job_id=job_id, execution=provenance, ocs_version=__version__)
+            ArtifactProvenance(producer_job_id=job_id, execution=provenance, geoservice_version=__version__)
             if job_id is not None
             else None
         ),

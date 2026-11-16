@@ -1977,8 +1977,8 @@ def test_recover_interrupted_swap_removes_stale_ingest_rollback_branches(tmp_pat
     target = tmp_path / "ds.icechunk"
     repo = open_or_create_repo(target)
     snapshot = repo.lookup_branch("main")
-    repo.create_branch("ocs-ingest-rollback-first", snapshot)
-    repo.create_branch("ocs-ingest-rollback-second", snapshot)
+    repo.create_branch("geoservice-ingest-rollback-first", snapshot)
+    repo.create_branch("geoservice-ingest-rollback-second", snapshot)
 
     assert recover_interrupted_swap(target) is True
     assert repo.list_branches() == {"main"}
@@ -2182,7 +2182,7 @@ def _rolled_back_store(target: Path) -> Any:
     repo = open_or_create_repo(target)
     _commit_days(repo, range(0, 3), "seed")
     before = repo.lookup_branch("main")
-    repo.create_branch("ocs-ingest-rollback-attempt", before)
+    repo.create_branch("geoservice-ingest-rollback-attempt", before)
     for day in range(3, 13):
         _commit_days(repo, range(day, day + 1), f"append {day}")
     repo.reset_branch("main", before)
@@ -2230,7 +2230,7 @@ def test_collecting_unreachable_objects_frees_a_rolled_back_attempt(tmp_path: Pa
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("geoservice-ingest-rollback-attempt")
     before = _chunk_files(target)
 
     collect_unreachable_objects(repo, target)
@@ -2297,7 +2297,7 @@ def test_a_collection_left_pending_frees_the_attempt_once_due(tmp_path: Path, sh
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("geoservice-ingest-rollback-attempt")
     before = _chunk_files(target)
 
     services.collect_unreachable_objects(repo, target)
@@ -2318,7 +2318,7 @@ def test_the_next_ingest_runs_a_pending_collection(tmp_path: Path, short_retenti
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("geoservice-ingest-rollback-attempt")
     before = _chunk_files(target)
     services._mark_collection_pending(target)
     time.sleep(short_retention)
@@ -2336,7 +2336,7 @@ def test_the_sweep_skips_a_store_an_ingest_holds(tmp_path: Path, short_retention
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("geoservice-ingest-rollback-attempt")
     services._mark_collection_pending(target)
     time.sleep(short_retention)
     lock = services._acquire_store_lock(target)

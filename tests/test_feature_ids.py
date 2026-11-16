@@ -57,7 +57,7 @@ def _openeo_aggregate_spatial(data: Any, geometries: Any, reducer: Any, **_: Any
     return attach_feature_ids(result, frame.index, "geometry")
 
 
-@pytest.fixture(params=["ocs", "openeo"])
+@pytest.fixture(params=["ogs", "openeo"])
 def service(
     request: pytest.FixtureRequest,
     instance: openeo_jobs.OpenEOJobService,  # noqa: F811

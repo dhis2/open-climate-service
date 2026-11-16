@@ -146,7 +146,7 @@ class ArtifactPublication(BaseModel):
     published_at: datetime | None = None
 
 
-OCS_AUTHORITY = "ocs"
+GEOSERVICE_AUTHORITY = "ocs"
 """Version authority for a release Open Geo Service defines itself.
 
 A constant rather than a literal at each site, so the path that stamps a derived dataset's
@@ -461,7 +461,9 @@ class ArtifactProvenance(BaseModel):
     output_snapshot_id: str | None = Field(
         default=None, description="Id of the Icechunk snapshot the producing job committed."
     )
-    ocs_version: str | None = Field(default=None, description="Version of Open Geo Service that ran the producing job.")
+    geoservice_version: str | None = Field(
+        default=None, description="Version of Open Geo Service that ran the producing job."
+    )
     execution: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -775,7 +777,7 @@ class DatasetProvenance(BaseModel):
     producer_job_id: str = Field(description="Id of the openEO job whose save_result produced the dataset.")
     producer_job_href: str = Field(description="Relative API path of the producing job.")
     process_sha256: str | None = Field(default=None, description="Digest of the process graph the job ran.")
-    ocs_version: str | None = Field(default=None, description="Version of Open Geo Service that ran the job.")
+    geoservice_version: str | None = Field(default=None, description="Version of Open Geo Service that ran the job.")
     output_snapshot_id: str | None = Field(default=None, description="Icechunk snapshot the job committed.")
     inputs: list[DatasetInput] = Field(default_factory=list, description="Datasets the job read.")
 

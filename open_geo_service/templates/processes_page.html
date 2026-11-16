@@ -60,7 +60,7 @@
                 <h3><a class="item-link" href="{{ mount }}/processes/{{ p.id }}"><code>{{ p.id }}</code></a></h3>
                 {% if p.summary %}<p class="description clamp">{{ p.summary }}</p>{% endif %}
                 <div class="meta">
-                  <span class="chip{% if p.origin == 'ocs' %} chip-output{% endif %}">{{ p.origin_label }}</span>
+                  <span class="chip{% if p.origin == 'geoservice' %} chip-output{% endif %}">{{ p.origin_label }}</span>
                   {% for category in p.categories %}<span class="chip">{{ category }}</span>{% endfor %}
                 </div>
               </div>

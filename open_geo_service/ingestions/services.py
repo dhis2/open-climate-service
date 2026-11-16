@@ -1400,7 +1400,7 @@ def _create_streaming_artifact(
             # so a retry can resume instead of downloading successful periods again.
             repo = open_or_create_repo(store_path)
             snapshot = repo.lookup_branch("main")
-            branch = f"ocs-ingest-rollback-{uuid4().hex}"
+            branch = f"geoservice-ingest-rollback-{uuid4().hex}"
             repo.create_branch(branch, snapshot)
             rollback_repo = repo
             rollback_snapshot = snapshot
@@ -1662,7 +1662,9 @@ def recover_interrupted_swap(target: Path) -> bool:
     if target.exists() and (target / "repo").exists():
         try:
             repo = open_or_create_repo(target)
-            stale_branches = [branch for branch in repo.list_branches() if branch.startswith("ocs-ingest-rollback-")]
+            stale_branches = [
+                branch for branch in repo.list_branches() if branch.startswith("geoservice-ingest-rollback-")
+            ]
             for branch in stale_branches:
                 repo.delete_branch(branch)
             if stale_branches:
@@ -3140,7 +3142,7 @@ def dataset_provenance(record: ArtifactRecord) -> DatasetProvenance | None:
         producer_job_id=provenance.producer_job_id,
         producer_job_href=f"/jobs/{_segment(provenance.producer_job_id)}",
         process_sha256=process_sha256 if isinstance(process_sha256, str) else None,
-        ocs_version=provenance.ocs_version,
+        geoservice_version=provenance.geoservice_version,
         output_snapshot_id=provenance.output_snapshot_id,
         inputs=inputs,
     )

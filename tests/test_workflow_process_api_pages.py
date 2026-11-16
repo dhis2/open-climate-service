@@ -190,11 +190,11 @@ def test_processes_are_tagged_with_their_origin() -> None:
 
     assert processes["load_collection"]["origin"] == "core"
     assert processes["add"]["origin"] == "core"
-    assert processes["spi"]["origin"] == "ocs"
+    assert processes["spi"]["origin"] == "geoservice"
     assert {"xclim", "earthkit"} <= {p["origin"] for p in processes.values()}
     # OGS first, openEO core last, so the default view leads with what is specific to OGS.
     origins = [p["origin"] for p in processes.values()]
-    assert origins[0] == "ocs" and origins[-1] == "core"
+    assert origins[0] == "geoservice" and origins[-1] == "core"
 
 
 def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -209,7 +209,7 @@ def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.Monk
     monkeypatch.setattr(earthkit_processes, "scan", lambda: [])
     monkeypatch.setattr(plugin_processes, "load_plugin_processes", lambda: [("tg_mean", override)])
 
-    assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "ocs", "abs": "core"}
+    assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "geoservice", "abs": "core"}
 
 
 # --- the process page --------------------------------------------------------------------

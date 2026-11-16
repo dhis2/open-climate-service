@@ -169,7 +169,7 @@ def _read_asset(name: str) -> str:
 # that size because it is three shapes. Inlined into the page rather than linked, so it costs no
 # request and works offline — the rationale lives here rather than in the file, because an XML
 # comment in the file would be served to every viewer.
-LOGO = Markup(_read_asset("ocs_logo.svg"))
+LOGO = Markup(_read_asset("geoservice_logo.svg"))
 
 _NAV_ITEMS = (
     ("overview", "Overview", "/"),
@@ -499,7 +499,7 @@ def _dataset_page_context(
                 for item in provenance.inputs
             ),
             ("Process graph digest", provenance.process_sha256 or "", None),
-            ("Open Geo Service version", provenance.ocs_version or "", None),
+            ("Open Geo Service version", provenance.geoservice_version or "", None),
         ]
 
     return {
@@ -621,9 +621,9 @@ def render_dataset_page(
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "datasets"),
-        job_script=_read_asset("ocs_jobs.js"),
+        job_script=_read_asset("geoservice_jobs.js"),
         read_only=api_config.is_read_only(),
         **_dataset_page_context(record, template, refreshable, refresh_blocked),
     )
@@ -652,7 +652,7 @@ def render_schedules_page(status: Any, mount: str, *, change_warning: str | None
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "automation"),
         automation_tabs=automation_tabs(mount, "schedules"),
         read_only=api_config.is_read_only(),
@@ -669,7 +669,7 @@ def render_schedule_delete_page(dataset_id: str, mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "automation"),
         dataset_id=dataset_id,
     )
@@ -879,9 +879,9 @@ def render_data_source_page(template: dict[str, Any], mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "data-sources"),
-        job_script=_read_asset("ocs_jobs.js"),
+        job_script=_read_asset("geoservice_jobs.js"),
         **_data_source_page_context(
             template,
             _load_datasets(),
@@ -952,9 +952,9 @@ def render_feature_source_page(template: dict[str, Any], mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "data-sources"),
-        job_script=_read_asset("ocs_jobs.js"),
+        job_script=_read_asset("geoservice_jobs.js"),
         **_feature_source_page_context(template, _load_datasets(), read_only=api_config.is_read_only()),
     )
 
@@ -993,8 +993,8 @@ def render_datasets_page(mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        list_script=_read_asset("ocs_list.js"),
+        styles=_read_asset("geoservice_ui.css"),
+        list_script=_read_asset("geoservice_list.js"),
         nav=page_nav(mount, "datasets"),
         datasets=_dataset_views(_load_datasets(), _load_templates()),
     )
@@ -1070,8 +1070,8 @@ def render_data_sources_page(mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        list_script=_read_asset("ocs_list.js"),
+        styles=_read_asset("geoservice_ui.css"),
+        list_script=_read_asset("geoservice_list.js"),
         nav=page_nav(mount, "data-sources"),
         sources=[_source_view(t) for t in _ingestable_templates(templates)]
         + [_feature_source_view(t) for t in _load_feature_templates()],
@@ -1089,7 +1089,7 @@ def _load_workflows() -> list[Any]:
 
 
 _PROCESS_ORIGINS = {
-    "ocs": "Open Geo Service",
+    "geoservice": "Open Geo Service",
     "xclim": "Climate indicators (xclim)",
     "earthkit": "Meteorology (earthkit)",
     "core": "openEO core",
@@ -1124,7 +1124,7 @@ def _load_processes() -> list[dict[str, Any]]:
             return "xclim"
         if id(func) in earthkit:
             return "earthkit"
-        return "ocs"
+        return "geoservice"
 
     order = list(_PROCESS_ORIGINS)
     views = []
@@ -1437,7 +1437,7 @@ def render_workflow_page(record: Any, mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "workflows"),
         **_workflow_page_context(record, _load_templates(), _load_datasets(), _load_recipes()),
     )
@@ -1503,7 +1503,7 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "processes"),
         **_process_page_context(process, origins.get(process["id"], ""), _load_workflows()),
     )
@@ -1598,7 +1598,7 @@ def render_api_page(schema: dict[str, Any], mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "api"),
         **_api_page_context(schema, read_only=api_config.is_read_only()),
     )
@@ -1885,8 +1885,8 @@ def render_workflows_page(mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        list_script=_read_asset("ocs_list.js"),
+        styles=_read_asset("geoservice_ui.css"),
+        list_script=_read_asset("geoservice_list.js"),
         nav=page_nav(mount, "workflows"),
         workflows=catalogue["workflows"],
         unattributed_outputs=catalogue["unattributed_outputs"],
@@ -1903,8 +1903,8 @@ def render_processes_page(mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
-        list_script=_read_asset("ocs_list.js"),
+        styles=_read_asset("geoservice_ui.css"),
+        list_script=_read_asset("geoservice_list.js"),
         nav=page_nav(mount, "processes"),
         processes=_load_processes(),
         process_origins=_PROCESS_ORIGINS,
@@ -1928,7 +1928,7 @@ def render_maps(mount: str) -> str:
         name=api_config.get_name(),
         logo=LOGO,
         version=app_version,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "map"),
     )
 
@@ -1988,7 +1988,7 @@ def render_landing(version: str, mount: str) -> str:
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "overview"),
         extent=extent,
         globe=_extent_globe(extent),
@@ -2097,14 +2097,14 @@ def render_pipelines_page(
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "automation"),
         automation_tabs=automation_tabs(mount, "pipelines"),
         tab=tab,
         pipelines=rows,
         legend=_automation_legend(),
-        list_script=_read_asset("ocs_list.js"),
-        lookup_script=_read_asset("ocs_lookup.js"),
+        list_script=_read_asset("geoservice_list.js"),
+        lookup_script=_read_asset("geoservice_lookup.js"),
         workflows=choices.get("workflows", []),
         destinations=choices.get("destinations", []),
         datasets=choices.get("datasets", []),
@@ -2209,7 +2209,7 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         mount=mount,
         name=api_config.get_name(),
         logo=LOGO,
-        styles=_read_asset("ocs_ui.css"),
+        styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "automation"),
         diagram=diagram,
         legend=_automation_legend(),

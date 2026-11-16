@@ -34,7 +34,7 @@ def _clear_template_cache() -> None:
     system_templates._cache.clear()
 
 
-@pytest.mark.parametrize("name", ["../config.py", "subdir/page.html", r"subdir\page.html", "ocs_ui.css"])
+@pytest.mark.parametrize("name", ["../config.py", "subdir/page.html", r"subdir\page.html", "geoservice_ui.css"])
 def test_template_loader_refuses_names_outside_bundled_html(name: str) -> None:
     with pytest.raises(TemplateNotFound):
         system_templates._template_source(name)

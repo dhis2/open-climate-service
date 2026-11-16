@@ -926,7 +926,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
         "producer_job_id": "job-1",
         "producer_job_href": "/jobs/job-1",
         "process_sha256": "f" * 64,
-        "ocs_version": __version__,
+        "geoservice_version": __version__,
         "output_snapshot_id": _head(),
         "inputs": [
             {

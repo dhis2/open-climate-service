@@ -20,8 +20,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         build-essential cython3 \
         libgeos-dev libproj-dev libeccodes-dev
 
-RUN groupadd --gid 999 ocs && \
-    useradd --create-home --shell /usr/sbin/nologin --uid 999 --gid 999 ocs
+RUN groupadd --gid 999 geoservice && \
+    useradd --create-home --shell /usr/sbin/nologin --uid 999 --gid 999 geoservice
 
 WORKDIR /app
 
@@ -35,14 +35,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 RUN mkdir -p /app/data/pygeoapi /app/data/artifacts && \
     printf '[]\n' > /app/data/artifacts/records.json && \
-    chown -R ocs:ocs /app/data
+    chown -R geoservice:geoservice /app/data
 
 ENV PYGEOAPI_CONFIG=/app/data/pygeoapi/pygeoapi-config.yml
 ENV PYGEOAPI_OPENAPI=/app/data/pygeoapi/pygeoapi-openapi.yml
 ENV PORT=9000
 ENV PATH="/app/.venv/bin:$PATH"
 
-USER ocs
+USER geoservice
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1

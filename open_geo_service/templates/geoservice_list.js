@@ -84,7 +84,7 @@
     if (views) {
       var stored = null;
       try {
-        stored = window.localStorage.getItem("ocs.view." + views);
+        stored = window.localStorage.getItem("geoservice.view." + views);
       } catch (e) {}
       setView(viewNames.indexOf(stored) !== -1 ? stored : viewNames[0]);
       viewButtons.forEach(function (button) {
@@ -92,7 +92,7 @@
           var view = button.getAttribute("data-view-button");
           setView(view);
           try {
-            window.localStorage.setItem("ocs.view." + views, view);
+            window.localStorage.setItem("geoservice.view." + views, view);
           } catch (e) {}
         });
       });

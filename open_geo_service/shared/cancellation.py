@@ -49,7 +49,7 @@ class _Scope:
     cancelled: bool = False
 
 
-_current: ContextVar[_Scope | None] = ContextVar("ocs_cancellation_scope", default=None)
+_current: ContextVar[_Scope | None] = ContextVar("geoservice_cancellation_scope", default=None)
 
 
 @contextmanager

@@ -61,7 +61,7 @@ def build_archive(collection_path: Path, collection_id: str, crs: str) -> Path |
     try:
         import tylertoo
 
-        with tempfile.TemporaryDirectory(prefix="ocs-tiles-") as scratch:
+        with tempfile.TemporaryDirectory(prefix="geoservice-tiles-") as scratch:
             source = collection_path
             if canonical_crs_code(crs) not in _TILEABLE_CRS:
                 import geopandas as gpd

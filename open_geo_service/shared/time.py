@@ -519,7 +519,7 @@ _TILES: dict[str, frozenset[str]] = {
 _CADENCE_RANK = {"hourly": 0, "daily": 1, "weekly": 2, "dekadal": 2, "monthly": 3, "quarterly": 4, "yearly": 5}
 
 
-CADENCE_ATTR = "ocs_cadence"
+CADENCE_ATTR = "geoservice_cadence"
 """Attribute a cube carries to say what cadence its time axis is at.
 
 Stamped from the dataset template when a collection is loaded, rewritten by every temporal

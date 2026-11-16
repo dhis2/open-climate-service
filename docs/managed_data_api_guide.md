@@ -592,7 +592,7 @@ period type, shown as `period_type` on `/datasets`. The dataset's extent there u
 names.
 
 A table dataset has one period type, or none, set by its first write. Rows with another period type are refused, and each stored
-Parquet file carries it in its metadata as `ocs:period_type`, for readers of the files themselves. A
+Parquet file carries it in its metadata as `geoservice:period_type`, for readers of the files themselves. A
 row dated other than on its period's first day, such as a month labelled by its last day the way
 `aggregate_temporal_period` labels it, is stored at its period's start. It has one unit too, the
 first one written: rows in another unit are refused. `publish` applies to its first write; a later

@@ -62,9 +62,9 @@ class ExecutionEvidence:
         }
 
 
-_current: ContextVar[ExecutionEvidence | None] = ContextVar("ocs_execution_evidence", default=None)
-_spatial_methods: ContextVar[set[str] | None] = ContextVar("ocs_spatial_methods", default=None)
-_temporal_scope: ContextVar[dict[str, Any] | None] = ContextVar("ocs_temporal_scope", default=None)
+_current: ContextVar[ExecutionEvidence | None] = ContextVar("geoservice_execution_evidence", default=None)
+_spatial_methods: ContextVar[set[str] | None] = ContextVar("geoservice_spatial_methods", default=None)
+_temporal_scope: ContextVar[dict[str, Any] | None] = ContextVar("geoservice_temporal_scope", default=None)
 
 
 @contextmanager

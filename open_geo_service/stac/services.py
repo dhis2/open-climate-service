@@ -709,8 +709,8 @@ def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str,
         "url": absolute_url(request, "/"),
         "processing:datetime": artifact.created_at.isoformat().replace("+00:00", "Z"),
     }
-    if artifact.provenance is not None and artifact.provenance.ocs_version is not None:
-        provider["processing:software"] = {"open-geo-service": artifact.provenance.ocs_version}
+    if artifact.provenance is not None and artifact.provenance.geoservice_version is not None:
+        provider["processing:software"] = {"open-geo-service": artifact.provenance.geoservice_version}
     return provider
 
 
