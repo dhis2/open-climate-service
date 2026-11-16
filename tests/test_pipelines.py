@@ -3389,7 +3389,7 @@ _TABLE_SPEC: dict[str, Any] = {
 }
 
 
-def test_end_to_end_a_table_pipeline_keeps_rows_in_ocs_and_replaces_revised_values(
+def test_end_to_end_a_table_pipeline_keeps_rows_in_ogs_and_replaces_revised_values(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The built-in workflow through the real job service into the table store, read back over /tables (CLIM-1554).

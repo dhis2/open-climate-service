@@ -290,7 +290,7 @@ def test_processes_are_tagged_with_their_origin() -> None:
     assert origins[0] == "geoservice" and origins[-1] == "core"
 
 
-def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_plugin_overriding_an_indicator_counts_as_ogs(monkeypatch: pytest.MonkeyPatch) -> None:
     from open_geo_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
 
     def indicator() -> None: ...

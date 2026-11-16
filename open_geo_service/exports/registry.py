@@ -36,7 +36,7 @@ def load_export_plugins() -> dict[str, BaseExportPlugin]:
         if directory.is_dir():
             # Unique namespace per instance prevents collisions with installed
             # 'exports' packages and supports relative helper imports.
-            namespace = "_ocs_exports_" + hashlib.sha256(str(directory).encode()).hexdigest()[:16]
+            namespace = "_geoservice_exports_" + hashlib.sha256(str(directory).encode()).hexdigest()[:16]
             if namespace not in sys.modules:
                 module = ModuleType(namespace)
                 module.__path__ = [str(directory)]

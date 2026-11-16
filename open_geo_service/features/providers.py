@@ -177,7 +177,7 @@ def _load_from_path(path: Path) -> list[Any]:
     harmless today; it would only surprise a future caller that started relying on it.
     """
     digest = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:12]
-    module_name = f"_ocs_instance_feature_provider_{path.stem}_{digest}"
+    module_name = f"_geoservice_instance_feature_provider_{path.stem}_{digest}"
     try:
         spec = importlib.util.spec_from_file_location(module_name, path)
         if spec is None or spec.loader is None:

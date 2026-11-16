@@ -12,7 +12,7 @@ import xclim.indicators.atmos as xclim_atmos
 import xclim.indices
 from xclim.core.indicator import InputKind
 
-from open_geo_service.openeo.xclim_processes import call_with_ocs_time_dim
+from open_geo_service.openeo.xclim_processes import call_with_geoservice_time_dim
 from open_geo_service.process import process
 
 _VARIABLE_SCHEMA: dict[str, Any] = {"type": "object", "subtype": "datacube"}
@@ -58,7 +58,7 @@ def spi(
     values above +1 indicate wet conditions.
     """
     # Delegate to xclim — the custom process exists to give SPI a richer description,
-    # and to pin a robust fitting configuration. call_with_ocs_time_dim maps our ``t``
+    # and to pin a robust fitting configuration. call_with_geoservice_time_dim maps our ``t``
     # dimension to the ``time`` dimension xclim requires (and back).
     #
     # We fit a two-parameter gamma (location fixed at 0 via fitkwargs) with the APP
@@ -66,7 +66,7 @@ def spi(
     # maximum-likelihood fit, does not raise FitError on real precipitation that has a
     # pronounced dry season (e.g. near-zero winter months), where ML optimization
     # diverges. DateStr is NewType(str) in xclim — cast to satisfy pyright.
-    result = call_with_ocs_time_dim(
+    result = call_with_geoservice_time_dim(
         xclim.indices.standardized_precipitation_index,
         pr,
         freq=freq,

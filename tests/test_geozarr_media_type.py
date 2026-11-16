@@ -163,12 +163,12 @@ class TestIcechunkDetectionEndToEnd:
         write_to_icechunk_store(self._cube(ny, nx), store_path, t_dim="t", crs="EPSG:4326")
         return str(store_path)
 
-    def test_a_pyramided_store_written_by_ocs_is_detected(self, tmp_path: Path) -> None:
+    def test_a_pyramided_store_written_by_ogs_is_detected(self, tmp_path: Path) -> None:
         # Past the 2048x2048 pyramid threshold, so the writer builds a multiscales layout.
         store = self._write(tmp_path, 2100, 2400)
         assert zarr_media_type(store, icechunk=True) == WEB_OPTIMIZED_ZARR_MEDIA_TYPE
 
-    def test_a_flat_store_written_by_ocs_is_not(self, tmp_path: Path) -> None:
+    def test_a_flat_store_written_by_ogs_is_not(self, tmp_path: Path) -> None:
         store = self._write(tmp_path, 64, 64)
         assert zarr_media_type(store, icechunk=True) == ZARR_V3_MEDIA_TYPE
 
