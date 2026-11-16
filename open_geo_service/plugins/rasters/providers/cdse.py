@@ -26,7 +26,7 @@ class _KeySession(Session):
     """Hands GDAL static S3 keys.
 
     rasterio refuses AWS keys as plain ``Env`` options, and its ``AWSSession`` needs boto3, which
-    OCS does not install.
+    OGS does not install.
     """
 
     def __init__(self, credentials: dict[str, str]) -> None:

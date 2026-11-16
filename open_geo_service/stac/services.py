@@ -138,7 +138,7 @@ def _cf_field(key: str, value: str) -> str | list[str]:
 #
 # CF is formally the *netCDF* Climate and Forecast Metadata Conventions, and GeoZarr does not
 # require it — "CF in Zarr" is listed there as a convention still under consideration. So this
-# is not inherited: it is OCS choosing CF and applying it consistently, which it already does
+# is not inherited: it is OGS choosing CF and applying it consistently, which it already does
 # via `shared/cf.py` and by emitting `cf:standard_name` / `cf:cell_methods` through the STAC CF
 # extension. xarray writes the same attribute names to Zarr as to netCDF, so CF is the de facto
 # vocabulary here regardless of which container the bytes land in. Given that choice, 2.6.2 is
@@ -401,7 +401,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
 
     STAC has no `itemType` to discriminate on — a Collection's `type` is always "Collection" —
     so a client tells the two apart by the extensions and asset media types they declare, which
-    is what OCS already does for rasters through `datacube` and `zarr`. This declares `table`
+    is what OGS already does for rasters through `datacube` and `zarr`. This declares `table`
     and neither of those.
 
     No temporal extent is invented. A boundary set has no time axis, and its release version is
@@ -717,7 +717,7 @@ def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str,
 def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:
     """STAC `providers` from the template, for carrying attribution (CLIM-946).
 
-    Attribution is a licence condition under CC-BY and CC-BY-NC, not a courtesy, and OCS had
+    Attribution is a licence condition under CC-BY and CC-BY-NC, not a courtesy, and OGS had
     nowhere to record it at collection level. Entries are passed through with only their shape
     checked — STAC defines `name`, `description`, `roles` and `url`, and inventing validation
     beyond that would reject legitimate metadata.

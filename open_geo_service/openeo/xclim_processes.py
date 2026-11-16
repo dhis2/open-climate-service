@@ -15,7 +15,7 @@ _cache: list[Any] | None = None
 
 
 def call_with_ocs_time_dim(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """Call an xclim function, mapping the OCS ``t`` dimension to/from ``time``.
+    """Call an xclim function, mapping the OGS ``t`` dimension to/from ``time``.
 
     Our GeoZarr stores name the temporal dimension ``t``, but xclim indicators and
     indices require a dimension literally named ``time`` (they index ``da.time``
@@ -45,7 +45,7 @@ def call_with_ocs_time_dim(func: Any, *args: Any, **kwargs: Any) -> Any:
 
     if not renamed:
         return result
-    # Restore the OCS `t` name on the output(s). Some indicators return a tuple of arrays.
+    # Restore the OGS `t` name on the output(s). Some indicators return a tuple of arrays.
     if isinstance(result, tuple):
         return tuple(_to_t(item) for item in result)
     return _to_t(result)
@@ -108,7 +108,7 @@ def _collect() -> list[Any]:
             # would feed a tuple into save_result or a reducer and get a confusing failure
             # rather than "not supported". Three of xclim 0.61's registered indicators are
             # multi-output — cffwis (6), rain_season (3), jetstream_metric_woollings (2) — and
-            # no OCS workflow uses them, so advertising 176 processes we honour beats 179 where
+            # no OGS workflow uses them, so advertising 176 processes we honour beats 179 where
             # three lie (CLIM-860). Registering one process per named output is the richer
             # alternative, worth doing if someone asks for these specifically.
             outputs = _declared_output_count(obj)

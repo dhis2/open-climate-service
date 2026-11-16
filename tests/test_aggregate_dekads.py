@@ -21,7 +21,7 @@ from open_geo_service.shared.time import dekad_period_ids
 
 @pytest.fixture
 def ocs_logs(caplog: pytest.LogCaptureFixture) -> Any:
-    """Capture warnings from the OCS package logger.
+    """Capture warnings from the OGS package logger.
 
     ``startup.py`` sets ``propagate = False`` on it, so caplog's root handler never sees
     the records. Same shim as tests/test_raster_contract.py.

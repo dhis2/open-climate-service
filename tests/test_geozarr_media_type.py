@@ -135,7 +135,7 @@ class TestIcechunkDetectionEndToEnd:
     """The Icechunk path against a store written by the real pipeline.
 
     The rest of this module builds root metadata by hand, which cannot catch a mismatch between
-    what OCS *writes* and what this module *looks for* — the two are on opposite sides of the
+    what OGS *writes* and what this module *looks for* — the two are on opposite sides of the
     contract. These write real stores and read them back.
     """
 

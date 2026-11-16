@@ -709,7 +709,7 @@ def test_a_raster_collection_still_builds_with_its_datacube_fields(
 
 
 def test_the_openeo_job_result_path_emits_the_settled_parquet_media_type(tmp_path: Path) -> None:
-    """The other place OCS names Parquet. It used to say `application/vnd.apache.parquet`.
+    """The other place OGS names Parquet. It used to say `application/vnd.apache.parquet`.
 
     Two spellings for one format meant a client reading a STAC asset and a client reading a job
     result saw different types for the same bytes, so both now read the shared constant.

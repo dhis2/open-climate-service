@@ -86,7 +86,7 @@ def test_the_self_url_keeps_the_requested_path(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_the_self_url_drops_the_query_string(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No OCS document varies by query string, so reflecting client input into a served
+    """No OGS document varies by query string, so reflecting client input into a served
     document buys nothing."""
     from open_geo_service.shared.urls import self_url
 

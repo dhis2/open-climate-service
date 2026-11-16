@@ -92,7 +92,7 @@ class _Plan:
 
 
 class SchedulerService:
-    """Own the process-local clock while delegating sync decisions to OCS.
+    """Own the process-local clock while delegating sync decisions to OGS.
 
     The effective schedule list comes only from the shared store (CLIM-1242).
     ``start`` registers it once; ``reload`` re-reads the store, resolves

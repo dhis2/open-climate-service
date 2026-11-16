@@ -1983,7 +1983,7 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     assert as_json["latest_run"]["run_id"] == run["run_id"] and as_json["latest_run"]["job_status"] == "finished"
     assert [item["run_id"] for item in client.get(as_json["links"]["runs"]).json()["items"]] == [run["run_id"]]
 
-    # Behind a proxy prefix every link leads into OCS, as the Location header does.
+    # Behind a proxy prefix every link leads into OGS, as the Location header does.
     mounted = mounted_client_factory("/ocs")
     prefixed = mounted.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-02-01", "end": "2025-02-28"})
     links = prefixed.json()["links"]

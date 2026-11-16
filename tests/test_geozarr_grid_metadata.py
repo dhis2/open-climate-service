@@ -12,7 +12,7 @@ they read were wrong or missing (CLIM-852), and each has its own failure signatu
 * ``spatial:bbox`` described the *requested* bbox. A source can return less than was asked
   for, so the declared extent claimed ground the store does not cover.
 
-The affine assertions are pinned against CHIRPS' real numbers: the GeoTIFFs OCS ingests
+The affine assertions are pinned against CHIRPS' real numbers: the GeoTIFFs OGS ingests
 carry their own GDAL ``GeoTransform``, so deriving one from the stored coordinates has an
 independent right answer to match.
 """

@@ -1,4 +1,4 @@
-"""The public origin and mount prefix for the URLs OCS puts into documents it serves.
+"""The public origin and mount prefix for the URLs OGS puts into documents it serves.
 
 Behind a TLS-terminating reverse proxy the request uvicorn sees is plain HTTP, so any absolute
 URL built from `request.base_url` carries the wrong scheme for the outside world (CLIM-974).
@@ -239,7 +239,7 @@ def self_url(request: Request) -> str:
     """The public URL of the document being requested, without its query string.
 
     The path comes from the request, so `/stac` and `/stac/catalog.json` each name themselves,
-    and the origin and prefix come from `absolute_base`. No OCS document varies by query
+    and the origin and prefix come from `absolute_base`. No OGS document varies by query
     string, so it is dropped rather than reflected into a served document.
     """
     return absolute_url(request, route_path(request))

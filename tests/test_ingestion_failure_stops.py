@@ -105,7 +105,7 @@ def test_commit_conflict_stops_the_loop_and_releases_the_lock(
 
 
 class _OtherProcessLock:
-    """Hold a file lock through a separate handle, as a second OCS process would."""
+    """Hold a file lock through a separate handle, as a second OGS process would."""
 
     def __init__(self, path: Path) -> None:
         import portalocker

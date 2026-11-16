@@ -1,4 +1,4 @@
-"""OCS reads only Zarr v3 Earth Data Hub stores (CLIM-955).
+"""OGS reads only Zarr v3 Earth Data Hub stores (CLIM-955).
 
 EDH leaves superseded stores readable and applies updates only to its v3 ones, so an older
 store does not fail — it silently stops advancing, and an ingest against it reports no new

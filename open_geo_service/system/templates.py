@@ -1101,7 +1101,7 @@ def _load_processes() -> list[dict[str, Any]]:
 
     Grouped by origin rather than openEO `categories`, which most processes do not declare.
     Origin is decided by which loader registered the callable that won, so an instance plugin
-    overriding an xclim indicator by id counts as OCS, not xclim.
+    overriding an xclim indicator by id counts as OGS, not xclim.
     """
     try:
         from open_geo_service.openeo import earthkit_processes, xclim_processes

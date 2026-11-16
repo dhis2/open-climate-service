@@ -451,7 +451,7 @@ async def delete_pipeline_form(request: Request, pipeline_id: str) -> Response:
 
 @router.post("/{pipeline_id}/validate", response_class=Response)
 async def validate_pipeline(request: Request, pipeline_id: str) -> Response:
-    """Re-check every binding the pipeline relies on, in OCS and at its destination, and keep the result."""
+    """Re-check every binding the pipeline relies on, in OGS and at its destination, and keep the result."""
     _require_writable()
     record = _record_or_404(pipeline_id)
     validation = service.validate_pipeline(record)

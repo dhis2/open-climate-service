@@ -134,7 +134,7 @@ def _pyramid_levels(ds: xr.Dataset, x_dim: str, y_dim: str) -> int:
 # is now delegated rather than recomputed here.
 _COMPOSABLE_METHODS = frozenset({"mean", "max", "min", "sum", "nearest"})
 # Methods topozarr cannot do: non-composable, so each level must be resampled from the
-# native (level-0) array rather than from an already-coarsened parent, and OCS recomputes
+# native (level-0) array rather than from an already-coarsened parent, and OGS recomputes
 # those levels itself. Only `mode` remains — carbonplan/topozarr#26 is still open for it, and
 # upstream's own note says such methods "must reduce from native instead". Delete this path
 # and the helpers below once it lands.

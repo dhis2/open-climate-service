@@ -15,7 +15,7 @@ first shrinks over time and the second does not (see CLIM-859):
 
 - ``_match_spatial_grid`` works around exact-equality coordinate alignment.
 
-**OCS policy** — ours to own, because earthkit is a general library and should not be
+**OGS policy** — ours to own, because earthkit is a general library and should not be
 deciding our domain rules:
 
 - refusing ``relative`` for temperature, an interval scale where percent-of-normal is
@@ -350,7 +350,7 @@ def compute_anomaly(observed: xr.DataArray, normal: xr.DataArray, method: str = 
     if ordinal is None:
         raise ValueError(f"normal must have one of {_ORDINALS} as a dimension, got dims {tuple(normal.dims)}")
 
-    # OCS policy, not an earthkit gap: earthkit offers `relative` for any variable, which is
+    # OGS policy, not an earthkit gap: earthkit offers `relative` for any variable, which is
     # correct for a general library. Deciding it is invalid for our temperature datasets is
     # our call, so this guard stays regardless of what upstream does.
     if method == "relative" and is_temperature_like(observed, normal):
@@ -360,7 +360,7 @@ def compute_anomaly(observed: xr.DataArray, normal: xr.DataArray, method: str = 
             "only for ratio-scale variables such as precipitation."
         )
 
-    # OCS policy, as above. earthkit would silently resample the observed cube to the
+    # OGS policy, as above. earthkit would silently resample the observed cube to the
     # normal's frequency (daily observed against a month normal → monthly means), returning
     # a plausible result for a pairing the caller almost certainly did not intend. Upstream
     # could reasonably warn; refusing outright is our decision, so this guard also stays.

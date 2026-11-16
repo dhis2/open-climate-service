@@ -1,6 +1,6 @@
 """Dataset licences: declaration and publication (CLIM-946).
 
-The failure this guards against is silent. OCS published the constant `various` on every
+The failure this guards against is silent. OGS published the constant `various` on every
 collection, so a CC-BY-NC source was published as though it carried no restriction.
 
 Propagation to derived products is deliberately not here. It is a separate change with a
@@ -112,7 +112,7 @@ def test_undeclared_publishes_as_other() -> None:
 @pytest.mark.parametrize("path", _BUILTIN_TEMPLATES, ids=lambda p: pathlib.Path(p).name)
 def test_every_builtin_template_declares_a_licence(path: str) -> None:
     """No built-in may rely on the default. A user seeing a layer should be able to see what
-    they may do with it, and `other` is what OCS says when nobody has said anything."""
+    they may do with it, and `other` is what OGS says when nobody has said anything."""
     undeclared = [
         t.get("id")
         for t in yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
@@ -245,13 +245,13 @@ def test_explicit_obligations_are_used_when_nothing_else_supplies_them() -> None
     assert licence.obligations == frozenset({ATTRIBUTION})
 
 
-# -- valid SPDX identifiers OCS has not reviewed -------------------------------------------
+# -- valid SPDX identifiers OGS has not reviewed -------------------------------------------
 
 
 @pytest.mark.parametrize("identifier", ["BSD-3-Clause", "ISC", "Zlib", "EUPL-1.2", "ODC-By-1.0"])
 def test_a_valid_spdx_identifier_is_preserved_even_when_unreviewed(identifier: str) -> None:
     """The general contract, not one hand-listed example. Identity is SPDX's question and
-    obligations are OCS's; while a single table answered both, every valid identifier nobody
+    obligations are OGS's; while a single table answered both, every valid identifier nobody
     had reviewed was demoted to a free-form name and published as `other`. `ODC-By-1.0` is the
     one that shows the cost — an open-data licence a climate source could plausibly carry."""
     licence = parse_licence(identifier)
@@ -375,7 +375,7 @@ def test_matching_obligations_do_not_make_two_licences_the_same_one() -> None:
 
 
 def test_a_recognised_name_contradicts_even_an_unreviewed_identifier() -> None:
-    """Whether OCS has recorded what `ISC` requires has no bearing on whether it is the
+    """Whether OGS has recorded what `ISC` requires has no bearing on whether it is the
     Copernicus licence. The check was skipped entirely for identifiers outside the obligations
     table."""
     licence = parse_licence({"id": "ISC", "name": "NASA Earth Science Data", "url": "https://x"})
@@ -450,10 +450,10 @@ def test_the_validator_names_the_contradiction_rather_than_calling_it_unreadable
 def test_ignored_obligations_are_reported_whatever_supplied_the_terms(declared: dict) -> None:
     """Parametrised over both, because the two were checked in separate places and drifted.
 
-    `parse_licence` ignores an explicit list whenever the identifier *or* the name is one OCS
+    `parse_licence` ignores an explicit list whenever the identifier *or* the name is one OGS
     knows, but the validator reported only the identifier case. So Copernicus plus
     `obligations: [non-commercial]` was read as commercially usable and said nothing — the
-    operator asserted a restriction and OCS silently dropped it, which is the laundering
+    operator asserted a restriction and OGS silently dropped it, which is the laundering
     direction.
     """
     from open_geo_service.shared.licences import licence_declaration_problem
@@ -520,7 +520,7 @@ def test_the_same_licence_under_both_aliases_is_not_a_conflict() -> None:
 # -- the declaration surface -----------------------------------------------------------------
 #
 # Four review rounds each found one more way for two parts of a `license` mapping to disagree
-# while OCS silently picked one: a prefix-matched name, an identifier contradicted by a name,
+# while OGS silently picked one: a prefix-matched name, an identifier contradicted by a name,
 # an obligations list beside a recognised name, and an identifier beside a conflicting alias.
 # One defect found four times. Finding them individually does not terminate, so the surface is
 # enumerated instead.

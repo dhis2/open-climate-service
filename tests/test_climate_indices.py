@@ -85,7 +85,7 @@ def test_spi_drops_xclim_fit_diagnostic_coords(daily_precip: xr.DataArray) -> No
 
 
 def test_spi_accepts_ocs_t_dimension_and_returns_t(daily_precip: xr.DataArray) -> None:
-    """OCS stores name the temporal dim 't'; xclim needs 'time'. The wrapper renames
+    """OGS stores name the temporal dim 't'; xclim needs 'time'. The wrapper renames
     on-the-fly and restores 't' on the output, so graphs need no rename_dimension."""
     cube_t = daily_precip.rename({"time": "t"})
     result = spi(cube_t, window=1)

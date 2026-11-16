@@ -451,7 +451,7 @@ def start_of_period(day: date, period_type: str | None) -> date:
     """The first day of the *period_type* period that contains *day*; *day* itself for any other.
 
     Producers label a period by different days: pandas resampling dates a month by its last day
-    and a week by its Sunday, while OCS stores date them by their first. Storing the start keeps
+    and a week by its Sunday, while OGS stores date them by their first. Storing the start keeps
     one key per period, so a revision replaces a value rather than standing beside it.
     """
     from open_geo_service.shared.time import dekad_start
@@ -490,10 +490,10 @@ def end_of_period(start: date, period_type: str | None) -> date | None:
 
 
 def period_label(day: date, period_type: str | None) -> str:
-    """How OCS names the period starting on *day*, as raster datasets name theirs: `2026-01`, `2026-W01`, `2026`.
+    """How OGS names the period starting on *day*, as raster datasets name theirs: `2026-01`, `2026-W01`, `2026`.
 
     For reading only: storage, filters and the key use the date. A dekad is named by its first
-    day, as in raster datasets; a period type OCS has no name for keeps the ISO date.
+    day, as in raster datasets; a period type OGS has no name for keeps the ISO date.
     """
     from open_geo_service.shared.time import datetime_to_period_string
 

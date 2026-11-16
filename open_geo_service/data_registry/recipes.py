@@ -1,7 +1,7 @@
 """A derived dataset's recipe: the workflow that produces it, and when it is computed again.
 
 A dataset template's ``produced_by`` is either a workflow id, which only records the workflow
-that makes the dataset, or a recipe that OCS can run::
+that makes the dataset, or a recipe that OGS can run::
 
     produced_by:
       workflow: climate_anomaly
@@ -12,7 +12,7 @@ that makes the dataset, or a recipe that OCS can run::
       refresh_on: observed_dataset_id
 
 ``arguments`` are the fixed parameters that define the product; changing one makes another
-dataset, with another id. OCS supplies ``output_dataset_id`` from the template's id, so it may
+dataset, with another id. OGS supplies ``output_dataset_id`` from the template's id, so it may
 not be given. ``refresh_on`` names the argument holding the dataset that drives this one: when
 that dataset updates, this one is computed again over its full coverage, which fills the
 workflow's one open temporal-interval parameter. Updates of the other datasets it reads, such as

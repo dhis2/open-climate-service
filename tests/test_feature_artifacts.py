@@ -684,7 +684,7 @@ def test_create_feature_artifact_refuses_a_bbox_that_is_not_four_numbers(
 def test_create_feature_artifact_refuses_a_geometry_it_cannot_interpret(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, geometry: dict[str, Any], expected: str
 ) -> None:
-    """The extent is what the catalogue publishes, so a shape OCS cannot read has to fail here.
+    """The extent is what the catalogue publishes, so a shape OGS cannot read has to fail here.
 
     A Polygon holding a bare position is the case a numbers-only walker accepts: it yields one
     point and registers an area dataset whose extent is a dot.

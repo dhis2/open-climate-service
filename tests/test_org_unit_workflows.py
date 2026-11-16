@@ -135,7 +135,7 @@ def test_method_selects_reducer(method: str, expected: float) -> None:
 
 def test_builtin_workflows_use_literal_process_ids() -> None:
     """openEO requires `process_id` to be a literal string; a `{from_parameter}` process_id
-    is non-portable (standard validators reject it) even though OCS resolves it at runtime.
+    is non-portable (standard validators reject it) even though OGS resolves it at runtime.
     Guard against reintroducing the pattern in any built-in workflow — use a process that
     takes the choice as an argument (e.g. reduce_by_method) instead."""
     import importlib.resources

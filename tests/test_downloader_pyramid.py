@@ -116,10 +116,10 @@ def test_coarsen_native_mode_picks_block_majority() -> None:
 
 
 def test_nearest_is_delegated_to_topozarr() -> None:
-    """`nearest` arrived upstream in topozarr 0.1.3, so OCS no longer computes it.
+    """`nearest` arrived upstream in topozarr 0.1.3, so OGS no longer computes it.
 
     It is composable — corner-of-corners equals corner-of-native — so level-from-previous
-    (what topozarr does) and level-from-native (what OCS used to do) agree. Verified
+    (what topozarr does) and level-from-native (what OGS used to do) agree. Verified
     byte-identical across a real 3-level pyramid when the delegation was made.
     """
     from open_geo_service.data_manager.services.downloader import (

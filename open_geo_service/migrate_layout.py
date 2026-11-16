@@ -9,7 +9,7 @@ It renames, in the data directory, ``downloads/`` to ``rasters/`` and ``features
 ``plugins_dir`` it renames ``datasets/`` to ``rasters/`` and ``features/`` to ``vectors/``,
 and rewrites the ``ingestion.plugin`` paths and plugin imports that name the old folders.
 
-OCS reads only the new names, so an instance that has not been migrated starts with no
+OGS reads only the new names, so an instance that has not been migrated starts with no
 data sources and no stores. Running it again once done changes nothing. It refuses to run
 when an old and a new folder both exist, rather than merging them.
 """

@@ -1,8 +1,8 @@
 """Feature ids survive spatial aggregation as `feature_id`, and the exports read them (CLIM-1355).
 
 openEO labels a vector cube's geometry dimension with the geometries and leaves the feature id to
-the backend (openeo-processes#466); OCS keeps it in a `feature_id` coordinate. The graphs below run
-as jobs with two aggregations: OCS's own `aggregate_spatial`, which labels the dimension with the
+the backend (openeo-processes#466); OGS keeps it in a `feature_id` coordinate. The graphs below run
+as jobs with two aggregations: OGS's own `aggregate_spatial`, which labels the dimension with the
 ids, and the openEO reference implementation from openeo-processes-dask, which labels it with the
 shapes, as CLIM-785's processes do. Both must export the same org units and locations.
 """
@@ -63,7 +63,7 @@ def service(
     instance: openeo_jobs.OpenEOJobService,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> openeo_jobs.OpenEOJobService:
-    """The job service, aggregating with OCS's process or with the openEO reference one."""
+    """The job service, aggregating with OGS's process or with the openEO reference one."""
     if request.param == "openeo":
         registry = execution._build_process_registry()
         overlay = execution._RegistryOverlay(

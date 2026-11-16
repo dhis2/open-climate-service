@@ -1,6 +1,6 @@
 """The automation graph: how schedules, derived dataset recipes and pipelines connect.
 
-Assembled from what OCS already records, so it needs no configuration of its own:
+Assembled from what OGS already records, so it needs no configuration of its own:
 
 - a sync schedule keeps a dataset current from its data source;
 - a derived dataset's recipe runs its workflow when the dataset it refreshes on updates, reads
@@ -521,7 +521,7 @@ def _read_schedules() -> list[Any]:
 
 
 def _read_recipes(datasets: Mapping[str, Any], templates: list[dict[str, Any]] | None) -> list[Any]:
-    """The recipes OCS keeps current: those that refresh on an input, of derived datasets that exist."""
+    """The recipes OGS keeps current: those that refresh on an input, of derived datasets that exist."""
     if templates is None:
         return []
     try:

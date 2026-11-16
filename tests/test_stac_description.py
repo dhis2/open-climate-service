@@ -85,7 +85,7 @@ def test_every_cf_2_6_2_variable_attribute_survives(attr: str) -> None:
     pass through. `references` matters most: it is the standard home for attribution, so a
     plugin should use it rather than inventing an `attribution` attribute.
 
-    CF is formally a netCDF convention and GeoZarr does not mandate it; OCS adopts it anyway
+    CF is formally a netCDF convention and GeoZarr does not mandate it; OGS adopts it anyway
     (`shared/cf.py`, and the STAC CF extension is already emitted), so 2.6.2 is what decides
     which of these belong on a variable rather than globally."""
     collection = _collection_with_attrs({"long_name": "X", attr: "value"})

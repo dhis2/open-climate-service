@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_GEOMETRY_COLUMN = "geometry"
 
 PARQUET_MEDIA_TYPE = "application/vnd.apache.parquet"
-"""The one media type OCS advertises for Parquet, wherever it advertises one.
+"""The one media type OGS advertises for Parquet, wherever it advertises one.
 
 The type IANA registered for Parquet in 2024, and the one Portolan requires. pystac still ships
 `application/x-parquet` as its constant, an older unregistered spelling. Kept here, beside the

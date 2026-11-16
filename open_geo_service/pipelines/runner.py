@@ -615,7 +615,7 @@ def _check_redelivery(pipeline_id: str, record: PipelineRecord, run: PipelineRun
 def acknowledge_delivery(pipeline_id: str, run_id: str) -> PipelineRun:
     """Record that an operator checked the destination and settled an unconfirmed delivery.
 
-    The way to resolve a delivery OCS cannot confirm where sending it again is not safe, or not
+    The way to resolve a delivery OGS cannot confirm where sending it again is not safe, or not
     wanted. Nothing is sent; the run is settled, so it may leave the history.
     """
     record = store.get_record(pipeline_id)
@@ -1035,7 +1035,7 @@ def _run_failure(
 def run_view(pipeline_id: str, run: PipelineRun, mount: str) -> PipelineRunView:
     """One run with its workflow and delivery jobs' current states: the one reading of its status.
 
-    ``mount`` is the deployment's path prefix, so links lead into OCS behind a proxy too.
+    ``mount`` is the deployment's path prefix, so links lead into OGS behind a proxy too.
     """
     from open_geo_service.openeo.jobs import store_get_job
 

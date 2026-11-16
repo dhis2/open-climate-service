@@ -658,7 +658,7 @@ class OpenEOJobService:
     def start_triggered_job(self, job_id: str) -> bool:
         """Atomically claim and enqueue a created automation job.
 
-        The conditional transition prevents two OCS processes replaying the same
+        The conditional transition prevents two OGS processes replaying the same
         durable event from both executing its deterministic job.
         """
 

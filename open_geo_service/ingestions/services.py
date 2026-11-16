@@ -99,7 +99,7 @@ StoreResult = TypeVar("StoreResult")
 class StoreWriteLock:
     """Exclusive writer lock for one Icechunk store, across threads and across processes.
 
-    The thread lock alone was invisible to a second OCS process: an overlapping restart, an
+    The thread lock alone was invisible to a second OGS process: an overlapping restart, an
     auto-reload, or a second worker could run a write against the same store at the same
     time, and Icechunk then rejected one of them with a commit conflict. The file lock beside
     the store makes the second writer refuse up front instead. The operating system releases
@@ -908,7 +908,7 @@ def _geometry_positions(geometry: object, *, dataset_id: str, index: int) -> Ite
     """Yield every (x, y) position in one feature's geometry, rejecting anything that is not one.
 
     Validated rather than best-effort. The extent computed from these positions is what the
-    catalogue publishes and what a spatial read is checked against, so a geometry OCS cannot
+    catalogue publishes and what a spatial read is checked against, so a geometry OGS cannot
     interpret has to fail here: silently skipping it would publish an extent derived from the
     features that happened to parse, and `feature_count` would still claim all of them.
 

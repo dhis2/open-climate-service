@@ -1,4 +1,4 @@
-"""Table datasets as a pipeline destination: a workflow's value per feature and period, kept in OCS (CLIM-1554).
+"""Table datasets as a pipeline destination: a workflow's value per feature and period, kept in OGS (CLIM-1554).
 
 The `table` destination renders a workflow's vector cube to the rows of a table dataset and
 delivers them through the one writer, `tables.store.write_rows`. The payload is those rows as a

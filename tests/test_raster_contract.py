@@ -43,7 +43,7 @@ _needs_proj = pytest.mark.skipif(not _CRS_RESOLVABLE, reason="pyproj cannot reso
 
 @pytest.fixture
 def ocs_logs(caplog: pytest.LogCaptureFixture) -> Any:
-    """Capture warnings from the OCS package logger.
+    """Capture warnings from the OGS package logger.
 
     ``startup.py`` sets ``propagate = False`` on it so the app owns its own handler, which
     means caplog's root handler never sees the records. Re-enable propagation for the test.

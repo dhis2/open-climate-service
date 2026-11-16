@@ -52,7 +52,7 @@ class DatasetItemType(StrEnum):
     `itemType` on the collection object as an "indicator about the type of the items in the
     collection (the default value is 'feature')". `coverage` is convention rather than
     conformance: OGC API - Coverages is a candidate draft and silent on the field. `/datasets`
-    is OCS's own API, so borrowing the name buys consistency, not a promise that the rest of
+    is OGS's own API, so borrowing the name buys consistency, not a promise that the rest of
     an OGC collection object is there.
     """
 
@@ -177,7 +177,7 @@ class ArtifactVersion(BaseModel):
     materialization is this?" and every artifact has one; this answers "which logical
     release is this?" and only a versioned dataset has one. How an artifact was produced is
     provenance, and a derived artifact does not inherit a version from its inputs — an
-    openEO result carries `version=None` unless OCS deliberately releases it, with its
+    openEO result carries `version=None` unless OGS deliberately releases it, with its
     inputs recorded as provenance rather than folded into this field.
     """
 
@@ -453,7 +453,7 @@ class ArtifactProvenance(BaseModel):
     Three identities stay distinct: ``producer_job_id`` names the job that produced the data,
     the record's ``artifact_id`` names the logical artifact, and ``output_snapshot_id`` names
     the physical Icechunk snapshot the job committed. The snapshot is not a release: a derived
-    artifact's ``version`` stays None unless OCS deliberately releases it.
+    artifact's ``version`` stays None unless OGS deliberately releases it.
     """
 
     producer_kind: Literal["openeo_job"] = "openeo_job"

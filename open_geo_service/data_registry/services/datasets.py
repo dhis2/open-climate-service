@@ -542,7 +542,7 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
     # Surface non-CF/udunits units so unit-aware processes (xclim indices) don't fail
     # cryptically later. Warn rather than reject — not every variable is a physical
     # quantity (e.g. population counts) (#280).
-    # A licence is how a user knows what they may do with a layer, and OCS published the
+    # A licence is how a user knows what they may do with a layer, and OGS published the
     # constant "various" on every collection until CLIM-946. Warn rather than reject: an
     # instance should not be unable to serve data because a template is missing metadata, and
     # an undeclared licence still publishes honestly as `other`. But warn every time, because

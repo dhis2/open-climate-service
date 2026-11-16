@@ -5,7 +5,7 @@ in the PR.
 
     uv run python tests/benchmarks/zarr_chunk_reads.py [--concurrency 6] [--rounds 5]
 
-It writes a daily CHIRPS-shaped store over Nepal's extent (3 years at 0.05 degrees) with OCS's
+It writes a daily CHIRPS-shaped store over Nepal's extent (3 years at 0.05 degrees) with OGS's
 own writer into a temporary data root, registers it as a published dataset, serves the app with
 uvicorn and requests every chunk of the store, `--rounds` times, `--concurrency` at a time.
 Each round is one map view's worth of chunk requests, repeated. A second pass asks for the first
@@ -33,10 +33,10 @@ import pandas as pd
 import uvicorn
 import xarray as xr
 
-# OCS is imported only after `_use_temporary_instance`, never at module level: store paths are
+# OGS is imported only after `_use_temporary_instance`, never at module level: store paths are
 # resolved from the config when their modules are imported, and the app's lifespan recovers jobs
 # and starts the scheduler, so an import under the developer's `.env` would read and write their
-# instance. The client processes import this module too, and never import OCS.
+# instance. The client processes import this module too, and never import OGS.
 
 DATASET_ID = "chirps3_precipitation_daily"
 
@@ -50,7 +50,7 @@ data_dir: ./data
 
 
 def _use_temporary_instance(root: Path) -> Path:
-    """Point OCS at an instance under *root*, before anything from it is imported; returns its data root."""
+    """Point OGS at an instance under *root*, before anything from it is imported; returns its data root."""
     config = root / "geoservice.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
     os.environ["GEOSERVICE_CONFIG"] = str(config)

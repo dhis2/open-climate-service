@@ -94,7 +94,7 @@ class ScheduleView(ScheduleStatus):
 class ClockStatus(BaseModel):
     """A clock that runs on this data directory, as it last reported.
 
-    Which process and host it is stays in the shared file: OCS needs it to recognise its own
+    Which process and host it is stays in the shared file: OGS needs it to recognise its own
     heartbeat, a client does not, and a public instance should not publish it.
     """
 

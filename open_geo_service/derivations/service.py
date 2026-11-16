@@ -225,7 +225,7 @@ def _refresh_locked(recipe: Recipe) -> OpenEOJobRecord | None:
         return None  # done, or failed and left for an operator
     open_intervals = [name for name in binding.interval_parameters(snapshot) if name not in recipe.arguments]
     if len(open_intervals) != 1:
-        # Checked at startup, but a workflow can be edited while OCS runs.
+        # Checked at startup, but a workflow can be edited while OGS runs.
         raise ValueError(
             f"workflow '{recipe.workflow}' must leave exactly one temporal-interval parameter open, "
             f"not {open_intervals}"

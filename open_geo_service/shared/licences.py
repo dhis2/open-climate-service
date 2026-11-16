@@ -1,6 +1,6 @@
 """Dataset licences: declare them and publish them honestly (CLIM-946).
 
-OCS had no per-dataset licence concept — every collection published the constant `various`,
+OGS had no per-dataset licence concept — every collection published the constant `various`,
 whether the data came from ERA5-Land or a non-commercial imagery release. That was tolerable
 while every source was openly licensed. It stopped being tolerable when the August 2026 Nepal
 flood produced the only usable imagery of the event under CC-BY-NC-4.0.
@@ -57,7 +57,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # STAC 1.1 wants an SPDX identifier or the literal "other"; it deprecated "proprietary" and
-# never defined "various", which is what OCS was publishing on every collection.
+# never defined "various", which is what OGS was publishing on every collection.
 STAC_LICENSE_OTHER = "other"
 
 # What a licence requires of anyone redistributing the data, or a work derived from it. A
@@ -296,7 +296,7 @@ def _contradiction(identifier: str | None, name: str | None) -> str | None:
     `license: CC-BY-4.0` over a link to Copernicus terms — a STAC client reads the field far
     more often than it fetches the link.
 
-    Any identifier, not only a reviewed one. Whether OCS has recorded what `ISC` requires has
+    Any identifier, not only a reviewed one. Whether OGS has recorded what `ISC` requires has
     no bearing on whether it is the Copernicus licence.
 
     An *unrecognised* name is still left alone: it is a label and a link, the identifier stays
@@ -316,7 +316,7 @@ def _contradiction(identifier: str | None, name: str | None) -> str | None:
 def _declared_semantics(identifier: str | None, name: str | None) -> tuple[frozenset[str], str] | None:
     """The obligations this declaration resolves to, and what supplied them.
 
-    None when neither the identifier nor the name is one OCS knows, which is the only case
+    None when neither the identifier nor the name is one OGS knows, which is the only case
     where an explicit `obligations` list is consulted.
 
     Single owner of that precedence rule. `parse_licence` and `licence_declaration_problem`

@@ -1,6 +1,6 @@
 """Reading and writing netCDF files from threads.
 
-netCDF4 and the HDF5 library it links are not thread-safe, and OCS runs netCDF I/O in threads:
+netCDF4 and the HDF5 library it links are not thread-safe, and OGS runs netCDF I/O in threads:
 ingest fetches (up to a plugin's ``max_concurrency`` per job, and several jobs at once), openEO
 jobs saving a netCDF result, and the download endpoint. Two of them at the same time can corrupt
 HDF5's state and crash the whole process with a segmentation fault, so every netCDF read and

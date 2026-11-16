@@ -192,7 +192,7 @@ def test_processes_are_tagged_with_their_origin() -> None:
     assert processes["add"]["origin"] == "core"
     assert processes["spi"]["origin"] == "ocs"
     assert {"xclim", "earthkit"} <= {p["origin"] for p in processes.values()}
-    # OCS first, openEO core last, so the default view leads with what is specific to OCS.
+    # OGS first, openEO core last, so the default view leads with what is specific to OGS.
     origins = [p["origin"] for p in processes.values()]
     assert origins[0] == "ocs" and origins[-1] == "core"
 

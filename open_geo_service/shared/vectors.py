@@ -19,7 +19,7 @@ FEATURE_ID_COORD = "feature_id"
 
 The id is what a DHIS2 or CHAP export keys its location on. openEO labels the geometry dimension
 with the geometries themselves and leaves the feature id to the backend
-(openeo-processes#466); this is where OCS keeps it, so it survives an aggregation whatever that
+(openeo-processes#466); this is where OGS keeps it, so it survives an aggregation whatever that
 aggregation puts in the labels. A `location_field` or `org_unit_field` of `geometry` reads it
 (:func:`feature_id_field`).
 """

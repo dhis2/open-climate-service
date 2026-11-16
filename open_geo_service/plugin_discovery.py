@@ -1,4 +1,4 @@
-"""Discovery of installable OCS plugins via entry points (#118).
+"""Discovery of installable OGS plugins via entry points (#118).
 
 A plugin package declares an ``open_geo_service.plugins`` entry point whose value
 is its top-level import package. The framework then loads the package's ``rasters/``,
