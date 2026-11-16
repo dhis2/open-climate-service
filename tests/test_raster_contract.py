@@ -42,7 +42,7 @@ _needs_proj = pytest.mark.skipif(not _CRS_RESOLVABLE, reason="pyproj cannot reso
 
 
 @pytest.fixture
-def ogs_logs(caplog: pytest.LogCaptureFixture) -> Any:
+def geoservice_logs(caplog: pytest.LogCaptureFixture) -> Any:
     """Capture warnings from the OGS package logger.
 
     ``startup.py`` sets ``propagate = False`` on it so the app owns its own handler, which
@@ -204,7 +204,7 @@ def test_the_data_crs_wins_over_a_projected_declaration() -> None:
 
 
 @_needs_proj
-def test_a_projected_crs_over_degree_coordinates_is_refused(ogs_logs: Any) -> None:
+def test_a_projected_crs_over_degree_coordinates_is_refused(geoservice_logs: Any) -> None:
     """The reported failure: EPSG:32633 over lon/lat puts the store at the UTM origin.
 
     Reached here with no CRS on the data at all, so the projected declaration is what wins the
@@ -215,12 +215,12 @@ def test_a_projected_crs_over_degree_coordinates_is_refused(ogs_logs: Any) -> No
     resolved = resolve_store_crs(ds, "EPSG:32633")
 
     assert resolved == "EPSG:4326"
-    assert "EPSG:32633" in ogs_logs.text
-    assert "±180/±90" in ogs_logs.text  # the log names the evidence, not just the verdict
+    assert "EPSG:32633" in geoservice_logs.text
+    assert "±180/±90" in geoservice_logs.text  # the log names the evidence, not just the verdict
 
 
 @_needs_proj
-def test_a_grid_still_on_the_0_360_frame_is_recognised_as_geographic(ogs_logs: Any) -> None:
+def test_a_grid_still_on_the_0_360_frame_is_recognised_as_geographic(geoservice_logs: Any) -> None:
     """Chicken-and-egg: the roll needs to know the axis is a longitude, but an unrolled axis
     exceeds 180. Testing longitude against 180 would make every 0…360 dataset look projected,
     so the check allows up to 360 and leans on latitude (±90) for the real evidence.
@@ -231,7 +231,7 @@ def test_a_grid_still_on_the_0_360_frame_is_recognised_as_geographic(ogs_logs: A
         coords={"y": [60.0, 59.0], "x": [0.0, 180.0, 350.0]},
     )
     assert resolve_store_crs(ds, "EPSG:32633") == "EPSG:4326"
-    assert "EPSG:32633" in ogs_logs.text
+    assert "EPSG:32633" in geoservice_logs.text
 
 
 @_needs_proj
@@ -253,7 +253,7 @@ def test_a_consistent_projected_crs_is_kept() -> None:
 
 
 @_needs_proj
-def test_a_sticky_wrong_crs_on_the_data_is_also_refused(ogs_logs: Any) -> None:
+def test_a_sticky_wrong_crs_on_the_data_is_also_refused(geoservice_logs: Any) -> None:
     """A wrong `proj:code` is copied forward on every rewrite, so the data's CRS can be wrong too.
 
     Norway's WorldPop store is in exactly this state: root says EPSG:32633, level 0 says
@@ -263,7 +263,7 @@ def test_a_sticky_wrong_crs_on_the_data_is_also_refused(ogs_logs: Any) -> None:
 
     assert resolve_store_crs(ds, "EPSG:32633") == "EPSG:4326"
 
-    assert "EPSG:32633 is projected" in ogs_logs.text
+    assert "EPSG:32633 is projected" in geoservice_logs.text
 
 
 def test_no_declared_crs_uses_the_datasets_own() -> None:
@@ -488,7 +488,7 @@ def test_a_missing_store_is_not_a_blocker(tmp_path: Path) -> None:
 
 
 @_needs_proj
-def test_prepare_never_rolls_a_projected_axis(ogs_logs: Any) -> None:
+def test_prepare_never_rolls_a_projected_axis(geoservice_logs: Any) -> None:
     """The defect this entry point exists to make unexpressible.
 
     Composed by hand, the streaming path passed the plugin's `crs` *class attribute* into the
@@ -511,7 +511,7 @@ def test_prepare_never_rolls_a_projected_axis(ogs_logs: Any) -> None:
 
     assert prepared.crs == "EPSG:32633"
     assert prepared.dataset["x"].values.tolist() == [400_000.0, 500_000.0, 600_000.0]
-    assert "Rolling" not in ogs_logs.text
+    assert "Rolling" not in geoservice_logs.text
 
 
 def test_prepare_applies_every_invariant_in_one_call() -> None:

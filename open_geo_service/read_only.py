@@ -86,7 +86,7 @@ async def read_only_middleware(
 
     The policy is matched against the route path, with the ASGI prefix removed, because
     `is_blocked` matches route paths as the app declares them. Matched against the raw request
-    path, `/ogs/manage` under `ROOT_PATH=/ogs` hits no closed prefix and read-only mode fails
+    path, `/geoservice/manage` under `ROOT_PATH=/geoservice` hits no closed prefix and read-only mode fails
     open. `route_path` never consults `GEOSERVICE_BASE_URL`, whose path is a public-origin
     statement rather than an incoming prefix.
     """

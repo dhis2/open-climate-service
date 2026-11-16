@@ -335,15 +335,15 @@ def test_policy_is_inert_when_the_flag_is_off(client: TestClient) -> None:
     assert client.post("/ingestions", json={}).status_code != 403  # ...but it is not applied
 
 
-@pytest.mark.parametrize("root_path", ["/ogs", "/ogs/"])
+@pytest.mark.parametrize("root_path", ["/geoservice", "/geoservice/"])
 def test_read_only_still_refuses_manage_under_a_mount_prefix(
     read_only: None, mounted_client_factory: MountedClientFactory, root_path: str
 ) -> None:
     """The policy matches route paths as the app declares them, so the prefix must come off.
 
-    Matched unstripped, `/ogs/manage` hits no closed prefix and read-only mode fails open. The
+    Matched unstripped, `/geoservice/manage` hits no closed prefix and read-only mode fails open. The
     trailing-slash case is the same failure one step later: uvicorn joins `root_path + path`
-    verbatim, so `/ogs/` yields `/ogs//manage`, which Starlette still routes to `/manage`.
+    verbatim, so `/geoservice/` yields `/geoservice//manage`, which Starlette still routes to `/manage`.
     """
     mounted = mounted_client_factory(root_path)
 

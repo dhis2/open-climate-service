@@ -32,7 +32,7 @@ Two options:
 ## Notes
 
 - The plugin needs a running Open Geo Service instance to connect to; it depends only on Open Geo Service's public HTTP contract (`/stac` and `/zarr/{id}/`), so it works against any instance.
-- Serving a browser build of GeoLibre from a different origin than the Open Geo Service instance needs CORS headers on the Open Geo Service `/zarr/` and `/stac` routers; the desktop app fetches cross-origin without that.
+- Serving a browser build of GeoLibre from a different origin than the Open Geo Service instance needs CORS headers on `/zarr/` and `/stac` routers; the desktop app fetches cross-origin without that.
 
 ## Links
 

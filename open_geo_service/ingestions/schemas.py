@@ -461,9 +461,7 @@ class ArtifactProvenance(BaseModel):
     output_snapshot_id: str | None = Field(
         default=None, description="Id of the Icechunk snapshot the producing job committed."
     )
-    open_geo_service_version: str | None = Field(
-        default=None, description="Version of Open Geo Service that ran the producing job."
-    )
+    ogs_version: str | None = Field(default=None, description="Version of Open Geo Service that ran the producing job.")
     execution: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -777,9 +775,7 @@ class DatasetProvenance(BaseModel):
     producer_job_id: str = Field(description="Id of the openEO job whose save_result produced the dataset.")
     producer_job_href: str = Field(description="Relative API path of the producing job.")
     process_sha256: str | None = Field(default=None, description="Digest of the process graph the job ran.")
-    open_geo_service_version: str | None = Field(
-        default=None, description="Version of Open Geo Service that ran the job."
-    )
+    ogs_version: str | None = Field(default=None, description="Version of Open Geo Service that ran the job.")
     output_snapshot_id: str | None = Field(default=None, description="Icechunk snapshot the job committed.")
     inputs: list[DatasetInput] = Field(default_factory=list, description="Datasets the job read.")
 

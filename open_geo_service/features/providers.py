@@ -29,7 +29,7 @@ ProviderResult = Mapping[str, Any] | tuple[Mapping[str, Any], str | None]
 
 F = TypeVar("F", bound=Callable[..., ProviderResult])
 
-_GEOSERVICE_FEATURE_PROVIDER_ATTR = "__geoservice_feature_provider__"
+_OGS_FEATURE_PROVIDER_ATTR = "__ogs_feature_provider__"
 
 
 def feature_provider(name: object) -> Callable[[F], F]:
@@ -74,7 +74,7 @@ def feature_provider(name: object) -> Callable[[F], F]:
         )
 
     def decorator(fn: F) -> F:
-        setattr(fn, _GEOSERVICE_FEATURE_PROVIDER_ATTR, name)
+        setattr(fn, _OGS_FEATURE_PROVIDER_ATTR, name)
         return fn
 
     return decorator
@@ -82,7 +82,7 @@ def feature_provider(name: object) -> Callable[[F], F]:
 
 def get_feature_provider_name(obj: Any) -> str | None:
     """Return the name set by `@feature_provider`, or None."""
-    return getattr(obj, _GEOSERVICE_FEATURE_PROVIDER_ATTR, None)
+    return getattr(obj, _OGS_FEATURE_PROVIDER_ATTR, None)
 
 
 def load_feature_providers() -> dict[str, Callable[..., ProviderResult]]:

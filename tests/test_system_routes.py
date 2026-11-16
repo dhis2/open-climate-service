@@ -301,9 +301,9 @@ def test_ingestable_templates_excludes_static_workflow_outputs(monkeypatch: pyte
 
 
 def test_the_shared_navigation_marks_the_current_page_and_carries_the_mount() -> None:
-    nav = str(system_templates.page_nav("/ogs", "map"))
+    nav = str(system_templates.page_nav("/geoservice", "map"))
 
-    assert 'href="/ogs/map"' in nav, "every link resolves under the mount prefix"
+    assert 'href="/geoservice/map"' in nav, "every link resolves under the mount prefix"
     assert 'aria-current="page"' in nav
     # The openEO editor is hosted elsewhere, so it opens in a new tab and is set apart.
     assert 'target="_blank" rel="noopener"' in nav
@@ -501,7 +501,7 @@ async def test_a_refusal_names_no_url_at_all() -> None:
     refusal carries a message and no location — there is no URL left to get wrong.
     """
     response = await system_routes.manage_sync(
-        cast("Request", _FakeRequest({"dataset_id": "  "}, root_path="/ogs")),
+        cast("Request", _FakeRequest({"dataset_id": "  "}, root_path="/geoservice")),
     )
 
     assert response.status_code == 400

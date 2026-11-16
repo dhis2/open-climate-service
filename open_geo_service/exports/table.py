@@ -308,7 +308,7 @@ def _provenance(context: DeliveryContext | None) -> ArtifactProvenance | None:
     if context is None or context.source_job_id is None:
         return None
     return ArtifactProvenance(
-        producer_job_id=context.source_job_id, execution=context.source_provenance, open_geo_service_version=__version__
+        producer_job_id=context.source_job_id, execution=context.source_provenance, ogs_version=__version__
     )
 
 

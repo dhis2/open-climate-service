@@ -199,13 +199,13 @@ def mounted_client_factory() -> MountedClientFactory:
     """Build a client that reaches the app the way uvicorn does under `--root-path`.
 
     Uvicorn sets `scope["root_path"]` *and* prepends it to `scope["path"]`, so `/manage` under
-    `/ogs` arrives as `/ogs/manage`. `TestClient(root_path=...)` only sets the former, which
+    `/geoservice` arrives as `/geoservice/manage`. `TestClient(root_path=...)` only sets the former, which
     makes any prefix-stripping code a no-op under test and lets a test pass with the strip
     removed. The prefix is passed verbatim, so a trailing slash reaches the app as it would in
     production.
     """
 
-    def make(root_path: str = "/ogs", target: ASGIApp = app) -> TestClient:
+    def make(root_path: str = "/geoservice", target: ASGIApp = app) -> TestClient:
         async def uvicorn_shaped(scope: Scope, receive: Receive, send: Send) -> None:
             if scope["type"] == "http":
                 scope = {**scope, "root_path": root_path, "path": root_path + scope["path"]}
@@ -242,7 +242,9 @@ def webhook(monkeypatch: pytest.MonkeyPatch) -> WebhookReceiver:
         receiver.posts.append((status, headers["Idempotency-Key"], json))
         return httpx.Response(status)
 
-    monkeypatch.setattr(notifications, "webhook_url", lambda: "http://hooks.test/ogs" if receiver.enabled else None)
+    monkeypatch.setattr(
+        notifications, "webhook_url", lambda: "http://hooks.test/geoservice" if receiver.enabled else None
+    )
     monkeypatch.setattr(notifications.httpx, "post", post)
     monkeypatch.setattr(notifications, "_kick", notifications.send_due)
     return receiver

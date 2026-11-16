@@ -412,8 +412,8 @@ def test_api_creates_reads_updates_pauses_and_deletes(
         refused = client.put("/schedules/sync/era5", json={setting: None})
         assert refused.status_code == 422 and refused.json()["detail"][0]["loc"] == ["body", setting], refused.text
     assert client.get("/schedules/sync/era5").json()["cron"] == "0 6 * * *"
-    mounted = mounted_client_factory("/ogs")
-    assert mounted.get("/schedules/sync/era5").json()["links"]["self"] == "/ogs/schedules/sync/era5"
+    mounted = mounted_client_factory("/geoservice")
+    assert mounted.get("/schedules/sync/era5").json()["links"]["self"] == "/geoservice/schedules/sync/era5"
     operations = client.get("/openapi.json").json()["paths"]
     for method, path, model in (
         ("post", "/schedules/sync", "ScheduleCreate"),

@@ -1984,20 +1984,20 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     assert [item["run_id"] for item in client.get(as_json["links"]["runs"]).json()["items"]] == [run["run_id"]]
 
     # Behind a proxy prefix every link leads into OGS, as the Location header does.
-    mounted = mounted_client_factory("/ogs")
+    mounted = mounted_client_factory("/geoservice")
     prefixed = mounted.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-02-01", "end": "2025-02-28"})
     links = prefixed.json()["links"]
     assert (
         prefixed.headers["Location"]
         == links["self"]
-        == f"/ogs/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
+        == f"/geoservice/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
     )
-    assert links["job"] == f"/ogs/jobs/{prefixed.json()['job_id']}"
+    assert links["job"] == f"/geoservice/jobs/{prefixed.json()['job_id']}"
     listed = mounted.get("/pipelines/rain-to-dhis2/runs").json()["items"]
-    assert listed[1]["links"]["delivery"] == "/ogs/exports/rain-to-dhis2/jobs/delivery-1"
+    assert listed[1]["links"]["delivery"] == "/geoservice/exports/rain-to-dhis2/jobs/delivery-1"
     assert mounted.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["links"] == {
-        "self": "/ogs/pipelines/rain-to-dhis2",
-        "runs": "/ogs/pipelines/rain-to-dhis2/runs",
+        "self": "/geoservice/pipelines/rain-to-dhis2",
+        "runs": "/geoservice/pipelines/rain-to-dhis2/runs",
     }
     operation = client.get("/openapi.json").json()["paths"]["/pipelines/{pipeline_id}/runs"]["post"]
     body = operation["requestBody"]["content"]["application/json"]["schema"]

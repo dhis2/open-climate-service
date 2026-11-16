@@ -61,7 +61,7 @@ def test_the_entry_point_does_not_own_the_root_path(
     too, and the entry point passing it as well would only be a second copy of the value."""
     from open_geo_service.cli import main
 
-    monkeypatch.setenv("ROOT_PATH", "/ogs")
+    monkeypatch.setenv("ROOT_PATH", "/geoservice")
     main()
 
     assert "root_path" not in uvicorn_kwargs

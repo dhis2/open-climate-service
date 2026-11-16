@@ -148,7 +148,7 @@ key at every start, which invalidates every token, so a production DHIS2 used th
 persistent keystore.
 
 DHIS2 is an identity source, never a dependency. Open Geo Service runs without DHIS2, and signing in through
-DHIS2 never implies the right to operate Open Geo Service. A DHIS2 role grants an Open Geo Service tier only through an
+DHIS2 never implies the right to operate the service. A DHIS2 role grants an Open Geo Service tier only through an
 explicit mapping.
 
 ## Apps inside DHIS2

@@ -295,6 +295,6 @@ def test_append_record_failure_restores_existing_store(
 
     assert services._load_records()[-1].artifact_id == initial.artifact_id
     repo = services.open_or_create_repo(store_path)
-    assert not [branch for branch in repo.list_branches() if branch.startswith("geoservice-ingest-rollback-")]
+    assert not [branch for branch in repo.list_branches() if branch.startswith("ogs-ingest-rollback-")]
     with open_icechunk_dataset(store_path) as stored:
         assert stored["precip"][:, 0, 0].values.tolist() == [1.0, 2.0]

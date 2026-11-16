@@ -1494,7 +1494,7 @@ def complete_managed_publication(job_id: str, snapshot_id: str) -> OpenEOJobReco
     if publication.state == "completed":
         return job
     planned = ArtifactRecord.model_validate(publication.record)
-    provenance = planned.provenance or ArtifactProvenance(producer_job_id=job_id, open_geo_service_version=__version__)
+    provenance = planned.provenance or ArtifactProvenance(producer_job_id=job_id, ogs_version=__version__)
     provenance = provenance.model_copy(update={"output_snapshot_id": snapshot_id})
     record = planned.model_copy(
         update={**_measured_after_commit(Path(publication.store_path), planned.variable), "provenance": provenance}
@@ -1751,7 +1751,7 @@ def _write_managed_zarr(
         # The execution evidence as the graph produced it; the output snapshot is added once
         # the commit has landed.
         provenance=(
-            ArtifactProvenance(producer_job_id=job_id, execution=provenance, open_geo_service_version=__version__)
+            ArtifactProvenance(producer_job_id=job_id, execution=provenance, ogs_version=__version__)
             if job_id is not None
             else None
         ),

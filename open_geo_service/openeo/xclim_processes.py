@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _cache: list[Any] | None = None
 
 
-def call_with_geoservice_time_dim(func: Any, *args: Any, **kwargs: Any) -> Any:
+def call_with_ogs_time_dim(func: Any, *args: Any, **kwargs: Any) -> Any:
     """Call an xclim function, mapping the OGS ``t`` dimension to/from ``time``.
 
     Our GeoZarr stores name the temporal dimension ``t``, but xclim indicators and
@@ -167,7 +167,7 @@ def _make_callable(indicator: Any, meta: dict[str, Any]) -> Any:
     """Wrap an xclim indicator as a bare callable with process metadata attached."""
 
     def _call(**kwargs: Any) -> Any:
-        return call_with_geoservice_time_dim(indicator, **kwargs)
+        return call_with_ogs_time_dim(indicator, **kwargs)
 
     setattr(_call, _GEOSERVICE_PROCESS_ATTR, meta)
     return _call

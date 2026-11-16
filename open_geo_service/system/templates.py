@@ -499,7 +499,7 @@ def _dataset_page_context(
                 for item in provenance.inputs
             ),
             ("Process graph digest", provenance.process_sha256 or "", None),
-            ("Open Geo Service version", provenance.open_geo_service_version or "", None),
+            ("Open Geo Service version", provenance.ogs_version or "", None),
         ]
 
     return {

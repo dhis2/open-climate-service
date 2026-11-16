@@ -466,9 +466,9 @@ def test_the_dataset_page_links_back_to_the_data_source(monkeypatch: pytest.Monk
     """
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: _ingestable("chirps_monthly"))
 
-    html = landing.render_dataset_page(_record("chirps_monthly"), "/ogs")
+    html = landing.render_dataset_page(_record("chirps_monthly"), "/geoservice")
 
-    assert 'href="/ogs/data-sources/chirps_monthly"' in html
+    assert 'href="/geoservice/data-sources/chirps_monthly"' in html
 
 
 def _ingest_defaults_start(today: date) -> str:

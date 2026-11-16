@@ -119,7 +119,7 @@ run: ## Start the API with uvicorn
 Create `geoservice.yaml`:
 
 ```yaml
-id: rwanda-geoservice             # unique identifier for this instance
+id: rwanda-geo-service             # unique identifier for this instance
 name: Rwanda Geo Service           # display name shown in the web UI
 
 extent:

@@ -41,7 +41,7 @@ cp geoservice.yaml.example geoservice.yaml
 ```
 
 ```yaml
-id: rwanda-geoservice
+id: rwanda-geo-service
 name: Rwanda Geo Service
 
 extent:
