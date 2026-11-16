@@ -1343,7 +1343,7 @@ def test_a_malformed_declaration_raises_rather_than_reading_as_no_version() -> N
 def test_release_identity_compares_on_the_pair_not_the_value() -> None:
     """Same value under a different authority is a different release."""
     assert _version("R2025A") == _version("R2025A")
-    assert _version("R2025A") != _version("R2025A", authority="ocs")
+    assert _version("R2025A") != _version("R2025A", authority="geoservice")
     assert _version("R2025A") != _version("R2025B")
 
 
@@ -1353,7 +1353,7 @@ def test_authority_must_be_a_machine_identifier() -> None:
         with pytest.raises(ValidationError):
             ArtifactVersion(value="R2025A", authority=rejected)
 
-    for accepted in ["worldpop", "overture", "ocs", "dhis2", "dhis2.national-hmis", "worldpop_global2"]:
+    for accepted in ["worldpop", "overture", "geoservice", "dhis2", "dhis2.national-hmis", "worldpop_global2"]:
         assert ArtifactVersion(value="R2025A", authority=accepted).authority == accepted
 
 

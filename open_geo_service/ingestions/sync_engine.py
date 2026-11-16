@@ -204,7 +204,7 @@ def plan_sync(
     target_version = _declared_release_version(source_dataset)
 
     # Compared as a whole, not on `value`: the authority is half the identity, so
-    # `worldpop:R2025A` and `ocs:R2025A` name different releases that happen to share a
+    # `worldpop:R2025A` and `geoservice:R2025A` name different releases that happen to share a
     # string. Pydantic models compare by field value, so `!=` is that comparison.
     if target_version is not None and target_version != current_version:
         # Two cases reach here, and both rematerialize:

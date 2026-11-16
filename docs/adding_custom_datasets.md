@@ -354,7 +354,7 @@ the revision so sync can see it:
 
 Both halves are required, because the pair is the identity: `R2025A` on its own does not say
 whose `R2025A` it is, and Open Geo Service may later publish its own releases of derived datasets under the
-`ocs` authority. `value` is passed through verbatim and never parsed — its syntax belongs to
+`geoservice` authority. `value` is passed through verbatim and never parsed — its syntax belongs to
 the source — so a blank or padded value (`" R2025A "`) is rejected rather than trimmed, since
 trimming would make the stored identity differ from the declared one. `authority` is a
 **stable machine identifier**: lowercase letters and digits, separated by `.`, `-` or `_`, at

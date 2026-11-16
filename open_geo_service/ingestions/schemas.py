@@ -146,7 +146,7 @@ class ArtifactPublication(BaseModel):
     published_at: datetime | None = None
 
 
-GEOSERVICE_AUTHORITY = "ocs"
+GEOSERVICE_AUTHORITY = "geoservice"
 """Version authority for a release Open Geo Service defines itself.
 
 A constant rather than a literal at each site, so the path that stamps a derived dataset's
@@ -169,7 +169,7 @@ class ArtifactVersion(BaseModel):
     """A logical release identity: what the release is, and whose scheme names it.
 
     The meaningful identity is the pair. A bare "1.0" or "R2025A" says nothing on its own —
-    it is `worldpop:R2025A` or `ocs:1.0` that identifies a release — so one namespaced
+    it is `worldpop:R2025A` or `geoservice:1.0` that identifies a release — so one namespaced
     concept is carried here rather than parallel `source_version` / `dataset_version` /
     `release_version` fields that would each mean something slightly different.
 
@@ -197,7 +197,7 @@ class ArtifactVersion(BaseModel):
         max_length=AUTHORITY_MAX_LENGTH,
         description=(
             "Whose versioning scheme gives `value` its meaning, as a stable machine "
-            "identifier ('worldpop', 'overture', 'ocs') — never a display label. Compared "
+            "identifier ('worldpop', 'overture', 'geoservice') — never a display label. Compared "
             "exactly, and part of the identity, so changing it renames every release under "
             "it; choose it once."
         ),

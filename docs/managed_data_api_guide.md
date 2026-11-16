@@ -681,7 +681,7 @@ are required and neither is inferred. `value` is opaque: Open Geo Service never 
 normalises it, because its syntax belongs to the authority. Because it is stored exactly as
 declared, a blank or whitespace-padded value is rejected rather than trimmed — otherwise
 `" R2025A "` would be a different release from `R2025A`. `authority` is a stable machine
-identifier (`worldpop`, `overture`, `ocs`), never a display label — display names live on
+identifier (`worldpop`, `overture`, `geoservice`), never a display label — display names live on
 `source` and `providers` — and it is compared exactly, so changing it renames every release
 under it. Both are capped at 64 characters, and the same rules apply wherever an identity is
 built: a template at registration, an artifact at materialization, a record on load.
@@ -708,7 +708,7 @@ known-equal, so it rematerializes once to establish identity and then settles.
 A version is a *logical release*, distinct from the other two identities on a record:
 `artifact_id` is the exact materialization, and provenance is how it was produced. A derived
 dataset does not inherit a version from its inputs — an openEO result carries no version
-unless Open Geo Service deliberately releases it, as `{"value": "1.0", "authority": "ocs"}`, with its
+unless Open Geo Service deliberately releases it, as `{"value": "1.0", "authority": "geoservice"}`, with its
 inputs recorded as provenance.
 
 A template that declares no version keeps the period-based behaviour described above, and a

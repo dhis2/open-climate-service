@@ -405,7 +405,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     and neither of those.
 
     No temporal extent is invented. A boundary set has no time axis, and its release version is
-    a release identifier rather than a date — `ocs:2026-08-19.0` is not an instant, and turning
+    a release identifier rather than a date — `geoservice:2026-08-19.0` is not an instant, and turning
     one into a temporal extent would publish a time range no feature was observed in.
     """
     detail = artifact.features
