@@ -218,9 +218,7 @@ async def _catalogue(client: httpx.AsyncClient) -> list[DatasetSummary]:
     catalog = await _get_json(client, "/stac/catalog.json")
     # A child link is `.../stac/{id}/collection.json`.
     ids = [
-        unquote(str(link["href"]).rsplit("/", 2)[-2])
-        for link in catalog.get("links", [])
-        if link.get("rel") == "child"
+        unquote(str(link["href"]).rsplit("/", 2)[-2]) for link in catalog.get("links", []) if link.get("rel") == "child"
     ]
     # The records, not the STAC documents, know when each dataset was last updated.
     records = await _get_json(client, "/datasets?f=json")
