@@ -501,7 +501,7 @@ def test_a_feature_collections_data_files_carry_their_size_but_are_not_hashed(
     assert all("file:checksum" not in doc["assets"][key] for key in ("data", "tiles") if key in doc["assets"])
     assert hashed == []
     assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" in doc["stac_extensions"]
-    assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in doc["stac_extensions"]
+    assert "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json" in doc["stac_extensions"]
 
 
 def test_a_collection_with_no_file_left_does_not_declare_the_file_extension(

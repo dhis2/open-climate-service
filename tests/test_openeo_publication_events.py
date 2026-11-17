@@ -977,7 +977,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
             assert client.head(href).status_code == 200, link
     assert "https://stac-extensions.github.io/projection/v2.0.0/schema.json" in collection["stac_extensions"]
     assert not any("projection/v1" in extension for extension in collection["stac_extensions"])
-    assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in collection["stac_extensions"]
+    assert "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json" in collection["stac_extensions"]
     # With this instance as host, the collection is a mirror, which records when it was last synced.
     assert collection["updated"].endswith("Z")
     readme = client.get(f"/stac/{_DATASET}/README.md").text

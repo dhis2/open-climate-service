@@ -151,7 +151,7 @@ def test_stac_landing_links_to_collections(client: TestClient) -> None:
     payload = response.json()
     assert any(link["href"].endswith("/stac/catalog.json") for link in payload["links"] if link["rel"] == "root")
     # The Portolan profile's versioned URI, its only conformance signal.
-    assert payload["stac_extensions"] == ["https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"]
+    assert payload["stac_extensions"] == ["https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json"]
 
 
 def test_catalog_self_link_reflects_request_path(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
