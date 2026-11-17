@@ -15,8 +15,8 @@ import xarray as xr
 from openeo_pg_parser_networkx.pg_schema import Date, ParameterReference, TemporalInterval
 from pydantic import ValidationError
 
-from open_climate_service.openeo import execution
-from open_climate_service.openeo.execution import _naive_temporal_scalar
+from open_geo_service.openeo import execution
+from open_geo_service.openeo.execution import _naive_temporal_scalar
 
 
 @pytest.fixture
@@ -184,7 +184,7 @@ def test_wrapper_preserves_the_wrapped_signature() -> None:
     """
     import inspect
 
-    from open_climate_service.openeo.execution import _normalise_temporal_arguments
+    from open_geo_service.openeo.execution import _normalise_temporal_arguments
 
     def implementation(data: object, axis: object = None) -> None: ...
 
@@ -227,7 +227,7 @@ def test_spi_accepts_every_bound_form_the_instance_override_handled(registry: ob
 
 def test_temporal_extent_normalisation_is_unaffected() -> None:
     """load_collection's own path must keep working — this fix is additive to it."""
-    from open_climate_service.openeo.execution import _temporal_to_list
+    from open_geo_service.openeo.execution import _temporal_to_list
 
     assert _temporal_to_list(TemporalInterval.model_validate(["1991-01-01", "2020-12-31"])) == [
         "1991-01-01T00:00:00",

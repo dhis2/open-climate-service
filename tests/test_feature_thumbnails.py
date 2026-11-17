@@ -16,11 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from open_climate_service import config as api_config
-from open_climate_service.features import services as feature_services
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.shared import thumbnails
-from open_climate_service.shared.thumbnails import THUMBNAIL_LONG_SIDE_PIXELS, thumbnail_path
+from open_geo_service import config as api_config
+from open_geo_service.features import services as feature_services
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.shared import thumbnails
+from open_geo_service.shared.thumbnails import THUMBNAIL_LONG_SIDE_PIXELS, thumbnail_path
 
 TEMPLATE = {"id": "districts", "name": "District boundaries", "id_property": "code"}
 
@@ -155,7 +155,7 @@ def test_the_thumbnail_is_served_and_advertised_in_stac(client: TestClient, monk
     assert served.status_code == 200
     assert served.headers["content-type"] == "image/png"
 
-    asset = client.get("/stac/collections/districts").json()["assets"]["thumbnail"]
+    asset = client.get("/stac/districts/collection.json").json()["assets"]["thumbnail"]
     assert asset["href"] == "http://testserver/datasets/districts/thumbnail.png"
     assert asset["roles"] == ["thumbnail"]
 
@@ -168,4 +168,4 @@ def test_a_collection_without_a_thumbnail_does_not_advertise_one(
     monkeypatch.setattr(ingestion_services, "_artifact_storage_exists", lambda _: True)
 
     assert not thumbnail_path("districts").exists()
-    assert "thumbnail" not in client.get("/stac/collections/districts").json()["assets"]
+    assert "thumbnail" not in client.get("/stac/districts/collection.json").json()["assets"]

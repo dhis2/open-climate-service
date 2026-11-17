@@ -1,0 +1,753 @@
+"""Sync engine for managed datasets.
+
+This module owns the two sync responsibilities:
+
+- `plan_sync(...)` decides what EO API should do for one managed dataset
+- `run_sync(...)` applies that plan through the existing artifact creation flow
+
+Keeping both operations here gives the route/service layer a stable entry point
+and keeps future scheduler-driven sync jobs on the same code path.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+from open_geo_service import config as api_config
+from open_geo_service.ingestions.schemas import (
+    ArtifactFormat,
+    ArtifactRecord,
+    ArtifactVersion,
+    SyncAction,
+    SyncDetail,
+    SyncKind,
+    SyncResponse,
+    parse_declared_artifact_version,
+)
+from open_geo_service.publications.services import managed_dataset_id_for
+from open_geo_service.shared.time import (
+    datetime_to_period_string,
+    dekad_start,
+    next_period_string,
+    normalize_period_string,
+    parse_period_string_to_datetime,
+    utc_now,
+    utc_today,
+)
+from open_geo_service.streaming.store import read_committed_period_ids
+
+logger = logging.getLogger(__name__)
+
+
+class SyncConfigurationError(RuntimeError):
+    """Raised when server-side sync configuration is invalid."""
+
+
+def _declared_release_version(source_dataset: dict[str, Any]) -> ArtifactVersion | None:
+    """Return the release identity a template declares, or None if it declares none.
+
+    Delegates to the one interpreter of that declaration, so the planner cannot read it
+    differently from the path that stamps it on an artifact.
+    """
+    return parse_declared_artifact_version(source_dataset.get("sync", {}).get("version"))
+
+
+def _release_label(version: ArtifactVersion | None) -> str | None:
+    """Render a release identity for a human-readable message, as `authority:value`.
+
+    Both halves, because the value alone is ambiguous — the pair is what identifies a
+    release — and because a message naming only "R2025A" cannot explain a sync triggered by
+    the authority changing.
+    """
+    if version is None:
+        return None
+    return f"{version.authority}:{version.value}"
+
+
+def plan_sync(
+    *,
+    source_dataset: dict[str, Any],
+    latest_artifact: ArtifactRecord,
+    requested_end: str | None,
+) -> SyncDetail:
+    """Return the sync decision for one managed dataset without changing local state.
+
+    The planner reads the latest materialized coverage plus the dataset template's
+    declared `sync_kind` and produces the action EO API should take next.
+
+    Current first-pass behavior:
+
+    - temporal datasets compare the latest local period against the requested end
+    - release datasets compare the current materialized release against the requested end
+    - static datasets are marked as not syncable
+
+    This planner deliberately does not download data or persist artifacts.
+    """
+    sync_kind_value = source_dataset.get("sync", {}).get("kind")
+    if not isinstance(sync_kind_value, str) or not sync_kind_value:
+        raise ValueError("source_dataset must define sync.kind for sync planning")
+    sync_kind = SyncKind(sync_kind_value)
+    # Request scope is operation provenance and may describe only the latest
+    # incremental ingest. Sync planning must use the cumulative realized store
+    # coverage as its artifact scope.
+    current_start = latest_artifact.coverage.temporal.start
+
+    if sync_kind == SyncKind.STATIC:
+        # Static datasets are never synced. Report NOT_SYNCABLE directly, reading the
+        # coverage end from the artifact (None for a non-temporal dataset such as a
+        # climatology) — don't call _sync_current_end, which requires a temporal end.
+        static_end = latest_artifact.coverage.temporal.end
+        return SyncDetail(
+            source_dataset_id=latest_artifact.dataset_id,
+            sync_kind=sync_kind,
+            action=SyncAction.NOT_SYNCABLE,
+            reason="static_dataset",
+            message="This dataset is static and is not syncable.",
+            current_start=current_start,
+            current_end=static_end,
+            target_end=static_end,
+            target_end_source="current_coverage",
+        )
+
+    current_end = _sync_current_end(source_dataset=source_dataset, latest_artifact=latest_artifact)
+    period_type = str(source_dataset["period_type"])
+    normalized_requested_end = requested_end.strip() if isinstance(requested_end, str) else None
+    normalized_requested_end = normalized_requested_end or None
+    target_end_source = "request" if normalized_requested_end is not None else "default_today"
+    if normalized_requested_end is not None:
+        target_end = normalize_period_string(normalized_requested_end, period_type)
+    else:
+        target_end = _default_target_end(period_type=period_type)
+
+    if sync_kind == SyncKind.TEMPORAL:
+        next_period_start = next_period_string(current_end, period_type)
+        if next_period_start > target_end:
+            return SyncDetail(
+                source_dataset_id=latest_artifact.dataset_id,
+                sync_kind=sync_kind,
+                action=SyncAction.NO_OP,
+                reason="no_new_period",
+                message=(
+                    f"Data exists for {_existing_coverage(current_start, current_end, period_type)}; "
+                    f"target {target_end} does not require a new download."
+                ),
+                current_start=current_start,
+                current_end=current_end,
+                target_end=target_end,
+                target_end_source=target_end_source,
+            )
+        # Enumerate the plugin's actually-available periods before committing to a sync.
+        # The full list is stored on the SyncDetail so the orchestrator can reuse it
+        # without re-querying at execution time.
+        available_periods = _query_available_periods(source_dataset, next_period_start, target_end)
+        # available_periods is None  → no plugin, use target_end as-is
+        # available_periods is []    → plugin exists but nothing available → NO_OP
+        # available_periods is [...]  → clamp target_end to the last available period
+        if available_periods == []:
+            return SyncDetail(
+                source_dataset_id=latest_artifact.dataset_id,
+                sync_kind=sync_kind,
+                action=SyncAction.NO_OP,
+                reason="no_new_period",
+                message=(
+                    f"Data exists for {_existing_coverage(current_start, current_end, period_type)}; "
+                    "no new periods are available from the source."
+                ),
+                current_start=current_start,
+                current_end=current_end,
+                target_end=target_end,
+                target_end_source=target_end_source,
+            )
+        if available_periods is not None and available_periods[-1] < target_end:
+            target_end = available_periods[-1]
+            target_end_source = "plugin_availability"
+        action = SyncAction.APPEND if _supports_append(source_dataset, latest_artifact) else SyncAction.REMATERIALIZE
+        reason = "new_periods_available_for_append" if action == SyncAction.APPEND else "new_periods_available"
+        # Only pass periods for APPEND — it covers [next_period_start, target_end].
+        # For REMATERIALIZE the orchestrator must enumerate the full [current_start, target_end]
+        # range so we pass None and let it call plugin.periods() with the correct bounds.
+        periods_for_orchestrator = available_periods if action == SyncAction.APPEND else None
+        return SyncDetail(
+            source_dataset_id=latest_artifact.dataset_id,
+            sync_kind=sync_kind,
+            action=action,
+            reason=reason,
+            message=_sync_plan_message(
+                action=action,
+                current_start=current_start,
+                current_end=current_end,
+                target_end=target_end,
+                delta_start=next_period_start,
+                delta_end=target_end,
+                period_type=period_type,
+            ),
+            current_start=current_start,
+            current_end=current_end,
+            target_end=target_end,
+            target_end_source=target_end_source,
+            delta_start=next_period_start,
+            delta_end=target_end,
+            periods=periods_for_orchestrator,
+        )
+
+    # Release identity, independent of period_type. current_end/target_end stay
+    # period-domain values throughout, but when a template declares a version that is
+    # the authoritative currency signal: an upstream source can republish the *same*
+    # periods under a new revision, which no period comparison can ever detect. That
+    # case is the reason this field exists — see ArtifactRecord.version.
+    current_version = latest_artifact.version
+    target_version = _declared_release_version(source_dataset)
+
+    # Compared as a whole, not on `value`: the authority is half the identity, so
+    # `worldpop:R2025A` and `geoservice:R2025A` name different releases that happen to share a
+    # string. Pydantic models compare by field value, so `!=` is that comparison.
+    if target_version is not None and target_version != current_version:
+        # Two cases reach here, and both rematerialize:
+        #
+        # - the declared release genuinely changed (current_version is a different identity)
+        # - the artifact predates version tracking (current_version is None), so its
+        #   release is *unknown* rather than known-equal
+        #
+        # The legacy case is a deliberate one-time migration cost: rematerializing stamps
+        # the version, so the next sync sees current_version == target_version and stops.
+        # Treating an unknown version as a match instead would leave it unknown forever
+        # and silently serve content nothing can vouch for.
+        #
+        # A version change rewrites the existing span; it must never truncate it. Without
+        # this, a sync that omits `end` takes the default target of today and would replace
+        # a 2015..2030 artifact with 2015..<this year>. An explicitly requested earlier end
+        # is held to the same rule: release sync does not shrink a managed dataset, which is
+        # also why the period path below returns NO_OP rather than rematerializing whenever
+        # target_end is already behind current_end. Periods compare lexically here as they
+        # do everywhere else in this module.
+        if current_end > target_end:
+            target_end = current_end
+            target_end_source = "current_coverage"
+
+        # What availability may do here depends on where it lands relative to the coverage
+        # already held, which is the floor — not target_end, which may sit ahead of it:
+        #
+        #   before current_end        wait; rematerializing would shorten the dataset
+        #   current_end..target_end   rematerialize, clamped — preserves coverage, advances it
+        #   through target_end        rematerialize the full requested span
+        #
+        # Both ends are checked. A release that no longer republishes the earliest years
+        # starts after current_start, and execution requires the first available period to
+        # equal the requested start (_validate_source_periods), so passing only the
+        # last-period check would plan a rematerialization that fails with "Source cannot
+        # materialize the requested temporal scope from ...". It would also drop the head of
+        # the series, which is the same shrinkage the tail check exists to prevent.
+        #
+        # Periods are queried from current_start, not current_end, because a version change
+        # rewrites the whole artifact rather than extending it, matching how run_sync
+        # executes REMATERIALIZE (start=current_start, no download window).
+        #
+        # This guard is only as strong as the plugin's own period reporting, and a plugin
+        # whose periods() ignores the revision it was configured with — WorldPop's clamps
+        # the requested range to its 2015..2030 window without checking that revision —
+        # reports every in-range period as available even for a revision the upstream hub
+        # has not published. Advancing such a template to an unpublished revision therefore
+        # still fails at fetch time rather than waiting here.
+        # That is a property of the plugin contract, unchanged by release tracking: making
+        # availability revision-aware belongs with the plugin, not the planner.
+        release_start = current_start or current_end
+        available_for_release = _query_available_periods(source_dataset, release_start, target_end)
+        if available_for_release is not None:
+            if (
+                not available_for_release
+                or available_for_release[-1] < current_end
+                or available_for_release[0] > release_start
+            ):
+                # The declared release cannot be materialized across the span we already
+                # hold: the plugin reports nothing at all, or it stops short of the coverage
+                # floor, or it no longer reaches back to the start. Rematerializing to the
+                # shorter span would shrink a published dataset to chase a version, and
+                # planning past what the source has would fail at execution instead. Wait,
+                # leaving the current artifact and its old version in place, and say so.
+                if not available_for_release:
+                    reach = f"reports no available periods through {target_end}"
+                elif available_for_release[0] > release_start:
+                    reach = f"starts at {available_for_release[0]}, after the current {release_start}"
+                else:
+                    reach = f"covers only through {available_for_release[-1]}, short of the current {current_end}"
+                return SyncDetail(
+                    source_dataset_id=latest_artifact.dataset_id,
+                    sync_kind=sync_kind,
+                    action=SyncAction.NO_OP,
+                    reason="release_version_unavailable",
+                    message=(
+                        f"The template declares release {_release_label(target_version)}, but the source {reach}. "
+                        "Sync will not rematerialize, because doing so would shorten the dataset."
+                    ),
+                    current_start=current_start,
+                    current_end=current_end,
+                    target_end=target_end,
+                    target_end_source=target_end_source,
+                    current_version=current_version,
+                    target_version=target_version,
+                )
+            if available_for_release[-1] < target_end:
+                target_end = available_for_release[-1]
+                target_end_source = "plugin_availability"
+        return SyncDetail(
+            source_dataset_id=latest_artifact.dataset_id,
+            sync_kind=sync_kind,
+            action=SyncAction.REMATERIALIZE,
+            reason="release_version_unknown" if current_version is None else "release_version_changed",
+            message=(
+                (
+                    f"The stored artifact predates release tracking and its release is unknown; "
+                    f"the template declares {_release_label(target_version)}. Sync will rematerialize the dataset."
+                )
+                if current_version is None
+                else (
+                    f"The declared release changed from {_release_label(current_version)} to "
+                    f"{_release_label(target_version)}. "
+                    "Sync will rematerialize the dataset."
+                )
+            ),
+            current_start=current_start,
+            current_end=current_end,
+            target_end=target_end,
+            target_end_source=target_end_source,
+            current_version=current_version,
+            target_version=target_version,
+            # Unlike the temporal path — whose list covers only the append delta and so
+            # cannot describe a full rewrite — this one was queried over exactly the span
+            # execution will rematerialize, [current_start, target_end]. Passing it keeps
+            # planning and execution on one view of source availability, instead of letting
+            # a second periods() call moments later materialize a different span than the
+            # one this plan was approved for.
+            periods=available_for_release,
+        )
+
+    # Clamp target_end to what the plugin reports as actually available so we
+    # never plan a rematerialization into future/unpublished releases.
+    available_periods = _query_available_periods(source_dataset, current_end, target_end)
+    if available_periods is not None:
+        if not available_periods:
+            return SyncDetail(
+                source_dataset_id=latest_artifact.dataset_id,
+                sync_kind=sync_kind,
+                action=SyncAction.NO_OP,
+                reason="no_new_release",
+                message=(
+                    f"Data exists for {_existing_coverage(current_start, current_end, period_type)}; "
+                    "no new release is available from the source."
+                ),
+                current_start=current_start,
+                current_end=current_end,
+                target_end=target_end,
+                target_end_source=target_end_source,
+                current_version=current_version,
+                target_version=target_version,
+            )
+        target_end = available_periods[-1]
+        target_end_source = "plugin_availability"
+
+    if current_end >= target_end:
+        return SyncDetail(
+            source_dataset_id=latest_artifact.dataset_id,
+            sync_kind=sync_kind,
+            action=SyncAction.NO_OP,
+            reason="no_new_release",
+            message=(
+                f"Data exists for {_existing_coverage(current_start, current_end, period_type)}; "
+                f"target {target_end} does not require a new download."
+            ),
+            current_start=current_start,
+            current_end=current_end,
+            target_end=target_end,
+            target_end_source=target_end_source,
+            current_version=current_version,
+            target_version=target_version,
+        )
+
+    return SyncDetail(
+        source_dataset_id=latest_artifact.dataset_id,
+        sync_kind=sync_kind,
+        action=SyncAction.REMATERIALIZE,
+        reason="new_release_available",
+        message=_sync_plan_message(
+            action=SyncAction.REMATERIALIZE,
+            current_start=current_start,
+            current_end=current_end,
+            target_end=target_end,
+            delta_start=current_end,
+            delta_end=target_end,
+            period_type=period_type,
+        ),
+        current_start=current_start,
+        current_end=current_end,
+        target_end=target_end,
+        target_end_source=target_end_source,
+        current_version=current_version,
+        target_version=target_version,
+    )
+
+
+def run_sync(
+    *,
+    latest_artifact: ArtifactRecord,
+    source_dataset: dict[str, Any],
+    requested_end: str | None,
+    country_code: str | None,
+    publish: bool,
+    create_artifact_fn: Callable[..., ArtifactRecord],
+    get_dataset_fn: Callable[[str], Any],
+    on_progress: Callable[..., Any] | None = None,
+) -> SyncResponse:
+    """Plan and execute one sync operation for a managed dataset.
+
+    `run_sync(...)` is the engine entry point that non-HTTP callers can reuse
+    later, for example scheduled jobs. It keeps all sync outcomes on the same
+    response model:
+
+    - `up_to_date` when no new upstream state is planned
+    - `waiting_for_source` when a newer release is declared but the source cannot serve it
+    - `not_syncable` for templates that should not be synced
+    - `completed` when EO API rematerializes a fresh backing artifact
+    """
+    sync_detail = plan_sync(
+        source_dataset=source_dataset,
+        latest_artifact=latest_artifact,
+        requested_end=requested_end,
+    )
+    dataset_id = managed_dataset_id_for(latest_artifact)
+    logger.info(
+        "Sync plan for dataset '%s': action=%s reason=%s current=%s..%s target=%s delta=%s..%s",
+        dataset_id,
+        sync_detail.action,
+        sync_detail.reason,
+        sync_detail.current_start,
+        sync_detail.current_end,
+        sync_detail.target_end,
+        sync_detail.delta_start,
+        sync_detail.delta_end,
+    )
+
+    if sync_detail.action == SyncAction.NO_OP:
+        if sync_detail.reason == "release_version_unavailable":
+            # Nothing to run, but the dataset is *not* current: a newer release is declared
+            # and the source cannot serve it yet. Reporting "already current" here would
+            # assert the opposite of what the planner found, so carry the planner's own
+            # explanation through instead of the canned message.
+            logger.info(
+                "Sync skipped for dataset '%s': declared release %s is not yet available from the source",
+                dataset_id,
+                _release_label(sync_detail.target_version),
+            )
+            return SyncResponse(
+                sync_id=None,
+                status="waiting_for_source",
+                message=sync_detail.message,
+                dataset=get_dataset_fn(dataset_id),
+                sync_detail=sync_detail,
+            )
+        logger.info("Sync skipped for dataset '%s': already current", dataset_id)
+        return SyncResponse(
+            sync_id=None,
+            status="up_to_date",
+            message="Managed dataset is already current with upstream source state.",
+            dataset=get_dataset_fn(dataset_id),
+            sync_detail=sync_detail,
+        )
+
+    if sync_detail.action == SyncAction.NOT_SYNCABLE:
+        logger.info("Sync skipped for dataset '%s': dataset is not syncable", dataset_id)
+        return SyncResponse(
+            sync_id=None,
+            status="not_syncable",
+            message="Managed dataset is not syncable under its configured sync policy.",
+            dataset=get_dataset_fn(dataset_id),
+            sync_detail=sync_detail,
+        )
+
+    # Execution always goes through the ingestion materialization path so sync
+    # does not grow a second write/storage implementation. Temporal APPEND
+    # extends the committed store; release-style REMATERIALIZE rewrites the
+    # managed artifact against the latest planned upstream state.
+    if sync_detail.current_start is None:
+        raise ValueError("Sync execution requires current_start for rematerialize or append actions")
+    if sync_detail.target_end is None:
+        raise ValueError("Sync execution requires target_end for rematerialize or append actions")
+    download_start = sync_detail.delta_start if sync_detail.action == SyncAction.APPEND else None
+    logger.info(
+        "Sync executing for dataset '%s': action=%s artifact_scope=%s..%s download_scope=%s..%s publish=%s",
+        dataset_id,
+        sync_detail.action,
+        sync_detail.current_start,
+        sync_detail.target_end,
+        download_start or sync_detail.current_start,
+        sync_detail.delta_end if download_start is not None else sync_detail.target_end,
+        publish,
+    )
+    artifact = create_artifact_fn(
+        dataset=source_dataset,
+        start=sync_detail.current_start,
+        end=sync_detail.target_end,
+        download_start=download_start,
+        download_end=sync_detail.delta_end if download_start is not None else None,
+        bbox=list(latest_artifact.request_scope.bbox) if latest_artifact.request_scope.bbox is not None else None,
+        country_code=country_code,
+        overwrite=sync_detail.action == SyncAction.REMATERIALIZE,
+        publish=publish,
+        on_progress=on_progress,
+        periods=sync_detail.periods,
+    )
+    logger.info(
+        "Sync completed for dataset '%s': artifact_id=%s action=%s",
+        dataset_id,
+        artifact.artifact_id,
+        sync_detail.action,
+    )
+    return SyncResponse(
+        sync_id=artifact.artifact_id,
+        status="completed",
+        message=_sync_completed_message(sync_detail.action),
+        dataset=get_dataset_fn(managed_dataset_id_for(artifact)),
+        sync_detail=sync_detail,
+    )
+
+
+def _sync_completed_message(action: SyncAction) -> str:
+    """Return a user-facing completion message for the executed sync action."""
+    if action == SyncAction.APPEND:
+        return "Managed dataset was synced by appending missing periods to the committed store."
+    return "Managed dataset was rematerialized against the latest planned upstream state."
+
+
+def _display_period(value: str, period_type: str) -> str:
+    """Format stored coverage in the dataset's native period notation when possible."""
+    try:
+        return normalize_period_string(value, period_type)
+    except ValueError:
+        # Older or externally written records may contain a value the current normaliser does
+        # not understand. A plan message must still be available for that record.
+        return value
+
+
+def _existing_coverage(current_start: str | None, current_end: str, period_type: str) -> str:
+    """The range a store already holds, as the dataset page states it: "2024-01 through 2025-02".
+
+    Every plan message opens with this so the sync panel and the coverage line on the same
+    page name the same thing. A store of one period is named once, and a record with no
+    start falls back to naming the end alone.
+    """
+    displayed_end = _display_period(current_end, period_type)
+    if not current_start:
+        return displayed_end
+    displayed_start = _display_period(current_start, period_type)
+    if displayed_start == displayed_end:
+        return displayed_end
+    return f"{displayed_start} through {displayed_end}"
+
+
+def _sync_plan_message(
+    *,
+    action: SyncAction,
+    current_start: str | None,
+    current_end: str,
+    target_end: str,
+    delta_start: str,
+    delta_end: str,
+    period_type: str,
+) -> str:
+    """Return a human-readable sync plan summary.
+
+    Says each period once. An append covers exactly [delta_start, delta_end] and the caller
+    passes `delta_end=target_end`, so naming the target as well only repeated the same month:
+    "append missing periods 2026-08 through 2026-08 and extend coverage through 2026-08".
+    """
+    existing = _existing_coverage(current_start, current_end, period_type)
+    if action == SyncAction.APPEND:
+        added = delta_start if delta_start == delta_end else f"{delta_start} through {delta_end}"
+        return f"Data exists for {existing}. Sync will add {added}."
+    return f"Data exists for {existing}. Sync will rematerialize the dataset through {target_end}."
+
+
+def _query_available_periods(
+    source_dataset: dict[str, Any],
+    start: str,
+    target_end: str,
+) -> list[str] | None:
+    """Ask the plugin which periods are actually available.
+
+    Returns the full period list (possibly empty) so the result can be reused
+    at execution time, avoiding a second query in the orchestrator.
+
+    Returns None only when the dataset has no plugin (non-streaming) — the
+    caller falls back to the requested target_end without clamping.
+
+    Returns [] when the plugin exists but has no periods for the requested
+    range — the caller should treat this as NO_OP.
+    """
+    from open_geo_service.shared.plugin_loader import instantiate_plugin
+
+    plugin_path = source_dataset.get("ingestion", {}).get("plugin")
+    if not plugin_path:
+        return None
+    params: dict[str, Any] = source_dataset.get("ingestion", {}).get("params") or {}
+    plugin = instantiate_plugin(plugin_path, params)
+    return asyncio.run(plugin.periods(start, target_end))
+
+
+def _default_target_end(*, period_type: str) -> str:
+    """Return the default sync target in the dataset-native period format."""
+    today = utc_today()
+    if period_type == "hourly":
+        return datetime_to_period_string(utc_now(), period_type)
+    if period_type == "daily":
+        return today.isoformat()
+    if period_type == "dekadal":
+        return dekad_start(today).isoformat()
+    if period_type == "weekly":
+        return datetime_to_period_string(utc_now(), period_type)
+    if period_type == "monthly":
+        return f"{today.year:04d}-{today.month:02d}"
+    if period_type == "yearly":
+        return str(today.year)
+    raise ValueError(f"Unsupported period_type '{period_type}' for sync")
+
+
+def _icechunk_path_for(artifact: ArtifactRecord) -> str | None:
+    """Return the Icechunk store path for a plugin-backed artifact.
+
+    Explicitly raster-only, and None is the right answer for every other format rather than a
+    case to add. Append writes periods into a committed Icechunk store, so a plain Zarr, a
+    NetCDF download and a GeoParquet feature collection all fall back to rematerialize — and a
+    feature collection never reaches here at all, since `services._refuse_non_raster_sync`
+    turns it away before the planner runs.
+    """
+    if artifact.format != ArtifactFormat.ICECHUNK:
+        return None
+    return artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
+
+
+def _supports_append(source_dataset: dict[str, Any], latest_artifact: ArtifactRecord) -> bool:
+    """Return whether this template opts into store-based append sync execution."""
+    if source_dataset.get("sync", {}).get("execution") != SyncAction.APPEND.value:
+        return False
+    if latest_artifact.format == ArtifactFormat.ICECHUNK:
+        return True
+    logger.info(
+        "Sync append execution for dataset '%s' requires an existing Icechunk artifact; falling back to rematerialize",
+        source_dataset.get("id", "<unknown>"),
+    )
+    return False
+
+
+def _is_plugin_backed(source_dataset: dict[str, Any]) -> bool:
+    """Return whether the source dataset uses the streaming plugin contract."""
+    ingestion = source_dataset.get("ingestion")
+    if not isinstance(ingestion, dict):
+        return False
+    plugin = ingestion.get("plugin")
+    return isinstance(plugin, str) and bool(plugin)
+
+
+def _artifact_storage_roots() -> tuple[Path, ...]:
+    """Return the trusted local roots that may contain managed artifact stores."""
+    return (api_config.get_download_root().resolve(),)
+
+
+def _resolve_local_artifact_path(raw_path: str | None) -> tuple[Path | None, str | None]:
+    """Return a trusted local artifact path plus a fallback reason when unavailable."""
+    if raw_path is None:
+        return None, None
+    # urlparse misreads Windows drive letters as URI schemes — "C:/path" produces
+    # scheme="c". Detect drive-letter paths explicitly so they skip URI parsing
+    # and reach the shared absolute-path and trusted-root checks below.
+    is_windows_path = len(raw_path) >= 3 and raw_path[0].isalpha() and raw_path[1] == ":" and raw_path[2] in ("\\", "/")
+    if is_windows_path:
+        candidate = Path(raw_path)
+    else:
+        parsed = urlparse(raw_path)
+        if parsed.scheme and parsed.scheme != "file":
+            return None, "non-local URI"
+        if parsed.scheme == "file":
+            if parsed.netloc not in ("", "localhost"):
+                return None, "non-local file URI"
+            candidate = Path(unquote(parsed.path))
+        else:
+            candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        return None, "relative path"
+    resolved = candidate.resolve(strict=False)
+    for root in _artifact_storage_roots():
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            continue
+        return resolved, None
+    return None, "untrusted local path"
+
+
+def _sync_current_end(*, source_dataset: dict[str, Any], latest_artifact: ArtifactRecord) -> str:
+    """Return the current sync end using the same source of truth as execution.
+
+    For plugin-backed Icechunk datasets, sync execution consults committed store
+    periods directly. Planning should do the same so it does not depend on
+    potentially stale artifact metadata after prior interrupted or external
+    updates.
+
+    This adds a small read cost to plan-only requests for plugin-backed
+    datasets, but keeps planning aligned with execution on the committed store
+    state rather than a cached metadata snapshot.
+    """
+    end = latest_artifact.coverage.temporal.end
+    if end is None:
+        # Sync planning only applies to temporal datasets; a non-temporal (ordinal)
+        # dataset such as a day-of-year climatology has no temporal end to advance from.
+        raise ValueError(
+            f"Dataset '{source_dataset.get('id', '<unknown>')}' has no temporal coverage and cannot be synced"
+        )
+    if not _is_plugin_backed(source_dataset):
+        return end
+    raw_artifact_path = _icechunk_path_for(latest_artifact)
+    if raw_artifact_path is None:
+        return end
+    local_artifact_path, path_reason = _resolve_local_artifact_path(raw_artifact_path)
+    if local_artifact_path is None:
+        logger.warning(
+            "Sync planning skipped committed-store inspection for dataset '%s' because artifact path is %s: %s",
+            source_dataset.get("id", "<unknown>"),
+            path_reason or "unsupported",
+            raw_artifact_path,
+        )
+        return end
+    try:
+        committed = read_committed_period_ids(
+            local_artifact_path,
+            str(source_dataset["period_type"]),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Sync planning failed to read committed periods for dataset '%s' from '%s'; "
+            "falling back to artifact metadata: %s",
+            source_dataset.get("id", "<unknown>"),
+            str(local_artifact_path),
+            exc,
+        )
+        return end
+    if not committed:
+        return end
+    try:
+        return normalize_period_string(
+            max(committed, key=parse_period_string_to_datetime),
+            str(source_dataset["period_type"]),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Sync planning found malformed committed periods for dataset '%s' in '%s'; "
+            "falling back to artifact metadata: %s",
+            source_dataset.get("id", "<unknown>"),
+            str(local_artifact_path),
+            exc,
+        )
+        return end

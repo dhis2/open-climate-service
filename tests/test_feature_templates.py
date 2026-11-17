@@ -12,11 +12,11 @@ from typing import Any
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.features import providers as feature_providers
-from open_climate_service.features import services as feature_services
-from open_climate_service.features import templates as feature_templates
+from open_geo_service import config as api_config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.features import providers as feature_providers
+from open_geo_service.features import services as feature_services
+from open_geo_service.features import templates as feature_templates
 
 VALID_TEMPLATE: dict[str, object] = {
     "id": "districts",
@@ -125,7 +125,7 @@ def test_plugins_dir_template_overrides_entry_point_plugin(monkeypatch: pytest.M
         lambda: [("overture", {**VALID_TEMPLATE, "name": "plugin"})],
     )
     monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": str(tmp_path)})
-    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "climate-service.yaml")
+    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "geoservice.yaml")
 
     result = {t["id"]: t for t in feature_templates.list_feature_templates()}
     assert result["districts"]["name"] == "plugins_dir"
@@ -204,7 +204,7 @@ def test_an_instance_provider_file_is_discovered_from_disk(monkeypatch: pytest.M
     features_dir = tmp_path / "vectors"
     features_dir.mkdir()
     (features_dir / "dhis2.py").write_text(
-        "from open_climate_service.features.providers import feature_provider\n"
+        "from open_geo_service.features.providers import feature_provider\n"
         "\n"
         "@feature_provider('dhis2')\n"
         "def load_org_units(**kwargs):\n"
@@ -212,7 +212,7 @@ def test_an_instance_provider_file_is_discovered_from_disk(monkeypatch: pytest.M
         encoding="utf-8",
     )
     monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": str(tmp_path)})
-    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "climate-service.yaml")
+    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "geoservice.yaml")
 
     provider = feature_providers.get_feature_provider("dhis2")
 
@@ -230,7 +230,7 @@ def test_the_instance_provider_module_name_does_not_depend_on_a_per_process_salt
     """
     provider_file = tmp_path / "dhis2.py"
     provider_file.write_text(
-        "from open_climate_service.features.providers import feature_provider\n"
+        "from open_geo_service.features.providers import feature_provider\n"
         "\n"
         "@feature_provider('dhis2')\n"
         "def load_org_units(**_):\n"
@@ -239,7 +239,7 @@ def test_the_instance_provider_module_name_does_not_depend_on_a_per_process_salt
     )
     script = (
         "from pathlib import Path\n"
-        "from open_climate_service.features.providers import _load_from_path\n"
+        "from open_geo_service.features.providers import _load_from_path\n"
         f"funcs = _load_from_path(Path(r'{provider_file}'))\n"
         "print(funcs[0].__module__)\n"
     )

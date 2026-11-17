@@ -13,6 +13,7 @@ distinction invisible in the published result — only the final image survives 
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,14 +24,16 @@ import pandas as pd
 import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
+from matplotlib import colormaps
+from matplotlib.colors import to_hex
 
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.shared import thumbnails
-from open_climate_service.shared.thumbnails import (
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.shared import thumbnails
+from open_geo_service.shared.thumbnails import (
     THUMBNAIL_LONG_SIDE_PIXELS,
+    colormap_stops,
     decimate,
-    declared_midpoint,
     render_png,
     representative_slice,
     resolve_colormap,
@@ -310,7 +313,7 @@ def test_a_thumbnail_never_materialises_more_than_it_draws(tmp_path: Path, monke
 def test_the_store_is_closed_once_the_pixels_are_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A sync run touches every dataset it syncs; leaving each one's Icechunk and Zarr backend
     resources open behind the thumbnail is a leak that only shows up at scale."""
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     closed: list[bool] = []
     real_open = accessor.open_icechunk_dataset
@@ -405,22 +408,40 @@ def test_every_built_in_template_colormap_resolves_to_itself() -> None:
     matches case-insensitively; matplotlib does not, so `blues`, `rdbu_r` and `reds` all
     raise when passed straight to it — 18 of the 27 built-in templates. Falling back to the
     default would render every one of them in the wrong colours while still "working"."""
-    from open_climate_service.data_registry.services import datasets as registry
+    from open_geo_service.data_registry.services import datasets as registry
 
-    declared = {
-        str(template["display"]["colormap"])
+    declared = [
+        template["display"]["colormap"]
         for template in registry.list_datasets()
         if isinstance(template.get("display"), dict) and template["display"].get("colormap")
-    }
+    ]
     assert declared, "no template declares a colormap"
 
-    unresolved = {name for name in declared if resolve_colormap(name).name.lower() != name.lower()}
+    unresolved = [spec for spec in declared if resolve_colormap(spec).name.lower() not in {str(spec).lower(), "custom"}]
     assert not unresolved, f"colormaps that fell back to the default instead of resolving: {unresolved}"
 
 
-def test_an_unknown_colormap_falls_back_instead_of_raising() -> None:
-    assert resolve_colormap("not-a-colormap").name == "viridis"
+def test_a_list_of_colours_is_a_ramp_through_them() -> None:
+    stops = colormap_stops(["#000000", "#ff0000", "#ffffff"])
+    assert (len(stops), stops[0], stops[-1]) == (256, "#000000", "#ffffff")
+    # An alpha is dropped, so every render path draws the same opaque colour.
+    assert colormap_stops(["#ff000040", "#00f8"], count=2) == ["#ff0000", "#0000ff"]
+    assert colormap_stops("terrain", count=2) == [to_hex(colormaps["terrain"](0.0)), to_hex(colormaps["terrain"](1.0))]
+
+
+def test_an_unknown_colormap_falls_back_instead_of_raising(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="open_geo_service.shared.thumbnails"):
+        assert resolve_colormap("not-a-colormap").name == "viridis"
+        assert resolve_colormap("not-a-colormap").name == "viridis"
+    # Logged on every fallback, so each map viewer request that draws it shows in the logs.
+    assert ["'not-a-colormap'" in r.getMessage() for r in caplog.records] == [True, True]
     assert resolve_colormap(None).name == "viridis"
+    assert resolve_colormap(["#000000"]).name == "viridis"
+    assert resolve_colormap(["not-a-colour", "#ffffff"]).name == "viridis"
+    # A custom list takes hex colours only.
+    assert resolve_colormap(["red", "#ffffff"]).name == "viridis"
+    assert resolve_colormap([[1, 0, 0], [0, 0, 1]]).name == "viridis"
+    assert resolve_colormap([]).name == "viridis"
 
 
 def test_a_low_signal_slice_still_shows_its_structure(tmp_path: Path) -> None:
@@ -481,27 +502,6 @@ def test_the_stretch_resists_a_single_outlier() -> None:
     assert (low, high) != (float(field.min()), float(field.max()))
 
 
-@pytest.mark.parametrize(
-    "declared,midpoint",
-    [
-        ([-5.0, 5.0], 0.0),  # temperature anomaly
-        ([-30.0, 30.0], 0.0),  # temperature in Celsius, where zero is freezing
-        ([-3, 3], 0.0),  # SPI
-        ([0.0, 20.0], None),  # precipitation
-        ([0, 4000], None),  # elevation, which pairs Spectral_r with a one-sided range
-        ([-0.1, 1.0], None),  # NDVI: negative, but not symmetric
-        ([-1.0, 1.5], None),
-        (None, None),
-        ("nonsense", None),
-    ],
-)
-def test_only_a_zero_symmetric_declared_range_names_a_midpoint(declared: Any, midpoint: float | None) -> None:
-    """The signal for "this quantity diverges about zero" is the declared range, not the
-    colormap: `copernicus_dem_elevation` uses the diverging Spectral_r over [0, 4000] and must
-    not be centred, and across the shipped templates the split by range is exact."""
-    assert declared_midpoint(declared) == midpoint
-
-
 def test_a_diverging_scale_keeps_zero_at_its_midpoint(tmp_path: Path) -> None:
     """Blue means below normal. Stretched to its own extremes, an anomaly slice that happens
     to be entirely positive would still render half blue and invert that meaning."""
@@ -526,14 +526,14 @@ def test_a_sequential_scale_is_not_centred(tmp_path: Path) -> None:
 
 
 def test_an_anomaly_store_renders_centred_on_zero(tmp_path: Path) -> None:
-    """Through the entry point, since the midpoint has to be read off the template's declared
-    range and reach the render — the wiring is the part that can silently not happen."""
+    """Through the entry point, since the midpoint has to be read off the template's
+    `display.midpoint` and reach the render — the wiring is the part that can silently not happen."""
     anomaly = xr.Dataset(
         {"precip": (("y", "x"), np.array([[0.5, 1.0], [2.0, 4.0]], dtype="float32"))},
         coords={"y": [1.5, 0.5], "x": [10.5, 11.5]},
     )
     store = _store(tmp_path, anomaly, t_dim=None)
-    diverging = {**DATASET, "display": {"colormap": "rdbu_r", "range": [-5.0, 5.0]}}
+    diverging = {**DATASET, "display": {"colormap": "rdbu_r", "midpoint": 0.0}}
 
     written = write_dataset_thumbnail(store, diverging, now=GENERATED_AT)
 
@@ -555,7 +555,7 @@ def test_a_multi_period_sync_never_reaches_the_renderer(tmp_path: Path, monkeypa
     """Half of "once per run, at the end". A streaming sync commits per period, so a renderer
     reached from the commit path would run once per period — a few hundred times on a
     historical backfill, all but the last discarded."""
-    from open_climate_service.streaming import orchestrator as streaming_orchestrator
+    from open_geo_service.streaming import orchestrator as streaming_orchestrator
 
     renders: list[Any] = []
     monkeypatch.setattr(thumbnails, "render_png", lambda *a, **k: renders.append(a))
@@ -660,7 +660,7 @@ def test_one_ingest_produces_exactly_one_render(tmp_path: Path, monkeypatch: pyt
 
 
 def _published_artifact() -> Any:
-    from open_climate_service.ingestions.schemas import (
+    from open_geo_service.ingestions.schemas import (
         ArtifactCoverage,
         ArtifactFormat,
         ArtifactPublication,
@@ -703,7 +703,7 @@ def _published(monkeypatch: pytest.MonkeyPatch) -> None:
     metadata xstac derives, so opening a real Icechunk store would only add a fixture to
     maintain. `_minimal_collection` mirrors what xstac returns.
     """
-    from open_climate_service.stac import services as stac_services
+    from open_geo_service.stac import services as stac_services
 
     stac_services._clear_xstac_collection_cache()
     monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=[_published_artifact()]))
@@ -735,7 +735,7 @@ def test_the_collection_advertises_the_thumbnail_as_a_stac_role(client: TestClie
     needed and a STAC client picks the image up unaided."""
     _write_a_thumbnail()
 
-    payload = client.get("/stac/collections/thumb_dataset").json()
+    payload = client.get("/stac/thumb_dataset/collection.json").json()
 
     asset = payload["assets"]["thumbnail"]
     assert asset["roles"] == ["thumbnail"]
@@ -748,7 +748,7 @@ def test_the_collection_advertises_the_thumbnail_as_a_stac_role(client: TestClie
 def test_the_collection_omits_the_thumbnail_when_there_is_none(client: TestClient, _published: None) -> None:
     """Advertising an asset a client then 404s on is worse than advertising none, and absence
     is normal: thumbnails are not backfilled, so a store never rewritten never gains one."""
-    payload = client.get("/stac/collections/thumb_dataset").json()
+    payload = client.get("/stac/thumb_dataset/collection.json").json()
 
     assert "thumbnail" not in payload["assets"]
     assert "zarr" in payload["assets"]
@@ -762,6 +762,8 @@ def test_the_route_serves_the_thumbnail(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.content == written.read_bytes()
+    # A link checker sends HEAD to the asset the STAC collection lists.
+    assert client.head("/datasets/thumb_dataset/thumbnail.png").status_code == 200
 
 
 def test_the_route_404s_when_a_dataset_has_no_thumbnail(client: TestClient) -> None:

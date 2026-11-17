@@ -1,0 +1,777 @@
+"""Write raster datasets to Icechunk stores with GeoZarr conventions."""
+
+import logging
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, cast
+
+import xarray as xr
+import xproj  # noqa: F401  # type: ignore[import-untyped]  # pyright: ignore[reportUnusedImport]
+import zarr
+from geozarr_toolkit import MultiscalesConventionMetadata, create_geozarr_attrs
+from topozarr import CoarseningMethod
+from topozarr.coarsen import create_pyramid
+
+from open_geo_service import config as api_config
+from open_geo_service.shared.crs import store_crs_attrs
+from open_geo_service.shared.geozarr import check_grid_description, grid_geometry, write_gdal_geotransform
+from open_geo_service.shared.raster_contract import prepare_for_publication
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_download_dir() -> Path:
+    return api_config.get_download_root()
+
+
+DOWNLOAD_DIR = _resolve_download_dir()
+
+
+# A grid larger than this gets overviews. Compared against the *grid* (nx * ny), not the
+# chunk shape — a pyramid appends coarser levels beside level 0 and costs ~+33% storage
+# (1 + 1/4 + 1/16), so the only question is whether a map client would benefit.
+#
+# 1024x1024 rather than 2048x2048: at 2048² a 1949 x 1895 store (Uganda's CLMS GPP, 3.69 Mpx)
+# fell 0.88x short of the bar and rendered flat, making every frame at every zoom read the
+# full grid — 32 chunk requests and 14.8 MB per timestep to fill a few hundred screen pixels.
+# 1024² catches that while still skipping grids small enough to send whole.
+_PYRAMID_PIXEL_THRESHOLD = 1024 * 1024
+_PYRAMID_MAX_LEVELS = 8
+_PYRAMID_TARGET_TILE_SIZE = 512
+_ROOT_TIME_COORD_MAX_CHUNK = 4096
+# Memory budget per streamed level-0 region. topozarr writes region by region from a *lazy*
+# source, so this — not the store size — bounds the pyramid build. Its own default is 256 MB;
+# 64 MB keeps peak well within a small on-prem box, since peak is roughly
+# `max_workers * 5 * region_bytes`.
+_PYRAMID_MAX_REGION_BYTES = 64 * 1024 * 1024
+
+
+def _uniform_chunks(ds: xr.Dataset) -> xr.Dataset:
+    """Rechunk any dim whose dask chunks are non-uniform except for the final chunk.
+
+    Zarr requires that shape; dask does not. Reversing an axis produces exactly the illegal
+    case — ``raster_contract.ensure_north_up`` flips a south-up source with
+    ``isel(slice(None, None, -1))``, which reverses the chunk *tuple* too, so a legal
+    trailing remainder (244, 244, …, 241) becomes a leading one (241, 244, …) and
+    ``to_zarr`` refuses the write.
+
+    Rechunking to the largest existing chunk restores the source layout, since dask fills
+    uniformly and leaves the remainder last.
+
+    Only the flat path needs this. The pyramid path is unaffected because topozarr plans its
+    own chunk layout per level from ``target_chunk_bytes`` rather than inheriting the source's,
+    so a reversed tuple never reaches the write. (Deliberately not "because the pyramid path
+    calls ``load()``" — it does today, but that materialisation is being removed, and this
+    would then read as a guarantee that no longer holds.)
+
+    Applied per dimension across the whole dataset, so a variable with a legal layout can be
+    rechunked because a sibling on the same dim was illegal. Harmless, and only when at least
+    one variable needs it.
+    """
+    targets: dict[Any, int] = {}
+    for var in ds.data_vars.values():
+        for dim, chunks in zip(var.dims, var.chunks or (), strict=False):
+            # Legal already when every chunk but the last matches and the last is no larger.
+            # Checked rather than blanket-rechunked because rechunking a full-resolution grid
+            # costs a graph rewrite and a shuffle for nothing.
+            if len(set(chunks[:-1])) <= 1 and chunks[-1] <= chunks[0]:
+                continue
+            targets[dim] = max(targets.get(dim, 0), max(chunks))
+    if not targets:
+        return ds
+    logger.info("Rechunking to uniform Zarr-legal chunks: %s", targets)
+    return ds.chunk(targets)
+
+
+def _one_step_per_chunk(ds: xr.Dataset, x_dim: str, y_dim: str) -> xr.Dataset:
+    """Rechunk every non-spatial dim of the data variables to one step per chunk.
+
+    The flat path otherwise stores the dataset's dask chunks as they arrive, and a computed
+    result arrives with the read chunks: ``open_icechunk_dataset`` merges up to a year of steps
+    per dask chunk, so an openEO anomaly over daily data was stored 183 days per chunk, and a
+    map client drawing one day read all of them. Ingested stores hold one step per chunk, and
+    the Portolan Zarr profile asks the same of every non-spatial dimension (CLIM-1861).
+
+    Spatial chunks are kept. A source's stored layout is dropped where it no longer applies, also
+    when the dask chunks are one step already: stored chunks spanning several steps, which the
+    write would refuse to fill from one-step dask chunks, and shards, which a flat store does not
+    have. Inherited shards are worse than refused: the parallel one-step writes into one shard
+    lose steps without an error.
+    """
+    targets: dict[Any, int] = {}
+    for var in ds.data_vars.values():
+        chunks = var.chunks or ((size,) for size in var.shape)
+        for dim, dim_chunks in zip(var.dims, chunks, strict=False):
+            if dim not in (x_dim, y_dim) and max(dim_chunks, default=1) > 1:
+                targets[dim] = 1
+    ds = ds.copy()
+    for var in ds.data_vars.values():
+        var.encoding.pop("shards", None)
+        stored = var.encoding.get("chunks") or ()
+        if any(size > 1 for dim, size in zip(var.dims, stored, strict=False) if dim not in (x_dim, y_dim)):
+            for key in ("chunks", "preferred_chunks"):
+                var.encoding.pop(key, None)
+    return ds.chunk(targets) if targets else ds
+
+
+def _needs_pyramid(ds: xr.Dataset, x_dim: str, y_dim: str) -> bool:
+    """Return True when the spatial extent is large enough to benefit from a pyramid."""
+    return ds.sizes[x_dim] * ds.sizes[y_dim] > _PYRAMID_PIXEL_THRESHOLD
+
+
+def _pyramid_levels(ds: xr.Dataset, x_dim: str, y_dim: str) -> int:
+    """Compute the number of pyramid levels needed to reach a manageable tile size."""
+    import math
+
+    max_dim = max(ds.sizes[x_dim], ds.sizes[y_dim])
+    levels = math.ceil(math.log2(max_dim / _PYRAMID_TARGET_TILE_SIZE))
+    return max(2, min(levels, _PYRAMID_MAX_LEVELS))
+
+
+# Coarsening methods topozarr computes itself, each level block-reduced from the one above.
+# That is valid because they are composable — `nearest` included, since corner-of-corners
+# equals corner-of-native. `nearest` arrived in topozarr 0.1.3 (carbonplan/topozarr#26) and
+# is now delegated rather than recomputed here.
+_COMPOSABLE_METHODS = frozenset({"mean", "max", "min", "sum", "nearest"})
+# Methods topozarr cannot do: non-composable, so each level must be resampled from the
+# native (level-0) array rather than from an already-coarsened parent, and OGS recomputes
+# those levels itself. Only `mode` remains — carbonplan/topozarr#26 is still open for it, and
+# upstream's own note says such methods "must reduce from native instead". Delete this path
+# and the helpers below once it lands.
+_NATIVE_RESAMPLE_METHODS = frozenset({"mode"})
+_RESAMPLING_METHODS = _COMPOSABLE_METHODS | _NATIVE_RESAMPLE_METHODS
+_DEFAULT_RESAMPLING = "mean"
+
+
+def _normalize_resampling_method(raw: object) -> str:
+    """Trim/lower-case a resampling method and validate it against the supported set.
+
+    Unknown or missing values fall back to ``mean`` (the safe default for continuous
+    data) with a warning, so neither a mistyped template value nor a stray direct call
+    reaches topozarr as an invalid ``CoarseningMethod``.
+    """
+    if raw is None:
+        return _DEFAULT_RESAMPLING
+    method = str(raw).strip().lower()
+    if method not in _RESAMPLING_METHODS:
+        logger.warning(
+            "Unknown resampling method %r (expected one of %s); using %r",
+            raw,
+            sorted(_RESAMPLING_METHODS),
+            _DEFAULT_RESAMPLING,
+        )
+        return _DEFAULT_RESAMPLING
+    return method
+
+
+def resampling_method_from_template(template: dict[str, Any] | None) -> str:
+    """Pyramid coarsening method from a dataset template's ``ingestion.resampling`` field.
+
+    It lives under ``ingestion`` rather than ``display`` because it changes the *stored*
+    pyramid data (how coarse levels are aggregated), not how the layer is rendered.
+
+    Defaults to ``mean`` — correct for continuous data (temperature, precipitation, …).
+    Categorical layers should declare ``mode`` (multi-class, e.g. land-cover class codes)
+    or ``max`` (binary presence masks); ``mean`` averages class codes into meaningless
+    values at coarse zoom. An unrecognised value falls back to ``mean`` with a warning.
+    """
+    ingestion = (template or {}).get("ingestion")
+    raw = ingestion.get("resampling") if isinstance(ingestion, dict) else None
+    if raw is None and (template or {}).get("classes"):
+        # A dataset that declares classes holds codes: the most common code, never an average.
+        return "mode"
+    return _normalize_resampling_method(raw)
+
+
+def _mode_reduce(values: Any, axis: Any = None, **_kwargs: Any) -> Any:
+    """Majority value over ``axis`` — the reducer xarray's ``coarsen(...).reduce`` calls.
+
+    ``axis`` is the tuple of window axes; flatten them and take the per-cell mode so a
+    coarsened cell keeps a real class code instead of an average. NaNs are ignored.
+    """
+    import numpy as np
+    from scipy import stats  # type: ignore[import-untyped]
+
+    if axis is None:
+        axes: tuple[int, ...] = tuple(range(values.ndim))
+    elif isinstance(axis, (tuple, list)):
+        axes = tuple(int(a) for a in axis)
+    else:
+        axes = (int(axis),)
+    axes = tuple(a % values.ndim for a in axes)
+    keep = [a for a in range(values.ndim) if a not in axes]
+    moved = np.transpose(values, keep + list(axes))
+    flat = moved.reshape(*(values.shape[a] for a in keep), -1)
+    result = stats.mode(flat, axis=-1, nan_policy="omit", keepdims=False)
+    return result.mode
+
+
+def _coarsen_native(da: xr.DataArray, x_dim: str, y_dim: str, factor: int, method: str) -> xr.DataArray:
+    """Coarsen ``da`` by ``factor`` over the spatial dims using a non-composable ``method``.
+
+    ``boundary="trim"`` drops the trailing partial window, so the result is
+    ``floor(size / factor)`` per spatial dim — the same shape topozarr produces by
+    repeatedly halving, so the output drops straight into the level's existing array.
+
+    Only ``mode`` reaches here. ``nearest`` used to as well, but topozarr 0.1.3 does it
+    natively and composably, so it is delegated (see ``_COMPOSABLE_METHODS``).
+    """
+    if method != "mode":
+        raise ValueError(f"unsupported native-resample method {method!r}")
+    return da.coarsen({x_dim: factor, y_dim: factor}, boundary="trim").reduce(_mode_reduce)
+
+
+def _overwrite_native_resampled_levels(
+    store: Any, ds: xr.Dataset, x_dim: str, y_dim: str, levels: int, method: str
+) -> None:
+    """Replace topozarr's coarsened levels with a native resample for categorical data.
+
+    topozarr block-reduces each level from the level above, which is wrong for ``mode``: a
+    coarse cell's majority class must be derived from the native cells it covers, not from an
+    already-coarsened parent, or a locally dominant class can win at coarse zoom while being
+    globally rare. topozarr has still written every level's group/array with the right shape,
+    chunking and encoding, so we recompute levels 1..N-1 straight from the native (level-0)
+    arrays and write the values back in place.
+    """
+    root = zarr.open_group(store, mode="a")
+    spatial_vars = [str(name) for name, da in ds.data_vars.items() if {x_dim, y_dim} <= set(da.dims)]
+    for name in spatial_vars:
+        da = ds[name]
+        t_dim = next((str(d) for d in da.dims if d not in (x_dim, y_dim)), None)
+        for window in _native_batches(da, t_dim):
+            # Loaded a batch at a time: the source is lazy, and scipy's mode cannot take a
+            # dask array.
+            native = da.isel(window).load()
+            for lvl in range(1, levels):
+                target = cast(zarr.Array, cast(zarr.Group, root[str(lvl)])[name])
+                _write_native_resampled(native, target, window, x_dim, y_dim, lvl, method)
+
+
+def _record_resampling_method(store: Any, method: str) -> None:
+    """Replace topozarr's placeholder method in the multiscales metadata with the one used.
+
+    A ``mode`` build passes ``max`` to topozarr, which records ``max``. Left that way, a
+    reader would take the levels for maxima, and a template changed between ``mode`` and
+    ``max`` would look unchanged to ``append_pyramid_levels``.
+    """
+    root = zarr.open_group(store, mode="a")
+    multiscales = root.attrs.get("multiscales")
+    if not isinstance(multiscales, dict):
+        return
+    multiscales = dict(multiscales)
+    multiscales["resampling_method"] = method
+    layout = multiscales.get("layout")
+    if isinstance(layout, list):
+        multiscales["layout"] = [
+            {**entry, "resampling_method": method}
+            if isinstance(entry, dict) and "resampling_method" in entry
+            else entry
+            for entry in layout
+        ]
+    root.attrs["multiscales"] = multiscales
+
+
+def _native_batches(da: xr.DataArray, t_dim: str | None, start: int = 0) -> list[dict[str, slice]]:
+    """Slices of *da* along its leading non-spatial dim, sized to the pyramid region budget."""
+    if t_dim is None:
+        return [{}]
+    step_bytes = max(1, int(da.size // max(1, da.sizes[t_dim])) * da.dtype.itemsize)
+    batch = max(1, _PYRAMID_MAX_REGION_BYTES // step_bytes)
+    return [{t_dim: slice(a, min(a + batch, da.sizes[t_dim]))} for a in range(start, da.sizes[t_dim], batch)]
+
+
+def _write_native_resampled(
+    native: xr.DataArray,
+    target: zarr.Array,
+    window: dict[str, slice],
+    x_dim: str,
+    y_dim: str,
+    level: int,
+    method: str,
+) -> None:
+    """Write level *level* of the loaded *native* slice into its window of *target*."""
+    values = _coarsen_native(native, x_dim, y_dim, 2**level, method).transpose(*native.dims).values
+    # Defensive: clip to the level array's shape if trimming disagrees by a cell.
+    region = tuple(window.get(str(d), slice(0, s)) for d, s in zip(native.dims, target.shape, strict=True))
+    values = values[tuple(slice(0, r.stop - r.start) for r in region)]
+    target[region] = values.astype(target.dtype, copy=False)
+
+
+def _write_root_time_coordinate(zarr_store: "Path | Any", ds: xr.Dataset, *, time_dim: str) -> None:
+    """Expose the time coordinate at the pyramid root with bounded chunking for browser clients.
+
+    zarr_store may be a filesystem Path (plain Zarr) or a zarr-compatible store object
+    (e.g. an Icechunk session store).
+    """
+    if time_dim not in ds.dims:
+        logger.debug("Skipping root time coordinate write: no %s dimension found", time_dim)
+        return
+    if time_dim not in ds.coords or ds.sizes.get(time_dim, 0) == 0:
+        logger.debug("Skipping root time coordinate write: empty or missing %s coordinate", time_dim)
+        return
+
+    store_arg = str(zarr_store) if isinstance(zarr_store, Path) else zarr_store
+    root = zarr.open_group(store_arg, mode="a", zarr_format=3)
+    root_attrs = dict(root.attrs)
+    if time_dim in root:
+        del root[time_dim]
+    time_coord = xr.Dataset(coords={time_dim: ds[time_dim]})
+    time_coord.to_zarr(
+        store_arg,
+        mode="a",
+        zarr_format=3,
+        consolidated=False,
+        encoding={time_dim: {"chunks": (min(ds.sizes[time_dim], _ROOT_TIME_COORD_MAX_CHUNK),)}},
+    )
+    root = zarr.open_group(store_arg, mode="a", zarr_format=3)
+    root.attrs.update(root_attrs)
+
+
+def _dimension_names(arr: zarr.Array) -> tuple[str, ...]:
+    return tuple(str(d) for d in (arr.metadata.dimension_names or ()))  # type: ignore[union-attr]
+
+
+def append_pyramid_levels(
+    store_path: Path,
+    *,
+    pyramid_method: str = "mean",
+    t_dim: str | None = None,
+    x_dim: str = "x",
+    y_dim: str = "y",
+) -> int | None:
+    """Extend every coarser level of a pyramid store to the periods level 0 has gained.
+
+    A streaming sync appends new periods to level 0 only, and rebuilding the pyramid to cover
+    them rewrites every period ever stored (CLIM-1237). Each level is reduced from the level
+    above in space only, never along time, so a new period's coarser levels depend on nothing
+    but that period's own slice of level 0. They are computed here as
+    ``write_to_icechunk_store`` computes them (topozarr's kernel from the level above, or a
+    resample from native for ``mode``) and committed in one commit, so the store matches a
+    full rebuild.
+
+    ``t_dim`` defaults to the leading dim of level 0's data variables: publication renames
+    time aliases to ``t``, but a climatology keeps its own (``dayofyear``).
+
+    Returns the number of periods appended, 0 when the levels are already current, or None
+    when the store is not a pyramid that level 0 has simply grown past. The caller rebuilds
+    then.
+    """
+    import icechunk
+    import numpy as np
+    from topozarr_core import block_reduce
+
+    from open_geo_service.stac.media_types import attributes_declare_multiscales
+
+    method = _normalize_resampling_method(pyramid_method)
+    native_resample = method in _NATIVE_RESAMPLE_METHODS
+    composable_method = "max" if native_resample else method
+
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
+    session = repo.writable_session("main")
+    root = zarr.open_group(session.store, mode="r+")
+    root_attrs = dict(root.attrs)
+    if not attributes_declare_multiscales(root_attrs):
+        return None
+    multiscales: Any = root_attrs["multiscales"]
+    if multiscales.get("resampling_method") != method:
+        # The template's method changed since the pyramid was built. Levels reduced one way
+        # must not be extended another, so the rebuild redoes them all.
+        return None
+    level_names = sorted((k for k in root.group_keys() if k.isdigit()), key=int)
+    if level_names != [str(i) for i in range(len(level_names))] or len(level_names) != len(multiscales["layout"]):
+        return None
+    groups = [cast(zarr.Group, root[name]) for name in level_names]
+    base = groups[0]
+    if t_dim is None:
+        leading = {
+            _dimension_names(arr)[0]
+            for _, arr in base.arrays()
+            if {x_dim, y_dim} <= set(_dimension_names(arr)) and len(_dimension_names(arr)) > 2
+        }
+        if len(leading) != 1:
+            return None
+        t_dim = leading.pop()
+    if t_dim not in base:
+        return None
+    base_t = np.asarray(cast(zarr.Array, base[t_dim])[:])
+    total = int(base_t.shape[0])
+
+    def timed_arrays(group: zarr.Group) -> dict[str, zarr.Array]:
+        # Every array along time, the level's own time coordinate included.
+        return {str(name): arr for name, arr in group.arrays() if _dimension_names(arr)[:1] == (t_dim,)}
+
+    base_arrays = timed_arrays(base)
+    if any(arr.shape[0] != total for arr in base_arrays.values()):
+        return None
+    start: int | None = None
+    for group in groups[1:]:
+        arrays = timed_arrays(group)
+        if set(arrays) != set(base_arrays):
+            return None
+        lengths = {arr.shape[0] for arr in arrays.values()}
+        level_start = lengths.pop()
+        if lengths or level_start > total or (start is not None and level_start != start):
+            return None
+        start = level_start
+        level_t = cast(zarr.Array, group[t_dim])
+        if dict(level_t.attrs) != dict(cast(zarr.Array, base[t_dim]).attrs):
+            return None
+        if not np.array_equal(np.asarray(level_t[:]), base_t[:level_start]):
+            return None
+    if start is None:
+        return None
+    # The root coordinate is encoded on its own (its units start at its first period), so
+    # it is compared and rewritten decoded.
+    with xr.open_zarr(session.store, group="0", zarr_format=3) as level0:
+        base_times = level0[t_dim].values
+    root_times = None
+    if t_dim in root:
+        with xr.open_zarr(session.store, zarr_format=3) as root_ds:
+            root_times = root_ds[t_dim].values
+    if root_times is not None and not np.array_equal(root_times, base_times[: len(root_times)]):
+        return None
+    if start > 0 and not bool(np.all(np.diff(base_t[start - 1 :]) > 0)):
+        # A forward append only. The rebuild sorts by time; this would not.
+        return None
+    appended = total - start
+    if appended == 0 and (root_times is None or len(root_times) == total):
+        return 0
+
+    spatial = {
+        name
+        for name, arr in base_arrays.items()
+        if {x_dim, y_dim} & set(_dimension_names(arr)) and np.issubdtype(arr.dtype, np.number)
+    }
+    for group in groups[1:]:
+        for arr in timed_arrays(group).values():
+            arr.resize((total, *arr.shape[1:]))
+
+    base_ds = xr.open_zarr(session.store, group="0", zarr_format=3) if native_resample and spatial else None
+    # Whole periods per batch, as many as fit the pyramid build's own region budget. One
+    # period always goes, however large.
+    step_bytes = max(
+        (int(np.prod(base_arrays[name].shape[1:])) * base_arrays[name].dtype.itemsize for name in spatial),
+        default=1,
+    )
+    batch = max(1, _PYRAMID_MAX_REGION_BYTES // step_bytes)
+    try:
+        for a in range(start, total, batch):
+            b = min(a + batch, total)
+            for name, base_arr in base_arrays.items():
+                if name not in spatial:
+                    values = base_arr[a:b]
+                    for group in groups[1:]:
+                        cast(zarr.Array, group[name])[a:b] = values
+                    continue
+                if base_ds is not None:
+                    # As _overwrite_native_resampled_levels: from native, not the level above.
+                    window = {t_dim: slice(a, b)}
+                    native = base_ds[name].isel(window).load()
+                    for level, group in enumerate(groups[1:], start=1):
+                        target = cast(zarr.Array, group[name])
+                        _write_native_resampled(native, target, window, x_dim, y_dim, level, method)
+                    continue
+                # As topozarr's downsample_level: each level from the stored level above.
+                stride = tuple(2 if d in (x_dim, y_dim) else 1 for d in _dimension_names(base_arr))
+                values = np.ascontiguousarray(base_arr[a:b])
+                for group in groups[1:]:
+                    target = cast(zarr.Array, group[name])
+                    reduced = block_reduce(values, stride, composable_method, target.fill_value, True)
+                    reduced = reduced[(slice(None), *(slice(0, s) for s in target.shape[1:]))]
+                    values = np.ascontiguousarray(reduced.astype(target.dtype, copy=False))
+                    target[a:b] = values
+    finally:
+        if base_ds is not None:
+            base_ds.close()
+
+    if root_times is not None:
+        _write_root_time_coordinate(session.store, xr.Dataset(coords={t_dim: base_times}), time_dim=t_dim)
+    session.commit(f"Appended {appended} period(s) to every pyramid level")
+    logger.info("Appended %d period(s) to the pyramid levels of '%s'", appended, store_path.name)
+    return appended
+
+
+def _get_cache_prefix(dataset: dict[str, Any]) -> str:
+    return str(dataset["id"])
+
+
+def get_zarr_path(dataset: dict[str, Any]) -> Path | None:
+    """Return the optimised zarr archive path if it exists."""
+    prefix = _get_cache_prefix(dataset)
+    optimized = DOWNLOAD_DIR / f"{prefix}.zarr"
+    if optimized.exists():
+        return optimized
+    return None
+
+
+def get_icechunk_path(dataset: dict[str, Any]) -> Path:
+    """Return the Icechunk store path for a dataset."""
+    prefix = _get_cache_prefix(dataset)
+    return DOWNLOAD_DIR / f"{prefix}.icechunk"
+
+
+def needs_pyramid(ds: xr.Dataset) -> bool:
+    """Return True when the dataset is large enough to need a multiscale pyramid."""
+    return _needs_pyramid(ds, "x", "y")
+
+
+def ensure_time_coordinate_chunking(store_path: Path, time_dim: str) -> bool:
+    """Re-chunk an existing Icechunk store's 1-D time coordinate to a bounded chunk size.
+
+    Streaming ingests append one period at a time, which leaves the ``time_dim`` coordinate
+    chunked at size 1. A browser map client reads the whole time axis to drive its step
+    control, so a chunk-per-timestep coordinate means one tiny HTTP request per step — tens
+    of thousands of them for a multi-year daily store, dominating load/step latency. Rewrite
+    only the coordinate array to ``<= _ROOT_TIME_COORD_MAX_CHUNK`` values per chunk (the data
+    variables, chunked at one timestep for independent per-step reads, are left untouched).
+
+    Surgical and transactional (Icechunk commit-or-nothing), and idempotent — a no-op when
+    the coordinate is already coarse enough. Returns True if it re-chunked.
+    """
+    import icechunk
+
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
+    read_group = zarr.open_group(repo.readonly_session("main").store, mode="r")
+    if time_dim not in read_group:
+        return False
+    coord = read_group[time_dim]
+    if not isinstance(coord, zarr.Array) or coord.ndim != 1:
+        return False
+    n = int(coord.shape[0])
+    target = min(n, _ROOT_TIME_COORD_MAX_CHUNK)
+    if int(coord.chunks[0]) >= target:
+        return False  # already coarse enough
+
+    values = coord[:]
+    attrs = dict(coord.attrs)
+    attrs.pop("_ChunkSizes", None)  # stale netCDF per-chunk hint from the source
+    dtype = coord.dtype
+    fill_value = coord.fill_value
+
+    session = repo.writable_session("main")
+    write_group = zarr.open_group(session.store, mode="r+")
+    del write_group[time_dim]
+    new_coord = write_group.create_array(
+        time_dim,
+        shape=(n,),
+        chunks=(target,),
+        dtype=dtype,
+        fill_value=fill_value,
+        dimension_names=(time_dim,),
+    )
+    new_coord[:] = values
+    for key, value in attrs.items():
+        new_coord.attrs[key] = value
+    session.commit(f"Re-chunk '{time_dim}' coordinate to <= {target}/chunk for browser-friendly axis reads")
+    logger.info("Re-chunked '%s' coordinate of '%s' from 1 to %d values/chunk", time_dim, store_path.name, target)
+    return True
+
+
+def write_to_icechunk_store(
+    ds: xr.Dataset,
+    store_path: Path,
+    x_dim: str = "x",
+    y_dim: str = "y",
+    t_dim: str | None = "t",
+    *,
+    crs: str | None = None,
+    pyramid_method: str = "mean",
+    commit_message: str = "Materialized dataset",
+    before_commit: Callable[[], None] | None = None,
+) -> str:
+    """Write *ds* to an Icechunk store, building a multiscale pyramid when needed.
+
+    ``before_commit`` runs after every write and immediately before the single commit. If it
+    raises, nothing is committed and the store keeps its previous state.
+
+    Returns the id of the committed Icechunk snapshot: the physical identity of what was
+    written, which callers may record as provenance. It is not a logical release version.
+
+    Applies GeoZarr conventions throughout. Creates the store if it does not exist;
+    overwrites any existing content in the new commit.
+
+    Three CRS calls are required: ``proj.assign_crs`` sets the xproj CRS needed by
+    topozarr, ``rio.write_crs`` populates ``spatial_ref`` attrs and encodes
+    ``grid_mapping`` per variable, then ``proj.assign_crs`` again because
+    ``rio.write_crs`` destroys xproj CRS detection.
+    """
+    import icechunk
+    import rioxarray as _rxr  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio accessor
+
+    # Bring the cube up to the published-store contract, and resolve the CRS that describes it,
+    # at the write boundary — rather than relying on every plugin to get it right (CLIM-821).
+    # The published axis is always `t`; a dataset without one (CLIM-1448) has none to name.
+    published_time = "t" if t_dim is not None else None
+    prepared = prepare_for_publication(ds, fallback_crs=crs, time_dim=published_time, x_dim=x_dim, y_dim=y_dim)
+    ds, crs = prepared.dataset, prepared.crs
+    # Onto the cube itself, not only the root attrs written below, because a client reads the
+    # `proj:` convention from the innermost source that declares any of it: the data array,
+    # then the level-0 group, and only then the root. `prepare_for_publication` puts a bare
+    # `proj:code` on the cube, and the pyramid path writes each level group from it — so a
+    # definition written at the root alone would sit behind a level-0 `proj:code` that
+    # shadows it, and an unresolvable code would stay unresolvable. Both levels agree now.
+    crs_attrs = store_crs_attrs(crs)
+    ds = ds.assign_attrs(crs_attrs)
+    if t_dim is not None and t_dim != "t":
+        # The caller named the temporal dim as it arrived; normalisation has renamed it, so the
+        # rest of this function (root time coordinate, chunking) must follow the new name.
+        t_dim = "t" if "t" in ds.dims else t_dim
+
+    # Array order, (y, x): `spatial:dimensions` and `spatial:shape` are read positionally, so
+    # naming them x-first transposes the grid for any client that trusts the convention.
+    dims = [y_dim, x_dim]
+    geometry = grid_geometry(ds[x_dim], ds[y_dim])
+    if geometry is None:
+        # Degenerate grid (a single cell on an axis) — the cell size can't be derived from
+        # coordinates, so fall back to the centre-based extent and omit the affine.
+        bbox = [
+            float(ds[x_dim].min()),
+            float(ds[y_dim].min()),
+            float(ds[x_dim].max()),
+            float(ds[y_dim].max()),
+        ]
+        shape: tuple[int, ...] = (ds.sizes[y_dim], ds.sizes[x_dim])
+    else:
+        bbox = geometry["bbox"]
+        shape = tuple(geometry["shape"])
+    geozarr_attrs = create_geozarr_attrs(dimensions=dims, crs=crs, bbox=bbox, shape=shape)
+    # `create_geozarr_attrs` reduces an EPSG input to `proj:code`, which describes the store
+    # only to a reader that can look the code up. Overwrite with the full `proj:` set.
+    geozarr_attrs.update(crs_attrs)
+    if geometry is not None:
+        # The affine is what a client places the raster with; without it, viewers infer a grid
+        # from the coordinate arrays and assume EPSG:4326 while doing so, which puts every
+        # projected store off the map. topozarr writes the same affine for pyramid level 0,
+        # and this matches it exactly (pixel registration, so the origin is the cell edge).
+        geozarr_attrs["spatial:transform"] = geometry["transform"]
+
+    # Refuse to write a grid description that contradicts the grid. Getting the positional
+    # order wrong is silent otherwise — see check_grid_description.
+    check_grid_description(
+        geozarr_attrs,
+        y_dim=y_dim,
+        x_dim=x_dim,
+        y_size=int(ds.sizes[y_dim]),
+        x_size=int(ds.sizes[x_dim]),
+        store=store_path.name,
+    )
+
+    ds = ds.proj.assign_crs(spatial_ref=crs)
+    ds = ds.rio.write_crs(crs)
+    ds = ds.proj.assign_crs(spatial_ref=crs)
+
+    storage = icechunk.local_filesystem_storage(str(store_path))
+    repo = icechunk.Repository.open_or_create(storage)
+    session = repo.writable_session("main")
+
+    if _needs_pyramid(ds, x_dim, y_dim):
+        zarr_conventions = list(geozarr_attrs.get("zarr_conventions", []))
+        zarr_conventions.append(MultiscalesConventionMetadata().model_dump())
+        geozarr_attrs["zarr_conventions"] = zarr_conventions
+
+        levels = _pyramid_levels(ds, x_dim, y_dim)
+        logger.info(
+            "Building %d-level pyramid into Icechunk store '%s' (dims %dx%d)",
+            levels,
+            store_path.name,
+            ds.sizes[x_dim],
+            ds.sizes[y_dim],
+        )
+
+        # Deliberately *not* `ds.load()`. topozarr streams level 0 region by region and sizes
+        # those regions from `max_region_bytes`, so a lazy source is what bounds peak memory —
+        # its own docs say "for bounded memory on large stores, open the source lazily".
+        # Materialising first defeated that: Uganda's GPP store is 3.47 GB and growing ~0.6 GB
+        # per year of dekads, which is what made a lower threshold risky on a small box.
+        # Validate/normalize here too, so a direct caller passing e.g. "MAX" or a mistyped
+        # value never reaches topozarr as an invalid CoarseningMethod (falls back to mean).
+        pyramid_method = _normalize_resampling_method(pyramid_method)
+        # topozarr only offers composable coarsening (mean/max/min/sum/nearest). For `mode`
+        # it writes valid structure with a placeholder here, then we overwrite the coarsened
+        # levels from native below (see #293 and carbonplan/topozarr#26).
+        native_resample = pyramid_method in _NATIVE_RESAMPLE_METHODS
+        composable_method = "max" if native_resample else pyramid_method
+        pyramid = create_pyramid(
+            ds, levels=levels, x_dim=x_dim, y_dim=y_dim, method=cast(CoarseningMethod, composable_method)
+        )
+        # Pyramid.write() writes the root group attributes from ``pyramid.attrs``,
+        # so merge the GeoZarr conventions (multiscales / proj / spatial) in here.
+        pyramid.attrs.update(geozarr_attrs)
+
+        # Keep the no-data sentinel consistent across pyramid levels so the map
+        # renders the same pixels transparent at every zoom. topozarr keeps an integer
+        # variable's dtype at every level (a mean rounds half to even), but gives it no
+        # fill value unless the source declares one, so an integer-coded mask (e.g. a 0/1
+        # hotspot raster, where 0 is the no-data background) would have no sentinel at all.
+        # Pin the fill_value to 0 for integer-coded variables (Pyramid.write applies it
+        # across all levels); float variables already use NaN as both data and fill.
+        for var_name, var_da in ds.data_vars.items():
+            if var_da.dtype.kind != "f" and pyramid.fill_values.get(str(var_name)) is None:
+                pyramid.fill_values[str(var_name)] = 0
+
+        pyramid.write(session.store, mode="w", max_region_bytes=_PYRAMID_MAX_REGION_BYTES)
+
+        if native_resample:
+            # Categorical data: recompute the coarsened levels from native so class codes /
+            # masks aren't averaged (topozarr wrote them composably above; replace in place).
+            logger.info("Resampling pyramid levels of '%s' from native (%s)", store_path.name, pyramid_method)
+            _overwrite_native_resampled_levels(session.store, ds, x_dim, y_dim, levels, pyramid_method)
+            _record_resampling_method(session.store, pyramid_method)
+
+        # topozarr writes each level's `proj:`/`spatial:` attrs, its `spatial_ref` coordinate,
+        # and the level's affine in the root `multiscales.layout`. GDAL reads those only from
+        # consolidated metadata, which these stores do not have. So each level also gets the
+        # GDAL GeoTransform, taken from its own layout entry (one copied from level 0 would
+        # place every overview at twice its true size), and a CF `grid_mapping` on its data
+        # arrays, through which GDAL finds the CRS.
+        root = zarr.open_group(session.store, mode="a")
+        if geometry is not None:
+            write_gdal_geotransform(root, geometry["transform"])
+        multiscales = root.attrs.get("multiscales")
+        layout = multiscales.get("layout") if isinstance(multiscales, dict) else None
+        for entry in layout if isinstance(layout, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            level_group = root.get(str(entry.get("asset")))
+            if not isinstance(level_group, zarr.Group):
+                continue
+            transform = entry.get("spatial:transform")
+            if geometry is not None and isinstance(transform, list):
+                write_gdal_geotransform(level_group, cast(list[float], transform))
+            if "spatial_ref" in level_group:
+                for _, array in level_group.arrays():
+                    if {x_dim, y_dim} <= set(_dimension_names(array)):
+                        array.attrs["grid_mapping"] = "spatial_ref"
+
+        if t_dim is not None:
+            _write_root_time_coordinate(session.store, ds, time_dim=t_dim)
+    else:
+        logger.info(
+            "Writing flat Icechunk store '%s' (dims %dx%d)",
+            store_path.name,
+            ds.sizes[x_dim],
+            ds.sizes[y_dim],
+        )
+        ds = ds.assign_attrs({**ds.attrs, **geozarr_attrs})
+        ds = _uniform_chunks(_one_step_per_chunk(ds, x_dim, y_dim))
+        # Bound the time-coordinate chunk so map clients read the axis in a few requests
+        # rather than one per timestep (data variables keep their own chunking). Set it for
+        # every length: a store reopened after a streaming ingest carries a chunk of 1 in the
+        # coordinate's encoding, which the write would otherwise keep.
+        flat_encoding = {}
+        if t_dim is not None and t_dim in ds.coords and ds.sizes.get(t_dim, 0) > 0:
+            flat_encoding[t_dim] = {"chunks": (min(ds.sizes[t_dim], _ROOT_TIME_COORD_MAX_CHUNK),)}
+        ds.to_zarr(session.store, mode="w", zarr_format=3, encoding=flat_encoding or None)
+
+        # xarray demotes scalar coordinates (like spatial_ref) to data variables in zarr v3.
+        # Patch the root group so rioxarray can follow the CF grid_mapping attribute.
+        root_flat = zarr.open_group(session.store, mode="a")
+        flat_attrs = dict(root_flat.attrs)
+        flat_attrs["coordinates"] = "spatial_ref"
+        root_flat.attrs.update(flat_attrs)
+        if geometry is not None:
+            write_gdal_geotransform(root_flat, geometry["transform"])
+
+    if before_commit is not None:
+        before_commit()
+    return str(session.commit(commit_message))

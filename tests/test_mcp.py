@@ -11,13 +11,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import ArtifactRecord
-from open_climate_service.main import app
-from open_climate_service.mcp_server import tools
-from open_climate_service.openeo import execution
-from open_climate_service.stac import services as stac_services
+from open_geo_service import config as api_config
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import ArtifactRecord
+from open_geo_service.main import app
+from open_geo_service.mcp_server import tools
+from open_geo_service.openeo import execution
+from open_geo_service.stac import services as stac_services
 from tests.test_openeo_vector_collections import (
     _rain_cube,  # pyright: ignore[reportPrivateUsage]
     _raster_record,  # pyright: ignore[reportPrivateUsage]
@@ -33,7 +33,7 @@ _RAIN_COLLECTION = {
     "title": "Rain",
     "description": "Synthetic rain.",
     "assets": {"zarr": {"href": "http://testserver/zarr/rain"}},
-    "renders": {"default": {"open_climate_service:variable": "tp"}},
+    "renders": {"default": {"ogs:variable": "tp"}},
     "cube:variables": {"tp": {"unit": "mm/d"}},
     "cube:dimensions": {
         "t": {"type": "temporal", "extent": ["2025-01-01T00:00:00Z", "2025-02-01T00:00:00Z"], "step": "P1M"},
@@ -122,7 +122,7 @@ def test_mcp_is_off_unless_the_instance_enables_it() -> None:
 
 
 def test_an_enabled_instance_answers_as_an_mcp_server(mcp: TestClient) -> None:
-    assert _initialize(mcp)["result"]["serverInfo"]["name"] == "Open Climate Service"
+    assert _initialize(mcp)["result"]["serverInfo"]["name"] == "Open Geo Service"
 
     listed = _rpc(mcp, "tools/list")["result"]["tools"]
 

@@ -1,0 +1,108 @@
+"""Read-only mode: refuse state-changing requests when ``read_only: true`` is configured.
+
+Serves a public instance that can be browsed but not modified. The policy is deliberately
+expressed as **paths**, not HTTP methods, because method is the wrong axis here:
+
+- ``POST /result`` is a POST only because the process graph travels in the request body.
+  It is the instance's compute path and stays open. It cannot publish a dataset — the
+  synchronous handler rejects ZARR output outright (``openeo/routes.py``), so the only
+  route that writes to the managed store is the batch-job path, which read-only closes.
+- ``/manage`` holds the ingest and sync streams the template and dataset pages post to.
+  It is closed as a whole tree, every method included, so nothing under it can be added
+  later and be missed by a method filter. The pages themselves stay open and simply leave
+  their forms out on a read-only instance.
+
+Batch jobs are closed entirely rather than merely made unwritable. There is no request
+identity — ``/me`` reports ``anonymous`` for every caller — so the job namespace is shared:
+``GET /jobs`` would list every visitor's jobs and ``DELETE /jobs/{id}`` would let anyone
+remove anyone else's. Partial protection would leave that intact.
+
+Read-only governs HTTP only. Ingestion on a read-only instance is an operator task run on
+the host, which is what lets this be absolute — there is no exemption, token or trusted
+header to misconfigure into a bypass. In particular there is deliberately **no** loopback
+or trusted-CIDR escape hatch: behind a reverse proxy on the same host, every public request
+arrives from ``127.0.0.1``, so such an exemption would silently open the instance to
+everyone while appearing to work in testing.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+
+from fastapi import Request
+from starlette.responses import JSONResponse, Response
+
+from open_geo_service import config as api_config
+from open_geo_service.shared.urls import route_path
+
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Mutating paths that remain open. Matched exactly (after stripping a trailing slash).
+# `/mcp` because MCP sends every message, a read as much as anything else, as a POST. It is no
+# bypass: its tools reach the rest of the API in-process, through this middleware, so a tool
+# can do no more on a read-only instance than an outside client can (CLIM-851).
+_ALLOWED_WRITE_PATHS = frozenset({"/result", "/mcp"})
+
+# Path trees closed to every method, including GET: the ingest and sync streams, batch
+# jobs, and operator export delivery. Delivery exposes server-held credentials
+# to an operation with external effects, so reports and dry runs are closed too.
+_CLOSED_PREFIXES = ("/manage", "/jobs", "/exports")
+
+_MESSAGE = (
+    "This instance is read-only: {method} {path} is not available. "
+    "Data can be browsed via /collections, /stac, /zarr and /datasets, and process graphs "
+    "can be executed synchronously via POST /result."
+)
+
+
+def _normalise(path: str) -> str:
+    """Strip a trailing slash so ``/result/`` and ``/result`` match the same rule."""
+    return path.rstrip("/") or "/"
+
+
+def is_blocked(method: str, path: str) -> bool:
+    """Return True when read-only mode should refuse this request.
+
+    Pure function of the request line so the policy can be tested without a client, and
+    so the route-coverage test can assert every mutating route in the app is decided.
+    """
+    method = method.upper()
+    path = _normalise(path)
+
+    # Never block CORS preflight: the browser must be able to learn that the real request
+    # is disallowed, and a rejected preflight surfaces as an opaque CORS failure instead
+    # of the 403 below. The actual request is still refused.
+    if method == "OPTIONS":
+        return False
+
+    if any(path == prefix or path.startswith(f"{prefix}/") for prefix in _CLOSED_PREFIXES):
+        return True
+
+    return method in _WRITE_METHODS and path not in _ALLOWED_WRITE_PATHS
+
+
+async def read_only_middleware(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Refuse state-changing and admin requests when the instance is configured read-only.
+
+    The policy is matched against the route path, with the ASGI prefix removed, because
+    `is_blocked` matches route paths as the app declares them. Matched against the raw request
+    path, `/geoservice/manage` under `ROOT_PATH=/geoservice` hits no closed prefix and read-only mode fails
+    open. `route_path` never consults `GEOSERVICE_BASE_URL`, whose path is a public-origin
+    statement rather than an incoming prefix.
+    """
+    if not api_config.is_read_only():
+        return await call_next(request)
+    path = route_path(request)
+    if is_blocked(request.method, path):
+        message = _MESSAGE.format(method=request.method, path=path)
+        return JSONResponse(
+            status_code=403,
+            # `detail` matches FastAPI's HTTPException shape for ordinary HTTP clients;
+            # `code`/`message` are the openEO error fields, so openEO clients surface
+            # something meaningful rather than a bare status.
+            content={"id": "read-only", "code": "PermissionsInsufficient", "message": message, "detail": message},
+        )
+    return await call_next(request)

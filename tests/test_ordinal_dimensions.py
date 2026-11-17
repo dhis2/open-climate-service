@@ -12,9 +12,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from open_climate_service.stac.services import _build_ordinal_dimensions
-from open_climate_service.streaming.orchestrator import _strip_cf_encoding
-from open_climate_service.streaming.store import open_or_create_repo, read_committed_period_ids
+from open_geo_service.stac.services import _build_ordinal_dimensions
+from open_geo_service.streaming.orchestrator import _strip_cf_encoding
+from open_geo_service.streaming.store import open_or_create_repo, read_committed_period_ids
 
 
 def _dayofyear_cube() -> xr.Dataset:

@@ -18,7 +18,7 @@ pytest.importorskip("topozarr")
 pytest.importorskip("rioxarray")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.data_manager.services.downloader import (  # noqa: E402
+from open_geo_service.data_manager.services.downloader import (  # noqa: E402
     _coarsen_native,
     _normalize_resampling_method,
     needs_pyramid,
@@ -116,13 +116,13 @@ def test_coarsen_native_mode_picks_block_majority() -> None:
 
 
 def test_nearest_is_delegated_to_topozarr() -> None:
-    """`nearest` arrived upstream in topozarr 0.1.3, so OCS no longer computes it.
+    """`nearest` arrived upstream in topozarr 0.1.3, so OGS no longer computes it.
 
     It is composable — corner-of-corners equals corner-of-native — so level-from-previous
-    (what topozarr does) and level-from-native (what OCS used to do) agree. Verified
+    (what topozarr does) and level-from-native (what OGS used to do) agree. Verified
     byte-identical across a real 3-level pyramid when the delegation was made.
     """
-    from open_climate_service.data_manager.services.downloader import (
+    from open_geo_service.data_manager.services.downloader import (
         _COMPOSABLE_METHODS,
         _NATIVE_RESAMPLE_METHODS,
     )
@@ -286,7 +286,12 @@ def test_pyramid_levels_carry_the_crs_definition_and_not_just_the_code(tmp_path:
     repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(store_path)))
     root = zarr.open_group(repo.readonly_session("main").store, mode="r")
 
-    for name, attrs in [("root", dict(root.attrs)), ("level 0", dict(root["0"].attrs))]:
+    levels = [(f"level {key}", dict(root[key].attrs)) for key in sorted(root.group_keys())]
+    for name, attrs in [("root", dict(root.attrs)), *levels]:
         assert attrs["proj:code"] == "EPSG:27700", name
         assert CRS.from_wkt(attrs["proj:wkt2"]) == CRS.from_epsg(27700), name
-        assert CRS.from_json_dict(attrs["proj:projjson"]) == CRS.from_epsg(27700), name
+    # topozarr writes the level attrs with WKT2 only; the root also carries PROJJSON.
+    assert CRS.from_json_dict(root.attrs["proj:projjson"]) == CRS.from_epsg(27700)
+    # Without consolidated metadata, GDAL finds a level's CRS only through the CF grid mapping.
+    for key in sorted(root.group_keys()):
+        assert root[key]["v"].attrs["grid_mapping"] == "spatial_ref", key

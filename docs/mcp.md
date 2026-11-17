@@ -8,7 +8,7 @@ This is a first version, off by default while it settles (CLIM-851).
 
 ## Enable it
 
-Add to `climate-service.yaml`:
+Add to `geoservice.yaml`:
 
 ```yaml
 mcp: true

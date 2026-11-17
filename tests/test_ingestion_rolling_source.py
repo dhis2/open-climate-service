@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
-from open_climate_service.ingestions import services
-from open_climate_service.ingestions.schemas import ArtifactVersion, CoverageTemporal
-from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
+from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
+from open_geo_service.ingestions import services
+from open_geo_service.ingestions.schemas import ArtifactVersion, CoverageTemporal
+from open_geo_service.streaming import BaseDatasetPlugin, normalize_period
 
 
 class _RollingPlugin(BaseDatasetPlugin):
@@ -295,6 +295,6 @@ def test_append_record_failure_restores_existing_store(
 
     assert services._load_records()[-1].artifact_id == initial.artifact_id
     repo = services.open_or_create_repo(store_path)
-    assert not [branch for branch in repo.list_branches() if branch.startswith("ocs-ingest-rollback-")]
+    assert not [branch for branch in repo.list_branches() if branch.startswith("ogs-ingest-rollback-")]
     with open_icechunk_dataset(store_path) as stored:
         assert stored["precip"][:, 0, 0].values.tolist() == [1.0, 2.0]

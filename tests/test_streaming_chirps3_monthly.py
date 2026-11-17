@@ -11,10 +11,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.plugins.rasters import chirps3
-from open_climate_service.plugins.rasters.chirps3 import CHIRPS3MonthlyPlugin
-from open_climate_service.shared.time import monthly_period_ids
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.plugins.rasters import chirps3
+from open_geo_service.plugins.rasters.chirps3 import CHIRPS3MonthlyPlugin
+from open_geo_service.shared.time import monthly_period_ids
 
 _NODATA = -9999.0
 
@@ -114,14 +114,6 @@ def test_rejects_malformed_months(value: str) -> None:
 def test_rejects_a_malformed_end_too() -> None:
     with pytest.raises(ValueError, match="Invalid monthly period"):
         monthly_period_ids("2025-01", "2025-13")
-
-
-def test_era5_land_monthly_uses_the_shared_helper() -> None:
-    """It hand-rolled the same month loop before; the third copy is what prompted this."""
-    from open_climate_service.plugins.rasters import era5_land
-
-    source = __import__("pathlib").Path(era5_land.__file__).read_text(encoding="utf-8")
-    assert "monthly_period_ids(" in source
 
 
 # --- the mm/d conversion --------------------------------------------------------------

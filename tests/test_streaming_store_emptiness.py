@@ -25,8 +25,8 @@ zarr = pytest.importorskip("zarr")
 zarr_errors = pytest.importorskip("zarr.errors")
 pytest.importorskip("icechunk")  # required by the store helpers, not referenced here
 
-from open_climate_service.streaming.orchestrator import run_streaming_ingest_sync  # noqa: E402
-from open_climate_service.streaming.store import is_store_empty, open_or_create_repo  # noqa: E402
+from open_geo_service.streaming.orchestrator import run_streaming_ingest_sync  # noqa: E402
+from open_geo_service.streaming.store import is_store_empty, open_or_create_repo  # noqa: E402
 
 
 class _OnePeriodPlugin:

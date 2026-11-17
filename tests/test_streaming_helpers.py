@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.streaming import normalize_period
+from open_geo_service.streaming import normalize_period
 
 
 def test_normalize_period_renames_dims_masks_nodata_and_stamps_time() -> None:
@@ -69,6 +69,6 @@ def test_normalize_period_renames_projected_axes_and_drops_2d_aux_coords() -> No
 
 @pytest.mark.parametrize("crs_in,expected", [(4326, 4326), ("EPSG:32633", 32633), ("epsg:4326", 4326), ("CRS84", 4326)])
 def test_to_epsg_int_accepts_int_and_string_forms(crs_in: int | str, expected: int) -> None:
-    from open_climate_service.streaming.protocol import to_epsg_int
+    from open_geo_service.streaming.protocol import to_epsg_int
 
     assert to_epsg_int(crs_in) == expected

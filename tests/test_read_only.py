@@ -8,9 +8,9 @@ from collections.abc import Generator, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.main import app
-from open_climate_service.read_only import is_blocked
+from open_geo_service import config as api_config
+from open_geo_service.main import app
+from open_geo_service.read_only import is_blocked
 
 from .conftest import MountedClientFactory
 
@@ -38,7 +38,9 @@ _MUTATING_ROUTES = [
     ("DELETE", "/schedules/sync/{dataset_id}"),
     ("POST", "/schedules/sync/{dataset_id}/delete"),
     ("POST", "/pipelines"),
-    ("POST", "/pipelines/{pipeline_id}"),
+    ("POST", "/pipelines/new"),
+    ("PUT", "/pipelines/{pipeline_id}"),
+    ("POST", "/pipelines/{pipeline_id}/edit"),
     ("DELETE", "/pipelines/{pipeline_id}"),
     ("POST", "/pipelines/{pipeline_id}/delete"),
     ("POST", "/pipelines/{pipeline_id}/validate"),
@@ -97,8 +99,14 @@ def read_only() -> Iterator[None]:
 
 @pytest.fixture
 def ro_client(read_only: None) -> Generator[TestClient, None, None]:
+    from open_geo_service.jobs.service import reset_job_service
+    from open_geo_service.openeo.jobs import reset_openeo_job_service
+
     with TestClient(app) as client:
         yield client
+    # The lifespan shuts the job services down; later tests in this process need live ones.
+    reset_job_service()
+    reset_openeo_job_service()
 
 
 # --- the policy as a pure function ---------------------------------------------------
@@ -143,7 +151,7 @@ def test_policy_allows_public_reads(path: str) -> None:
 def test_policy_allows_data_endpoints() -> None:
     assert not is_blocked("GET", "/zarr/some_dataset/zarr.json")
     assert not is_blocked("GET", "/icechunk/some_dataset/refs/branch.main/ref.json")
-    assert not is_blocked("GET", "/stac/collections/some_dataset")
+    assert not is_blocked("GET", "/stac/some_dataset/collection.json")
 
 
 def test_policy_never_blocks_cors_preflight() -> None:
@@ -156,10 +164,14 @@ def test_policy_never_blocks_cors_preflight() -> None:
 def _live_mutating_routes() -> set[tuple[str, str]]:
     write_methods = {"POST", "PUT", "PATCH", "DELETE"}
     live: set[tuple[str, str]] = set()
-    for route in app.routes:
-        methods: set[str] = getattr(route, "methods", None) or set()
-        for method in methods & write_methods:
-            live.add((method, getattr(route, "path", "")))
+    # FastAPI 0.162 keeps an included router as one entry in `app.routes`; its routes, with the
+    # prefix applied, come from `effective_route_contexts()`.
+    for entry in app.routes:
+        included = getattr(entry, "effective_route_contexts", None)
+        for route in included() if included else [entry]:
+            methods: set[str] = getattr(route, "methods", None) or set()
+            for method in methods & write_methods:
+                live.add((method, getattr(route, "path", "")))
     return live
 
 
@@ -324,30 +336,30 @@ def test_policy_is_inert_when_the_flag_is_off(client: TestClient) -> None:
     assert client.post("/ingestions", json={}).status_code != 403  # ...but it is not applied
 
 
-@pytest.mark.parametrize("root_path", ["/ocs", "/ocs/"])
+@pytest.mark.parametrize("root_path", ["/geoservice", "/geoservice/"])
 def test_read_only_still_refuses_manage_under_a_mount_prefix(
     read_only: None, mounted_client_factory: MountedClientFactory, root_path: str
 ) -> None:
     """The policy matches route paths as the app declares them, so the prefix must come off.
 
-    Matched unstripped, `/ocs/manage` hits no closed prefix and read-only mode fails open. The
+    Matched unstripped, `/geoservice/manage` hits no closed prefix and read-only mode fails open. The
     trailing-slash case is the same failure one step later: uvicorn joins `root_path + path`
-    verbatim, so `/ocs/` yields `/ocs//manage`, which Starlette still routes to `/manage`.
+    verbatim, so `/geoservice/` yields `/geoservice//manage`, which Starlette still routes to `/manage`.
     """
     mounted = mounted_client_factory(root_path)
 
     assert mounted.get("/manage").status_code == 403
     assert mounted.get("/jobs").status_code == 403
-    assert mounted.get("/stac").status_code == 200
+    assert mounted.get("/stac/catalog.json").status_code == 200
 
 
 def test_a_configured_base_url_path_cannot_bypass_read_only(read_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The policy reads the ASGI path, never the path of `CLIMATE_SERVICE_BASE_URL`.
+    """The policy reads the ASGI path, never the path of `GEOSERVICE_BASE_URL`.
 
     That path is a statement about the public origin, not about the incoming path. Stripping
     it would let a base URL of `https://public.example/jobs` take `/jobs` off the real route.
     """
-    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "https://public.example/jobs")
+    monkeypatch.setenv("GEOSERVICE_BASE_URL", "https://public.example/jobs")
     client = TestClient(app)
 
     assert client.get("/jobs").status_code == 403

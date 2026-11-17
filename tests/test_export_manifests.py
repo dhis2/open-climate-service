@@ -11,21 +11,24 @@ import pytest
 import xarray as xr
 from fastapi import HTTPException
 
-from open_climate_service import config
-from open_climate_service.exports.delivery_input import lease_export_input
-from open_climate_service.exports.manifest import ExportManifest
-from open_climate_service.exports.service import write_named_export
-from open_climate_service.ingestions.schemas import ArtifactFormat
-from open_climate_service.openeo import jobs
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus, OpenEOJobUpdate
-from open_climate_service.shared.provenance import (
+from open_geo_service import config
+from open_geo_service.exports.delivery_input import lease_export_input
+from open_geo_service.exports.manifest import ExportManifest
+from open_geo_service.exports.service import write_named_export
+from open_geo_service.ingestions.schemas import ArtifactFormat
+from open_geo_service.openeo import jobs
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus, OpenEOJobUpdate
+from open_geo_service.pipelines import exports as pipeline_exports
+from open_geo_service.shared.provenance import (
     capture_execution,
     json_digest,
     record_features,
     record_snapshot,
     record_source,
 )
-from open_climate_service.shared.time import utc_now
+from open_geo_service.shared.time import utc_now
+
+from .conftest import named_exports
 
 
 def _data() -> pd.DataFrame:
@@ -39,16 +42,17 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         config,
         "_cache",
         {
-            "exports": [
-                {
-                    "id": "rain",
-                    "plugin": "dhis2",
-                    "connection": "hmis",
-                    "period_type": "monthly",
-                    "series": [{"data_element": "BXgDHhPdFVU"}],
-                }
-            ],
             "dhis2_connections": [{"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "TEST_TOKEN"}],
+        },
+    )
+    named_exports(
+        monkeypatch,
+        {
+            "id": "rain",
+            "plugin": "dhis2",
+            "connection": "hmis",
+            "period_type": "monthly",
+            "series": [{"data_element": "BXgDHhPdFVU"}],
         },
     )
     monkeypatch.delenv("TEST_TOKEN", raising=False)
@@ -97,7 +101,7 @@ def test_rotation_and_url_normalization_do_not_invalidate_binding(saved: Path, m
 
 @pytest.mark.parametrize("change", ["mapping", "target", "connection", "version", "reference", "process"])
 def test_changed_bindings_are_conflicts(saved: Path, monkeypatch: pytest.MonkeyPatch, change: str):
-    definition = config.get_config()["exports"][0]
+    definition = pipeline_exports.pipeline_export_definitions()[0]
     if change == "mapping":
         definition["series"][0]["data_element"] = "Ix2HsbDMLea"
     elif change == "target":
@@ -107,7 +111,7 @@ def test_changed_bindings_are_conflicts(saved: Path, monkeypatch: pytest.MonkeyP
     elif change == "reference":
         definition["dataset"] = "other"
     elif change == "version":
-        monkeypatch.setattr("open_climate_service.exports.dhis2_renderer.Dhis2ExportPlugin.version", "2")
+        monkeypatch.setattr("open_geo_service.exports.dhis2_renderer.Dhis2ExportPlugin.version", "2")
     else:
         # Construct a fresh manifest with the original graph digest, then change the job graph.
         path = write_named_export(
@@ -208,7 +212,7 @@ def test_lease_blocks_mutation_and_releases_after_exception(saved: Path):
 
 
 def test_failed_publication_keeps_previous_generation(saved: Path, monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.exports import manifest as module
+    from open_geo_service.exports import manifest as module
 
     original = module.atomic_write
     old_metadata = (saved.parent / ".export.json").read_bytes()
@@ -227,7 +231,7 @@ def test_failed_publication_keeps_previous_generation(saved: Path, monkeypatch: 
 
 
 def test_unbound_export_remains_downloadable_but_cannot_be_delivered(saved: Path):
-    del config.get_config()["exports"][0]["connection"]
+    del pipeline_exports.pipeline_export_definitions()[0]["connection"]
     path = write_named_export(_data(), saved.parent, "DHIS2JSON", {"export": "rain"}, job_id="source")
     jobs.store_update_job("source", lambda record: record.model_copy(update={"usage": {"output_path": path}}))
     assert _manifest(Path(path)).target is None
@@ -260,7 +264,7 @@ def test_feature_and_snapshot_evidence_is_execution_scoped():
 
 
 def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     artifact = SimpleNamespace(
         path="/source", artifact_id="artifact-1", source_dataset_id="rain", format=ArtifactFormat.ICECHUNK
@@ -285,16 +289,6 @@ def test_run_graph_attaches_native_observations(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("openeo_pg_parser_networkx.OpenEOProcessGraph", Graph)
     result = execution.run_process_graph({"process_graph": {}})
     assert result.provenance["sources"][0]["artifact_id"] == "artifact-1"
-
-
-def test_export_environment_interpolation_rejected_before_caching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    path = tmp_path / "config.yaml"
-    path.write_text("exports:\n  - id: rain\n    plugin: dhis2\n    data_element: ${SECRET}\n")
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(path))
-    monkeypatch.setenv("SECRET", "secret: [invalid yaml")
-    with pytest.raises(ValueError, match="literal"):
-        config.get_config()
-    assert config._cache is None
 
 
 def test_snapshot_paths_are_normalized(tmp_path: Path):

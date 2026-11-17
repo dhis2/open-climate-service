@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-import open_climate_service.streaming.orchestrator as streaming_orchestrator
-from open_climate_service.streaming.orchestrator import _grid_spec_from_dataset, run_streaming_ingest_sync
+import open_geo_service.streaming.orchestrator as streaming_orchestrator
+from open_geo_service.streaming.orchestrator import _grid_spec_from_dataset, run_streaming_ingest_sync
 
 
 def test_grid_spec_from_dataset_raises_clear_error_for_missing_spatial_dims() -> None:
@@ -631,7 +631,7 @@ def test_sync_append_keeps_spatial_ref_a_coordinate(tmp_path: Path) -> None:
     """
     import zarr
 
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     store_path = tmp_path / "flat-store.icechunk"
 

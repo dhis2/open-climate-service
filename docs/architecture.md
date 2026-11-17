@@ -1,6 +1,6 @@
 # Architecture
 
-This document explains how the Open Climate Service is structured, why it is structured that way, and what the consequences are of each design decision. It is written for developers who will maintain or extend the platform over time.
+This document explains how the Open Geo Service is structured, why it is structured that way, and what the consequences are of each design decision. It is written for developers who will maintain or extend the platform over time.
 
 ---
 
@@ -10,7 +10,7 @@ The platform has four first-class concepts. Understanding the distinction betwee
 
 ### Data source
 
-A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint: raster templates in `rasters/`, vector templates in `vectors/`. Built-ins live in `open_climate_service/plugins/rasters/` and `open_climate_service/plugins/vectors/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` and `{plugins_dir}/vectors/`, where `plugins_dir` is set in `climate-service.yaml`. A data source has no state — it describes what _could_ be ingested, not what _has been_ ingested.
+A **data source** is an upstream dataset this instance can fetch. It is described by a **dataset template**, a YAML blueprint: raster templates in `rasters/`, vector templates in `vectors/`. Built-ins live in `open_geo_service/plugins/rasters/` and `open_geo_service/plugins/vectors/` inside the package (loaded via `importlib.resources`). Custom ones live in `{plugins_dir}/rasters/` and `{plugins_dir}/vectors/`, where `plugins_dir` is set in `geoservice.yaml`. A data source has no state — it describes what _could_ be ingested, not what _has been_ ingested.
 
 A raster dataset template defines:
 
@@ -28,7 +28,7 @@ Templates are config, not code. If a template needs custom logic, the logic goes
 
 Datasets are ingested via a per-period streaming contract. The plugin enumerates periods and fetches one period at a time as an `xarray.Dataset`; the store grid is inferred from the first fetched period. The framework handles resume, concurrency, store commits, artifact persistence, and publication.
 
-The streaming engine lives in `open_climate_service.streaming`, while `open_climate_service.ingestions` is the application-facing layer that owns routes, artifact records, and publication state.
+The streaming engine lives in `open_geo_service.streaming`, while `open_geo_service.ingestions` is the application-facing layer that owns routes, artifact records, and publication state.
 
 ### Artifact
 
@@ -42,7 +42,7 @@ An **artifact** is the internal record of a completed data ingestion. It is the 
 
 Multiple artifacts can exist for the same data source if data was ingested at different times (they form the version history). The most recent artifact for a given `dataset_id` is what the public API serves.
 
-Artifacts are stored in `{data_dir}/artifacts/records.json`, where `data_dir` is the path configured in `climate-service.yaml`. This is an internal implementation detail — consumers should never depend on artifact IDs or artifact paths directly.
+Artifacts are stored in `{data_dir}/artifacts/records.json`, where `data_dir` is the path configured in `geoservice.yaml`. This is an internal implementation detail — consumers should never depend on artifact IDs or artifact paths directly.
 
 Store paths are persisted relative to `data_dir` (`rasters/foo.icechunk`) and resolved to absolute paths when records are loaded, so the data directory stays portable: it can be moved, copied to another host, or written in a container at `/app/data` and read from the host. Records written before this convention hold absolute paths and are re-rooted onto the current `data_dir` on read, then rewritten in relative form on the next update. Stores kept outside `data_dir` are recorded as absolute paths.
 
@@ -54,7 +54,7 @@ The relationship is: one template → many artifacts over time → one managed d
 
 ### Extent
 
-The **extent** is the spatial bounding box configured for this Open Climate Service instance. It is set once in `climate-service.yaml` and does not change at runtime. Every ingestion is automatically scoped to this extent — operators do not specify it per-request.
+The **extent** is the spatial bounding box configured for this Open Geo Service instance. It is set once in `geoservice.yaml` and does not change at runtime. Every ingestion is automatically scoped to this extent — operators do not specify it per-request.
 
 This is a deliberate design constraint: each instance serves one place. A Sierra Leone instance serves Sierra Leone. Multi-country coverage requires multiple instances.
 
@@ -62,10 +62,10 @@ This is a deliberate design constraint: each instance serves one place. A Sierra
 
 ## Operational ownership and access
 
-OCS owns its operational capabilities, policy, and state. An instance must remain
-operable without DHIS2. The DHIS2 Climate App is an optional client of the OCS API:
+Open Geo Service owns its operational capabilities, policy, and state. An instance must remain
+operable without DHIS2. The DHIS2 Climate App is an optional client of the Open Geo Service API:
 it may provide DHIS2-specific presentation, mappings, and interaction flows, but
-must not duplicate OCS lifecycle rules or maintain a parallel copy of operational
+must not duplicate Open Geo Service lifecycle rules or maintain a parallel copy of operational
 state.
 
 Domain services and persistent stores are the source of truth. HTTP routes, the
@@ -74,14 +74,14 @@ than implement separate lifecycle rules. External clients use the HTTP API.
 
 ### Built-in web surfaces
 
-OCS owns two web surfaces with distinct purposes:
+Open Geo Service owns two web surfaces with distinct purposes:
 
 - **The landing page (`/`) provides public discovery.** It presents the instance,
   published data, available templates, exploration tools, and documentation, and
   must remain useful without DHIS2. The root URL serves HTML to browsers and JSON
   discovery metadata to API clients through content negotiation.
 - **The `/manage` console provides operator administration.** It supports ingestion
-  and synchronization and is the OCS surface for dataset administration. It is
+  and synchronization and is the Open Geo Service surface for dataset administration. It is
   unavailable when the instance is configured as read-only.
 
 See [Using the web interface](web_interface.md) for the available views and actions.
@@ -93,7 +93,7 @@ The access model distinguishes three classes:
 | Access class | Intended responsibility |
 | --- | --- |
 | Public read | Discover and consume published datasets and instance metadata through the public API and landing page. |
-| Operator read and write | Inspect operational state and perform ingestion, synchronization, and lifecycle actions through the OCS API and `/manage`. |
+| Operator read and write | Inspect operational state and perform ingestion, synchronization, and lifecycle actions through the Open Geo Service API and `/manage`. |
 | Host operator | Configure the instance, including read-only policy and schedule definitions, and perform host maintenance. |
 
 Network-exposed operator reads and writes must be protected by authentication and
@@ -102,11 +102,12 @@ authorization are not yet implemented. Read-only mode is an HTTP access policy,
 not an identity or permissions system. Operational diagnostics such as job errors
 must not be treated as public merely because reading them does not mutate state.
 See [Read-only instances](instance_guide.md#read-only-instances) for the current
-deployment behavior.
+deployment behavior, and [Authentication and authorization](authentication.md) for
+the planned design.
 
 Schedule definitions come from the single `<data_dir>/schedules.json` store, whether
 prepared before startup or saved through the web interface or API. The instance-wide
-clock switch and timezone remain in `climate-service.yaml`. See
+clock switch and timezone remain in `geoservice.yaml`. See
 [Scheduled dataset synchronization](scheduled_sync.md) for configuration, the
 schedule API and the reload rules.
 
@@ -156,7 +157,7 @@ Artifact (internal record)
 Managed dataset (public API)
     ├── /datasets/{id}         — native metadata
     ├── /zarr/{id}             — raw zarr store access
-    └── /stac/collections/{id} — STAC discovery
+    └── /stac/{id}/collection.json — STAC discovery
 ```
 
 The plugin owns source probing, period enumeration, and fetching one period as an `xarray.Dataset`. The framework owns job callbacks, artifact persistence, publication metadata, and all public API integration. Plugins do not need to know about Zarr conventions or STAC.
@@ -214,9 +215,12 @@ Successful native jobs may also contain domain events in their `events` field. T
 persisted in the same update that marks the job successful, so consumers never observe an event
 for failed work. An async sync that actually appends or rematerializes data records one
 `dataset.updated` event with the dataset, artifact, executed action, and previous/current coverage.
-An up-to-date sync records no event. Instance-configured workflow triggers consume these durable
-outcomes and submit existing openEO workflows. A deterministic job ID makes replay after restart
-idempotent. External notification remains a separate concern.
+An up-to-date sync records no event. Derived dataset recipes and pipelines consume these durable
+outcomes and submit openEO workflows. A deterministic job ID makes replay after restart
+idempotent. A scheduled sync job persists an `automation.failed` or `automation.succeeded` event
+with its final outcome, and a pipeline run one for each change it causes in the pipeline's health
+(`automation.resolved` when an operator acknowledged the failure). These drive the
+[failure alerts](scheduled_sync.md#failure-alerts).
 
 Jobs provide:
 
@@ -236,7 +240,7 @@ The platform has three plugin types. Each has a narrow contract — the framewor
 ### Streaming plugin
 
 ```python
-from open_climate_service.streaming import BaseDatasetPlugin
+from open_geo_service.streaming import BaseDatasetPlugin
 
 
 class MyStreamingPlugin(BaseDatasetPlugin):
@@ -249,28 +253,30 @@ class MyStreamingPlugin(BaseDatasetPlugin):
         ...
 ```
 
-Responsibilities are split: the plugin knows the source; the orchestrator owns resume, concurrency, and store commits; `open_climate_service.ingestions` owns artifacts, publication, and API responses.
+Responsibilities are split: the plugin knows the source; the orchestrator owns resume, concurrency, and store commits; `open_geo_service.ingestions` owns artifacts, publication, and API responses.
 
 Multiple YAML templates can reference the same plugin class and differentiate via `ingestion.params`. This is the intended pattern for sources that expose multiple variables:
 
 ```yaml
-# era5land_temperature_hourly.yaml
+# era5_land_cds.yaml: era5land_temperature_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: t2m
+    temporal_aggregation: mean
 
-# era5land_precipitation_hourly.yaml
+# era5_land_cds.yaml: era5land_precipitation_daily
 ingestion:
-  plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandCDSHourlyPlugin
+  plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
   params:
     variable: tp
+    temporal_aggregation: sum
 ```
 
 ### Named openEO process (`@process`)
 
 ```python
-from open_climate_service.process import process
+from open_geo_service.process import process
 
 
 @process(summary="My custom index")

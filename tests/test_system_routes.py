@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from jinja2 import TemplateNotFound
 from starlette.responses import StreamingResponse
 
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.system import routes as system_routes
-from open_climate_service.system import templates as system_templates
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.system import routes as system_routes
+from open_geo_service.system import templates as system_templates
 
 
 class _FakeRequest:
@@ -34,7 +34,7 @@ def _clear_template_cache() -> None:
     system_templates._cache.clear()
 
 
-@pytest.mark.parametrize("name", ["../config.py", "subdir/page.html", r"subdir\page.html", "ocs_ui.css"])
+@pytest.mark.parametrize("name", ["../config.py", "subdir/page.html", r"subdir\page.html", "geoservice_ui.css"])
 def test_template_loader_refuses_names_outside_bundled_html(name: str) -> None:
     with pytest.raises(TemplateNotFound):
         system_templates._template_source(name)
@@ -206,11 +206,11 @@ async def test_manage_ingest_strips_string_inputs_and_treats_blank_end_as_none(
     monkeypatch.setattr(system_routes.asyncio, "create_task", fake_create_task)
     monkeypatch.setattr(ingestion_services, "create_artifact", fake_create_artifact)
     monkeypatch.setattr(
-        "open_climate_service.data_registry.services.datasets.get_dataset",
+        "open_geo_service.data_registry.services.datasets.get_dataset",
         lambda dataset_id: template if dataset_id == template["id"] else None,
     )
     monkeypatch.setattr(
-        "open_climate_service.extents.services.get_extent_or_404",
+        "open_geo_service.extents.services.get_extent_or_404",
         lambda: {"bbox": [0.0, 1.0, 2.0, 3.0], "country_code": "SLE"},
     )
 
@@ -245,7 +245,7 @@ async def test_manage_ingest_strips_string_inputs_and_treats_blank_end_as_none(
 @pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
 async def test_manage_ingest_rejects_blank_start(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "open_climate_service.data_registry.services.datasets.get_dataset",
+        "open_geo_service.data_registry.services.datasets.get_dataset",
         # Ingestability is checked before the stream opens, so the stub needs a plugin.
         lambda dataset_id: {
             "id": dataset_id,
@@ -256,7 +256,7 @@ async def test_manage_ingest_rejects_blank_start(monkeypatch: pytest.MonkeyPatch
         },
     )
     monkeypatch.setattr(
-        "open_climate_service.extents.services.get_extent_or_404",
+        "open_geo_service.extents.services.get_extent_or_404",
         lambda: {"bbox": [0.0, 1.0, 2.0, 3.0], "country_code": "SLE"},
     )
 
@@ -301,9 +301,9 @@ def test_ingestable_templates_excludes_static_workflow_outputs(monkeypatch: pyte
 
 
 def test_the_shared_navigation_marks_the_current_page_and_carries_the_mount() -> None:
-    nav = str(system_templates.page_nav("/ocs", "map"))
+    nav = str(system_templates.page_nav("/geoservice", "map"))
 
-    assert 'href="/ocs/map"' in nav, "every link resolves under the mount prefix"
+    assert 'href="/geoservice/map"' in nav, "every link resolves under the mount prefix"
     assert 'aria-current="page"' in nav
     # The openEO editor is hosted elsewhere, so it opens in a new tab and is set apart.
     assert 'target="_blank" rel="noopener"' in nav
@@ -405,6 +405,14 @@ def test_the_map_viewer_draws_each_class_in_its_own_colour(client: TestClient) -
     assert "if (classes.length) updateClassLegend(classes, colors);" in body
 
 
+def test_the_map_viewer_draws_the_colours_the_server_resolved(client: TestClient) -> None:
+    """chroma-js knows fewer colormaps than matplotlib, so a name it lacked silently drew viridis."""
+    body = client.get("/map").text
+
+    assert "Object.values(renders.colormap)" in body
+    assert "colormap_name" not in body
+
+
 def test_a_selection_made_while_tiles_load_still_runs(client: TestClient) -> None:
     """`isStyleLoaded()` is false while basemap tiles load, long after `load` fired once."""
     body = client.get("/map").text
@@ -493,7 +501,7 @@ async def test_a_refusal_names_no_url_at_all() -> None:
     refusal carries a message and no location — there is no URL left to get wrong.
     """
     response = await system_routes.manage_sync(
-        cast("Request", _FakeRequest({"dataset_id": "  "}, root_path="/ocs")),
+        cast("Request", _FakeRequest({"dataset_id": "  "}, root_path="/geoservice")),
     )
 
     assert response.status_code == 400

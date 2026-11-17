@@ -1,8 +1,8 @@
 """Feature ids survive spatial aggregation as `feature_id`, and the exports read them (CLIM-1355).
 
 openEO labels a vector cube's geometry dimension with the geometries and leaves the feature id to
-the backend (openeo-processes#466); OCS keeps it in a `feature_id` coordinate. The graphs below run
-as jobs with two aggregations: OCS's own `aggregate_spatial`, which labels the dimension with the
+the backend (openeo-processes#466); OGS keeps it in a `feature_id` coordinate. The graphs below run
+as jobs with two aggregations: OGS's own `aggregate_spatial`, which labels the dimension with the
 ids, and the openEO reference implementation from openeo-processes-dask, which labels it with the
 shapes, as CLIM-785's processes do. Both must export the same org units and locations.
 """
@@ -24,12 +24,12 @@ pytest.importorskip("xvec")
 from openeo_pg_parser_networkx.process_registry import Process  # noqa: E402
 from shapely.geometry import box  # noqa: E402
 
-from open_climate_service.exports.delivery_input import lease_export_input  # noqa: E402
-from open_climate_service.exports.service import render_named_export  # noqa: E402
-from open_climate_service.openeo import execution  # noqa: E402
-from open_climate_service.openeo import jobs as openeo_jobs  # noqa: E402
-from open_climate_service.openeo.schemas import OpenEOJobStatus  # noqa: E402
-from open_climate_service.shared.vectors import (  # noqa: E402
+from open_geo_service.exports.delivery_input import lease_export_input  # noqa: E402
+from open_geo_service.exports.service import render_named_export  # noqa: E402
+from open_geo_service.openeo import execution  # noqa: E402
+from open_geo_service.openeo import jobs as openeo_jobs  # noqa: E402
+from open_geo_service.openeo.schemas import OpenEOJobStatus  # noqa: E402
+from open_geo_service.shared.vectors import (  # noqa: E402
     FEATURE_ID_COORD,
     attach_feature_ids,
     geometries_to_frame,
@@ -57,13 +57,13 @@ def _openeo_aggregate_spatial(data: Any, geometries: Any, reducer: Any, **_: Any
     return attach_feature_ids(result, frame.index, "geometry")
 
 
-@pytest.fixture(params=["ocs", "openeo"])
+@pytest.fixture(params=["ogs", "openeo"])
 def service(
     request: pytest.FixtureRequest,
     instance: openeo_jobs.OpenEOJobService,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> openeo_jobs.OpenEOJobService:
-    """The job service, aggregating with OCS's process or with the openEO reference one."""
+    """The job service, aggregating with OGS's process or with the openEO reference one."""
     if request.param == "openeo":
         registry = execution._build_process_registry()
         overlay = execution._RegistryOverlay(

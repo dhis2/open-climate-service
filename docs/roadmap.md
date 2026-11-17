@@ -1,6 +1,6 @@
 # Roadmap
 
-The Open Climate Service has delivered its foundation. An instance can ingest climate
+The Open Geo Service has delivered its foundation. An instance can ingest climate
 and Earth Observation data, keep it current, store it as cloud-native GeoZarr, make it
 discoverable through STAC, derive new products from it through openEO processes
 (including climate indices), and chain those steps into reusable workflows.
@@ -46,7 +46,7 @@ ecosystem, hardening it for production, and broadening the data and analysis it 
 
 ## Focus areas
 
-These are the priorities for taking the Open Climate Service from a working platform to
+These are the priorities for taking the Open Geo Service from a working platform to
 production-ready shared infrastructure for the DHIS2 climate and health ecosystem. They
 are largely parallel rather than strictly sequential.
 
@@ -55,7 +55,7 @@ are largely parallel rather than strictly sequential.
 The highest-value next step is direct integration with the DHIS2 ecosystem so that climate
 and EO data flows into the tools country teams already use:
 
-- **DHIS2 Climate App** — consume Open Climate Service datasets and aggregation directly
+- **DHIS2 Climate App** — consume Open Geo Service datasets and aggregation directly
 - **DHIS2 Maps App** — render GeoZarr layers and import aggregated values
 - **CHAP Modelling Platform** — supply harmonised climate inputs to models
 - Push aggregated values into DHIS2 data elements against org-unit hierarchies

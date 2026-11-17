@@ -1,0 +1,304 @@
+"""Instance configuration loaded from GEOSERVICE_CONFIG."""
+
+import datetime
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+_MISSING = object()
+
+
+def _substitute_env_vars(text: str) -> str:
+    """Replace ${VAR:-default} patterns with values from the environment."""
+
+    def _replace(match: re.Match[str]) -> str:
+        var, _, default = match.group(1).partition(":-")
+        return os.environ.get(var, default)
+
+    return re.sub(r"\$\{([^}]+)\}", _replace, text)
+
+
+def get_config_path() -> Path | None:
+    """Return the resolved Path of GEOSERVICE_CONFIG, or None if unset."""
+    raw = os.environ.get("GEOSERVICE_CONFIG")
+    return Path(raw).resolve() if raw else None
+
+
+def get_config() -> dict[str, Any]:
+    """Load and return the instance config from GEOSERVICE_CONFIG.
+
+    Results are cached for the lifetime of the process; the config file is
+    read once and reused on subsequent calls. Returns an empty dict if
+    GEOSERVICE_CONFIG is not set. Raises FileNotFoundError if the path is
+    set but does not exist.
+    """
+    return _load_config()
+
+
+_RETIRED_KEYS = {
+    "automation": "keep a derived dataset current with a produced_by recipe in its dataset template, "
+    "and deliver with a pipeline (docs/workflow_automation.md)",
+    "exports": "a pipeline owns the named export under its own id; create a manual pipeline instead "
+    "(docs/importing_to_dhis2.md)",
+}
+"""Top-level keys removed by CLIM-1426, and what replaces each."""
+
+# Module-level cache — reset between tests via monkeypatch on _cache.
+_cache: dict[str, Any] | None = None
+
+
+def _load_config() -> dict[str, Any]:
+    global _cache
+    if _cache is not None:
+        return _cache
+    path = get_config_path()
+    if path is None:
+        return {}
+    if not path.exists():
+        raise FileNotFoundError(f"GEOSERVICE_CONFIG not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    # Named connections are validated as literal definitions. Reject environment interpolation
+    # inside that block before substitution, so a secret that happens to contain YAML syntax can
+    # never break parsing or be cached, while interpolation elsewhere (for example
+    # bbox: [${MINX}, ${MINY}]) keeps working.
+    if _block_uses_interpolation(text, "dhis2_connections"):
+        raise ValueError("dhis2_connections does not support environment interpolation; use literal values")
+    loaded = yaml.safe_load(_substitute_env_vars(text))
+    if loaded is not None and not isinstance(loaded, dict):
+        raise ValueError(f"GEOSERVICE_CONFIG must be a YAML mapping at the top level: {path}")
+    if loaded is not None and "dhis2_connections" in loaded:
+        from open_geo_service.exports.dhis2_config import parse_connections
+
+        parse_connections(loaded["dhis2_connections"])
+    retired = [key for key in _RETIRED_KEYS if loaded is not None and key in loaded]
+    if retired:
+        raise ValueError(
+            "GEOSERVICE_CONFIG has settings Open Geo Service no longer reads: "
+            + "; ".join(f"'{key}': {_RETIRED_KEYS[key]}" for key in retired)
+        )
+    _cache = dict(loaded or {})
+    return _cache
+
+
+def _block_uses_interpolation(text: str, key: str) -> bool:
+    """Return True when the top-level ``key`` block contains ``${...}`` tokens.
+
+    Interpolation is disallowed inside ``dhis2_connections`` because its
+    definitions are validated as literals and a substituted secret must never be
+    cached. The scan stops at the next top-level key, so
+    interpolation in other blocks remains supported.
+    """
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        if not re.match(rf"^{re.escape(key)}\s*:", lines[index]):
+            index += 1
+            continue
+        # The value may be written on the key line itself. Aliases and anchors
+        # make the protected value depend on YAML outside this block, where the
+        # literal interpolation check cannot safely follow it.
+        value = lines[index].split(":", 1)[1].strip()
+        if "${" in value or value.startswith(("*", "&")):
+            return True
+        index += 1
+        while index < len(lines):
+            candidate = lines[index]
+            # Column-zero comments remain part of the surrounding YAML block.
+            # Stop only at the next ordinary top-level mapping key.
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:", candidate):
+                break
+            if "${" in candidate:
+                return True
+            index += 1
+        break
+    return False
+
+
+DEFAULT_CRS = "EPSG:4326"
+DEFAULT_NAME = "Open Geo Service"
+DEFAULT_ID = "open-geo-service"  # operators should always set id: in geoservice.yaml
+
+
+def get_id() -> str:
+    """Return the instance identifier from GEOSERVICE_CONFIG.
+
+    Set `id: sierra-leone-geoservice` in geoservice.yaml to give this
+    instance a unique id used as the STAC catalog id. Should be lowercase,
+    hyphen-separated, and unique across all deployed instances (e.g.
+    nepal-geoservice, kenya-geoservice). Defaults to
+    'open-geo-service'.
+    """
+    raw = get_config().get("id")
+    if raw is None:
+        return DEFAULT_ID
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"id in GEOSERVICE_CONFIG must be a non-empty string, got {type(raw).__name__}")
+    return raw.strip()
+
+
+def get_name() -> str:
+    """Return the instance display name from GEOSERVICE_CONFIG.
+
+    Set `name: My Geo Service` in geoservice.yaml to customise the title
+    shown in the web UI. Defaults to 'Open Geo Service' when unset.
+    """
+    raw = get_config().get("name")
+    if raw is None:
+        return DEFAULT_NAME
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"name in GEOSERVICE_CONFIG must be a non-empty string, got {type(raw).__name__}")
+    return raw.strip()
+
+
+def get_crs() -> str:
+    """Return the instance CRS from GEOSERVICE_CONFIG, defaulting to EPSG:4326.
+
+    Set `crs: EPSG:25833` in geoservice.yaml to store all GeoZarr files in a
+    national projection. All datasets within one instance share the same CRS.
+    """
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    raw = get_config().get("crs")
+    if raw is None:
+        return DEFAULT_CRS
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"crs in GEOSERVICE_CONFIG must be a non-empty string, got {type(raw).__name__}")
+    crs = raw.strip()
+    try:
+        CRS.from_user_input(crs)
+    except CRSError as exc:
+        raise ValueError(f"crs '{crs}' in GEOSERVICE_CONFIG is not a valid CRS: {exc}") from exc
+    return crs
+
+
+def get_data_dir() -> Path | None:
+    """Return the data directory declared in GEOSERVICE_CONFIG.
+
+    Returns None when GEOSERVICE_CONFIG is unset or points to a file that does
+    not exist (e.g. CI environments where the config is gitignored).
+
+    Raises ValueError if the config file exists but data_dir is not set, so
+    misconfigured instances fail fast at startup rather than silently sharing
+    a default directory with other instances.
+
+    """
+    config_path = get_config_path()
+    if config_path is None or not config_path.exists():
+        return None
+
+    config = get_config()
+    raw = config.get("data_dir", _MISSING)
+    if raw is _MISSING:
+        raise ValueError(
+            "data_dir is required in GEOSERVICE_CONFIG when a config file is present. "
+            "Set it to the directory where downloaded data should be stored, "
+            "e.g. data_dir: ./data"
+        )
+    if not isinstance(raw, (str, Path)):
+        raise ValueError(f"data_dir in GEOSERVICE_CONFIG must be a path string, got {type(raw).__name__}")
+    return (config_path.parent / raw).resolve()
+
+
+def get_data_root() -> Path:
+    """Return the effective root for instance data, falling back to XDG when unconfigured.
+
+    ``get_data_dir`` returns None when no config file is present. Every consumer that
+    needs a concrete directory then repeats the same XDG fallback, so it lives here
+    instead. Subdirectories (``rasters``, ``vectors``, ``artifacts``, ``jobs``) hang off this root.
+    """
+    data_dir = get_data_dir()
+    if data_dir is not None:
+        return data_dir
+    xdg_data = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return xdg_data / "geoservice"
+
+
+def get_download_root() -> Path:
+    """Return the directory holding managed artifact stores."""
+    return get_data_root() / "rasters"
+
+
+def get_features_root() -> Path:
+    """Return the one directory holding feature collections, as GeoParquet.
+
+    One location, not a second answer to where features live: a collection is either here or
+    it does not exist. It sits beside `rasters/` rather than inside it because the two hold
+    different things — a raster store is a directory an Icechunk repository owns, a feature
+    collection is a single file this service writes.
+
+    Being the store directory does not make it an inbox. A record is what brings a collection
+    into existence, so a file dropped in here that nothing registered is ignored by every
+    listing (CLIM-836).
+    """
+    return get_data_root() / "vectors"
+
+
+def get_tables_root() -> Path:
+    """Return the directory holding table datasets, one folder per dataset (CLIM-1553).
+
+    Like `vectors/`, not an inbox: a table exists because a record names its folder.
+    """
+    return get_data_root() / "tables"
+
+
+def get_utc_offset_hours() -> float:
+    """Return the UTC offset in hours for daily period boundaries, defaulting to 0 (UTC).
+
+    Set ``utc_offset_hours: 5.5`` in geoservice.yaml for UTC+5:30 (India),
+    ``utc_offset_hours: 3`` for East Africa (UTC+3), etc.
+    """
+    raw = get_config().get("utc_offset_hours", 0)
+    if not isinstance(raw, (int, float)):
+        raise ValueError(f"utc_offset_hours in GEOSERVICE_CONFIG must be a number, got {type(raw).__name__}")
+    if not -12 <= float(raw) <= 14:
+        raise ValueError(f"utc_offset_hours must be between -12 and 14, got {raw}")
+    return float(raw)
+
+
+def get_utc_offset() -> datetime.timedelta:
+    """Return the UTC offset as a timedelta, supporting fractional-hour zones (e.g. UTC+5:30).
+
+    Prefer this over ``get_utc_offset_hours()`` wherever a timedelta is needed,
+    as it correctly handles half- and quarter-hour offsets rather than truncating.
+    """
+    return datetime.timedelta(hours=get_utc_offset_hours())
+
+
+def is_read_only() -> bool:
+    """Return True when the instance refuses state-changing requests.
+
+    Set ``read_only: true`` in geoservice.yaml to serve a public instance that can
+    be browsed but not modified — no ingestion, no batch jobs, no stored process graphs,
+    no admin UI. Defaults to False so local and single-user deployments are unaffected.
+
+    Read-only applies to HTTP and in-process background triggers. Ingestion on a read-only
+    instance is an operator task performed on the host, which is what lets this switch be
+    absolute: there is no exemption, token or trusted header that could be misconfigured
+    into a bypass.
+    """
+    raw = get_config().get("read_only", False)
+    if not isinstance(raw, bool):
+        raise ValueError(
+            f"read_only in GEOSERVICE_CONFIG must be true or false, got {type(raw).__name__}. "
+            "Quoted values like 'false' are strings, not booleans."
+        )
+    return raw
+
+
+def is_mcp_enabled() -> bool:
+    """Return True when the instance serves its MCP endpoint at `/mcp` (CLIM-851).
+
+    Set ``mcp: true`` in geoservice.yaml. Off by default while the tools settle. Read per
+    request like `read_only`, so it can be flipped without rebuilding the app.
+    """
+    raw = get_config().get("mcp", False)
+    if not isinstance(raw, bool):
+        raise ValueError(
+            f"mcp in GEOSERVICE_CONFIG must be true or false, got {type(raw).__name__}. "
+            "Quoted values like 'false' are strings, not booleans."
+        )
+    return raw

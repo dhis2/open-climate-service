@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-import open_climate_service
+import open_geo_service
 
 from . import conftest
 from .conftest import TEST_DATA_ROOT
@@ -24,18 +24,18 @@ from .conftest import TEST_DATA_ROOT
 def _import_every_module() -> None:
     # No import error is skipped: the suite runs with every extra installed, so a module that
     # fails to import is broken, and skipping it would leave its store paths unchecked.
-    for module in pkgutil.walk_packages(open_climate_service.__path__, prefix="open_climate_service."):
+    for module in pkgutil.walk_packages(open_geo_service.__path__, prefix="open_geo_service."):
         importlib.import_module(module.name)
 
 
 def test_every_store_path_resolved_at_import_is_inside_the_test_instance() -> None:
     _import_every_module()
-    package = Path(open_climate_service.__file__).parent
+    package = Path(open_geo_service.__file__).parent
 
     outside = [
         f"{name}.{attr} = {value}"
         for name, module in sorted(sys.modules.items())
-        if name == "open_climate_service" or name.startswith("open_climate_service.")
+        if name == "open_geo_service" or name.startswith("open_geo_service.")
         for attr, value in vars(module).items()
         if isinstance(value, Path)
         and value.is_absolute()
@@ -48,7 +48,7 @@ def test_every_store_path_resolved_at_import_is_inside_the_test_instance() -> No
 
 
 def test_the_suite_runs_against_its_own_instance() -> None:
-    from open_climate_service import config as api_config
+    from open_geo_service import config as api_config
 
     assert api_config.get_data_root() == TEST_DATA_ROOT.resolve()
 
@@ -57,22 +57,22 @@ def test_a_session_gives_the_caller_its_config_back_and_the_next_session_takes_i
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Restores the real environment afterwards, whatever the hooks do to it.
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", os.environ["CLIMATE_SERVICE_CONFIG"])
-    monkeypatch.setattr(conftest, "_CALLERS_CONFIG", "/home/dev/my-instance/climate-service.yaml")
+    monkeypatch.setenv("GEOSERVICE_CONFIG", os.environ["GEOSERVICE_CONFIG"])
+    monkeypatch.setattr(conftest, "_CALLERS_CONFIG", "/home/dev/my-instance/geoservice.yaml")
 
     conftest.pytest_sessionfinish(session=None, exitstatus=0)  # type: ignore[arg-type]
-    assert os.environ["CLIMATE_SERVICE_CONFIG"] == "/home/dev/my-instance/climate-service.yaml"
+    assert os.environ["GEOSERVICE_CONFIG"] == "/home/dev/my-instance/geoservice.yaml"
 
     conftest.TEST_CONFIG_FILE.unlink()  # as if the instance were gone by the next session
     conftest.pytest_sessionstart(session=None)  # type: ignore[arg-type]
-    assert os.environ["CLIMATE_SERVICE_CONFIG"] == str(conftest.TEST_CONFIG_FILE)
+    assert os.environ["GEOSERVICE_CONFIG"] == str(conftest.TEST_CONFIG_FILE)
     assert conftest.TEST_CONFIG_FILE.is_file()
 
 
 def test_a_caller_without_a_config_is_left_without_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", os.environ["CLIMATE_SERVICE_CONFIG"])
+    monkeypatch.setenv("GEOSERVICE_CONFIG", os.environ["GEOSERVICE_CONFIG"])
     monkeypatch.setattr(conftest, "_CALLERS_CONFIG", None)
 
     conftest.pytest_sessionfinish(session=None, exitstatus=0)  # type: ignore[arg-type]
 
-    assert "CLIMATE_SERVICE_CONFIG" not in os.environ
+    assert "GEOSERVICE_CONFIG" not in os.environ

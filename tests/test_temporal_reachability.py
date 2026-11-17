@@ -19,32 +19,31 @@ import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.process_registry import Process
 
-from open_climate_service import config
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-from open_climate_service.exports.service import (
+from open_geo_service import config
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+from open_geo_service.exports.service import (
     _drop_periods,
     check_execution_declarations,
     incomplete_periods_to_drop,
     render_named_export,
     resolve_named_export,
-    validate_configured_exports,
 )
-from open_climate_service.jobs import service as job_service_module
-from open_climate_service.jobs import store as native_store
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.jobs import check_ad_hoc_period_reachability
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.provenance import (
+from open_geo_service.jobs import service as job_service_module
+from open_geo_service.jobs import store as native_store
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.openeo.jobs import check_ad_hoc_period_reachability
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.provenance import (
     capture_execution,
     observe_temporal_aggregation,
     record_incomplete_periods,
     record_reduction,
     record_source,
 )
-from open_climate_service.shared.time import (
+from open_geo_service.shared.time import (
     Reachability,
     cadence_of,
     export_period_label,
@@ -56,6 +55,8 @@ from open_climate_service.shared.time import (
     stamp_cadence,
     utc_now,
 )
+
+from .conftest import named_exports
 
 _DATA_ELEMENT = "BXgDHhPdFVU"
 _OU_A = "ImspTQPwCqd"
@@ -166,7 +167,8 @@ def _configure(monkeypatch: pytest.MonkeyPatch, source: str | None, **extra: Any
         "series": [{"data_element": _DATA_ELEMENT}],
         **extra,
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [export]})
+    monkeypatch.setattr(config, "_cache", {})
+    named_exports(monkeypatch, export)
     template = {"id": "src", "period_type": source} if source is not None else None
     monkeypatch.setattr(registry, "get_dataset", lambda dataset_id: template if dataset_id == "src" else None)
 
@@ -175,26 +177,11 @@ def test_daily_dataset_with_monthly_export_must_declare_temporal_aggregation(mon
     _configure(monkeypatch, "daily")
     with pytest.raises(ValueError, match="must declare temporal_aggregation"):
         resolve_named_export("DHIS2JSON", {"export": "rain"})
-    with pytest.raises(ValueError, match="must declare temporal_aggregation"):
-        validate_configured_exports()
 
 
 def test_daily_dataset_with_monthly_export_and_a_declaration_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "daily", temporal_aggregation="sum")
     assert resolve_named_export("DHIS2JSON", {"export": "rain"}).mapping["temporal_aggregation"] == "sum"
-    validate_configured_exports()
-
-
-@pytest.mark.parametrize(
-    ("definitions", "message"),
-    [(["not-a-mapping"], "must be a mapping"), ([{"plugin": "dhis2"}], "requires an ID")],
-)
-def test_startup_rejects_malformed_export_definitions(
-    monkeypatch: pytest.MonkeyPatch, definitions: list[Any], message: str
-) -> None:
-    monkeypatch.setattr(config, "_cache", {"exports": definitions})
-    with pytest.raises(ValueError, match=message):
-        validate_configured_exports()
 
 
 def test_monthly_dataset_with_monthly_export_refuses_a_declaration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,7 +273,7 @@ def _cube(stamps: np.ndarray, value: float = 1.0) -> xr.DataArray:
 @pytest.mark.parametrize("method", ["sum", "mean"])
 def test_aggregate_dekads_leaves_the_same_evidence(method: str) -> None:
     """Coverage evidence is independent of the reducer used for dekads-to-months."""
-    from open_climate_service.plugins.processes.aggregate_dekads import aggregate_dekads
+    from open_geo_service.plugins.processes.aggregate_dekads import aggregate_dekads
 
     stamps = np.array(["2025-01-01", "2025-01-11", "2025-01-21", "2025-02-01", "2025-02-11"], dtype="datetime64[ns]")
     with capture_execution({}) as evidence:
@@ -409,21 +396,17 @@ def daily_instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
 
 
 def _export_config(monkeypatch: pytest.MonkeyPatch, **extra: Any) -> None:
-    monkeypatch.setattr(
-        config,
-        "_cache",
+    monkeypatch.setattr(config, "_cache", {})
+    named_exports(
+        monkeypatch,
         {
-            "exports": [
-                {
-                    "id": "rain-monthly",
-                    "plugin": "dhis2",
-                    "dataset": "rain_daily",
-                    "period_type": "monthly",
-                    "aggregation": "mean",
-                    "series": [{"data_element": _DATA_ELEMENT}],
-                    **extra,
-                }
-            ]
+            "id": "rain-monthly",
+            "plugin": "dhis2",
+            "dataset": "rain_daily",
+            "period_type": "monthly",
+            "aggregation": "mean",
+            "series": [{"data_element": _DATA_ELEMENT}],
+            **extra,
         },
     )
 
@@ -746,7 +729,7 @@ def test_load_stamps_the_declared_cadence_and_steps_rewrite_it(monkeypatch: pyte
     assert cadence_of(execution.stamp_declared_cadence(_cube(_days("2025-01-01", "2025-01-03")), "x")) == "daily"
     monkeypatch.setattr(registry, "get_dataset", lambda dataset_id: None)
     assert cadence_of(execution.stamp_declared_cadence(_cube(_days("2025-01-01", "2025-01-03")), "x")) is None
-    from open_climate_service.plugins.processes.aggregate_dekads import aggregate_dekads
+    from open_geo_service.plugins.processes.aggregate_dekads import aggregate_dekads
 
     dekads = np.array(["2025-01-01", "2025-01-11", "2025-01-21"], dtype="datetime64[ns]")
     assert cadence_of(aggregate_dekads(stamp_cadence(_cube(dekads), "dekadal"), period="month")) == "monthly"

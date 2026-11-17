@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo.schemas import OpenEOJobStatus
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo.schemas import OpenEOJobStatus
 from tests.test_dhis2_export_workflow import (
     _DATA_ELEMENT,
     _OU_A,

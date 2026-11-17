@@ -1,6 +1,6 @@
 # Using the web interface
 
-Every Open Climate Service instance ships with a small built-in web interface — no
+Every Open Geo Service instance ships with a small built-in web interface — no
 separate application to install. Once the instance is running, open its root URL
 (`http://127.0.0.1:9000` by default) and the landing page links to everything below.
 
@@ -77,8 +77,8 @@ a read-only instance the endpoints that refuse are marked.
 
 Selecting a workflow opens its page: what it does, including its usage example, whether it
 publishes a dataset or exports a file, its parameters with their types and defaults, the
-datasets it produces (linked where they have been made), and any automation configured to
-run it when a dataset is updated. The process graph itself is at
+datasets it produces (linked where they have been made), and the derived datasets whose
+recipe runs it again when their input is updated. The process graph itself is at
 `/process_graphs/{workflow_id}`. Workflows cannot yet be started from the page.
 
 ### The process page (`/processes/{process_id}`)
@@ -115,7 +115,7 @@ yet.
 ### The Schedules page (`/schedules`)
 
 The Schedules page lists everything on the instance's clock. Today that is one kind, a sync
-schedule: at each check time OCS submits a sync job, which adds new source data if any is
+schedule: at each check time Open Geo Service submits a sync job, which adds new source data if any is
 available. Each row names its kind in the first column, so the list can carry other kinds later.
 
 A sync schedule belongs to exactly one dataset, so it is set up and edited on the dataset page,
@@ -127,7 +127,7 @@ Resume, and Delete, which asks for confirmation in a dialog.
 
 Only one schedule is allowed per dataset. All schedules are stored in one file,
 `<data_dir>/schedules.json`, and can be managed from the UI or API. The instance-wide
-clock switch and timezone remain in `climate-service.yaml`. A static or forecast
+clock switch and timezone remain in `geoservice.yaml`. A static or forecast
 dataset cannot take a schedule, and the API refuses it with the reason.
 
 Each row shows a readable check time (or cron for a custom schedule) and timezone,
@@ -138,14 +138,13 @@ that shares it; the sync jobs a check submits are linked from the row. The timez
 instance's `scheduler.timezone`. When the clock runs in another process, such as a writable
 worker beside a read-only public instance, the page says so. When no process runs it,
 schedules can still be saved and are listed, and the page explains that an operator
-enables checks by setting `enabled: true` under `scheduler:` in `climate-service.yaml` and
-restarting OCS. If a change cannot be applied, the page shows why.
+enables checks by setting `enabled: true` under `scheduler:` in `geoservice.yaml` and
+restarting Open Geo Service. If a change cannot be applied, the page shows why.
 ### The pipeline pages (`/pipelines`)
 
-For a new setup that runs a workflow on a dataset and delivers the result, use a pipeline. The
-older [workflow triggers](workflow_automation.md) and the named `exports` in
-`climate-service.yaml` keep working for existing configurations, and react to the same dataset
-updates, but are due to be retired in favour of pipelines.
+A pipeline runs a workflow on a dataset and delivers the result. It is the one way Open Geo Service delivers
+automatically; a derived dataset is kept current by its recipe instead (see
+[Dataset-update automation](workflow_automation.md)).
 
 A **workflow** is a reusable, parameterized sequence of processes that defines how data is
 transformed or analyzed. A **pipeline** is a managed configuration that connects one workflow to
@@ -178,7 +177,7 @@ delivery:
 
 The workflow's arguments are checked against its declared parameters: unknown, missing or
 ill-typed arguments are refused with the reason. A feature collection is bound with
-`{from_features: <id>}`, as for workflow triggers, and pinned to its current version when a run
+`{from_features: <id>}` and pinned to its current version when a run
 is submitted.
 
 In this first iteration a pipeline supports workflows that meet a narrow contract. It is a
@@ -198,7 +197,9 @@ managed dataset. The create form lists only the workflows that meet the contract
 
 The destination's settings belong to the export plugin. The plugin validates them, compiles
 them into the named export the pipeline's results are saved and delivered through, and runs its
-own destination checks. For DHIS2 these are the connection, the data element and data set UIDs,
+own destination checks. The `table` destination keeps the result in this instance as a table
+dataset, and checks that its id is free and the workflow binds one registered feature collection
+([Read table datasets](managed_data_api_guide.md#12-read-table-datasets)). For DHIS2 these are the connection, the data element and data set UIDs,
 that the dataset's cadence is a DHIS2 period, that the organisation units come from a DHIS2
 collection fetched over the same connection, and, when a data set is declared, its period type,
 data elements and organisation-unit assignments. The pipeline core knows none of this.
@@ -247,7 +248,7 @@ Each run moves through these states; the page shows them and the action each nee
 | delivery `failed` | the hand-off was refused (a changed export, a missing result) or its attempts ran out | **Deliver** retries it under the same key, so nothing is sent twice |
 | delivery `submitted` | handed to the delivery framework, not yet delivered | the delivery job's outcome is recorded on the run: `delivered` (or `validated` for a dry run) confirms it; `partial` (conflicts), `rejected`, `unknown` (no answer after sending, or the delivery job's record is gone), `failed` and `cancelled` need an operator: **Send again** where that is safe, or **Checked at the destination**, which records `acknowledged` and sends nothing |
 
-OCS recovers the automatic states at startup and every 15 minutes: it submits pending runs,
+Open Geo Service recovers the automatic states at startup and every 15 minutes: it submits pending runs,
 hands off finished jobs whose completion was missed, records jobs that ended without a result,
 retries transient hand-off failures, and releases held deliveries that have become eligible.
 A failure is permanent when repeating it can only fail the same way: an HTTP 4xx refusal (a
@@ -280,10 +281,10 @@ says changed, not the dataset's whole coverage:
   period, so the run covers the whole coverage after it, `current_start` to `current_end`.
 
 The run records which (`source.update`). Updates do not describe a correction of individual
-stored periods: OCS has no such update, so a pipeline cannot follow a revision of past data at
+stored periods: Open Geo Service has no such update, so a pipeline cannot follow a revision of past data at
 the source (for example a provisional value replaced by a final one) unless the dataset is
 rematerialised. Run that interval by hand. The interval's ends are passed to the workflow as the
-updates give them, as for workflow triggers.
+updates give them.
 
 Each pipeline keeps a durable checkpoint of the updates it has decided on, written in the same
 write as the run an update starts. What happens to an update:
@@ -311,7 +312,7 @@ contacts the destination, and its delivery retries transient failures. Updates t
 paused are not run on resume: the checkpoint starts afresh, and the page lists them so an operator
 can run their intervals.
 
-At startup OCS decides any persisted update a pipeline missed, then moves the checkpoint forward
+At startup Open Geo Service decides any persisted update a pipeline missed, then moves the checkpoint forward
 only to the earliest of: the start of that pass, the creation of any ingestion still running, and
 any update still being retried; less 15 minutes. An ingestion's update carries its completion
 time, which is never earlier than the job's creation, so an update from a job that was running
@@ -334,10 +335,8 @@ ones once the pipeline is live again, approved for the bindings they were comput
 does not replay the updates that arrived while paused; run their interval by hand. A scheduled
 release time is not implemented yet and is not accepted.
 
-A pipeline's export id is its own id, unique across the pipelines and the `exports` in
-`climate-service.yaml`. An id configured in both is refused, when the pipeline is validated and
-again when the export is resolved, rather than one silently winning. Pipeline records are kept
-under `<data_dir>/pipelines`; every change is a locked read-modify-write, and an edit names the
+A pipeline's export id is its own id, so pipeline ids are also the named export ids. Pipeline
+records are kept under `<data_dir>/pipelines`; every change is a locked read-modify-write, and an edit names the
 revision it was based on, so a stale edit is refused rather than overwriting a newer one. A
 check, dry run or mode switch computed while the pipeline changed is refused too, and only a
 validation of the current revision publishes the pipeline's export. The run history keeps the
@@ -346,13 +345,19 @@ running, held, failed or ended without a result stays, whatever its age. A run's
 kept only until its job holds it.
 
 **Delete** removes the pipeline and its run history after a confirmation; jobs and deliveries
-already made are kept. The API offers the same: `POST /pipelines` and `POST /pipelines/{id}` to
-save (with an optional `revision`), `DELETE /pipelines/{id}`, `POST /pipelines/{id}/validate`,
+already made are kept. The API offers the same: `POST /pipelines` to create and `PUT /pipelines/{id}`
+to change (with the `revision` it read), `DELETE /pipelines/{id}`, `POST /pipelines/{id}/validate`,
 `POST /pipelines/{id}/dry-run` and `POST /pipelines/{id}/runs` with `start` and `end` (and `mode`
 for a run), `POST /pipelines/{id}/runs/{run_id}/deliver`, `POST /pipelines/{id}/runs/{run_id}/redeliver`,
 `POST /pipelines/{id}/runs/{run_id}/retry`,
 `POST /pipelines/{id}/runs/{run_id}/acknowledge`,
-and `POST /pipelines/{id}/mode/{dry_run|live|paused}`.
+and `POST /pipelines/{id}/mode/{dry_run|live|paused}`. A pipeline read as JSON resolves what the
+page shows: the datasets and feature collections it reads with the parameter each fills, its
+workflow, its destination's settings as the plugin names them with the names looked up at the last
+validation, what starts a run, and its latest run; `GET /pipelines/{id}/runs` lists them all. Starting or retrying a run answers `202` with the
+run in the `Location` header: poll `GET /pipelines/{id}/runs/{run_id}` until its `status` is
+final, and follow its `links` to the workflow job and the delivery report. The API reference
+lists the statuses.
 
 ### The dataset page (`/datasets/{dataset_id}`)
 
@@ -391,13 +396,13 @@ There is no separate console: data is added from the page of the thing it concer
   a time, and up to how many attempts a sync job may make. Custom cron is available for
   advanced needs. The suggested check frequency reflects the data's period type, but the
   operator should choose a time after the source normally publishes; period type does not
-  tell OCS that release time. A schedule can be saved paused. Once saved, it shows the next
+  tell Open Geo Service that release time. A schedule can be saved paused. Once saved, it shows the next
   and last check and offers Edit, Pause or Resume, and Delete behind a confirmation.
   Editing does not silently change its publication setting. Every schedule on the
   instance is listed on the [Schedules page](#the-schedules-page-schedules).
 
 You do **not** enter a bounding box — ingestion always uses the spatial extent configured
-for the instance in `climate-service.yaml`. On a read-only instance neither form is shown.
+for the instance in `geoservice.yaml`. On a read-only instance neither form is shown.
 
 ---
 

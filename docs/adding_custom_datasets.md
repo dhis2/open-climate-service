@@ -1,8 +1,8 @@
 # Adding custom datasets
 
-This guide explains how to add a new dataset source to your Open Climate Service instance — for example a national meteorological service, a regional satellite product, or a custom model output.
+This guide explains how to add a new dataset source to your Open Geo Service instance — for example a national meteorological service, a regional satellite product, or a custom model output.
 
-The built-in dataset templates (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `climate-service.yaml` at a plugins directory.
+The built-in dataset templates (CHIRPS3, ERA5-Land, WorldPop) ship as package data. Custom datasets are layered on top by pointing `plugins_dir` in your `geoservice.yaml` at a plugins directory.
 
 ## Overview
 
@@ -28,9 +28,9 @@ concurrency, store commits, artifact registration, and publication.
 
 ```python
 # plugins/rasters/enacts.py
-# Everything you need to write a plugin is importable from open_climate_service.streaming.
+# Everything you need to write a plugin is importable from open_geo_service.streaming.
 import xarray as xr
-from open_climate_service.streaming import BaseDatasetPlugin, daily_period_ids, normalize_period
+from open_geo_service.streaming import BaseDatasetPlugin, daily_period_ids, normalize_period
 
 
 class ENACTSRainfallPlugin(BaseDatasetPlugin):
@@ -59,7 +59,7 @@ values in STAC describe stored coordinates; they do not change ingestion policy.
 
 For a contiguous existing store, a forward extension queries only the missing
 delta, beginning at the next period after committed coverage. The source need not
-retain older periods already stored by OCS. Requests wholly within committed
+retain older periods already stored by Open Geo Service. Requests wholly within committed
 coverage do not query the source. Extending backwards or repairing an existing gap
 requires the source to reproduce the complete union, including committed history.
 
@@ -87,7 +87,7 @@ multiple variables.
 
 ### Helpers, grid inference, and tuning
 
-The helpers below are all importable from `open_climate_service.streaming` (the single
+The helpers below are all importable from `open_geo_service.streaming` (the single
 plugin import surface), alongside `BaseDatasetPlugin`.
 
 - **`normalize_period(obj, *, variable, period=None, nodata=None, bbox=None, bbox_crs="EPSG:4326", ...)`**
@@ -106,6 +106,11 @@ plugin import surface), alongside `BaseDatasetPlugin`.
 - **`daily_period_ids(start, end)`** — enumerate the inclusive ISO day strings for a daily
   `periods()` implementation; apply your own availability clamp around it (accepts ISO
   strings or `date` objects, returns `[]` when `start > end`).
+- **Credentials** — read a key the source needs from an environment variable, which Open Geo Service fills
+  from `.env`. Read it when the plugin opens the source, not at import or in `__init__`, so that
+  listing data sources needs no key, and pass it in a header or the reader's own session rather
+  than in the URL, where it leaks into error messages and logs. The built-in plugins share theirs
+  per provider in `open_geo_service/plugins/rasters/providers`; a plugin of your own need not use it.
 - **Tuning** — set the class attributes `max_concurrency` (default 1) and
   `commit_batch_size` (default 1) only when the defaults don't fit.
 - **Grid inference** — the framework infers the store grid from the
@@ -179,7 +184,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
 | `license`    | No       | The data's licence: an SPDX identifier (`CC-BY-4.0`), or `name` and `url` where none exists (`Licence to Use Copernicus Products`). Published on the STAC collection; without it the collection is published as `other`. Take it from the licence the source names, not from how its page describes the data |
 | `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /data-sources`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
-| `produced_by` | No      | Id of the workflow that produces a non-ingestable template. See [Derived datasets](#derived-datasets) |
+| `produced_by` | No      | The workflow that produces a non-ingestable template, or its recipe. See [Derived datasets](#derived-datasets) |
 
 **Period and sync**
 
@@ -200,24 +205,26 @@ question, e.g. `era5land_temperature_daily_normal_1991_2020` is `static` *and* i
 
 | Field                  | Required | Description                                                                                                                                     |
 | ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
+| `ingestion.plugin`     | Yes      | Dotted path to the streaming plugin class, for example `open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin`                                                                                                       |
 | `ingestion.params`     | No       | Extra keyword arguments forwarded to `fetch_period` as `**params`, and to the plugin constructor                                                |
 | `ingestion.resampling` | No       | Pyramid coarsening for large layers: `mean` (default; continuous data), `max`/`min`/`sum`, or `mode`/`nearest` for categorical data — see below |
 
 Multiple templates can share the same plugin class and differ only in `params`:
 
 ```yaml
-- id: era5land_temperature_hourly
+- id: era5land_temperature_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandHourlySingleBandPlugin
+    plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
-      variable: 2m_temperature
+      variable: t2m
+      temporal_aggregation: mean
 
-- id: era5land_precipitation_hourly
+- id: era5land_precipitation_daily
   ingestion:
-    plugin: open_climate_service.plugins.rasters.era5_land.ERA5LandPrecipitationPlugin
+    plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin
     params:
-      variable: total_precipitation
+      variable: tp
+      temporal_aggregation: sum
 ```
 
 ### Static datasets without a time axis
@@ -250,11 +257,59 @@ Name the workflow that produces such a template with `produced_by`:
   produced_by: climate_normal
 ```
 
-`produced_by` is metadata, not behaviour: it records where the data comes from, so a reader can get from
-the dataset to the way it is made, and `GET /data-sources` reports it. A template that
-declares `produced_by` beside `ingestion.plugin` is rejected at registration, since a dataset is
-either fetched or produced. The workflow id itself is not checked, because workflows can be
-registered later at runtime.
+A workflow id records where the data comes from, so a reader can get from the dataset to the way
+it is made, and `GET /data-sources` reports it. A template that declares `produced_by` beside
+`ingestion.plugin` is rejected at registration, since a dataset is either fetched or produced.
+
+#### Keep a derived dataset current with a recipe
+
+Give `produced_by` the whole recipe instead, and Open Geo Service can run it:
+
+```yaml
+- id: era5land_precipitation_monthly_anomaly_1991_2020
+  sync:
+    kind: static
+  produced_by:
+    workflow: climate_anomaly
+    arguments:
+      observed_dataset_id: era5land_precipitation_monthly
+      normal_dataset_id: era5land_precipitation_monthly_normal_1991_2020
+      variable: tp
+    refresh_on: observed_dataset_id
+```
+
+- `arguments` are the fixed parameters that define the product. Changing one makes another
+  dataset, with another id.
+- `output_dataset_id` is not given: Open Geo Service passes the template's own id. A recipe's workflow must
+  declare that parameter and publish its result through it, with `save_result` as Zarr and
+  `dataset_id: {from_parameter: output_dataset_id}`, as `climate_normal`, `climate_anomaly` and
+  `temporal_change` do.
+- `refresh_on` names the argument holding the dataset that drives this one. When that dataset
+  updates, by a sync or by another recipe, Open Geo Service runs the workflow again over that dataset's full
+  coverage, filling the workflow's one temporal-interval parameter, which the recipe leaves out.
+  Updates of the other datasets it reads, such as the normal above, do not refresh it.
+- Without `refresh_on` the recipe has a fixed range: set the temporal-interval parameter in
+  `arguments`, as for a normal. Open Geo Service checks such a recipe at startup but never runs it; an
+  operator runs the workflow when the dataset is needed.
+
+Only a derived dataset that exists is kept current: create it once by running the workflow over
+its input's full coverage. A built-in recipe therefore does nothing on an instance that never
+created its dataset. The run that creates it counts as current, so the first refresh comes with
+the input's next update; a dataset created before its input's latest update is refreshed at the
+next reconciliation. Each refresh is an openEO batch job, listed under `GET /jobs` with the
+title `Refresh <dataset id>`. It runs the workflow as defined when it was submitted, and editing
+the recipe or the workflow makes the next reconciliation refresh the dataset again. One refresh
+of a dataset runs at a time: updates that arrive meanwhile are taken up when it finishes, as one
+run over the newest coverage, or, when it fails, at the next reconciliation. A refresh that
+fails is not retried by itself beyond its job's attempts; the next update of its input starts a
+new one. Updates missed while Open Geo Service was stopped are caught up at startup and every 15 minutes.
+
+The recipe is checked at startup, against the registered workflows: an unknown workflow or
+argument, a missing argument, a time range set where `refresh_on` should fill it (or left open
+without `refresh_on`), a workflow that does not publish through `output_dataset_id`, a
+`refresh_on` dataset that no template declares, and a chain of recipes that leads back to
+itself each refuse startup with the reason. A refreshed dataset's update
+starts the pipelines on it, so a pipeline can deliver the anomaly each time its source syncs.
 
 ### Dekads: a period type with no fixed length
 
@@ -298,8 +353,8 @@ the revision so sync can see it:
 ```
 
 Both halves are required, because the pair is the identity: `R2025A` on its own does not say
-whose `R2025A` it is, and OCS may later publish its own releases of derived datasets under the
-`ocs` authority. `value` is passed through verbatim and never parsed — its syntax belongs to
+whose `R2025A` it is, and Open Geo Service may later publish its own releases of derived datasets under the
+`geoservice` authority. `value` is passed through verbatim and never parsed — its syntax belongs to
 the source — so a blank or padded value (`" R2025A "`) is rejected rather than trimmed, since
 trimming would make the stored identity differ from the declared one. `authority` is a
 **stable machine identifier**: lowercase letters and digits, separated by `.`, `-` or `_`, at
@@ -398,12 +453,12 @@ Building one is not free, though. Level 0 is rewritten rather than kept as-is �
 Levels are aggregated from the full-resolution data, and `ingestion.resampling` controls how:
 
 - **Continuous data** (temperature, precipitation, NDVI, …) — leave the default `mean`.
-- **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a mask into meaningless fractions.
+- **Binary masks** (0/1 presence) — use `max` ("present anywhere in the block"). Averaging turns a float mask into meaningless fractions. An integer mask without a declared no-data value gets 0 as its fill value, which the mean skips, so it already behaves like `max`; with another no-data value, such as 255, 0 is data and the mean becomes a majority vote in which a tie rounds to 0, so small patches disappear at coarse zooms.
 - **Multi-class categorical** (land-cover class codes, etc.) — use `mode` (majority class). `mean` would average class codes into a _different, non-existent_ class (e.g. `mean(10, 80) = 45`). A dataset that declares [`classes`](#categorical-datasets) gets `mode` unless it sets `resampling` itself.
 
 `mean`/`max`/`min`/`sum`/`nearest` are computed by [topozarr](https://github.com/carbonplan/topozarr), which builds each level from the one above. That is valid for all five because they are _composable_ — for `nearest`, taking the corner of each corner gives the same cell as taking every nth cell of the original.
 
-`mode` is not composable: mode-of-modes is not mode-of-native, since a locally dominant class can win at coarse zoom even when it is globally rare. So Open Climate Service resamples `mode` levels from the native resolution itself. A first-class `mode` upstream is still open as [carbonplan/topozarr#26](https://github.com/carbonplan/topozarr/issues/26); when it lands, that local path can go.
+`mode` is not composable: mode-of-modes is not mode-of-native, since a locally dominant class can win at coarse zoom even when it is globally rare. So Open Geo Service resamples `mode` levels from the native resolution itself. A first-class `mode` upstream is still open as [carbonplan/topozarr#26](https://github.com/carbonplan/topozarr/issues/26); when it lands, that local path can go.
 
 ### Spatial and temporal extents
 
@@ -441,12 +496,41 @@ keeps its own attributes:
 
 The following parameters control how the datasets are displayed visually and in text:
 
-| Field              | Required | Description                                              |
-| ------------------ | -------- | -------------------------------------------------------- |
-| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)   |
-| `display.colormap` | No       | Colormap name for map rendering (e.g. `blues`, `rdbu_r`) |
-| `display.range`    | No       | `[min, max]` display range for the colormap              |
-| `display.nodata`   | No       | No-data / fill value                                     |
+| Field              | Required | Description                                                                                                                                                                                                    |
+| ------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolution`       | No       | Human-readable spatial resolution (e.g. `5 km x 5 km`)                                                                                                                                                         |
+| `display.colormap` | No       | A [matplotlib colormap](https://matplotlib.org/stable/gallery/color/colormap_reference.html) name, or a list of colours (see below). Defaults to `viridis`.                                                    |
+| `display.range`    | No       | The two values the colormap spans, each a number or a measured statistic: `[0, 20]`, `[p2, p98]`, `[0, p98]`. Defaults to `[p2, p98]`, which suits the instance's extent and period and ignores rare extremes. |
+| `display.midpoint` | No       | Value used to center a colormap when the range is computed from the data; a range of two numbers is used as written. Set `0` for a diverging quantity such as an anomaly or a change.                          |
+| `display.nodata`   | No       | No-data / fill value                                                                                                                                                                                           |
+
+The statistics a range can name are `min`, `max`, `mean`, and the percentiles `p2`, `p5`, `p25`,
+`p50`, `p75`, `p95` and `p98`, all measured at the end of every sync. A dataset written before a
+statistic was measured gets it in the background the next time the service starts.
+
+A colormap name is matched case-insensitively, and `_r` reverses it (`blues`, `rdbu_r`, `terrain`).
+Where no named colormap fits, list two or more hex colours (`#rgb` or `#rrggbb`), spread
+evenly from the low end of the display range to the high end. An alpha (`#rrggbbaa`) is ignored
+and the colour drawn opaque; transparency is set by `display.nodata`.
+
+```yaml
+display:
+  colormap: ["#1a9850", "#fee08b", "#a6611a", "#ffffff"]
+  range: [0, 4500]
+```
+
+The server resolves the colormap once, with matplotlib, and the thumbnail, the landing-page ramp
+and the map viewer all draw from that result. The STAC collection publishes it in its `renders`
+block as a `colormap` of 256 colours keyed `0`-`255`, where `0` is the low end of `rescale` and
+`255` the high end, and adds `colormap_name` when the template gives a name. The map viewer reads
+only the colours, so it needs no colormap library and draws what the thumbnail shows. An unknown
+name or an invalid list falls back to `viridis`.
+
+The STAC lists 256 colours rather than only the few you declared, because map tools that
+follow the STAC render convention (titiler, for one) need the full set to draw a smooth ramp.
+Given only a few, they colour only the pixels that hit those exact values and leave the rest
+blank. Nothing changes in how the colormap looks: matplotlib itself draws every colormap from
+256 colours, so a named colormap appears in the map viewer exactly as it does in matplotlib.
 
 ### Categorical datasets
 
@@ -476,7 +560,7 @@ it is loaded.
 
 ## Step 3: Point the instance at your plugins directory
 
-Add `plugins_dir` to your `climate-service.yaml`:
+Add `plugins_dir` to your `geoservice.yaml`:
 
 ```yaml
 extent:
@@ -493,7 +577,7 @@ Since `plugins_dir` is added to `sys.path`, the plugin class at `rasters.enacts.
 
 ## Step 4: Ingest and publish
 
-Once the API is running with `CLIMATE_SERVICE_CONFIG` pointing to your updated config:
+Once the API is running with `GEOSERVICE_CONFIG` pointing to your updated config:
 
 ```bash
 curl -s -X POST http://127.0.0.1:9000/ingestions \
@@ -514,7 +598,7 @@ curl -s http://127.0.0.1:9000/stac/catalog.json | jq '.links[] | select(.rel == 
 
 ## Contributing a data source
 
-A data source added to OCS core is maintained by the team rather than by one instance, so it needs a little more than a working plugin. Check before you start:
+A data source added to Open Geo Service core is maintained by the team rather than by one instance, so it needs a little more than a working plugin. Check before you start:
 
 - **Open access.** The source can be fetched with a free account at most, from the provider itself.
 - **Maintained.** The provider still updates and supports the dataset.
@@ -526,7 +610,7 @@ And before opening the PR:
 - **One data source per PR.** A plugin shared by several templates of one source (daily and monthly ERA5-Land, say) counts as one.
 - **Ingest a real period.** Run Step 4 on a small extent and open the dataset in the map viewer. Check that units and values are plausible and that the store has the expected time steps.
 - **Tests.** Test `periods()` and `fetch_period()` with the network faked, and run `make lint` and `make test`.
-- **Describe access.** The `description` names the account or key the source needs, and any limit (a short rolling window, a data lag).
+- **Describe access.** The `description` names the account or key the source needs, and any limit (a short rolling window, a data lag). A key is read from an environment variable, listed with its sign-up link in `.env.example`.
 
 ## Distributing a plugin as an installable package
 
@@ -535,5 +619,5 @@ The `plugins_dir` above is ideal for instance-specific customisation. To make a 
 [Installable plugins](installable_plugins.md) guide. The layout mirrors `plugins_dir`, so migrating
 is mostly moving the files into a package and declaring one entry point.
 
-The [seNorge plugin](https://github.com/dhis2/open-climate-service-senorge-plugin) is the reference
+The [seNorge plugin](https://github.com/dhis2/open-geo-service-senorge-plugin) is the reference
 implementation.

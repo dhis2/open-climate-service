@@ -8,20 +8,20 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service.ingestions import processes
-from open_climate_service.ingestions.schemas import SyncAction, SyncDetail, SyncKind, SyncResponse
-from open_climate_service.jobs.models import (
+from open_geo_service.ingestions import processes
+from open_geo_service.ingestions.schemas import SyncAction, SyncDetail, SyncKind, SyncResponse
+from open_geo_service.jobs.models import (
     JobEventDraft,
     JobExecutionResult,
     JobProgress,
     JobRecord,
     JobStatus,
 )
-from open_climate_service.jobs.service import JobService
+from open_geo_service.jobs.service import JobService
 
 
 def _make_job(job_id: str = "job-123") -> JobRecord:
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.shared.time import utc_now
 
     return JobRecord(
         job_id=job_id,
@@ -72,14 +72,14 @@ def test_post_ingestion_respond_async_returns_202_with_location(
     job = _make_job("abc-123")
     mock_service = MagicMock()
     mock_service.submit_callable_job.return_value = job
-    monkeypatch.setattr("open_climate_service.jobs.service.JobService.submit_callable_job", lambda self, **kw: job)
+    monkeypatch.setattr("open_geo_service.jobs.service.JobService.submit_callable_job", lambda self, **kw: job)
     monkeypatch.setattr(
-        "open_climate_service.ingestions.routes._get_dataset_or_404",
+        "open_geo_service.ingestions.routes._get_dataset_or_404",
         # An ingestable template. The ingest path refuses one with no "ingestion.plugin"
         # (CLIM-912), so a bare stub short-circuits before the behaviour under test.
         lambda _: {"id": "chirps3_precipitation_daily", "ingestion": {"plugin": "pkg.mod"}},
     )
-    monkeypatch.setattr("open_climate_service.ingestions.routes.get_extent_or_404", lambda: {"bbox": [0, 0, 1, 1]})
+    monkeypatch.setattr("open_geo_service.ingestions.routes.get_extent_or_404", lambda: {"bbox": [0, 0, 1, 1]})
 
     response = client.post(
         "/ingestions",
@@ -94,9 +94,9 @@ def test_post_ingestion_respond_async_returns_202_with_location(
 
 def test_post_sync_respond_async_returns_202_with_location(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     job = _make_job("sync-456")
-    monkeypatch.setattr("open_climate_service.jobs.service.JobService.submit_callable_job", lambda self, **kw: job)
+    monkeypatch.setattr("open_geo_service.jobs.service.JobService.submit_callable_job", lambda self, **kw: job)
     monkeypatch.setattr(
-        "open_climate_service.ingestions.routes.services.plan_sync_dataset",
+        "open_geo_service.ingestions.routes.services.plan_sync_dataset",
         lambda dataset_id, end: MagicMock(),
     )
 
@@ -114,7 +114,7 @@ def test_get_ingestion_job_returns_job_with_correct_self_link(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     job = _make_job("job-789")
-    monkeypatch.setattr("open_climate_service.jobs.store.get_job_record", lambda job_id: job)
+    monkeypatch.setattr("open_geo_service.jobs.store.get_job_record", lambda job_id: job)
 
     response = client.get("/ingestions/jobs/job-789")
 
@@ -136,7 +136,7 @@ def test_cancel_ingestion_job_requests_cancellation_and_returns_native_self_link
         }
     )
     monkeypatch.setattr(
-        "open_climate_service.jobs.service.JobService.request_cancellation",
+        "open_geo_service.jobs.service.JobService.request_cancellation",
         lambda self, job_id: cancelled,
     )
 
@@ -152,7 +152,7 @@ def test_cancel_ingestion_job_requests_cancellation_and_returns_native_self_link
 
 
 def test_get_ingestion_job_returns_404_for_unknown(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("open_climate_service.jobs.store.get_job_record", lambda job_id: None)
+    monkeypatch.setattr("open_geo_service.jobs.store.get_job_record", lambda job_id: None)
 
     response = client.get("/ingestions/jobs/does-not-exist")
 
@@ -162,14 +162,14 @@ def test_get_ingestion_job_returns_404_for_unknown(client: TestClient, monkeypat
 def test_post_ingestion_without_prefer_does_not_return_202(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without Prefer: respond-async the response is never 202 Accepted."""
     monkeypatch.setattr(
-        "open_climate_service.ingestions.routes._get_dataset_or_404",
+        "open_geo_service.ingestions.routes._get_dataset_or_404",
         lambda _: {"id": "chirps3_precipitation_daily", "ingestion": {"plugin": "pkg.mod"}},
     )
 
     def raise_no_extent() -> NoReturn:
         raise HTTPException(status_code=422, detail="no extent")
 
-    monkeypatch.setattr("open_climate_service.ingestions.routes.get_extent_or_404", raise_no_extent)
+    monkeypatch.setattr("open_geo_service.ingestions.routes.get_extent_or_404", raise_no_extent)
 
     response = client.post(
         "/ingestions",
@@ -198,14 +198,14 @@ def test_post_ingestion_respond_async_validates_dataset_and_extent_before_queuei
         return _make_job("should-not-queue")
 
     monkeypatch.setattr(
-        "open_climate_service.jobs.service.JobService.submit_callable_job",
+        "open_geo_service.jobs.service.JobService.submit_callable_job",
         lambda self, **kw: fake_submit_callable_job(**kw),
     )
 
     def raise_missing_dataset(_: str) -> NoReturn:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    monkeypatch.setattr("open_climate_service.ingestions.routes._get_dataset_or_404", raise_missing_dataset)
+    monkeypatch.setattr("open_geo_service.ingestions.routes._get_dataset_or_404", raise_missing_dataset)
 
     response = client.post(
         "/ingestions",
@@ -236,7 +236,7 @@ def test_post_sync_respond_async_validates_plan_before_queueing(
         return _make_job("should-not-queue")
 
     monkeypatch.setattr(
-        "open_climate_service.jobs.service.JobService.submit_callable_job",
+        "open_geo_service.jobs.service.JobService.submit_callable_job",
         lambda self, **kw: fake_submit_callable_job(**kw),
     )
 
@@ -244,7 +244,7 @@ def test_post_sync_respond_async_validates_plan_before_queueing(
         del args, kwargs
         raise HTTPException(status_code=400, detail="invalid sync plan")
 
-    monkeypatch.setattr("open_climate_service.ingestions.routes.services.plan_sync_dataset", raise_invalid_sync_plan)
+    monkeypatch.setattr("open_geo_service.ingestions.routes.services.plan_sync_dataset", raise_invalid_sync_plan)
 
     response = client.post(
         "/sync/chirps3_precipitation_daily",
@@ -260,12 +260,12 @@ def test_post_sync_respond_async_validates_plan_before_queueing(
 def test_submit_callable_job_uses_default_jobs_base(monkeypatch: pytest.MonkeyPatch) -> None:
     persisted: dict[str, JobRecord] = {}
 
-    monkeypatch.setattr("open_climate_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
+    monkeypatch.setattr("open_geo_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
     monkeypatch.setattr(
-        "open_climate_service.jobs.store.create_job_record",
+        "open_geo_service.jobs.store.create_job_record",
         lambda record: persisted.setdefault(record.job_id, record),
     )
-    monkeypatch.setattr("open_climate_service.jobs.store.get_job_record", lambda job_id: persisted.get(job_id))
+    monkeypatch.setattr("open_geo_service.jobs.store.get_job_record", lambda job_id: persisted.get(job_id))
 
     record = JobService().submit_callable_job(
         func=_fake_job_callable,
@@ -279,12 +279,12 @@ def test_submit_callable_job_uses_default_jobs_base(monkeypatch: pytest.MonkeyPa
 def test_submit_callable_job_normalizes_custom_jobs_base(monkeypatch: pytest.MonkeyPatch) -> None:
     persisted: dict[str, JobRecord] = {}
 
-    monkeypatch.setattr("open_climate_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
+    monkeypatch.setattr("open_geo_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
     monkeypatch.setattr(
-        "open_climate_service.jobs.store.create_job_record",
+        "open_geo_service.jobs.store.create_job_record",
         lambda record: persisted.setdefault(record.job_id, record),
     )
-    monkeypatch.setattr("open_climate_service.jobs.store.get_job_record", lambda job_id: persisted.get(job_id))
+    monkeypatch.setattr("open_geo_service.jobs.store.get_job_record", lambda job_id: persisted.get(job_id))
 
     record = JobService().submit_callable_job(
         func=_fake_job_callable,
@@ -299,19 +299,19 @@ def test_submit_callable_job_normalizes_custom_jobs_base(monkeypatch: pytest.Mon
 def test_successful_job_persists_result_and_events_atomically(monkeypatch: pytest.MonkeyPatch) -> None:
     persisted: dict[str, JobRecord] = {}
 
-    monkeypatch.setattr("open_climate_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
+    monkeypatch.setattr("open_geo_service.jobs.service.JobService._enqueue_job", lambda self, job_id: None)
     monkeypatch.setattr(
-        "open_climate_service.jobs.store.create_job_record",
+        "open_geo_service.jobs.store.create_job_record",
         lambda record: persisted.setdefault(record.job_id, record),
     )
-    monkeypatch.setattr("open_climate_service.jobs.store.get_job_record", lambda job_id: persisted.get(job_id))
+    monkeypatch.setattr("open_geo_service.jobs.store.get_job_record", lambda job_id: persisted.get(job_id))
 
     def mutate(job_id: str, mutation: Callable[[JobRecord], JobRecord]) -> JobRecord:
         updated = mutation(persisted[job_id])
         persisted[job_id] = updated
         return updated
 
-    monkeypatch.setattr("open_climate_service.jobs.store.mutate_job_record", mutate)
+    monkeypatch.setattr("open_geo_service.jobs.store.mutate_job_record", mutate)
     service = JobService()
     consume = MagicMock()
     service.set_event_consumer(consume)

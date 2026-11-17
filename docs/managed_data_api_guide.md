@@ -1,6 +1,6 @@
-# Open Climate Service Managed Data Guide
+# Open Geo Service Managed Data Guide
 
-This guide describes the current native FastAPI surface for Open Climate Service and how datasets are published as STAC collections.
+This guide describes the current native FastAPI surface for Open Geo Service and how datasets are published as STAC collections.
 
 The current public story is:
 
@@ -8,6 +8,7 @@ The current public story is:
 - discover the configured extent with `/extent`
 - discover managed datasets with `/datasets`
 - discover vector feature collections with `/features`
+- read values per feature and period with `/tables/{dataset_id}/rows`
 - discover published datasets, rasters and vector datasets, with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
@@ -35,13 +36,13 @@ Operational note:
 - `GET /features/{collection_id}/data.parquet`
 - `GET /features/{collection_id}/data.pmtiles`
 - `GET /features/{collection_id}/styles/default.json`
-- `GET /stac`
+- `GET /tables/{dataset_id}/rows`
 - `GET /stac/catalog.json`
-- `GET /stac/collections/{dataset_id}`
+- `GET /stac/{dataset_id}/collection.json`
 - `GET /stac/README.md`
 - `GET /stac/AGENTS.md`
-- `GET /stac/collections/{dataset_id}/README.md`
-- `GET /stac/collections/{dataset_id}/AGENTS.md`
+- `GET /stac/{dataset_id}/README.md`
+- `GET /stac/{dataset_id}/AGENTS.md`
 - `GET /zarr/{dataset_id}`
 - `GET /zarr/{dataset_id}/{relative_path}`
 - `GET /icechunk/{dataset_id}/{path}`
@@ -50,7 +51,7 @@ Operational note:
 
 ## 1. Discover the configured extent
 
-The configured extent is setup-time Open Climate Service configuration. It is read-only at runtime.
+The configured extent is setup-time Open Geo Service configuration. It is read-only at runtime.
 
 Example:
 
@@ -157,7 +158,7 @@ Example response:
         "title": "Zarr store"
       },
       {
-        "href": "/stac/collections/chirps3_precipitation_daily",
+        "href": "/stac/chirps3_precipitation_daily/collection.json",
         "rel": "stac",
         "title": "STAC collection"
       }
@@ -284,11 +285,11 @@ What this means:
 
 - `/datasets` is the public native catalog of managed datasets
 - `itemType` says what the dataset holds: `coverage` for a raster, `feature` for a feature
-  collection such as a boundary set. It is the field to filter a listing on, because `format`
+  collection such as a boundary set, `table` for values per feature and period. It is the field to filter a listing on, because `format`
   sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
   name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
   the collection object; `coverage` is convention rather than conformance, since OGC API -
-  Coverages is a candidate draft and silent on the field. `/datasets` is Open Climate Service's
+  Coverages is a candidate draft and silent on the field. `/datasets` is Open Geo Service's
   own API, so do not infer the rest of an OGC collection object from the borrowed name.
 - `variable` and `period_type` are both nullable, and are `null` together for a feature
   collection: a boundary set measures nothing and has no temporal axis. Read `itemType` rather
@@ -439,14 +440,14 @@ STAC examples:
 
 ```bash
 curl -s "http://127.0.0.1:9000/stac/catalog.json" | jq
-curl -s "http://127.0.0.1:9000/stac/collections/chirps3_precipitation_daily" | jq
+curl -s "http://127.0.0.1:9000/stac/chirps3_precipitation_daily/collection.json" | jq
 ```
 
 What this means:
 
 - `/stac` is the public STAC discovery surface for published datasets, raster and vector alike
 - native FastAPI no longer exposes `/collections`
-- dataset responses include `/stac/collections/{dataset_id}`
+- dataset responses include `/stac/{dataset_id}/collection.json`
 
 ### Raster and feature collections are described differently
 
@@ -567,7 +568,76 @@ attribution on the source. The STAC collection lists it as its `style` asset, an
 archive and its layer in a `pmtiles` link (web-map-links extension), whenever the collection has
 tiles.
 
-## 12. `/sync`
+## 12. Read table datasets
+
+A table dataset holds values per feature and period, such as monthly precipitation per district.
+It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
+`GET /tables/{dataset_id}/rows`, as JSON or with `format=csv`:
+
+```bash
+curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?collection=districts&start=2026-01-01&reducer=mean" | jq
+curl -s "http://127.0.0.1:9000/tables/precip_districts/rows?format=csv"
+```
+
+Each row names its `collection_id`, `feature_id`, its period, `value`, `unit`, and, for computed
+rows, the `reducer`, the `weights` dataset and `coverage`, the share of the unit with valid cells. A
+value per class (people per hazard class, say) has a `class`; other rows have none. A missing value
+is `null`, or an empty cell in CSV, never 0.
+
+A period is given three ways: `period` names it as raster datasets name theirs (`2026-01`,
+`2026-W01`, `2026-Q2`, `2026`; a day or a dekad by its date), and `period_start` and `period_end`
+are its first and last day (`2026-01-01` and `2026-01-31` for January 2026, a Monday and a Sunday
+for an ISO week). Only `period_start` is stored; the other two follow from it and the dataset's
+period type, shown as `period_type` on `/datasets`. The dataset's extent there uses the `period`
+names.
+
+A table dataset has one period type, or none, set by its first write. Rows with another period type are refused, and each stored
+Parquet file carries it in its metadata as `ogs:period_type`, for readers of the files themselves. A
+row dated other than on its period's first day, such as a month labelled by its last day the way
+`aggregate_temporal_period` labels it, is stored at its period's start. It has one unit too, the
+first one written: rows in another unit are refused. `publish` applies to its first write; a later
+write keeps the dataset published or not.
+
+A table dataset holds current values only, one row per feature, period, class, reducer and weights,
+in one Parquet file. A revised value replaces the previous one, and its `written_at` says when it
+last changed; the same value written again keeps its row. Rows written for a new version of a
+feature collection replace that collection's rows of other versions. No history is kept.
+
+Filters: `collection`, `start` and `end` (inclusive bounds on `period_start`), `reducer` and `weights`. Only
+published table datasets are served.
+
+A pipeline with the `table` destination keeps its workflow's value per feature and period as a
+table dataset, created on its first delivery. With `policy: on_update`, a revised source period
+is computed again and its values replace the previous ones:
+
+```yaml
+workflow:
+  id: aggregate_by_features
+  arguments: { dataset_id: chirps3_precipitation_monthly, geometries: { from_features: districts }, method: mean }
+destination:
+  plugin: table
+  settings: { dataset_id: chirps3_precipitation_monthly_districts, name: Monthly precipitation by district }
+delivery: { policy: on_update }
+```
+
+The rows take the period type of the workflow's result, so a workflow that aggregates daily data
+to months writes a monthly dataset, and a month the source does not fully cover is refused: narrow
+the temporal extent to complete periods. A result that carries no period type is read from the
+spacing of its time axis, and a single period without one is refused. They
+take the source dataset's units, the feature names of the collection, and the `reducer` the
+aggregation used. A per-class result, from `aggregate_spatial_classes`, gives one row per class,
+with the class code in `class`. A dry run shows the first rows and checks them against the store
+without writing.
+
+Pipeline rows do not record `weights` yet: a weighted aggregation is stored with `weights` empty,
+so keep results computed with different weights datasets in separate table datasets. Give each
+table dataset one pipeline; two pipelines writing the same one replace each other's values.
+
+`/datasets/{dataset_id}` shows the table's `units` and, under `provenance`, the job that computed
+its latest rows, that job's process graph digest and the datasets it read, as for any dataset a
+workflow produced.
+
+## 13. `/sync`
 
 `/sync` advances an existing managed dataset from its latest local coverage toward a requested upstream period.
 
@@ -607,11 +677,11 @@ sync:
 ```
 
 The pair is the identity — a bare `R2025A` or `1.0` says nothing on its own, so both halves
-are required and neither is inferred. `value` is opaque: OCS never parses, orders or
+are required and neither is inferred. `value` is opaque: Open Geo Service never parses, orders or
 normalises it, because its syntax belongs to the authority. Because it is stored exactly as
 declared, a blank or whitespace-padded value is rejected rather than trimmed — otherwise
 `" R2025A "` would be a different release from `R2025A`. `authority` is a stable machine
-identifier (`worldpop`, `overture`, `ocs`), never a display label — display names live on
+identifier (`worldpop`, `overture`, `geoservice`), never a display label — display names live on
 `source` and `providers` — and it is compared exactly, so changing it renames every release
 under it. Both are capped at 64 characters, and the same rules apply wherever an identity is
 built: a template at registration, an artifact at materialization, a record on load.
@@ -638,7 +708,7 @@ known-equal, so it rematerializes once to establish identity and then settles.
 A version is a *logical release*, distinct from the other two identities on a record:
 `artifact_id` is the exact materialization, and provenance is how it was produced. A derived
 dataset does not inherit a version from its inputs — an openEO result carries no version
-unless OCS deliberately releases it, as `{"value": "1.0", "authority": "ocs"}`, with its
+unless Open Geo Service deliberately releases it, as `{"value": "1.0", "authority": "geoservice"}`, with its
 inputs recorded as provenance.
 
 A template that declares no version keeps the period-based behaviour described above, and a
@@ -669,9 +739,9 @@ rather than returning `waiting_for_source`.
 
 Configured availability policies:
 
-- CHIRPS3 daily uses `open_climate_service.providers.availability.chirps3_daily_latest_available`; this clamps sync targets to the latest complete released source month
-- ERA5-Land hourly uses `open_climate_service.providers.availability.lagged_latest_available` with a YAML-declared `lag_hours`
-- WorldPop yearly uses `open_climate_service.providers.availability.worldpop_release_latest_available`; this can allow configured future projection years
+- CHIRPS3 daily uses `open_geo_service.providers.availability.chirps3_daily_latest_available`; this clamps sync targets to the latest complete released source month
+- ERA5-Land hourly uses `open_geo_service.providers.availability.lagged_latest_available` with a YAML-declared `lag_hours`
+- WorldPop yearly uses `open_geo_service.providers.availability.worldpop_release_latest_available`; this can allow configured future projection years
 
 Example dry-run plan:
 
@@ -721,7 +791,7 @@ Expected:
 
 ```bash
 curl -s "http://127.0.0.1:9000/datasets/chirps3_precipitation_daily" | jq
-curl -s "http://127.0.0.1:9000/stac/collections/chirps3_precipitation_daily" | jq
+curl -s "http://127.0.0.1:9000/stac/chirps3_precipitation_daily/collection.json" | jq
 curl -s "http://127.0.0.1:9000/zarr/chirps3_precipitation_daily" | jq
 ```
 
@@ -744,7 +814,7 @@ Expected planning response:
 - `delta_start` is `2024-02-01`
 - `delta_end` is `2024-02-10`
 
-`append` here means Open Climate Service reuses the planner's source-available delta and
+`append` here means Open Geo Service reuses the planner's source-available delta and
 writes only missing periods to the existing Icechunk store. A rollback snapshot protects
 the previously committed store until normalization and artifact registration succeed.
 Progress counts the new periods in this append, excluding already committed history.
@@ -954,4 +1024,4 @@ The public contract is now:
 - discover published Zarr-backed datasets with `/stac/catalog.json`
 - access raw native data with `/zarr/{dataset_id}`
 
-Artifacts remain internal because Open Climate Service still needs storage and provenance records behind ingestion and publication, but those internals are no longer exposed as first-class public resources.
+Artifacts remain internal because Open Geo Service still needs storage and provenance records behind ingestion and publication, but those internals are no longer exposed as first-class public resources.

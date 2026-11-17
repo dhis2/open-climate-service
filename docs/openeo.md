@@ -8,16 +8,16 @@ openEO is an **open standard API** for accessing and processing Earth Observatio
 
 Traditional EO data access is fragmented: each data provider has its own API, format, and tools. openEO solves this by defining a vendor-neutral HTTP API so the same client code works against any compliant backend.
 
-## Why openEO for the Open Climate Service?
+## Why openEO for the Open Geo Service?
 
-The Open Climate Service stores climate datasets — precipitation, temperature, population — as managed Zarr stores. openEO gives us a standardised, well-documented way to query and transform those datasets without building a bespoke query language.
+The Open Geo Service stores climate datasets — precipitation, temperature, population — as managed Zarr stores. openEO gives us a standardised, well-documented way to query and transform those datasets without building a bespoke query language.
 
 Concretely it means:
 
 - **DHIS2 analytics apps** can request district-level climate aggregates (monthly sum, seasonal mean) without downloading raw daily rasters — the computation runs server-side and returns a small result.
 - **Data scientists** can use the standard openEO Python client or web editor directly against the service without learning a DHIS2-specific API.
 - **New datasets** added to the service are immediately queryable through the same process graph interface, with no additional API work.
-- **Interoperability** — process graphs written for the Open Climate Service work, with minor configuration changes, against any other openEO-compliant backend, and vice versa.
+- **Interoperability** — process graphs written for the Open Geo Service work, with minor configuration changes, against any other openEO-compliant backend, and vice versa.
 
 ---
 
@@ -334,7 +334,7 @@ Processing plugins are Python functions registered via YAML that extend the proc
 
 ---
 
-## How the Open Climate Service implements openEO
+## How the Open Geo Service implements openEO
 
 ```
 openEO client
@@ -362,7 +362,7 @@ openEO is an additional access layer on top of the existing dataset store — th
 
 ## Examples
 
-- [`examples/openeo_process_graph.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/openeo_process_graph.py) — full end-to-end walkthrough using the openEO Python client
+- [`examples/openeo_process_graph.py`](https://github.com/dhis2/open-geo-service/blob/main/examples/openeo_process_graph.py) — full end-to-end walkthrough using the openEO Python client
 
 ---
 

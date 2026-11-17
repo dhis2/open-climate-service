@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service.features import services as feature_services
-from open_climate_service.features import templates as feature_templates
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.plugins.processes import load_features as load_features_module
-from open_climate_service.plugins.processes.load_features import load_features
+from open_geo_service import config as api_config
+from open_geo_service.features import services as feature_services
+from open_geo_service.features import templates as feature_templates
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.plugins.processes import load_features as load_features_module
+from open_geo_service.plugins.processes.load_features import load_features
 
 DISTRICTS_TEMPLATE: dict[str, object] = {
     "id": "districts",
@@ -292,7 +292,7 @@ def test_list_valued_properties_load_as_plain_json(tmp_path: Path, monkeypatch: 
     import numpy as np
     from shapely.geometry import Point
 
-    from open_climate_service.plugins.processes.load_features import _to_labeled_geojson
+    from open_geo_service.plugins.processes.load_features import _to_labeled_geojson
 
     frame = gpd.GeoDataFrame(
         {"id": ["ou1"], "name": ["A"], "groups": [np.array(["g1", "g2"])], "level": [np.int64(2)]},

@@ -1,8 +1,8 @@
-site_name: Open Climate Service
+site_name: Open Geo Service
 site_description: Climate data tailored for your country, ready for climate-smart decisions
-site_url: https://dhis2.github.io/open-climate-service/
-repo_url: https://github.com/dhis2/open-climate-service
-repo_name: dhis2/open-climate-service
+site_url: https://dhis2.github.io/open-geo-service/
+repo_url: https://github.com/dhis2/open-geo-service
+repo_name: dhis2/open-geo-service
 docs_dir: docs
 edit_uri: edit/main/docs/
 
@@ -70,6 +70,7 @@ nav:
       - Zarr and GeoZarr: zarr_and_geozarr.md
       - Raster conventions: conventions.md
       - Project overview: project_description.md
+      - Authentication (design): authentication.md
   - Guides:
       - Instance guide: instance_guide.md
       - Using the web interface: web_interface.md
@@ -81,7 +82,7 @@ nav:
       - Climate indices: climate_indices.md
       - Workflows: workflows.md
       - Scheduled dataset synchronization: scheduled_sync.md
-      - Dataset-update workflow automation: workflow_automation.md
+      - Dataset-update automation: workflow_automation.md
       - Import to DHIS2 and Chap: importing_to_dhis2.md
       - GeoLibre plugin: geolibre_plugin.md
       - AI assistants (MCP): mcp.md

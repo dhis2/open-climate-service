@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.system.schemas import HealthStatus
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.system.schemas import HealthStatus
 
 from .conftest import MountedClientFactory
 
@@ -11,7 +11,7 @@ def test_root_returns_html_for_browser_request(client: TestClient) -> None:
     response = client.get("/", headers={"accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
-    assert "Open Climate Service" in response.text
+    assert "Open Geo Service" in response.text
 
 
 def test_root_html_shows_extent(client: TestClient) -> None:
@@ -110,7 +110,7 @@ def test_zarr_route_echoes_origin_for_browser_access(client: TestClient, monkeyp
 def test_zarr_browser_headers_survive_a_mount_prefix(
     mounted_client_factory: MountedClientFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Under `ROOT_PATH=/ocs` the request path is `/ocs/zarr/...`; matched against the literal
+    """Under `ROOT_PATH=/geoservice` the request path is `/geoservice/zarr/...`; matched against the literal
     `/zarr`, the per-origin and private-network headers silently stop being added."""
     monkeypatch.setattr(
         ingestion_services,
@@ -118,7 +118,7 @@ def test_zarr_browser_headers_survive_a_mount_prefix(
         lambda _id, _path, range_header=None: {"zarr_format": 3, "node_type": "group", "attributes": {}},
     )
 
-    response = mounted_client_factory("/ocs").get(
+    response = mounted_client_factory("/geoservice").get(
         "/zarr/dataset-1/zarr.json", headers={"Origin": "https://inspect.geozarr.org"}
     )
 

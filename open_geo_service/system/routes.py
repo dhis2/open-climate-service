@@ -1,0 +1,281 @@
+"""Root API endpoints."""
+
+import asyncio
+import json
+import sys
+import urllib.parse
+from collections.abc import AsyncIterator
+from importlib.metadata import version as _pkg_version
+from typing import Any
+
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import RedirectResponse, StreamingResponse
+
+from open_geo_service import config as api_config
+from open_geo_service.shared.time import has_calendar_periods
+from open_geo_service.shared.urls import absolute_base, mount_prefix
+
+from .schemas import AppInfo, HealthStatus, Status
+from .templates import (
+    ROOT_RESPONSES,
+    app_version,
+    render_api_page,
+    render_landing,
+    render_maps,
+    render_workflow_page,
+    render_workflows_page,
+    wants_json,
+)
+
+router = APIRouter()
+
+
+async def _sse_events(queue: asyncio.Queue[dict[str, Any] | None]) -> AsyncIterator[str]:
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        yield f"data: {json.dumps(item)}\n\n"
+
+
+@router.get("/", response_class=Response, responses=ROOT_RESPONSES)
+def read_index(request: Request) -> Response:
+    """Return openEO capabilities (JSON) or the landing page (HTML)."""
+    if wants_json(request):
+        from open_geo_service.openeo.capabilities import build_capabilities
+
+        # openEO capabilities are consumed by other processes, so their links must be absolute
+        # and must name the public origin. The HTML page is navigated in a browser that is
+        # already on the right origin, so it uses relative paths instead.
+        caps = build_capabilities(absolute_base(request))
+        return JSONResponse(caps.model_dump())
+    return HTMLResponse(render_landing(app_version, mount_prefix(request)))
+
+
+@router.get("/map", response_class=HTMLResponse, include_in_schema=False)
+def maps(request: Request) -> HTMLResponse:
+    """Return the interactive map viewer."""
+    return HTMLResponse(render_maps(mount_prefix(request)))
+
+
+@router.get("/api", response_class=HTMLResponse, include_in_schema=False)
+def api_page(request: Request) -> HTMLResponse:
+    """Return the page listing this instance's API endpoints, built from its own OpenAPI schema."""
+    return HTMLResponse(render_api_page(request.app.openapi(), mount_prefix(request)))
+
+
+@router.get("/workflows", response_class=HTMLResponse, include_in_schema=False)
+def workflows_page(request: Request) -> HTMLResponse:
+    """Return the list of workflows. The machine-readable form is `GET /process_graphs`."""
+    return HTMLResponse(render_workflows_page(mount_prefix(request)))
+
+
+@router.get("/workflows/{workflow_id}", response_class=HTMLResponse, include_in_schema=False)
+def workflow_page(request: Request, workflow_id: str) -> HTMLResponse:
+    """Return the page for one workflow. The machine-readable form is `GET /process_graphs/{id}`."""
+    from fastapi import HTTPException
+
+    from open_geo_service.openeo.workflows import get_workflow
+
+    record = get_workflow(workflow_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+    return HTMLResponse(render_workflow_page(record, mount_prefix(request)))
+
+
+@router.get("/openeo", response_class=HTMLResponse, include_in_schema=False)
+def openeo_editor(request: Request) -> RedirectResponse:
+    """Redirect to the openEO Web Editor pre-connected to this backend."""
+    base = absolute_base(request)
+    params = urllib.parse.urlencode({"server": base, "server-title": api_config.get_name()})
+    return RedirectResponse(f"https://editor.openeo.org/?{params}", status_code=302)
+
+
+def _refusal(status_code: int, message: str) -> JSONResponse:
+    """The answer to an ingest or sync request that cannot start.
+
+    JSON rather than a stream, so the page that posted can show the message in place: the
+    streams below only begin once the request is known to be runnable.
+    """
+    return JSONResponse(status_code=status_code, content={"error": message})
+
+
+def _job_stream(work: Any, finished_message: str) -> StreamingResponse:
+    """Run *work* in a thread and stream its progress as server-sent events.
+
+    Events are progress updates (`done`, `total`, `message`), then exactly one of `finished`
+    (with a message) or `error`. The stream then ends.
+    """
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_progress(done: int | None, total: int | None, message: str | None) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, {"done": done, "total": total, "message": message})
+
+    async def run() -> None:
+        from fastapi import HTTPException
+
+        try:
+            await asyncio.to_thread(lambda: work(on_progress))
+            loop.call_soon_threadsafe(queue.put_nowait, {"finished": True, "message": finished_message})
+        except HTTPException as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, {"error": str(exc.detail)})
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, {"error": str(exc)})
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    asyncio.create_task(run())
+    return StreamingResponse(_sse_events(queue), media_type="text/event-stream")
+
+
+@router.post("/manage/ingest", include_in_schema=False)
+async def manage_ingest(request: Request) -> Response:
+    """Ingest a data source from its page's form, streaming progress via SSE."""
+    from fastapi import HTTPException
+
+    from open_geo_service.data_registry.services import datasets as registry_datasets
+    from open_geo_service.data_registry.services.datasets import get_dataset
+    from open_geo_service.extents.services import get_extent_or_404
+    from open_geo_service.ingestions.processes import ingest_dataset, record_inline_update
+    from open_geo_service.ingestions.services import ensure_ingestable
+
+    try:
+        form = await request.form()
+        dataset_id = str(form.get("dataset_id", "")).strip()
+        # A blank field submits "" rather than being absent, so normalise to None.
+        start = str(form.get("start", "")).strip() or None
+        end = str(form.get("end", "")).strip() or None
+        publish = "publish" in form
+        overwrite = "overwrite" in form
+
+        template = get_dataset(dataset_id)
+        if template is None:
+            return _refusal(404, f"Data source '{dataset_id}' not found")
+
+        # Both checks belong here rather than inside create_artifact: the work below runs in an
+        # event stream, where a refusal arrives as an event after a 200 instead of as the
+        # refusal it is. A workflow output has nothing to fetch from...
+        ensure_ingestable(template)
+        # ...and only a forecast may leave the start blank.
+        # A climatology has no start to give: its ids are ordinals and its reference period is
+        # fixed by the template, so the form offers no date and the refusal must not demand one.
+        # A static dataset without a time axis (CLIM-1448) has no periods at all.
+        dated = not registry_datasets.is_timeless(template) and has_calendar_periods(template.get("period_type"))
+        future = registry_datasets.is_future_facing(template)
+        if start is None and dated and not future:
+            return _refusal(400, f"Start period is required for '{dataset_id}': its periods are not in the future")
+
+        get_extent_or_404()
+    except HTTPException as exc:
+        return _refusal(exc.status_code, str(exc.detail))
+    except Exception as exc:
+        return _refusal(400, str(exc))
+
+    def ingest(on_progress: Any) -> None:
+        artifact, events = ingest_dataset(
+            dataset=template,
+            start=start,
+            end=end,
+            overwrite=overwrite,
+            publish=publish,
+            on_progress=on_progress,
+        )
+        # Inline, like the HTTP route without `respond-async`: recorded as a completed job
+        # so the update reaches derived datasets and pipelines.
+        if events:
+            record_inline_update(
+                label="ingestion",
+                request={
+                    "dataset_id": dataset_id,
+                    "start": start,
+                    "end": end,
+                    "overwrite": overwrite,
+                    "publish": publish,
+                },
+                result={"artifact_id": artifact.artifact_id, "dataset_id": dataset_id},
+                events=events,
+            )
+
+    return _job_stream(ingest, f"Ingested {template.get('name', dataset_id)}")
+
+
+@router.post("/manage/sync", include_in_schema=False)
+async def manage_sync(request: Request) -> Response:
+    """Sync a dataset from its page's form, streaming progress via SSE."""
+    from fastapi import HTTPException
+
+    from open_geo_service.ingestions.processes import record_inline_update, sync_update_events
+    from open_geo_service.ingestions.services import get_latest_artifact_for_dataset_or_404, sync_dataset
+
+    try:
+        form = await request.form()
+        dataset_id = str(form.get("dataset_id", "")).strip()
+        end = str(form.get("end", "")).strip() or None
+        publish = "publish" in form
+        if not dataset_id:
+            return _refusal(400, "Dataset ID is required")
+        # Resolve the dataset before the stream opens, for the same reason as ingest: an id
+        # that names nothing is a client mistake, and inside the stream it would reach the page
+        # as an error event on a 200.
+        get_latest_artifact_for_dataset_or_404(dataset_id)
+    except HTTPException as exc:
+        return _refusal(exc.status_code, str(exc.detail))
+    except Exception as exc:
+        return _refusal(400, str(exc))
+
+    def sync(on_progress: Any) -> None:
+        result = sync_dataset(dataset_id=dataset_id, end=end, publish=publish, on_progress=on_progress)
+        record_inline_update(
+            label="sync",
+            request={"dataset_id": dataset_id, "end": end, "publish": publish},
+            result=result.model_dump(mode="json"),
+            events=sync_update_events(dataset_id, result),
+        )
+
+    return _job_stream(sync, "Sync completed")
+
+
+@router.post("/manage/features/refresh", include_in_schema=False)
+async def manage_feature_refresh(request: Request) -> Response:
+    """Fetch a feature collection from its template page's form, streaming progress via SSE."""
+    from fastapi import HTTPException
+
+    from open_geo_service.features.services import execute_feature_refresh, refreshable_feature_template_or_error
+
+    try:
+        form = await request.form()
+        collection_id = str(form.get("collection_id", "")).strip()
+        publish = "publish" in form
+        # Checked before the stream starts, as for ingest: a refusal inside the stream would
+        # arrive as an event after a 200 instead of as the refusal it is.
+        template = refreshable_feature_template_or_error(collection_id)
+    except HTTPException as exc:
+        return _refusal(exc.status_code, str(exc.detail))
+    except Exception as exc:
+        return _refusal(400, str(exc))
+
+    return _job_stream(
+        lambda on_progress: execute_feature_refresh(
+            collection_id=collection_id, publish=publish, on_progress=on_progress
+        ),
+        f"Fetched {template.get('name', collection_id)}",
+    )
+
+
+@router.get("/health")
+def health() -> HealthStatus:
+    """Return health status for container health checks."""
+    return HealthStatus(status=Status.HEALTHY)
+
+
+@router.get("/info")
+def info() -> AppInfo:
+    """Return application version and environment info."""
+    return AppInfo(
+        app_version=_pkg_version("open-geo-service"),
+        python_version=sys.version,
+        uvicorn_version=_pkg_version("uvicorn"),
+        read_only=api_config.is_read_only(),
+    )

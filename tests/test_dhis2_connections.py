@@ -12,8 +12,8 @@ import httpx
 import pytest
 import yaml
 
-from open_climate_service import config
-from open_climate_service.exports.dhis2 import get_connection, get_connection_config
+from open_geo_service import config
+from open_geo_service.exports.dhis2 import get_connection, get_connection_config
 
 
 def _write_config(path: Path, value: object) -> None:
@@ -23,7 +23,7 @@ def _write_config(path: Path, value: object) -> None:
 
 @pytest.fixture
 def connection_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    path = tmp_path / "climate-service.yaml"
+    path = tmp_path / "geoservice.yaml"
     path.write_text(
         "dhis2_connections:\n"
         "  - id: national-hmis\n"
@@ -31,7 +31,7 @@ def connection_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "    token_env: TEST_DHIS2_TOKEN\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(path))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(path))
     monkeypatch.delenv("TEST_DHIS2_TOKEN", raising=False)
     return path
 
@@ -124,50 +124,46 @@ def test_legacy_yaml_fragment_interpolation_without_connections(connection_file:
     assert config.get_config()["extent"]["bbox"] == [-13.5, 6.9, -10.1, 10.0]
 
 
-def test_exports_can_be_added_to_config_with_yaml_fragment_interpolation(
+def test_connections_load_beside_fragment_interpolation_and_retired_blocks_are_refused(
     connection_file: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setenv("WEST", "-13.5")
-    connection_file.write_text(
-        "extent:\n"
-        "  bbox: [${WEST}, 6.9, -10.1, 10.0]\n"
-        "exports:\n"
-        "  - id: rainfall\n"
-        "    plugin: dhis2\n"
-        "    period_type: monthly\n"
-        "    series:\n"
-        "      - data_element: BXgDHhPdFVU\n"
-        "dhis2_connections:\n"
-        "  - id: hmis\n"
-        "    url: https://hmis.example.org/dhis\n"
-        "    token_env: TEST_DHIS2_TOKEN\n"
+    connections = (
+        "dhis2_connections:\n  - id: hmis\n    url: https://hmis.example.org/dhis\n    token_env: TEST_DHIS2_TOKEN\n"
     )
+    connection_file.write_text("extent:\n  bbox: [${WEST}, 6.9, -10.1, 10.0]\n" + connections)
     loaded = config.get_config()
     assert loaded["extent"]["bbox"] == [-13.5, 6.9, -10.1, 10.0]
-    assert loaded["exports"][0]["id"] == "rainfall"
+    assert loaded["dhis2_connections"][0]["id"] == "hmis"
+
+    monkeypatch.setattr(config, "_cache", None)
+    connection_file.write_text("automation:\n  workflow_triggers: []\nexports: []\n" + connections)
+    with pytest.raises(ValueError, match="no longer reads") as refused:
+        config.get_config()
+    assert "'automation': keep a derived dataset current" in str(refused.value)
+    assert "'exports': a pipeline owns the named export" in str(refused.value)
 
 
-@pytest.mark.parametrize("block", ["exports", "dhis2_connections"])
 def test_protected_config_block_rejects_inline_interpolation(
-    connection_file: Path, monkeypatch: pytest.MonkeyPatch, block: str
+    connection_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PROTECTED_CONFIG", "[]")
-    connection_file.write_text(f"{block}: ${{PROTECTED_CONFIG}}\n")
+    connection_file.write_text("dhis2_connections: ${PROTECTED_CONFIG}\n")
 
-    with pytest.raises(ValueError, match=rf"{block} does not support environment interpolation"):
+    with pytest.raises(ValueError, match="dhis2_connections does not support environment interpolation"):
         config.get_config()
 
 
 def test_protected_config_block_rejects_interpolation_after_column_zero_comment(
     connection_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("PLUGIN", "dhis2")
+    monkeypatch.setenv("URL", "https://hmis.example.org/dhis")
     connection_file.write_text(
-        "exports:\n  - id: rainfall\n# operator note\n    plugin: ${PLUGIN}\n",
+        "dhis2_connections:\n  - id: hmis\n# operator note\n    url: ${URL}\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="exports does not support environment interpolation"):
+    with pytest.raises(ValueError, match="dhis2_connections does not support environment interpolation"):
         config.get_config()
 
 
@@ -190,7 +186,7 @@ def test_missing_or_invalid_token(connection_file: Path, monkeypatch: pytest.Mon
         if "\x00" in token:
             # Real process environments cannot contain NUL; exercise header validation directly.
             monkeypatch.setattr(
-                "open_climate_service.exports.dhis2.os.environ", dict(os.environ) | {"TEST_DHIS2_TOKEN": token}
+                "open_geo_service.exports.dhis2.os.environ", dict(os.environ) | {"TEST_DHIS2_TOKEN": token}
             )
         else:
             monkeypatch.setenv("TEST_DHIS2_TOKEN", token)
@@ -258,7 +254,7 @@ def test_external_provider_uses_only_public_accessor(
     module_file = tmp_path / "external_provider.py"
     module_file.write_text(
         "from contextlib import closing\n"
-        "from open_climate_service.exports.dhis2 import get_connection\n"
+        "from open_geo_service.exports.dhis2 import get_connection\n"
         "def fetch(connection_id, level):\n"
         "    with closing(get_connection(connection_id)) as client:\n"
         "        return client.get_org_units_geojson(level=level)\n"
