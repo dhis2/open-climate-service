@@ -18,9 +18,9 @@ import pytest
 import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .rio
 import xarray as xr
 
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.openeo import jobs
-from open_climate_service.plugins.processes.compute_anomaly import compute_anomaly
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.openeo import jobs
+from open_geo_service.plugins.processes.compute_anomaly import compute_anomaly
 
 _OBSERVED_TEMPLATE = {
     "id": "chirps3_precipitation_daily",
@@ -183,12 +183,12 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  sync:\n"
         "    kind: temporal\n"
         "  ingestion:\n"
-        "    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
+        "    plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
     registry.reset_template_caches()
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "rasters")
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "rasters")
     (tmp_path / "rasters").mkdir()
     return configs
 

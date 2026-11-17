@@ -11,19 +11,29 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service.jobs.models import JobRecord, JobStatus
-from open_climate_service.scheduler import service as scheduler_service
-from open_climate_service.scheduler.config import DatasetSyncSchedule, SchedulerConfig
-from open_climate_service.scheduler.dispatcher import CheckOutcome, CheckResult, _dataset_is_materialized, enqueue_sync
-from open_climate_service.scheduler.results import ClockBeat, SharedResults, SharedResultsStore
-from open_climate_service.scheduler.service import SchedulerService
-from open_climate_service.scheduler.store import StoredSchedule
+from open_geo_service.jobs import store as native_store
+from open_geo_service.jobs.models import JobRecord, JobStatus
+from open_geo_service.scheduler import service as scheduler_service
+from open_geo_service.scheduler.config import DatasetSyncSchedule, SchedulerConfig
+from open_geo_service.scheduler.dispatcher import CheckOutcome, CheckResult, _dataset_is_materialized, enqueue_sync
+from open_geo_service.scheduler.results import ClockBeat, SharedResults, SharedResultsStore
+from open_geo_service.scheduler.service import SchedulerService
+from open_geo_service.scheduler.store import StoredSchedule
 
 
 @pytest.fixture(autouse=True)
 def _own_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Each test gets its own data directory, so no test reads another's check results or heartbeat."""
+    """Each test gets its own data directory, so no test reads another's check results, heartbeat or jobs."""
     monkeypatch.setattr(scheduler_service.api_config, "get_data_root", lambda: tmp_path / "data")
+    monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
+    monkeypatch.setattr(native_store, "JOBS_INDEX_PATH", tmp_path / "data" / "jobs" / "jobs.json")
+
+
+def _failed_job(job_id: str | None) -> JobRecord:
+    """The failed job a check that could not submit its sync was recorded as."""
+    record = native_store.get_job_record(str(job_id))
+    assert record is not None and record.status == JobStatus.FAILED
+    return record
 
 
 def _schedule(**updates: object) -> DatasetSyncSchedule:
@@ -94,10 +104,10 @@ def test_due_schedule_enqueues_retryable_native_job(monkeypatch: pytest.MonkeyPa
     submit = MagicMock(return_value=_job())
     job_service = MagicMock()
     job_service.list_jobs.return_value.jobs = []
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.api_config.is_read_only", lambda: False)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.get_job_service", lambda: job_service)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher._dataset_is_materialized", lambda _: True)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.submit_sync_job", submit)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.get_job_service", lambda: job_service)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher._dataset_is_materialized", lambda _: True)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.submit_sync_job", submit)
 
     result = enqueue_sync(_schedule(max_attempts=4))
 
@@ -109,16 +119,17 @@ def test_due_schedule_enqueues_retryable_native_job(monkeypatch: pytest.MonkeyPa
         publish=True,
         label="scheduled-sync",
         max_attempts=4,
+        outcome_source="/schedules/sync/chirps3_precipitation_daily",
     )
 
 
 def test_unmaterialized_dataset_skips_submission(monkeypatch: pytest.MonkeyPatch) -> None:
     """A registered-but-never-ingested dataset must not burn worker retries (CLIM-849)."""
     submit = MagicMock()
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.api_config.is_read_only", lambda: False)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher._active_writer_job", lambda _: None)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher._dataset_is_materialized", lambda _: False)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.submit_sync_job", submit)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher._active_writer_job", lambda _: None)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher._dataset_is_materialized", lambda _: False)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.submit_sync_job", submit)
 
     result = enqueue_sync(_schedule())
 
@@ -132,7 +143,7 @@ def test_materialization_check_translates_missing_artifact(monkeypatch: pytest.M
         raise HTTPException(status_code=404, detail="No artifact found")
 
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.get_latest_artifact_for_dataset_or_404",
+        "open_geo_service.ingestions.services.get_latest_artifact_for_dataset_or_404",
         missing_artifact,
     )
 
@@ -144,7 +155,7 @@ def test_materialization_check_propagates_unexpected_http_error(monkeypatch: pyt
         raise HTTPException(status_code=503, detail="Artifact index unavailable")
 
     monkeypatch.setattr(
-        "open_climate_service.ingestions.services.get_latest_artifact_for_dataset_or_404",
+        "open_geo_service.ingestions.services.get_latest_artifact_for_dataset_or_404",
         unavailable_artifact_index,
     )
 
@@ -159,9 +170,9 @@ def test_active_writer_job_prevents_duplicate_submission(process_id: str, monkey
     submit = MagicMock()
     job_service = MagicMock()
     job_service.list_jobs.return_value.jobs = [_job(process_id=process_id, status=JobStatus.RUNNING)]
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.api_config.is_read_only", lambda: False)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.get_job_service", lambda: job_service)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.submit_sync_job", submit)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.get_job_service", lambda: job_service)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.submit_sync_job", submit)
 
     result = enqueue_sync(_schedule())
 
@@ -171,8 +182,8 @@ def test_active_writer_job_prevents_duplicate_submission(process_id: str, monkey
 
 def test_read_only_check_does_not_submit(monkeypatch: pytest.MonkeyPatch) -> None:
     submit = MagicMock()
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.api_config.is_read_only", lambda: True)
-    monkeypatch.setattr("open_climate_service.scheduler.dispatcher.submit_sync_job", submit)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.api_config.is_read_only", lambda: True)
+    monkeypatch.setattr("open_geo_service.scheduler.dispatcher.submit_sync_job", submit)
 
     result = enqueue_sync(_schedule())
 
@@ -182,8 +193,8 @@ def test_read_only_check_does_not_submit(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_service_registers_coalesced_non_overlapping_cron_job(monkeypatch: pytest.MonkeyPatch) -> None:
     scheduler = MagicMock()
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored_schedule()],
@@ -202,8 +213,8 @@ def test_service_registers_coalesced_non_overlapping_cron_job(monkeypatch: pytes
 
 def test_start_loads_clock_config_once(monkeypatch: pytest.MonkeyPatch) -> None:
     scheduler = MagicMock()
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     load_config = MagicMock(return_value=SchedulerConfig(enabled=True))
     service = SchedulerService(
         config_loader=load_config,
@@ -217,7 +228,7 @@ def test_start_loads_clock_config_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.anyio  # pyright: ignore[reportUntypedFunctionDecorator]
 async def test_real_scheduler_computes_timezone_aware_next_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(
             enabled=True,
@@ -240,8 +251,8 @@ async def test_real_scheduler_computes_timezone_aware_next_run(monkeypatch: pyte
 def test_service_skips_future_facing_schedule_without_failing_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     scheduler = MagicMock()
     scheduler.get_jobs.return_value = []
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored_schedule()],
@@ -259,8 +270,8 @@ def test_service_skips_future_facing_schedule_without_failing_startup(monkeypatc
 def test_service_skips_static_schedule_without_failing_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     scheduler = MagicMock()
     scheduler.get_jobs.return_value = []
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored_schedule()],
@@ -279,9 +290,9 @@ def test_service_skips_missing_template_without_failing_startup(monkeypatch: pyt
     scheduler = MagicMock()
     warning = MagicMock()
     scheduler.get_jobs.return_value = []
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
-    monkeypatch.setattr("open_climate_service.scheduler.service.logger.warning", warning)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.logger.warning", warning)
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored_schedule()],
@@ -295,12 +306,20 @@ def test_service_skips_missing_template_without_failing_startup(monkeypatch: pyt
     assert service.status().schedules[0].last_outcome == CheckOutcome.ERROR
     assert "no registered data source" in (service.status().schedules[0].last_message or "")
     assert warning.call_args.args[-1] == 0
+    # A refused schedule never checks its dataset: it is reported once, as a failed job.
+    [refusal] = native_store.list_job_records()
+    [event] = _failed_job(refusal.job_id).events
+    assert (event.type, event.source) == ("automation.failed", "/schedules/sync/chirps3_precipitation_daily")
+    assert "no registered data source" in event.data["message"]
+    service._stamp = "changed"
+    service.reload()
+    assert len(native_store.list_job_records()) == 1
 
 
 def test_service_does_not_start_on_read_only_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     scheduler_factory = MagicMock()
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", scheduler_factory)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: True)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", scheduler_factory)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: True)
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True), store_loader=lambda: [_stored_schedule()]
     )
@@ -314,8 +333,8 @@ def test_status_exposes_next_and_last_check(monkeypatch: pytest.MonkeyPatch) -> 
     next_check = datetime(2026, 8, 19, 6, tzinfo=timezone.utc)
     scheduler = MagicMock()
     scheduler.get_jobs.return_value = [MagicMock(id=_schedule().schedule_id, next_run_time=next_check)]
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     result = CheckResult(
         schedule_id=_schedule().schedule_id,
         dataset_id=_schedule().dataset_id,
@@ -355,6 +374,17 @@ def test_check_error_is_retained_without_escaping() -> None:
 
     assert result.outcome == CheckOutcome.ERROR
     assert "source unavailable" in result.message
+    [event] = _failed_job(result.job_id).events
+    assert (event.type, event.source) == ("automation.failed", "/schedules/sync/chirps3_precipitation_daily")
+    assert event.data == {
+        "job": result.job_id,
+        "href": f"/ingestions/jobs/{result.job_id}",
+        "stage": "job",
+        "message": result.message,
+    }
+    # The same failure at the next check is the one job, not another a day.
+    assert service.check_now(_schedule()).job_id == result.job_id
+    assert len(native_store.list_job_records()) == 1
 
 
 def test_schedules_endpoint_is_read_only_status(client: TestClient) -> None:
@@ -384,29 +414,31 @@ def _submitted() -> CheckResult:
     )
 
 
-def _clock_process(monkeypatch: pytest.MonkeyPatch, store: SharedResultsStore) -> SchedulerService:
+def _clock_process(
+    monkeypatch: pytest.MonkeyPatch, store: SharedResultsStore, registered: bool = True
+) -> SchedulerService:
     """The process that runs the clock, with APScheduler itself replaced."""
     scheduler = MagicMock()
     scheduler.get_jobs.return_value = []
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True),
         store_loader=lambda: [_stored_schedule()],
         dispatcher=lambda _: _submitted(),
-        template_loader=lambda _: _template(),
+        template_loader=lambda _: _template() if registered else None,
         results=store,
     )
     service.start()
     return service
 
 
-def _other_process(store: SharedResultsStore) -> SchedulerService:
+def _other_process(store: SharedResultsStore, registered: bool = True) -> SchedulerService:
     """A process on the same data directory whose configuration leaves the clock off."""
     return SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=False),
         store_loader=lambda: [_stored_schedule()],
-        template_loader=lambda _: _template(),
+        template_loader=lambda _: _template() if registered else None,
         results=store,
     )
 
@@ -436,6 +468,22 @@ def test_another_process_reports_the_check_the_clock_ran(
     page = client.get("/schedules", headers={"Accept": "text/html"}).text
     assert "Scheduler running in another process" in page
     assert "Automatic checks are off" not in page
+    clock.shutdown()
+
+
+def test_another_process_links_the_job_a_refused_schedule_was_recorded_as(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = SharedResultsStore(tmp_path / "shared" / "schedule_results.json")
+    clock = _clock_process(monkeypatch, store, registered=False)
+    # The reader refuses the schedule too, after the clock did: the clock's result still wins.
+    monkeypatch.setattr(scheduler_service, "_service", _other_process(store, registered=False))
+
+    (row,) = client.get("/schedules", headers={"Accept": "application/json"}).json()["schedules"]
+
+    [refusal] = native_store.list_job_records()
+    assert row["last_outcome"] == "error" and row["last_job_id"] == refusal.job_id
+    assert row["links"]["last_job"] == f"/ingestions/jobs/{refusal.job_id}"
     clock.shutdown()
 
 
@@ -483,7 +531,7 @@ def test_a_stopped_clock_clears_its_heartbeat(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_a_read_only_process_never_writes_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: True)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: True)
     store = SharedResultsStore(tmp_path / "schedule_results.json")
     service = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True),
@@ -514,8 +562,8 @@ def test_another_process_reads_the_cron_in_the_clocks_timezone(monkeypatch: pyte
     store = SharedResultsStore(tmp_path / "schedule_results.json")
     scheduler = MagicMock()
     scheduler.get_jobs.return_value = []
-    monkeypatch.setattr("open_climate_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
-    monkeypatch.setattr("open_climate_service.scheduler.service.api_config.is_read_only", lambda: False)
+    monkeypatch.setattr("open_geo_service.scheduler.service.AsyncIOScheduler", lambda **_: scheduler)
+    monkeypatch.setattr("open_geo_service.scheduler.service.api_config.is_read_only", lambda: False)
     clock = SchedulerService(
         config_loader=lambda: SchedulerConfig(enabled=True, timezone="Asia/Kathmandu"),
         store_loader=lambda: [_stored_schedule()],

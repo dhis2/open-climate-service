@@ -18,10 +18,10 @@ icechunk = pytest.importorskip("icechunk")
 pytest.importorskip("topozarr")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset  # noqa: E402
-from open_climate_service.data_manager.services import downloader  # noqa: E402
-from open_climate_service.ingestions import services  # noqa: E402
-from open_climate_service.streaming import BaseDatasetPlugin, normalize_period  # noqa: E402
+from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset  # noqa: E402
+from open_geo_service.data_manager.services import downloader  # noqa: E402
+from open_geo_service.ingestions import services  # noqa: E402
+from open_geo_service.streaming import BaseDatasetPlugin, normalize_period  # noqa: E402
 
 # Odd sizes, so every level trims a trailing row or column.
 NY, NX = 101, 75
@@ -235,3 +235,23 @@ def test_a_failed_record_write_rolls_back_the_appended_levels(
     root = _root(state["store"])
     lengths = {path or "root": (root[path] if path else root)["t"].shape[0] for path in ["", *root.group_keys()]}
     assert set(lengths.values()) == {3}, lengths
+
+
+def test_an_ingested_pyramid_keeps_one_period_per_time_shard(pyramid_sync: dict[str, Any]) -> None:
+    """Every level of a pyramid built through the ingest path holds one period per shard.
+
+    A sync appends one period at a time, and appending into a shard several periods wide rewrites
+    that shard on every append (CLIM-879). topozarr widens time shards when the source's time
+    chunks allow it, and the ingest path reads the streaming store with time merged per dask chunk,
+    so this fails if either one changes (CLIM-1765).
+    """
+    state = pyramid_sync
+    _ingest(state, "2026-01-03")
+    root = _root(state["store"])
+    levels = sorted(root.group_keys())
+    assert len(levels) >= 3, "precondition: a pyramid with several levels"
+    for level in levels:
+        tg = root[level]["tg"]
+        assert tg.shape[0] == 3, level
+        assert (tg.shards or tg.chunks)[0] == 1, level
+        assert tg.chunks[0] == 1, level

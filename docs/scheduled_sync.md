@@ -1,13 +1,13 @@
 # Scheduled dataset synchronization
 
-Open Climate Service can periodically check whether an existing managed dataset has new
+Open Geo Service can periodically check whether an existing managed dataset has new
 source periods and submit an asynchronous sync job when work is required. The scheduler is
 a clock only: planning, retries, execution, progress, and restart recovery remain owned by
-the native OCS job service.
+the native Open Geo Service job service.
 
 ## Configure schedules
 
-`climate-service.yaml` controls whether the instance clock runs and its timezone:
+`geoservice.yaml` controls whether the instance clock runs and its timezone:
 
 ```yaml
 scheduler:
@@ -18,7 +18,7 @@ scheduler:
 Create and edit schedules from each dataset's **Schedule** tab, or through the
 `/schedules/sync` API. All dataset schedules live together in
 `<data_dir>/schedules.json`, keyed by dataset id. This file can be prepared before
-starting OCS, though the UI/API is recommended for validation and atomic writes.
+starting Open Geo Service, though the UI/API is recommended for validation and atomic writes.
 Only one schedule is allowed per dataset. The schedule's `cron` is a standard
 five-field expression interpreted in the configured IANA timezone. UTC is the
 default and is recommended for checks that follow upstream publication times.
@@ -46,7 +46,7 @@ For pre-start provisioning, one file contains all datasets, for example:
 
 The map key and `dataset_id` must match. The optional `enabled` field defaults to
 true; the second example stays paused until an operator resumes it. When editing
-the JSON outside the UI, stop OCS or replace the complete file atomically so the
+the JSON outside the UI, stop Open Geo Service or replace the complete file atomically so the
 clock never reads a partial write.
 
 For a development instance with `scheduler.dataset_sync` in YAML, remove that block
@@ -90,7 +90,7 @@ sync engine ingests.
 
 - The configuration file controls the global clock switch and timezone, read at startup;
   the JSON store controls every dataset schedule. Editing that store through the UI/API
-  takes effect without restarting OCS.
+  takes effect without restarting Open Geo Service.
 - A stored entry has a pause switch, `enabled`. Pausing keeps the entry and stops it firing.
 - Every change reloads the clock. The reload parses the store, then resolves every effective
   entry's dataset and builds its trigger, before any job is touched. When the store cannot be
@@ -139,10 +139,10 @@ source is refused with the reason, and the dataset page shows that reason instea
 form. The target must have been ingested for a check to submit a sync; a stored schedule for
 a dataset not yet ingested is saved and its checks finish as `not_materialized` until it is.
 
-Changing schedules changes when data moves into the instance, and a sync can trigger
-workflows and deliveries configured under `automation`. These routes are closed on a
+Changing schedules changes when data moves into the instance, and a sync can refresh derived
+datasets and run the pipelines on them, including live deliveries. These routes are closed on a
 read-only instance, but read-only mode is not authentication: an instance that exposes the
-page must be deployed privately or behind reverse-proxy authentication until OCS has its
+page must be deployed privately or behind reverse-proxy authentication until Open Geo Service has its
 own write authentication.
 
 ## Inspect status
@@ -165,9 +165,77 @@ Every due check creates a native job, including checks that finish without findi
 Native job history is currently retained in `jobs.json`; retention and indexed active-job lookup
 are follow-up work for the persistent job-store implementation.
 
+## Failure alerts
+
+Open Geo Service can post to a webhook when a scheduled sync or a pipeline starts failing, and again when
+that ends. Set the URL in `geoservice.yaml`:
+
+```yaml
+notifications:
+  webhook_url: ${GEOSERVICE_WEBHOOK_URL}
+```
+
+Open Geo Service sends an HTTP JSON POST. A directly compatible receiver displays the `text` field, ignores
+fields it does not recognise, and carries its authentication in the webhook URL, because custom
+headers cannot be configured. Slack and Mattermost incoming webhooks meet this contract. Strict
+receivers, and services that require their own payload format such as Google Chat, Microsoft
+Teams and Discord, need a small relay that translates the request.
+
+Each schedule and each pipeline posts once when it starts failing and once when that ends, not
+once per failure: a daily sync that keeps failing alerts on the first morning only.
+
+A scheduled sync fails when its job fails after its last attempt, and also when its check fails
+before any job exists: the check errors, the dataset has not been ingested, or the clock refuses
+the schedule when it loads it (an unknown data source, a cron it cannot read). Such a check is
+recorded as a failed job, so it shows in the jobs list too; a check that fails the same way
+again links that job rather than adding another. The schedule recovers when a sync
+job next succeeds.
+
+A pipeline run fails when its job cannot be submitted, its workflow job errors or disappears, or
+its delivery fails or ends partial, rejected or unknown; it succeeds when the delivery is
+confirmed or validated. A cancelled job is neither. The pipeline is failing while it has a failed
+run that no newer successful run superseded. It recovers when a newer run succeeds. It is
+resolved when every failure since the last success is a delivery that ended unconfirmed and an
+operator has acknowledged each of them. A submission or workflow-job failure stays open until a
+newer run succeeds, and acknowledging an older run while a newer one still fails changes nothing.
+
+The body is JSON, posted with the header `Idempotency-Key` set to the outcome's event id:
+
+```json
+{
+  "status": "failed",
+  "event": "8f1c...:0",
+  "time": "2026-11-06T06:00:12+00:00",
+  "automation": "pipeline",
+  "id": "rainfall-to-dhis2",
+  "link": "https://geoservice.example.org/pipelines/rainfall-to-dhis2",
+  "run": "8f1c...",
+  "details": "https://geoservice.example.org/pipelines/rainfall-to-dhis2/runs/8f1c...",
+  "stage": "delivery",
+  "message": "DHIS2 refused the payload",
+  "text": "Pipeline 'rainfall-to-dhis2' failed at delivery: DHIS2 refused the payload https://geoservice.example.org/pipelines/rainfall-to-dhis2"
+}
+```
+
+`status` is `failed`, `recovered` (a run succeeded) or `resolved` (an operator acknowledged the
+failure, which is not a success; only pipelines have this). A receiver that only opens and closes
+alerts can treat `recovered` and `resolved` alike. `automation` is `pipeline` or `schedule`; a scheduled sync
+names its `job` instead of a `run`. `text` is the one-line summary that chat tools show. Links
+are absolute when `GEOSERVICE_BASE_URL` is set, and paths otherwise; either way they carry
+the deployment prefix, the base URL's path or else `ROOT_PATH`.
+
+The outcomes are durable events, persisted with the job or run that reached them, and each alert
+is queued in `<data_dir>/notifications.json` before it is posted. An alert the receiver does not
+answer with 2xx is retried on the 15-minute maintenance interval with a growing delay, for about
+five hours. Each schedule's and pipeline's alerts arrive in order, and one that is refused holds
+up only its own. A failure alert given up on drops the alert that would end it too, so a
+receiver never gets a recovery or resolution alone; a later failure is still posted. After a restart, outcomes that no process decided are decided then.
+Outcomes from before the webhook was first configured are not posted. A read-only instance posts
+nothing.
+
 ## Deployment constraints
 
-Exactly one OCS process or replica may set `scheduler.enabled: true`. Active-job detection
+Exactly one Open Geo Service process or replica may set `scheduler.enabled: true`. Active-job detection
 and submission are not an atomic cross-process operation, and the store write lock is
 process-local. Enabling the clock in multiple replicas could therefore submit concurrent
 writers for the same store. API-only replicas must leave scheduling disabled; they may still

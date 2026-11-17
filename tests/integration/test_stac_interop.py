@@ -6,7 +6,7 @@ project's pinned xarray stack through `dhis2eo`.
 
 The smoke test uses ``openeo.rest.datacube.DataCube.load_stac(...)`` directly
 instead of an openEO backend connection so it can validate client-side STAC
-parsing against a live Open Climate Service instance without requiring a running openEO
+parsing against a live Open Geo Service instance without requiring a running openEO
 backend.
 
 Manual setup example:
@@ -14,7 +14,7 @@ Manual setup example:
 1. ``python3.12 -m venv /tmp/stac-interop``
 2. ``source /tmp/stac-interop/bin/activate``
 3. ``pip install pytest httpx openeo``
-4. start the Open Climate Service separately, e.g. ``make run``
+4. start the Open Geo Service separately, e.g. ``make run``
 5. run:
    ``RUN_STAC_INTEROP=1 STAC_BASE_URL=http://127.0.0.1:9000 pytest --noconftest tests/integration/test_stac_interop.py``
 """
@@ -50,7 +50,7 @@ def test_openeo_can_load_stac_collection() -> None:
             collection_href = child_links[0].get("href")
             assert isinstance(collection_href, str)
         else:
-            suffix = f"/stac/collections/{dataset_id}"
+            suffix = f"/stac/{dataset_id}/collection.json"
             collection_href = next(
                 (
                     link.get("href")

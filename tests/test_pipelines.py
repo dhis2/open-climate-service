@@ -20,21 +20,23 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.exports import dhis2_destination
-from open_climate_service.exports.base import (
+from open_geo_service import config as api_config
+from open_geo_service.exports import dhis2_destination
+from open_geo_service.exports.base import (
     BaseExportPlugin,
     DestinationCheck,
     DestinationContext,
+    LookupOption,
     PipelineSettingsForm,
     RenderedExport,
     SettingsFormField,
     SettingsFormSection,
 )
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.pipelines import forms, runner, service, store
-from open_climate_service.pipelines import workflow as workflow_binding
-from open_climate_service.pipelines.schemas import (
+from open_geo_service.features.services import registered_collections as _registered_collections
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.pipelines import forms, runner, service, store
+from open_geo_service.pipelines import workflow as workflow_binding
+from open_geo_service.pipelines.schemas import (
     Check,
     DryRunResult,
     PipelineRecord,
@@ -43,10 +45,11 @@ from open_climate_service.pipelines.schemas import (
     WorkflowReference,
 )
 
-from .conftest import MountedClientFactory
+from .conftest import MountedClientFactory, WebhookReceiver
 
 _OU = ["ImspTQPwCqd", "O6uvpzGd5pu"]
 _ELEMENT = "LeePHYkZwBk"
+_FEMALE, _MALE, _AOC = "FemaleCOC01", "MaleCOC0001", "PartnerAOC1"
 _SETTINGS: dict[str, Any] = {"connection": "local", "data_set": "N63vVmt2uY0", "series": [{"data_element": _ELEMENT}]}
 _SPEC: dict[str, Any] = {
     "id": "rain-to-dhis2",
@@ -81,6 +84,7 @@ def _dataset(period_type: str = "monthly", published: bool = True, dataset_id: s
         dataset_name="Rain, monthly",
         variable="tp",
         period_type=period_type,
+        units="mm",
         item_type="coverage",
         extent=SimpleNamespace(temporal=SimpleNamespace(start="2025-01", end="2025-02")),
         publication=SimpleNamespace(status="published" if published else "unpublished"),
@@ -98,14 +102,14 @@ def datasets() -> list[Any]:
 
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, datasets: list[Any]) -> None:
-    from open_climate_service.features import services as feature_services
-    from open_climate_service.ingestions import services as ingestion_services
-    from open_climate_service.system import templates as system_templates
+    from open_geo_service.features import services as feature_services
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.system import templates as system_templates
 
     monkeypatch.setattr(api_config, "get_data_root", lambda: tmp_path / "data")
     # Event replay reads both job stores: keep them inside this test's directory.
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.openeo import jobs as openeo_jobs
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.openeo import jobs as openeo_jobs
 
     monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
@@ -128,7 +132,7 @@ def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, datasets: list[Any
     monkeypatch.setattr(feature_services, "registered_collections", lambda: {"districts": SimpleNamespace()})
     monkeypatch.setattr(
         workflow_binding,
-        "_feature_versions",
+        "feature_versions",
         lambda arguments: {"districts": "2026-01-01T00:00:00"} if "districts" in json.dumps(arguments) else {},
     )
     monkeypatch.setattr(
@@ -167,9 +171,17 @@ def _dhis2(
     client = _FakeClient(
         {
             "id": "N63vVmt2uY0",
-            "displayName": "OCS test",
+            "displayName": "OGS test",
             "periodType": period_type,
-            "dataSetElements": [{"dataElement": {"id": _ELEMENT}}],
+            "dataSetElements": [
+                {
+                    "dataElement": {
+                        "id": _ELEMENT,
+                        "categoryCombo": {"categoryOptionCombos": [{"id": _FEMALE}, {"id": _MALE}]},
+                    }
+                }
+            ],
+            "categoryCombo": {"categoryOptionCombos": [{"id": _AOC}]},
             "organisationUnits": [{"id": ou} for ou in (assigned if assigned is not None else _OU)],
         },
         summary
@@ -179,7 +191,7 @@ def _dhis2(
             "conflicts": [],
         },
     )
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: client)
     return client
@@ -187,7 +199,7 @@ def _dhis2(
 
 def _schedule(dataset_id: str, cron: str, *, enabled: bool = True) -> None:
     """Store a sync schedule the way the Schedules page does, in this test's data directory."""
-    from open_climate_service.scheduler import store as schedule_store
+    from open_geo_service.scheduler import store as schedule_store
 
     schedule_store.save_schedule(
         schedule_store.StoredSchedule(dataset_id=dataset_id, cron=cron, publish=True, max_attempts=3, enabled=enabled),
@@ -512,7 +524,6 @@ def test_validation_passes_when_everything_lines_up(instance: None, monkeypatch:
         "connection": "pass",
         "dhis2_metadata": "pass",
         "schedule": "skip",
-        "configuration": "pass",
         "delivery": "pass",
     }
     assert result.export == {
@@ -563,6 +574,34 @@ def test_validation_reports_dhis2_period_and_assignment(instance: None, monkeypa
     message = _by_id(service.validate_pipeline(store.create_record(_spec())))["dhis2_metadata"].message
     assert "period type is 'Daily', the export is Monthly" in message
     assert "1 of 2 organisation units are not assigned" in message
+
+    _dhis2(monkeypatch)
+    series = [{"data_element": _ELEMENT, "category_option_combo": _FEMALE, "attribute_option_combo": _AOC}]
+    combos = _spec(id="by-sex", destination={"plugin": "dhis2", "settings": {**_SETTINGS, "series": series}})
+    result = service.validate_pipeline(store.create_record(combos))
+    assert result.valid, result.checks
+    assert result.export is not None and result.export["series"] == [{"select": {}, **series[0]}]
+    foreign = [{**series[0], "category_option_combo": "OtherCOC001", "attribute_option_combo": "OtherAOC001"}]
+    wrong = _spec(id="wrong-combos", destination={"plugin": "dhis2", "settings": {**_SETTINGS, "series": foreign}})
+    message = _by_id(service.validate_pipeline(store.create_record(wrong)))["dhis2_metadata"].message
+    assert f"category option combo(s) not of their data element: OtherCOC001 (data element {_ELEMENT})" in message
+    assert "attribute option combo(s) not of the data set's attribute: OtherAOC001" in message
+
+    # A data set can give its element another category combo, whose option combos then count.
+    client = _dhis2(monkeypatch)
+    client.data_set["dataSetElements"][0]["categoryCombo"] = {"categoryOptionCombos": [{"id": "OtherCOC001"}]}
+    override = _spec(id="override", destination=wrong.destination)
+    message = _by_id(service.validate_pipeline(store.create_record(override)))["dhis2_metadata"].message
+    assert "category option combo" not in message
+
+    # Without a data set, a category option combo is still checked against its data element.
+    client.data_set = {"dataElements": [client.data_set["dataSetElements"][0]["dataElement"]]}
+    unset = {key: value for key, value in _SETTINGS.items() if key != "data_set"}
+    for spec_id, chosen, status in (("no-set", series, "pass"), ("no-set-wrong", foreign, "fail")):
+        spec = _spec(id=spec_id, destination={"plugin": "dhis2", "settings": {**unset, "series": chosen}})
+        check = _by_id(service.validate_pipeline(store.create_record(spec)))["dhis2_metadata"]
+        assert check.status == status, check.message
+    assert "OtherCOC001" in check.message
 
 
 def test_validation_rejects_wrong_connection_or_non_polygon_collection(
@@ -623,7 +662,7 @@ def test_validation_reports_an_invalid_scheduler_configuration(instance: None, m
 
 
 def test_validation_reports_an_unreadable_schedule_store(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.scheduler import store as schedule_store
+    from open_geo_service.scheduler import store as schedule_store
 
     _dhis2(monkeypatch)
     api_config._cache["scheduler"] = {"enabled": True}  # type: ignore[index]
@@ -650,7 +689,7 @@ def test_validation_names_the_source_schedule_and_the_delivery_policy(
 def test_validation_fails_when_declared_dhis2_dataset_cannot_be_read(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
     check = _by_id(service.validate_pipeline(store.create_record(_spec())))["dhis2_metadata"]
@@ -713,19 +752,19 @@ class _DropPlugin(BaseExportPlugin):
 
 
 def _only_drop(monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
+    import open_geo_service.exports.registry as registry
+    import open_geo_service.exports.service as export_service
 
     plugin = _DropPlugin()
     monkeypatch.setattr(registry, "load_export_plugins", lambda: {"drop": plugin})
     monkeypatch.setattr(export_service, "load_export_plugins", lambda: {"drop": plugin})
 
 
-def test_approval_digest_includes_plugin_identity_and_resolved_export(
+def test_approval_digest_includes_plugin_identity_and_resolved_destination(
     instance: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
+    import open_geo_service.exports.registry as registry
+    import open_geo_service.exports.service as export_service
 
     plugin = _DropPlugin()
     plugin.version = "1"
@@ -964,7 +1003,6 @@ def test_the_core_needs_no_dhis2_identifiers(instance: None, monkeypatch: pytest
         "destination",
         "folder",
         "schedule",
-        "configuration",
         "delivery",
     ]
     assert result.export == {"dataset": "rain_monthly", "id": "rain-to-dhis2", "plugin": "drop"}
@@ -996,7 +1034,7 @@ def test_destination_settings_are_validated_by_the_plugin_schema(
 
 
 def _envelope(frame: pd.DataFrame) -> Any:
-    from open_climate_service.openeo.execution import SaveResultEnvelope
+    from open_geo_service.openeo.execution import SaveResultEnvelope
 
     envelope = SaveResultEnvelope(frame, "DHIS2JSON", {"export": "rain-to-dhis2"})
     envelope.provenance = {"sources": [{"collection_id": "rain_monthly"}], "spatial_aggregations": ["mean"]}
@@ -1016,7 +1054,7 @@ def _frame() -> pd.DataFrame:
 @pytest.fixture
 def executed(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Synchronous graph execution returning a monthly frame; records the graphs it ran."""
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     graphs: list[dict[str, Any]] = []
 
@@ -1055,7 +1093,7 @@ def test_dry_run_executes_the_run_graph_and_folds_the_report(
 
 
 def test_dry_run_applies_the_export_data_cadence_gate(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     daily = pd.DataFrame(
         {"geometry": [_OU[0], _OU[0]], "t": pd.to_datetime(["2025-01-01", "2025-01-02"]), "tp": [1.5, 2.0]}
@@ -1080,7 +1118,7 @@ def test_dry_run_of_a_destination_without_dry_run_support_only_renders(
 
 @pytest.fixture
 def client(instance: None) -> TestClient:
-    from open_climate_service.main import app
+    from open_geo_service.main import app
 
     return TestClient(app)
 
@@ -1148,14 +1186,20 @@ class _LookupClient(_FakeClient):
     def get(self, path: str, *, params: Any = None) -> dict[str, Any]:
         self.gets.append((path, dict(params or {})))
         if path == "/api/dataSets":
-            return {"dataSets": [{"id": "N63vVmt2uY0", "displayName": "OCS test", "periodType": "Monthly"}]}
+            return {"dataSets": [{"id": "N63vVmt2uY0", "displayName": "OGS test", "periodType": "Monthly"}]}
         if path == "/api/dataElements":
             return {"dataElements": [{"id": _ELEMENT, "displayName": "Rainfall total", "valueType": "NUMBER"}]}
+        combos = {f"/api/dataElements/{_ELEMENT}": ("Sex", {_FEMALE: "Female", _MALE: "Male"})}
+        combos["/api/dataSets/N63vVmt2uY0"] = ("Partner", {_AOC: "Partner A"})
+        if path in combos and str((params or {}).get("fields", "")).startswith("categoryCombo"):
+            name, options = combos[path]
+            entries = [{"id": uid, "displayName": label} for uid, label in options.items()]
+            return {"categoryCombo": {"displayName": name, "categoryOptionCombos": entries}}
         return super().get(path, params=params)
 
 
 def _dhis2_lookups(monkeypatch: pytest.MonkeyPatch) -> _LookupClient:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     original = _dhis2(monkeypatch)
     client = _LookupClient(original.data_set, original.summary)
@@ -1164,7 +1208,7 @@ def _dhis2_lookups(monkeypatch: pytest.MonkeyPatch) -> _LookupClient:
 
 
 def test_lookup_widget_applies_only_to_plain_string_fields() -> None:
-    from open_climate_service.exports.base import PipelineSettingsForm, SettingsFormField
+    from open_geo_service.exports.base import PipelineSettingsForm, SettingsFormField
 
     schema = {
         "type": "object",
@@ -1207,7 +1251,7 @@ def test_dhis2_lookups_search_by_name_narrow_to_the_data_set_and_resolve_labels(
     client = _dhis2_lookups(monkeypatch)
 
     sets = dhis2_destination.lookup_options("data_sets", {"connection": "local"}, " child ")
-    assert [(o.value, o.label, o.detail) for o in sets] == [("N63vVmt2uY0", "OCS test", "monthly")]
+    assert [(o.value, o.label, o.detail) for o in sets] == [("N63vVmt2uY0", "OGS test", "monthly")]
     path, params = client.gets[-1]
     assert path == "/api/dataSets" and params["filter"] == ["identifiable:token:child"]
     assert params["pageSize"] == 20 and "periodType" in params["fields"]
@@ -1229,6 +1273,25 @@ def test_dhis2_lookups_search_by_name_narrow_to_the_data_set_and_resolve_labels(
     assert params["filter"] == f"id:in:[{_ELEMENT},AAAAAAAAAAA]" and params["paging"] == "false"
     assert dhis2_destination.lookup_labels("data_sets", {"connection": "local"}, []) == {}
     assert len(client.gets) == 4, "no values, no request"
+
+    # A disaggregation follows the data element chosen in the same row; an attribute, the data set.
+    row = {"data_element": _ELEMENT}
+    combos = dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "FEM", row)
+    assert [(o.value, o.label, o.detail) for o in combos] == [(_FEMALE, "Female", "Sex")]
+    assert len(dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", row)) == 2
+    attributes = dhis2_destination.lookup_options("attribute_option_combos", {"connection": "local", **_SETTINGS}, "")
+    assert [o.value for o in attributes] == [_AOC]
+    # In a data set that gives the element another category combo, that combo's option combos are offered.
+    client.data_set["dataSetElements"][0]["categoryCombo"] = {
+        "displayName": "Age",
+        "categoryOptionCombos": [{"id": "UnderFive01", "displayName": "Under 5"}],
+    }
+    in_set = dhis2_destination.lookup_options("category_option_combos", {"connection": "local", **_SETTINGS}, "", row)
+    assert [(o.value, o.label, o.detail) for o in in_set] == [("UnderFive01", "Under 5", "Age")]
+    with pytest.raises(ValueError, match="choose this series' data element first"):
+        dhis2_destination.lookup_options("category_option_combos", {"connection": "local"}, "", {})
+    with pytest.raises(ValueError, match="choose a data set first"):
+        dhis2_destination.lookup_options("attribute_option_combos", {"connection": "local"}, "")
 
     with pytest.raises(ValueError, match="choose a DHIS2 connection first"):
         dhis2_destination.lookup_options("data_sets", {}, "x")
@@ -1254,6 +1317,18 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
         "dataSetElements.dataSet.id:eq:N63vVmt2uY0",
     ]
 
+    # The asking field names its row, so the search sees that row's data element.
+    row = {"dest.connection": "local", "dest.series.0.data_element": _ELEMENT, "dest.series.1.data_element": ""}
+    combos = client.post(
+        "/pipelines/lookups/dhis2/category_option_combos",
+        data={**row, "field": "dest.series.0.category_option_combo", "q": "male"},
+    )
+    assert [option["value"] for option in combos.json()["options"]] == [_FEMALE, _MALE]
+    empty_row = client.post(
+        "/pipelines/lookups/dhis2/category_option_combos", data={**row, "field": "dest.series.1.category_option_combo"}
+    )
+    assert empty_row.status_code == 400 and "data element first" in empty_row.json()["detail"]
+
     missing = client.post("/pipelines/lookups/dhis2/data_sets", data={"q": "rain"})
     assert missing.status_code == 400 and "choose a DHIS2 connection first" in missing.json()["detail"]
     unknown = client.post("/pipelines/lookups/dhis2/users", data={"dest.connection": "local"})
@@ -1267,6 +1342,35 @@ def test_lookup_route_searches_the_destination_with_the_form_so_far(
     monkeypatch.setattr(fake, "get", _down)
     failed = client.post("/pipelines/lookups/dhis2/data_sets", data={"dest.connection": "local", "q": "x"})
     assert failed.status_code == 502 and "connection refused" in failed.json()["detail"]
+
+    class _LegacyLookupPlugin:
+        """A third-party destination implementing the original lookup hook."""
+
+        def destination_settings_schema(self) -> dict[str, Any]:
+            rule = {"type": "object", "properties": {"target": {"type": "string"}}}
+            return {
+                "type": "object",
+                "properties": {"folder": {"type": "string"}, "rules": {"type": "array", "items": rule}},
+            }
+
+        def pipeline_settings_form(self) -> PipelineSettingsForm:
+            return PipelineSettingsForm(
+                title="Legacy destination",
+                fields=(
+                    SettingsFormField(name="folder", widget="lookup", lookup="folders"),
+                    SettingsFormField(name="rules.target", widget="lookup", lookup="folders"),
+                ),
+            )
+
+        def lookup_options(self, lookup: str, settings: dict[str, Any], query: str) -> list[LookupOption]:
+            return [LookupOption(value=settings.get("folder", ""), label=query, detail=lookup)]
+
+    monkeypatch.setattr(service, "destination_plugins", lambda: {"legacy": _LegacyLookupPlugin()})
+    legacy = client.post("/pipelines/lookups/legacy/folders", data={"dest.folder": "/srv/drop", "q": "archive"})
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json() == {"options": [{"value": "/srv/drop", "label": "archive", "detail": "folders"}]}
+    in_row = {"dest.folder": "/srv/drop", "dest.rules.0.target": "", "field": "dest.rules.0.target", "q": "archive"}
+    assert client.post("/pipelines/lookups/legacy/folders", data=in_row).json() == legacy.json()
 
     monkeypatch.setattr(api_config, "is_read_only", lambda: True)
     assert client.post("/pipelines/lookups/dhis2/data_sets", data={"dest.connection": "local"}).status_code == 403
@@ -1288,7 +1392,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     record = store.get_record("rain-to-dhis2")
     assert record is not None and record.validation is not None
     assert record.validation.labels == {
-        "data_set": {"N63vVmt2uY0": "OCS test"},
+        "data_set": {"N63vVmt2uY0": "OGS test"},
         "series.data_element": {_ELEMENT: "Rainfall total"},
     }
     label_requests = [params for path, params in fake.gets if path in {"/api/dataSets", "/api/dataElements"}]
@@ -1297,7 +1401,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     shown = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "text/html"})
     assert shown.status_code == 200
     assert "<dt>Data set</dt>" in shown.text
-    assert 'OCS test <span class="mono note">N63vVmt2uY0</span>' in shown.text
+    assert 'OGS test <span class="mono note">N63vVmt2uY0</span>' in shown.text
     assert f'Rainfall total <span class="mono note">{_ELEMENT}</span>' in shown.text
     assert "Settings as JSON" in shown.text and "&#34;data_element&#34;: &#34;LeePHYkZwBk&#34;" in shown.text
     assert "<dt>Connection</dt>" in shown.text and '<span class="mono">local</span>' in shown.text
@@ -1306,14 +1410,14 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     assert destination["plugin"] == "dhis2" and destination["title"] == "DHIS2"
     assert [(item["name"], item["value"], item["label"]) for item in destination["settings"][:2]] == [
         ("connection", "local", None),
-        ("data_set", "N63vVmt2uY0", "OCS test"),
+        ("data_set", "N63vVmt2uY0", "OGS test"),
     ]
     assert destination["settings"][2]["rows"] == [
         [{"name": "data_element", "title": "Data element", "value": _ELEMENT, "label": "Rainfall total", "rows": None}]
     ]
 
     edit_page = client.get("/pipelines/rain-to-dhis2/edit", headers={"Accept": "text/html"})
-    assert 'value="N63vVmt2uY0" data-lookup="data_sets" data-label="OCS test"' in edit_page.text
+    assert 'value="N63vVmt2uY0" data-lookup="data_sets" data-label="OGS test"' in edit_page.text
     assert f'value="{_ELEMENT}" data-lookup="data_elements" data-label="Rainfall total"' in edit_page.text
     assert 'name="dest.series.1.data_element" value="" data-lookup="data_elements" data-label=""' in edit_page.text
 
@@ -1329,7 +1433,7 @@ def test_validation_keeps_lookup_labels_and_the_pages_show_them(
     monkeypatch.setattr(store, "get_record", lambda pipeline_id: record.model_copy(update={"validation": validation}))
     shown = client.get("/pipelines/rain-to-dhis2", headers={"Accept": "text/html"})
     assert '<span class="mono">N63vVmt2uY0</span>' in shown.text
-    assert 'OCS test <span class="mono note">' not in shown.text
+    assert 'OGS test <span class="mono note">' not in shown.text
 
 
 def test_page_folds_a_green_validation_and_opens_a_red_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1583,10 +1687,8 @@ def _approve(pipeline_id: str = "rain-to-dhis2", *, live: bool = False) -> Pipel
     return record
 
 
-def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
-    instance: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+def test_a_validated_pipeline_owns_its_named_export(instance: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_geo_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
     with pytest.raises(ValueError, match="Unknown export"):
@@ -1603,19 +1705,9 @@ def test_a_validated_pipeline_owns_its_named_export_and_a_clash_is_refused(
     with pytest.raises(ValueError, match="Unknown export"):
         resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
 
-    store.delete_record("rain-to-dhis2")
-    _validated()
-    api_config._cache["exports"] = [  # type: ignore[index]
-        {"id": "rain-to-dhis2", "plugin": "dhis2", "period_type": "monthly", "series": [{"data_element": _ELEMENT}]}
-    ]
-    with pytest.raises(ValueError, match="declared in the configuration and owned by the pipeline"):
-        resolve_named_export("DHIS2JSON", {"export": "rain-to-dhis2"})
-    check = _by_id(service.validate_pipeline(store.get_record("rain-to-dhis2")))["configuration"]  # type: ignore[arg-type]
-    assert check.status == "fail" and "already configured" in check.message
-
 
 def test_save_refuses_an_invalid_pipeline(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
     refused = client.post("/pipelines", json=_SPEC)
@@ -1640,7 +1732,7 @@ def test_edit_keeps_the_approval_only_for_the_same_bindings(
     renamed = client.put("/pipelines/rain-to-dhis2", json={**_SPEC, "name": "Renamed", "revision": 1})
     assert renamed.status_code == 200 and renamed.json()["approved"] is True
 
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     good = dhis2_module.get_connection
     monkeypatch.setattr(dhis2_module, "get_connection", lambda connection_id: (_ for _ in ()).throw(OSError("down")))
@@ -1712,7 +1804,7 @@ class _FakeOpenEO:
     """A job service that records what it was asked to run and finishes nothing by itself."""
 
     def __init__(self) -> None:
-        from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+        from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 
         self.jobs: dict[str, OpenEOJobRecord] = {}
         self.started: list[str] = []
@@ -1723,7 +1815,7 @@ class _FakeOpenEO:
     def create_triggered_job(
         self, body: Any, *, source_event_id: str, trigger_id: str, max_attempts: int = 1
     ) -> tuple[Any, bool]:
-        from open_climate_service.openeo.jobs import triggered_job_id
+        from open_geo_service.openeo.jobs import triggered_job_id
 
         job_id = triggered_job_id(source_event_id, trigger_id)
         pipeline_id = trigger_id.removeprefix(runner.TRIGGER_PREFIX)
@@ -1763,7 +1855,7 @@ class _FakeOpenEO:
 
 @pytest.fixture
 def openeo(monkeypatch: pytest.MonkeyPatch) -> _FakeOpenEO:
-    import open_climate_service.openeo.jobs as jobs_module
+    import open_geo_service.openeo.jobs as jobs_module
 
     fake = _FakeOpenEO()
     monkeypatch.setattr(jobs_module, "get_openeo_job_service", lambda: fake)
@@ -1787,7 +1879,7 @@ class _Deliveries(list[tuple[str, str, bool, str]]):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail=f"Job '{delivery_id}' not found")
-        from open_climate_service.jobs.models import JobError, JobStatus
+        from open_geo_service.jobs.models import JobError, JobStatus
 
         error = JobError(type="ExportError", message="DHIS2 refused the payload") if status == "failed" else None
         return SimpleNamespace(status=JobStatus(status), result=result, error=error)
@@ -1795,8 +1887,8 @@ class _Deliveries(list[tuple[str, str, bool, str]]):
 
 @pytest.fixture
 def deliveries(monkeypatch: pytest.MonkeyPatch) -> _Deliveries:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.jobs import service as job_service_module
+    import open_geo_service.exports.delivery as delivery_module
+    from open_geo_service.jobs import service as job_service_module
 
     calls = _Deliveries()
 
@@ -1891,21 +1983,21 @@ def test_run_once_stores_its_intent_first_and_delivers_once(
     assert as_json["latest_run"]["run_id"] == run["run_id"] and as_json["latest_run"]["job_status"] == "finished"
     assert [item["run_id"] for item in client.get(as_json["links"]["runs"]).json()["items"]] == [run["run_id"]]
 
-    # Behind a proxy prefix every link leads into OCS, as the Location header does.
-    mounted = mounted_client_factory("/ocs")
+    # Behind a proxy prefix every link leads into OGS, as the Location header does.
+    mounted = mounted_client_factory("/geoservice")
     prefixed = mounted.post("/pipelines/rain-to-dhis2/runs", json={"start": "2025-02-01", "end": "2025-02-28"})
     links = prefixed.json()["links"]
     assert (
         prefixed.headers["Location"]
         == links["self"]
-        == f"/ocs/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
+        == f"/geoservice/pipelines/rain-to-dhis2/runs/{prefixed.json()['run_id']}"
     )
-    assert links["job"] == f"/ocs/jobs/{prefixed.json()['job_id']}"
+    assert links["job"] == f"/geoservice/jobs/{prefixed.json()['job_id']}"
     listed = mounted.get("/pipelines/rain-to-dhis2/runs").json()["items"]
-    assert listed[1]["links"]["delivery"] == "/ocs/exports/rain-to-dhis2/jobs/delivery-1"
+    assert listed[1]["links"]["delivery"] == "/geoservice/exports/rain-to-dhis2/jobs/delivery-1"
     assert mounted.get("/pipelines/rain-to-dhis2", headers={"Accept": "application/json"}).json()["links"] == {
-        "self": "/ocs/pipelines/rain-to-dhis2",
-        "runs": "/ocs/pipelines/rain-to-dhis2/runs",
+        "self": "/geoservice/pipelines/rain-to-dhis2",
+        "runs": "/geoservice/pipelines/rain-to-dhis2/runs",
     }
     operation = client.get("/openapi.json").json()["paths"]["/pipelines/{pipeline_id}/runs"]["post"]
     body = operation["requestBody"]["content"]["application/json"]["schema"]
@@ -1920,7 +2012,7 @@ def test_a_failed_hand_off_is_recorded_and_recoverable(
 ) -> None:
     from fastapi import HTTPException
 
-    import open_climate_service.exports.delivery as delivery_module
+    import open_geo_service.exports.delivery as delivery_module
 
     def refuse(export_id: str, source_job_id: str, dry_run: bool, idempotency_key: str) -> tuple[str, bool]:
         raise HTTPException(status_code=409, detail="No result for this job")
@@ -2009,7 +2101,7 @@ def test_delivery_hand_off_recovers_transient_failures_and_stops_on_permanent_on
 ) -> None:
     from fastapi import HTTPException
 
-    import open_climate_service.exports.delivery as delivery_module
+    import open_geo_service.exports.delivery as delivery_module
 
     _dhis2(monkeypatch)
     _validated()
@@ -2147,7 +2239,7 @@ def test_redelivery_is_refused_where_a_repeat_could_duplicate(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2195,13 +2287,83 @@ def test_handed_off_is_not_delivered_until_the_delivery_job_confirms(
     assert [runner._settled(by_id[run_id], superseded) for run_id in runs] == [True, False, False, False, False, False]
 
 
+def test_a_failing_pipeline_posts_once_and_again_when_it_recovers_or_is_resolved(
+    instance: None,
+    openeo: _FakeOpenEO,
+    deliveries: _Deliveries,
+    webhook: WebhookReceiver,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from open_geo_service.jobs.events import persisted_events
+    from open_geo_service.notifications import webhook as notifications
+
+    _dhis2(monkeypatch)
+    _validated()
+    monkeypatch.setattr(runner, "_event_consumer", notifications.consume)
+
+    def run(month: int, delivery: str) -> runner.PipelineRun:
+        interval = runner.RunContext(start=f"2025-0{month}-01", end=f"2025-0{month}-28")
+        started = runner.run_pipeline("rain-to-dhis2", interval)
+        runner.on_job_finished(openeo.finish(started.job_id))
+        if delivery == "failed":
+            deliveries.outcomes[f"delivery-{len(deliveries)}"] = ("failed", None)
+        runner.recover_runs()
+        return started
+
+    webhook.enabled = False
+    run(1, "failed")  # before notifications were configured: history, never posted
+    run(2, "successful")
+    webhook.enabled = True
+    notifications.replay()
+    failing = run(3, "failed")
+    run(4, "failed")  # still the same failure episode
+    webhook.status = 503
+    recovered = run(5, "successful")
+    webhook.status = 200
+    notifications.replay()  # the refused recovery is not due again yet
+    later = datetime.now(UTC) + timedelta(minutes=3)
+    monkeypatch.setattr(notifications, "utc_now", lambda: later)
+    notifications.replay()
+    older = run(6, "failed")
+    newer = run(7, "failed")
+    runner.acknowledge_delivery("rain-to-dhis2", older.run_id)  # the newer run still fails
+    runner.acknowledge_delivery("rain-to-dhis2", newer.run_id)
+
+    outcomes = [
+        event.type.removeprefix("automation.") for event in persisted_events() if event.type.startswith("automation.")
+    ]
+    assert outcomes == ["failed", "succeeded", "failed", "succeeded", "failed", "resolved"]
+    assert [(status, body["status"]) for status, _, body in webhook.posts] == [
+        (200, "failed"),
+        (503, "recovered"),
+        (200, "recovered"),
+        (200, "failed"),
+        (200, "resolved"),
+    ]
+    assert webhook.posts[-1][1] == f"{newer.run_id}:0"
+    assert webhook.posts[-1][2]["text"] == (
+        "Pipeline 'rain-to-dhis2' failure was acknowledged by an operator /pipelines/rain-to-dhis2"
+    )
+    (_, failure_key, failure), (_, first_key, _), (_, retry_key, recovery) = webhook.posts[:3]
+    assert failure_key == failure["event"] == f"{failing.run_id}:0"
+    assert first_key == retry_key == f"{recovered.run_id}:0"
+    assert failure["run"] == failing.run_id and failure["details"] == f"/pipelines/rain-to-dhis2/runs/{failing.run_id}"
+    assert (failure["automation"], failure["id"]) == ("pipeline", "rain-to-dhis2")
+    assert failure["link"] == "/pipelines/rain-to-dhis2"
+    assert (failure["stage"], failure["message"]) == ("delivery", "DHIS2 refused the payload")
+    assert failure["text"] == (
+        "Pipeline 'rain-to-dhis2' failed at delivery: DHIS2 refused the payload /pipelines/rain-to-dhis2"
+    )
+    assert recovery["text"] == "Pipeline 'rain-to-dhis2' succeeded again /pipelines/rain-to-dhis2"
+
+
 def test_a_missing_delivery_record_is_unknown_and_resolved_by_an_operator(
     client: TestClient,
     openeo: _FakeOpenEO,
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2241,8 +2403,8 @@ def test_a_refused_redelivery_leaves_the_earlier_round_unchanged(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    import open_geo_service.exports.delivery as delivery_module
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
 
     _dhis2(monkeypatch)
     _validated()
@@ -2351,8 +2513,8 @@ def test_only_refusals_are_permanent(status: int, permanent: bool) -> None:
 def test_a_busy_result_or_export_is_retried_not_given_up(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.delivery as delivery_module
-    from open_climate_service.exports.retention import ResourceBusy
+    import open_geo_service.exports.delivery as delivery_module
+    from open_geo_service.exports.retention import ResourceBusy
 
     assert not runner._is_permanent(ResourceBusy("Source job results are currently in use"))
     _dhis2(monkeypatch)
@@ -2450,7 +2612,7 @@ def test_live_runs_and_deliveries_follow_the_mode(
 
 
 def _update_event(event_id: str = "evt-1", *, dataset_id: str = "rain_monthly", when: datetime | None = None) -> Any:
-    from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
+    from open_geo_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
 
     return JobEvent(
         event_id=event_id,
@@ -2509,7 +2671,7 @@ def test_paused_or_manual_pipelines_ignore_updates(
 
 def _job_with(*events: Any, status: str = "successful", created: datetime | None = None) -> Any:
     """A native job record as the update log holds it."""
-    from open_climate_service.jobs.models import JobStatus
+    from open_geo_service.jobs.models import JobStatus
 
     return SimpleNamespace(events=list(events), status=JobStatus(status), created_at=created or datetime.now(UTC))
 
@@ -2520,7 +2682,7 @@ def test_reconcile_finishes_what_a_restart_interrupted(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2610,7 +2772,7 @@ def test_a_rewrite_runs_the_whole_coverage(
 def test_out_of_order_and_delayed_updates_are_each_run_once(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2649,7 +2811,7 @@ def test_pruned_history_and_restarts_never_replay_an_update(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2683,7 +2845,7 @@ def test_pruned_history_and_restarts_never_replay_an_update(
 def test_an_update_that_failed_to_dispatch_is_retried_and_holds_the_checkpoint(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2764,7 +2926,7 @@ def test_manual_and_update_runs_share_the_bindings_and_the_export(
     deliveries: _Deliveries,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_geo_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
     record = _validated()
@@ -2820,7 +2982,7 @@ def test_a_refused_update_is_listed_with_its_interval(
 def test_an_unreachable_destination_does_not_stop_an_update_run(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import open_climate_service.exports.dhis2 as dhis2_module
+    import open_geo_service.exports.dhis2 as dhis2_module
 
     _dhis2(monkeypatch)
     _validated()
@@ -2833,7 +2995,7 @@ def test_an_unreachable_destination_does_not_stop_an_update_run(
 def test_dispatch_errors_are_bounded_or_skipped_at_once(
     instance: None, openeo: _FakeOpenEO, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs import store as job_store
+    from open_geo_service.jobs import store as job_store
 
     _dhis2(monkeypatch)
     _validated()
@@ -2883,10 +3045,10 @@ def test_an_update_older_than_the_checkpoint_is_not_run_but_listed(
 
 def _openeo_owned_update(event_id: str, *, dataset_id: str = "rain_monthly") -> Any:
     """A full-rewrite update persisted on the openEO job that published the dataset."""
-    from open_climate_service.ingestions.processes import FULL_REWRITE_EVENT_ACTION, dataset_update_event
-    from open_climate_service.jobs.models import JobEvent
-    from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_geo_service.ingestions.processes import FULL_REWRITE_EVENT_ACTION, dataset_update_event
+    from open_geo_service.jobs.models import JobEvent
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 
     draft = dataset_update_event(
         dataset_id=dataset_id,
@@ -2985,8 +3147,8 @@ class _WarehousePlugin(_DropPlugin):
         return f"warehouse://{binding['database']}"
 
     def send(self, payload: bytes, target: Any, *, dry_run: bool = False, context: Any = None) -> Any:
-        from open_climate_service.exports.report import ExportOutcome, ExportReport
-        from open_climate_service.shared.time import utc_now
+        from open_geo_service.exports.report import ExportOutcome, ExportReport
+        from open_geo_service.shared.time import utc_now
 
         self.sent.append((target, dry_run))
         return ExportReport(
@@ -3002,10 +3164,10 @@ class _WarehousePlugin(_DropPlugin):
 def test_the_delivery_target_belongs_to_the_plugin(
     instance: None, monkeypatch: pytest.MonkeyPatch, executed: list[dict[str, Any]]
 ) -> None:
-    import open_climate_service.exports.registry as registry
-    import open_climate_service.exports.service as export_service
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.manifest import target_binding
+    import open_geo_service.exports.registry as registry
+    import open_geo_service.exports.service as export_service
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.manifest import target_binding
 
     plugin = _WarehousePlugin()
     monkeypatch.setattr(registry, "load_export_plugins", lambda: {"warehouse": plugin})
@@ -3032,7 +3194,7 @@ def test_the_delivery_target_belongs_to_the_plugin(
 
 
 def test_a_check_for_an_older_revision_is_never_installed(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports.service import resolve_named_export
+    from open_geo_service.exports.service import resolve_named_export
 
     _dhis2(monkeypatch)
     _validated()
@@ -3083,15 +3245,15 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
     """The real job service and workflow engine, the built-in workflow, and the DHIS2 delivery path with a fake send."""
     from openeo_pg_parser_networkx.process_registry import Process
 
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.report import ExportOutcome, ExportReport
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobStatus
-    from open_climate_service.openeo import execution
-    from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.shared.provenance import record_source
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.report import ExportOutcome, ExportReport
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobStatus
+    from open_geo_service.openeo import execution
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.shared.provenance import record_source
+    from open_geo_service.shared.time import utc_now
 
     monkeypatch.setattr(openeo_jobs, "_JOBS_DIR", tmp_path / "openeo_jobs")
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "data" / "jobs")
@@ -3181,7 +3343,7 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         assert len(live["payload"]["dataValues"]) == 4
 
         # A dataset update goes through the same runner, job service and delivery path.
-        from open_climate_service.exports.delivery_input import lease_export_input
+        from open_geo_service.exports.delivery_input import lease_export_input
 
         runner.consume([_update_event("evt-e2e")])
         automatic = None
@@ -3219,6 +3381,173 @@ def test_end_to_end_a_registered_workflow_dry_runs_and_delivers_live(
         job_service_module.reset_job_service()
 
 
+_TABLE_SPEC: dict[str, Any] = {
+    **_SPEC,
+    "id": "rain-to-table",
+    "name": "Rain by district",
+    "destination": {"plugin": "table", "settings": {"dataset_id": "rain_districts", "name": "Rain by district"}},
+}
+
+
+def test_end_to_end_a_table_pipeline_keeps_rows_in_ogs_and_replaces_revised_values(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The built-in workflow through the real job service into the table store, read back over /tables (CLIM-1554).
+
+    Only data and feature loading are stubbed. The dry run writes nothing; a live run writes one
+    row per feature and period; a dataset update with revised values replaces them.
+    """
+    from openeo_pg_parser_networkx.process_registry import Process
+
+    from open_geo_service.features import services as feature_services
+    from open_geo_service.features import store as feature_store
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs.models import JobStatus
+    from open_geo_service.openeo import execution
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.shared.provenance import record_source
+    from open_geo_service.shared.time import stamp_cadence
+
+    # A real registered collection and record index, so the rows are checked against its ids.
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", tmp_path / "data" / "artifacts")
+    monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", tmp_path / "data" / "artifacts" / "records.json")
+    monkeypatch.setattr(feature_services, "registered_collections", _registered_collections)
+    geometries = [_box(0.5, 0.5, 2.5, 2.5), _box(3.5, 2.5, 5.5, 4.5)]
+    collection = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "properties": {"code": ou, "name": name}, "geometry": geometry}
+            for ou, name, geometry in zip(_OU, ("Bo", "Bombali"), geometries, strict=True)
+        ],
+    }
+    path, _count, geometry_column = feature_store.write_feature_collection(
+        dataset_id="districts", features=collection, id_property="code"
+    )
+    ingestion_services.create_feature_artifact(
+        template={"id": "districts", "name": "Districts", "id_property": "code"},
+        features=collection,
+        store_path=path,
+        crs=feature_store.WGS84,
+        primary_geometry=geometry_column,
+    )
+
+    scale = [1.0]
+
+    def load_collection(id: str | None = None, temporal_extent: Any = None, **_: Any) -> xr.DataArray:
+        record_source(str(id), SimpleNamespace(artifact_id="artifact-1", source_dataset_id=id, path=None))
+        values = np.arange(2 * 4 * 5, dtype="float32").reshape(2, 4, 5) * scale[0]
+        cube = xr.DataArray(
+            values,
+            dims=("t", "y", "x"),
+            coords={
+                "t": np.array(["2025-01-01", "2025-02-01"], dtype="datetime64[ns]"),
+                "y": [1.0, 2.0, 3.0, 4.0],
+                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            },
+            name="tp",
+        )
+        # As the real load_collection stamps the dataset's cadence.
+        return stamp_cadence(cube, "monthly")
+
+    def load_features(id: str, version: str | None = None, **_: Any) -> dict[str, Any]:
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "id": ou, "geometry": geometry}
+                for ou, geometry in zip(_OU, geometries, strict=True)
+            ],
+        }
+
+    mocked = execution._RegistryOverlay(
+        execution._build_process_registry(),
+        {
+            "load_collection": Process(spec={}, implementation=load_collection),
+            "load_features": Process(spec={}, implementation=load_features),
+        },
+    )
+    monkeypatch.setattr(execution, "_build_process_registry", lambda: mocked)
+    job_service = openeo_jobs.OpenEOJobService()
+    monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: job_service)
+    job_service.set_finished_listener(runner.on_job_finished)
+    native = job_service_module.get_job_service()
+    deadline = time.monotonic() + 30
+
+    def current() -> list[tuple[str, str, float]]:
+        rows = client.get("/tables/rain_districts/rows").json()["items"]
+        return [(row["feature_id"], row["period"], row["value"]) for row in rows]
+
+    try:
+        assert client.post("/pipelines", json=_TABLE_SPEC).status_code == 201
+        dry = client.post("/pipelines/rain-to-table/dry-run", json={"start": "2025-01-01", "end": "2025-02-28"}).json()
+        assert dry["error"] is None and dry["values"] == 4, dry
+        assert dry["periods"] == ["2025-01", "2025-02"]
+        assert dry["report"]["outcome"] == "dry_run"
+        assert dry["sample"][0]["feature"] == {"value": _OU[0], "label": "Bo"}
+        assert dry["sample"][0]["reducer"] == "mean"
+        # A dry run writes nothing.
+        assert not (tmp_path / "data" / "tables").exists()
+        assert "rain_districts" not in ingestion_services.group_datasets()
+        assert client.get("/tables/rain_districts/rows").status_code == 404
+
+        assert (
+            client.post("/pipelines/rain-to-table/mode/live", headers={"Accept": "application/json"}).status_code == 200
+        )
+        run = client.post(
+            "/pipelines/rain-to-table/runs", json={"start": "2025-01-01", "end": "2025-02-28", "mode": "live"}
+        )
+        assert run.status_code == 202, run.text
+        polled = run.json()
+        while polled["status"] not in {"succeeded", "needs_attention", "failed", "canceled"}:
+            assert time.monotonic() < deadline, polled
+            time.sleep(0.05)
+            polled = client.get(run.headers["Location"]).json()
+        assert polled["status"] == "succeeded" and polled["delivery_result"] == "delivered", polled
+
+        first = current()
+        assert [(feature, period) for feature, period, _ in first] == [
+            (_OU[0], "2025-01"),
+            (_OU[0], "2025-02"),
+            (_OU[1], "2025-01"),
+            (_OU[1], "2025-02"),
+        ]
+        row = client.get("/tables/rain_districts/rows").json()["items"][0]
+        assert row["feature_name"] == "Bo" and row["reducer"] == "mean" and row["collection_id"] == "districts"
+        listed = client.get("/datasets/rain_districts").json()
+        assert listed["itemType"] == "table" and listed["dataset_name"] == "Rain by district"
+        assert listed["period_type"] == "monthly" and listed["units"] == "mm"
+        # The record names the run that computed the rows, its graph and the dataset it read.
+        produced = listed["provenance"]
+        assert produced["producer_job_id"] == polled["job_id"], produced
+        assert produced["process_sha256"] and [item["dataset_id"] for item in produced["inputs"]] == ["rain_monthly"]
+
+        # The source is revised: the update runs the pipeline again, and the revised values are current.
+        scale[0] = 10.0
+        runner.consume([_update_event("evt-revised")])
+        automatic = None
+        while time.monotonic() < deadline:
+            record = store.get_record("rain-to-table")
+            automatic = next((run for run in record.runs if run.event_id == "evt-revised"), None) if record else None
+            if automatic is not None and automatic.delivery_job_id:
+                break
+            time.sleep(0.05)
+        assert automatic is not None and automatic.delivery_job_id is not None, automatic
+        delivery = native.get_job_or_404(automatic.delivery_job_id)
+        while delivery.status not in {JobStatus.SUCCESSFUL, JobStatus.FAILED, JobStatus.CANCELLED}:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+            delivery = native.get_job_or_404(automatic.delivery_job_id)
+        assert delivery.status == JobStatus.SUCCESSFUL, delivery.error
+
+        revised = current()
+        assert [value for _, _, value in revised] == [value * 10 for _, _, value in first]
+        # The revised values replace the first ones: still one row per feature and period.
+        assert len(revised) == 4
+    finally:
+        job_service.shutdown()
+        job_service_module.reset_job_service()
+
+
 def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, datasets: list[Any]
 ) -> None:
@@ -3229,18 +3558,18 @@ def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
     """
     from openeo_pg_parser_networkx.process_registry import Process
 
-    from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
-    from open_climate_service.data_registry.services import datasets as registry
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.report import ExportOutcome, ExportReport
-    from open_climate_service.ingestions import services as ingestion_services
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs.models import JobStatus
-    from open_climate_service.openeo import execution
-    from open_climate_service.openeo import jobs as openeo_jobs
-    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-    from open_climate_service.shared.provenance import record_source
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
+    from open_geo_service.data_registry.services import datasets as registry
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.report import ExportOutcome, ExportReport
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs.models import JobStatus
+    from open_geo_service.openeo import execution
+    from open_geo_service.openeo import jobs as openeo_jobs
+    from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_geo_service.shared.provenance import record_source
+    from open_geo_service.shared.time import utc_now
 
     # A temporary template registry and store directory, as `managed_instance` provides.
     configs = tmp_path / "managed" / "plugins" / "rasters"
@@ -3255,14 +3584,14 @@ def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
         "  sync:\n"
         "    kind: temporal\n"
         "  ingestion:\n"
-        "    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
+        "    plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
     registry.reset_template_caches()
     (tmp_path / "managed" / "rasters").mkdir()
     monkeypatch.setattr(
-        "open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "managed" / "rasters"
+        "open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "managed" / "rasters"
     )
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(ingestion_services, "ARTIFACTS_INDEX_PATH", tmp_path / "artifacts" / "records.json")
@@ -3475,7 +3804,7 @@ def test_feature_names_read_only_the_id_and_name_columns(monkeypatch: pytest.Mon
     import pyarrow.parquet as pq
     from shapely.geometry import Point
 
-    from open_climate_service.features import services as feature_services
+    from open_geo_service.features import services as feature_services
 
     path = tmp_path / "districts.parquet"
     gpd.GeoDataFrame(

@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.system import templates as landing
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -23,7 +23,7 @@ def _template(template_id: str, **fields: Any) -> dict[str, Any]:
 
 
 def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
-    from open_climate_service.ingestions.schemas import DatasetDetailRecord
+    from open_geo_service.ingestions.schemas import DatasetDetailRecord
 
     values: dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -88,7 +88,7 @@ def _visible_text(html: str) -> str:
 
 
 def _workflow_record(**fields: Any) -> Any:
-    from open_climate_service.openeo.schemas import WorkflowRecord
+    from open_geo_service.openeo.schemas import WorkflowRecord
 
     values: dict[str, Any] = {
         "id": "aggregate_to_chap_csv",
@@ -132,8 +132,8 @@ def test_workflow_descriptions_are_escaped() -> None:
     assert str(context["blocks"][0]["html"]) == "&lt;script&gt;x&lt;/script&gt; <code>&lt;b&gt;</code>"
 
 
-def test_the_workflow_page_lists_outputs_and_triggers() -> None:
-    from open_climate_service.automation.config import WorkflowTrigger
+def test_the_workflow_page_lists_outputs_and_the_datasets_it_keeps_current() -> None:
+    from open_geo_service.data_registry.recipes import Recipe
 
     record = _workflow_record(id="climate_normal")
     templates = [
@@ -141,16 +141,20 @@ def test_the_workflow_page_lists_outputs_and_triggers() -> None:
         _template("normal_a", name="A normal", produced_by="climate_normal"),
         _template("other", produced_by="temporal_change"),
     ]
-    triggers = [
-        WorkflowTrigger(id="refresh", on_update_of="chirps_monthly", workflow_id="climate_normal", arguments={"x": 1}),
-        WorkflowTrigger(id="elsewhere", on_update_of="chirps_monthly", workflow_id="temporal_change"),
+    recipes = [
+        Recipe(output="normal_b", workflow="climate_normal", arguments={"x": "chirps_monthly"}, refresh_on="x"),
+        Recipe(output="normal_a", workflow="climate_normal", arguments={"x": "chirps_monthly"}, refresh_on="x"),
+        Recipe(output="change", workflow="temporal_change", arguments={"x": "chirps_monthly"}, refresh_on="x"),
+        Recipe(output="fixed", workflow="climate_normal", arguments={"x": "chirps_monthly"}),
     ]
 
-    context = landing._workflow_page_context(record, templates, [_record("normal_b")], triggers)
+    context = landing._workflow_page_context(record, templates, [_record("normal_b")], recipes)
 
     assert [(o["id"], o["ingested"]) for o in context["outputs"]] == [("normal_a", False), ("normal_b", True)]
-    assert [t["id"] for t in context["triggers"]] == ["refresh"]
-    assert context["triggers"][0]["held"] is False
+    # Only this workflow's recipes that refresh on an input, of derived datasets that exist, are kept current.
+    assert [(r["output"], r["input"], r["held"]) for r in context["refreshes"]] == [
+        ("normal_b", "chirps_monthly", False)
+    ]
 
 
 def test_the_workflow_page_is_served(client: TestClient) -> None:
@@ -186,15 +190,15 @@ def test_processes_are_tagged_with_their_origin() -> None:
 
     assert processes["load_collection"]["origin"] == "core"
     assert processes["add"]["origin"] == "core"
-    assert processes["spi"]["origin"] == "ocs"
+    assert processes["spi"]["origin"] == "geoservice"
     assert {"xclim", "earthkit"} <= {p["origin"] for p in processes.values()}
-    # OCS first, openEO core last, so the default view leads with what is specific to OCS.
+    # OGS first, openEO core last, so the default view leads with what is specific to OGS.
     origins = [p["origin"] for p in processes.values()]
-    assert origins[0] == "ocs" and origins[-1] == "core"
+    assert origins[0] == "geoservice" and origins[-1] == "core"
 
 
-def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
+def test_a_plugin_overriding_an_indicator_counts_as_ogs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_geo_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
 
     def indicator() -> None: ...
 
@@ -205,7 +209,7 @@ def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.Monk
     monkeypatch.setattr(earthkit_processes, "scan", lambda: [])
     monkeypatch.setattr(plugin_processes, "load_plugin_processes", lambda: [("tg_mean", override)])
 
-    assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "ocs", "abs": "core"}
+    assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "geoservice", "abs": "core"}
 
 
 # --- the process page --------------------------------------------------------------------
@@ -410,7 +414,7 @@ def test_the_process_list_serves_a_page_only_to_browsers(client: TestClient, acc
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html" if html else "application/json")
-    assert response.headers["vary"] == "Accept"
+    assert "Accept" in response.headers["vary"].split(", ")
     if html:
         assert 'data-views="processes"' in response.text
         assert "data-origin=" in response.text, "the origin filter needs the origins passed in"

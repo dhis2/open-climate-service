@@ -1,0 +1,278 @@
+"""Lightweight client for a running Open Geo Service instance.
+
+The base install needs only ``httpx`` and ``pystac``. With it you can discover
+published datasets, list the available processes and workflows, and run process
+graphs over HTTP — everything that talks to a remote instance via REST::
+
+    pip install open-geo-service             # talk to an instance (REST only)
+    pip install open-geo-service[xarray]     # + open datasets as xarray
+    pip install open-geo-service[server]     # run your own instance
+
+Opening a published dataset as an in-memory :class:`xarray.Dataset` additionally
+requires the optional ``xarray`` extra; :meth:`GeoService.open_dataset` raises a
+clear error pointing to it when the dependency is missing.
+
+Example:
+    >>> from open_geo_service import GeoService
+    >>> service = GeoService("https://my-instance.example.org")
+    >>> service.datasets()  # discover published collections
+    >>> ds = service.open_dataset("chirps3_precipitation_daily")  # needs [xarray]
+    >>> service.workflows()  # list reusable workflows (UDPs)
+    >>> service.execute(
+    ...     {  # run a process graph synchronously
+    ...         "agg": {
+    ...             "process_id": "aggregate_to_dhis2_json",
+    ...             "arguments": {...},
+    ...             "result": True,
+    ...         }
+    ...     }
+    ... )
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
+
+import httpx
+
+if TYPE_CHECKING:
+    import xarray as xr
+
+_FALLBACK_BASE_URL = "http://127.0.0.1:9000"
+_DEFAULT_TIMEOUT = 30.0
+# Synchronous process graphs (POST /result) can run for minutes — allow more headroom.
+_RESULT_TIMEOUT = 300.0
+
+_XARRAY_INSTALL_HINT = (
+    "Opening datasets as xarray needs extra dependencies that are not part of the "
+    "base client. Install them with: pip install 'open-geo-service[xarray]'"
+)
+
+
+def _default_base_url() -> str:
+    return os.environ.get("GEOSERVICE_BASE_URL", _FALLBACK_BASE_URL)
+
+
+def _id_from_href(href: str) -> str:
+    """Extract the dataset id from a STAC child href: the directory holding `collection.json`."""
+    segments = urlparse(href).path.rstrip("/").split("/")
+    return segments[-2] if segments[-1] == "collection.json" and len(segments) > 1 else segments[-1]
+
+
+def _child_links(catalog: Any, source: str) -> list[dict]:
+    """Extract STAC child links (one per published dataset) from a catalog response."""
+    raw_links = catalog.get("links") if isinstance(catalog, dict) else None
+    if not isinstance(raw_links, list):
+        raise ValueError(f"Invalid STAC catalog response from {source}: missing or non-list 'links' field")
+    links = []
+    for link in raw_links:
+        if isinstance(link, dict) and link.get("rel") == "child":
+            href = link.get("href")
+            if not isinstance(href, str) or not href:
+                raise ValueError(f"STAC child link from {source} has a missing or invalid href")
+            links.append({**link, "id": _id_from_href(href)})
+    return links
+
+
+def _zarr_asset(collection: Any, dataset_id: str, source: str) -> tuple[str, dict]:
+    """Return the Zarr asset ``(href, open_kwargs)`` from a STAC collection response."""
+    assets = collection.get("assets") if isinstance(collection, dict) else None
+    if not isinstance(assets, dict):
+        raise ValueError(f"STAC collection for '{dataset_id}' from {source} has a missing or invalid 'assets' field")
+    asset = assets.get("zarr")
+    if not isinstance(asset, dict):
+        raise ValueError(f"Dataset '{dataset_id}' has no Zarr asset in the STAC collection")
+    href = asset.get("href")
+    if not isinstance(href, str) or not href:
+        raise ValueError(f"Zarr asset for '{dataset_id}' has a missing or invalid href")
+    open_kwargs = asset.get("xarray:open_kwargs", {})
+    if not isinstance(open_kwargs, dict):
+        raise ValueError(f"Zarr asset for '{dataset_id}' has a malformed xarray:open_kwargs field")
+    return href, open_kwargs
+
+
+def _open_zarr(href: str, open_kwargs: dict) -> xr.Dataset:
+    """Open a (possibly remote) Zarr store as an xarray Dataset, lazy-importing xarray."""
+    if importlib.util.find_spec("xarray") is None:
+        raise ModuleNotFoundError(_XARRAY_INSTALL_HINT)
+    import xarray as xr
+
+    ds: xr.Dataset = xr.open_zarr(href, **open_kwargs)
+    # Pyramided (multiscale) stores expose data under the highest-resolution group "0". The
+    # asset names that group itself; this covers a server that does not yet.
+    if not ds.data_vars:
+        ds.close()
+        without_group = {key: value for key, value in open_kwargs.items() if key != "group"}
+        ds = xr.open_zarr(href, group="0", **without_group)
+    return ds
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    """Raise for a 4xx or 5xx response, with the server's reason in the message.
+
+    ``raise_for_status()`` alone reports only the status and URL; why the request failed
+    ("Collection 'x' not found") is in the body, which it drops. The error stays an
+    :class:`httpx.HTTPStatusError`, with the response attached.
+    """
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        reason = _error_reason(error.response)
+        if not reason:
+            raise
+        request, failed = error.request, error.response
+        message = f"{failed.status_code} {failed.reason_phrase} for {request.method} {request.url}: {reason}"
+        raise httpx.HTTPStatusError(message, request=request, response=failed) from error
+
+
+def _error_reason(response: httpx.Response) -> str:
+    """The server's reason for an error: FastAPI's ``detail``, openEO's ``message``, or the body text."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text.strip()[:500]
+    if isinstance(body, dict):
+        for key in ("detail", "message"):
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                return value
+            if value:
+                # FastAPI reports request validation errors as a list
+                return json.dumps(value)
+    return ""
+
+
+def _process_graph_body(process_graph: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a process-graph nodes mapping into the POST /result request body.
+
+    Accepts a bare nodes mapping (``{node_id: {...}}``, e.g. an openEO client's
+    ``flat_graph()``) or a ``{"process_graph": {...}}`` wrapper.
+    """
+    pg = process_graph["process_graph"] if set(process_graph) == {"process_graph"} else process_graph
+    return {"process": {"process_graph": pg}}
+
+
+class GeoService:
+    """Client for an Open Geo Service instance.
+
+    Maintains a persistent HTTP connection for efficient repeated calls. Use as a
+    context manager to ensure the connection is closed::
+
+        with GeoService("http://localhost:9000") as service:
+            datasets = service.datasets()
+
+    Args:
+        base_url: Base URL of the running Open Geo Service (e.g. ``http://localhost:9000``).
+        timeout: Default HTTP request timeout in seconds (default: 30).
+    """
+
+    def __init__(self, base_url: str, *, timeout: float = _DEFAULT_TIMEOUT) -> None:
+        self.base_url = base_url.rstrip("/")
+        self._http = httpx.Client(timeout=timeout)
+
+    def close(self) -> None:
+        """Close the underlying HTTP connection."""
+        self._http.close()
+
+    def __enter__(self) -> GeoService:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def datasets(self) -> list[dict]:
+        """Return all published datasets from the STAC catalog.
+
+        Each entry is a STAC child link dict with at least ``id``, ``title``, and ``href``.
+        """
+        response = self._http.get(f"{self.base_url}/stac/catalog.json")
+        _raise_for_status(response)
+        return _child_links(response.json(), self.base_url)
+
+    def open_dataset(self, dataset_id: str) -> xr.Dataset:
+        """Open a published dataset as an xarray Dataset.
+
+        Fetches the STAC collection for ``dataset_id``, reads the Zarr asset metadata,
+        and returns the opened (lazy) dataset. Requires the ``xarray`` extra.
+        """
+        response = self._http.get(f"{self.base_url}/stac/{dataset_id}/collection.json")
+        _raise_for_status(response)
+        href, open_kwargs = _zarr_asset(response.json(), dataset_id, self.base_url)
+        return _open_zarr(href, open_kwargs)
+
+    def processes(self) -> list[dict]:
+        """Return all openEO processes available on the instance (``GET /processes``)."""
+        response = self._http.get(f"{self.base_url}/processes")
+        _raise_for_status(response)
+        processes: list[dict] = response.json().get("processes", [])
+        return processes
+
+    def workflows(self) -> list[dict]:
+        """Return the reusable workflows (stored process graphs / UDPs) (``GET /process_graphs``)."""
+        response = self._http.get(f"{self.base_url}/process_graphs")
+        _raise_for_status(response)
+        workflows: list[dict] = response.json().get("processes", [])
+        return workflows
+
+    def execute(
+        self,
+        process_graph: dict[str, Any],
+        *,
+        timeout: float | None = _RESULT_TIMEOUT,
+        path: str | Path | None = None,
+    ) -> Any:
+        """Run a process graph synchronously and return its result (``POST /result``).
+
+        ``process_graph`` is a process-graph nodes mapping (e.g. an openEO client's
+        ``flat_graph()``); one node must carry ``"result": true``.
+
+        Returns a parsed object for JSON results (e.g. a DHIS2 ``dataValueSet`` from
+        ``save_result`` ``format: "DHIS2JSON"``). For file results (CSV, GeoJSON,
+        GeoTIFF, …) it returns the raw ``bytes``, or — when ``path`` is given — writes
+        them there and returns the :class:`~pathlib.Path`.
+        """
+        response = self._http.post(
+            f"{self.base_url}/result",
+            json=_process_graph_body(process_graph),
+            timeout=timeout,
+        )
+        _raise_for_status(response)
+        if "application/json" in response.headers.get("content-type", ""):
+            return response.json()
+        if path is not None:
+            Path(path).write_bytes(response.content)
+            return Path(path)
+        return response.content
+
+
+def list_datasets(base_url: str | None = None) -> list[dict]:
+    """Return all published datasets from the STAC catalog (one-shot, no persistent connection).
+
+    Each entry is a STAC child link dict with at least ``id``, ``title``, and ``href``.
+    ``base_url`` defaults to the ``GEOSERVICE_BASE_URL`` environment variable,
+    falling back to ``http://127.0.0.1:9000``.
+    """
+    url = (base_url or _default_base_url()).rstrip("/")
+    response = httpx.get(f"{url}/stac/catalog.json", timeout=_DEFAULT_TIMEOUT)
+    _raise_for_status(response)
+    return _child_links(response.json(), url)
+
+
+def open_dataset(dataset_id: str, *, base_url: str | None = None) -> xr.Dataset:
+    """Open a published dataset as an xarray Dataset (one-shot, no persistent connection).
+
+    Fetches the STAC collection for ``dataset_id``, reads the Zarr asset metadata, and
+    returns the opened dataset. Requires the ``xarray`` extra. ``base_url`` defaults to
+    the ``GEOSERVICE_BASE_URL`` environment variable, falling back to
+    ``http://127.0.0.1:9000``.
+    """
+    url = (base_url or _default_base_url()).rstrip("/")
+    response = httpx.get(f"{url}/stac/{dataset_id}/collection.json", timeout=_DEFAULT_TIMEOUT)
+    _raise_for_status(response)
+    href, open_kwargs = _zarr_asset(response.json(), dataset_id, url)
+    return _open_zarr(href, open_kwargs)

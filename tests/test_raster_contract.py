@@ -21,7 +21,7 @@ import pytest
 xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.shared.raster_contract import (  # noqa: E402
+from open_geo_service.shared.raster_contract import (  # noqa: E402
     ContractViolation,
     _axis_units,
     normalize_dim_layout,
@@ -42,17 +42,17 @@ _needs_proj = pytest.mark.skipif(not _CRS_RESOLVABLE, reason="pyproj cannot reso
 
 
 @pytest.fixture
-def ocs_logs(caplog: pytest.LogCaptureFixture) -> Any:
-    """Capture warnings from the OCS package logger.
+def geoservice_logs(caplog: pytest.LogCaptureFixture) -> Any:
+    """Capture warnings from the OGS package logger.
 
     ``startup.py`` sets ``propagate = False`` on it so the app owns its own handler, which
     means caplog's root handler never sees the records. Re-enable propagation for the test.
     """
-    package_logger = logging.getLogger("open_climate_service")
+    package_logger = logging.getLogger("open_geo_service")
     previous = package_logger.propagate
     package_logger.propagate = True
     try:
-        with caplog.at_level(logging.WARNING, logger="open_climate_service"):
+        with caplog.at_level(logging.WARNING, logger="open_geo_service"):
             yield caplog
     finally:
         package_logger.propagate = previous
@@ -204,7 +204,7 @@ def test_the_data_crs_wins_over_a_projected_declaration() -> None:
 
 
 @_needs_proj
-def test_a_projected_crs_over_degree_coordinates_is_refused(ocs_logs: Any) -> None:
+def test_a_projected_crs_over_degree_coordinates_is_refused(geoservice_logs: Any) -> None:
     """The reported failure: EPSG:32633 over lon/lat puts the store at the UTM origin.
 
     Reached here with no CRS on the data at all, so the projected declaration is what wins the
@@ -215,12 +215,12 @@ def test_a_projected_crs_over_degree_coordinates_is_refused(ocs_logs: Any) -> No
     resolved = resolve_store_crs(ds, "EPSG:32633")
 
     assert resolved == "EPSG:4326"
-    assert "EPSG:32633" in ocs_logs.text
-    assert "±180/±90" in ocs_logs.text  # the log names the evidence, not just the verdict
+    assert "EPSG:32633" in geoservice_logs.text
+    assert "±180/±90" in geoservice_logs.text  # the log names the evidence, not just the verdict
 
 
 @_needs_proj
-def test_a_grid_still_on_the_0_360_frame_is_recognised_as_geographic(ocs_logs: Any) -> None:
+def test_a_grid_still_on_the_0_360_frame_is_recognised_as_geographic(geoservice_logs: Any) -> None:
     """Chicken-and-egg: the roll needs to know the axis is a longitude, but an unrolled axis
     exceeds 180. Testing longitude against 180 would make every 0…360 dataset look projected,
     so the check allows up to 360 and leans on latitude (±90) for the real evidence.
@@ -231,7 +231,7 @@ def test_a_grid_still_on_the_0_360_frame_is_recognised_as_geographic(ocs_logs: A
         coords={"y": [60.0, 59.0], "x": [0.0, 180.0, 350.0]},
     )
     assert resolve_store_crs(ds, "EPSG:32633") == "EPSG:4326"
-    assert "EPSG:32633" in ocs_logs.text
+    assert "EPSG:32633" in geoservice_logs.text
 
 
 @_needs_proj
@@ -253,7 +253,7 @@ def test_a_consistent_projected_crs_is_kept() -> None:
 
 
 @_needs_proj
-def test_a_sticky_wrong_crs_on_the_data_is_also_refused(ocs_logs: Any) -> None:
+def test_a_sticky_wrong_crs_on_the_data_is_also_refused(geoservice_logs: Any) -> None:
     """A wrong `proj:code` is copied forward on every rewrite, so the data's CRS can be wrong too.
 
     Norway's WorldPop store is in exactly this state: root says EPSG:32633, level 0 says
@@ -263,7 +263,7 @@ def test_a_sticky_wrong_crs_on_the_data_is_also_refused(ocs_logs: Any) -> None:
 
     assert resolve_store_crs(ds, "EPSG:32633") == "EPSG:4326"
 
-    assert "EPSG:32633 is projected" in ocs_logs.text
+    assert "EPSG:32633 is projected" in geoservice_logs.text
 
 
 def test_no_declared_crs_uses_the_datasets_own() -> None:
@@ -276,7 +276,7 @@ def test_crs84_aliases_are_canonicalised() -> None:
 
 def test_the_instance_config_crs_is_never_consulted(monkeypatch: pytest.MonkeyPatch) -> None:
     """The config CRS as a fallback is what created the mismatch in the first place."""
-    from open_climate_service import config as api_config
+    from open_geo_service import config as api_config
 
     monkeypatch.setattr(api_config, "get_crs", lambda: "EPSG:32633")
     assert resolve_store_crs(_degree_grid(), None) == "EPSG:4326"
@@ -396,7 +396,7 @@ def test_written_store_satisfies_the_contract(tmp_path: Path) -> None:
     import icechunk
 
     pytest.importorskip("rioxarray")
-    from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+    from open_geo_service.data_manager.services.downloader import write_to_icechunk_store
 
     # (time, x, y) order, a `time` dim, 0…360 longitudes, and a projected CRS over degrees.
     ds = xr.Dataset(
@@ -430,8 +430,8 @@ def test_ingest_refuses_to_append_to_a_pre_contract_store(tmp_path: Path) -> Non
     actionable message beats silently corrupting the store, and the fix is a re-ingest.
     """
     pytest.importorskip("icechunk")
-    from open_climate_service.streaming.orchestrator import _assert_appendable_axes
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.streaming.orchestrator import _assert_appendable_axes
+    from open_geo_service.streaming.store import open_or_create_repo
 
     store_path = tmp_path / "south_up.icechunk"
     ascending = xr.Dataset(
@@ -456,8 +456,8 @@ def test_ingest_refuses_to_append_to_a_pre_contract_store(tmp_path: Path) -> Non
 
 def test_ingest_appends_happily_to_a_conforming_store(tmp_path: Path) -> None:
     pytest.importorskip("icechunk")
-    from open_climate_service.streaming.orchestrator import _assert_appendable_axes
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.streaming.orchestrator import _assert_appendable_axes
+    from open_geo_service.streaming.store import open_or_create_repo
 
     store_path = tmp_path / "north_up.icechunk"
     descending = xr.Dataset(
@@ -478,7 +478,7 @@ def test_ingest_appends_happily_to_a_conforming_store(tmp_path: Path) -> None:
 
 def test_a_missing_store_is_not_a_blocker(tmp_path: Path) -> None:
     """Nothing committed yet means nothing to disagree with — the first write must not fail."""
-    from open_climate_service.streaming.orchestrator import _assert_appendable_axes
+    from open_geo_service.streaming.orchestrator import _assert_appendable_axes
 
     ds = _cube(dims=("t", "y", "x"), sizes={"t": 1, "y": 2, "x": 2}, coords={"y": [60.0, 59.0]})
     _assert_appendable_axes(tmp_path / "absent.icechunk", ds, x_dim="x", y_dim="y")
@@ -488,7 +488,7 @@ def test_a_missing_store_is_not_a_blocker(tmp_path: Path) -> None:
 
 
 @_needs_proj
-def test_prepare_never_rolls_a_projected_axis(ocs_logs: Any) -> None:
+def test_prepare_never_rolls_a_projected_axis(geoservice_logs: Any) -> None:
     """The defect this entry point exists to make unexpressible.
 
     Composed by hand, the streaming path passed the plugin's `crs` *class attribute* into the
@@ -511,7 +511,7 @@ def test_prepare_never_rolls_a_projected_axis(ocs_logs: Any) -> None:
 
     assert prepared.crs == "EPSG:32633"
     assert prepared.dataset["x"].values.tolist() == [400_000.0, 500_000.0, 600_000.0]
-    assert "Rolling" not in ocs_logs.text
+    assert "Rolling" not in geoservice_logs.text
 
 
 def test_prepare_applies_every_invariant_in_one_call() -> None:

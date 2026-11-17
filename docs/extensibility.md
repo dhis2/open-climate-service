@@ -1,6 +1,6 @@
 # Extensibility
 
-The Open Climate Service supports four plugin types, all following the same pattern: place files in the appropriate subdirectory of `plugins_dir` and the service picks them up automatically — no forking or patching of core code required.
+The Open Geo Service supports four plugin types, all following the same pattern: place files in the appropriate subdirectory of `plugins_dir` and the service picks them up automatically — no forking or patching of core code required.
 
 | Plugin type | Location | Format |
 | ----------- | -------- | ------ |
@@ -17,7 +17,7 @@ is shared across instances without any `plugins_dir` wiring — see [Installable
 
 ## Datasets
 
-Each data source is described by a dataset template, a YAML entry that describes an upstream dataset. Raster templates live in `rasters/` and vector templates in `vectors/`. Built-ins live in the package (`open_climate_service/plugins/rasters/`, `open_climate_service/plugins/vectors/`). Custom ones are loaded from `plugins_dir/rasters/` and `plugins_dir/vectors/`.
+Each data source is described by a dataset template, a YAML entry that describes an upstream dataset. Raster templates live in `rasters/` and vector templates in `vectors/`. Built-ins live in the package (`open_geo_service/plugins/rasters/`, `open_geo_service/plugins/vectors/`). Custom ones are loaded from `plugins_dir/rasters/` and `plugins_dir/vectors/`.
 
 ```
 plugins/
@@ -30,7 +30,7 @@ plugins/
 ```
 
 ```yaml
-# climate-service.yaml
+# geoservice.yaml
 plugins_dir: ./plugins/
 ```
 
@@ -49,7 +49,7 @@ Custom processes are Python functions decorated with `@process` and placed in `p
 ```python
 # plugins/processes/indices.py
 import xarray as xr
-from open_climate_service.process import process
+from open_geo_service.process import process
 
 
 @process(summary="Precipitation anomaly relative to a baseline mean")

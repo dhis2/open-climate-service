@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.plugins.rasters import chirps3
-from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
+from open_geo_service.plugins.rasters import chirps3
+from open_geo_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
 
 
 def test_chirps3_plugin_periods_are_clamped_to_complete_month(monkeypatch: pytest.MonkeyPatch) -> None:

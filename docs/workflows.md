@@ -65,11 +65,11 @@ Calling it from a process graph is a single node:
 
 ## Built-in workflows
 
-Open Climate Service ships with ready-to-use workflows for aggregating **any published GeoZarr dataset** to a set of **GeoJSON features** (typically DHIS2 organisation units) and exporting DHIS2-ready output:
+Open Geo Service ships with ready-to-use workflows for aggregating **any published GeoZarr dataset** to a set of **GeoJSON features** (typically DHIS2 organisation units) and exporting DHIS2-ready output:
 
 | Workflow | Output |
 |---|---|
-| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a [named export](export_plugins.md), with a delivery manifest |
+| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a pipeline's [named export](export_plugins.md), with a delivery manifest |
 | `aggregate_to_chap_csv` | CHAP wide CSV (`time_period`, `location`, one column per variable) |
 | `aggregate_by_features` | The aggregated vector cube itself, saved by the caller; the workflow [pipelines](web_interface.md#the-pipeline-pages-pipelines) use |
 
@@ -82,11 +82,11 @@ The first two run `load_collection → aggregate_spatial_weighted → save_resul
 | `dataset_id` | both | — | Published GeoZarr collection to aggregate (see `/datasets`) |
 | `temporal_extent` | both | — | `[start, end]` ISO-8601 dates |
 | `geometries` | both | — | GeoJSON `FeatureCollection`; each feature's `id` is the org unit / location |
-| `export` | DHIS2 only | — | ID of a named DHIS2 export in the instance configuration |
+| `export` | DHIS2 only | — | ID of a pipeline whose destination is DHIS2; its named export is used |
 | `method` | both | `mean` | Spatial aggregation method: `mean`, `min`, `max`, `sum`, or `median` |
 | `period_type` | CHAP only | `month` | Period type used to format each time step: `day`, `week`, `month`, `quarter`, `year` |
 
-The DHIS2 workflow takes no data element or period type. The named export supplies
+The DHIS2 workflow takes no data element or period type. The pipeline's named export supplies
 the data element mapping, period type, and DHIS2 connection, so the workflow stays
 the same on every instance. When the export declares `aggregation`, the workflow's
 `method` must match it or the run fails.
@@ -150,7 +150,7 @@ It runs `load_collection → reduce_dimension → save_result`, reducing the tim
 | `variable` | Variable/band name carried through to the published dataset |
 | `temporal_extent` | `[start, end]` ISO-8601 dates; the change is `value(last) − value(first)` within this range |
 
-The `output_dataset_id` must have a **dataset template** registered on the instance, in the built-in `plugins/rasters/` folder (or an instance's `plugins_dir/rasters/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Climate Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
+The `output_dataset_id` must have a **dataset template** registered on the instance, in the built-in `plugins/rasters/` folder (or an instance's `plugins_dir/rasters/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Geo Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
 
 ```yaml
 - id: worldpop_population_change
@@ -164,6 +164,7 @@ The `output_dataset_id` must have a **dataset template** registered on the insta
   display:
     colormap: RdBu
     range: [-50.0, 50.0]
+    midpoint: 0
 ```
 
 ### Example
@@ -206,7 +207,7 @@ When the job finishes, the new change dataset appears under `/datasets` and on t
 | `frequency` | `dayofyear` (1–366, default) or `month` (1–12) |
 | `smoothing_window` | Circular day-of-year smoothing window in days (0 disables, default 31; ignored for `month`) |
 
-The `output_dataset_id` needs a **static dataset template** (`sync: {kind: static}`, `period_type: climatology`, a `display` block; no ingestion plugin) — auto-registered from the result and source metadata if none exists. Open Climate Service bundles the from-store monthly templates (`era5land_temperature_monthly_normal_1991_2020`, …) plus EDH-direct **day-of-year** ERA5-Land normals (`era5land_*_daily_normal_1991_2020`) that read the reference period straight from Earth Data Hub — no 30-year ingest needed.
+The `output_dataset_id` needs a **static dataset template** (`sync: {kind: static}`, `period_type: climatology`, a `display` block; no ingestion plugin) — auto-registered from the result and source metadata if none exists. Open Geo Service bundles the from-store monthly templates (`era5land_temperature_monthly_normal_1991_2020`, …) plus EDH-direct **day-of-year** ERA5-Land normals (`era5land_*_daily_normal_1991_2020`) that read the reference period straight from Earth Data Hub — no 30-year ingest needed.
 
 ### Example
 
@@ -245,7 +246,7 @@ The `output_dataset_id` needs a **static dataset template** (`sync: {kind: stati
 | `temporal_extent` | Observed range `[start, end]` |
 | `method` | `absolute` (observed − normal, default) or `relative` (percent of normal — for ratio-scale variables like precipitation only, **not** temperature) |
 
-The `output_dataset_id` needs a static template like the normals above (auto-registered if missing). Use a diverging colormap centred on zero, running the way the variable is read: `RdBu` for precipitation, where wet is blue and dry is red, and `rdbu_r` for temperature, where warm is red. Pair a **daily** observed dataset with a day-of-year normal, or a **monthly** observed dataset with a month normal — `compute_anomaly` aligns on the matching axis automatically.
+The `output_dataset_id` needs a static template like the normals above (auto-registered if missing). Use a diverging colormap centred on zero (`display.midpoint: 0`), running the way the variable is read: `RdBu` for precipitation, where wet is blue and dry is red, and `rdbu_r` for temperature, where warm is red. Pair a **daily** observed dataset with a day-of-year normal, or a **monthly** observed dataset with a month normal — `compute_anomaly` aligns on the matching axis automatically.
 
 The two methods publish **different units**, so a pre-registered template belongs to one of them:
 
@@ -282,6 +283,46 @@ The observed and normal cubes must be on the **same grid** — same cell count, 
 ```
 
 When the job finishes, the normal/anomaly dataset appears under `/datasets` and on the map viewer.
+
+## Relative humidity from daily dewpoint
+
+`relative_humidity_from_daily_dewpoint` estimates daily relative humidity from a daily mean temperature dataset and a daily mean dewpoint dataset, using earthkit-meteo's `relative_humidity_from_dewpoint`, and publishes it as a new managed dataset in `%`.
+
+Relative humidity from daily means is an estimate. Saturation vapour pressure is exponential in temperature, so it runs below the daily mean of hourly relative humidity, most where days are hot and nights cool. Against ERA5-Land's hourly-based `era5land_relative_humidity_daily`, it was about 2 to 5 percentage points low on average over a month in places with a large diurnal temperature range, and up to 10 to 20 points low on single days, which matters for threshold-based uses. Use the workflow where only daily inputs exist; where hourly inputs exist, prefer an hourly-based dataset.
+
+### Parameters
+
+| Name | Description |
+|---|---|
+| `temperature_dataset_id` | Published daily mean temperature, e.g. `era5land_temperature_daily` |
+| `dewpoint_dataset_id` | Published daily mean dewpoint, e.g. `era5land_dewpoint_daily` |
+| `output_dataset_id` | Id of the relative humidity dataset to publish, e.g. `era5land_relative_humidity_daily_estimated` (auto-registered if missing) |
+| `variable` | Variable/band name of the published dataset, e.g. `rh` |
+| `temporal_extent` | Range `[start, end]` |
+
+Both inputs must be on the same grid and time axis, and their data sources must declare temperature units: they are converted to Kelvin from the declared units, and an input without units is refused. The output dataset is auto-registered on the first run, taking `%` from the result and the rest of its metadata from the dewpoint dataset. Each run replaces the whole published dataset, so keep it current by re-running the workflow over the full range, from the original start to the new end, after the inputs sync.
+
+### Example
+
+```json
+{
+  "process": {
+    "process_graph": {
+      "rh": {
+        "process_id": "relative_humidity_from_daily_dewpoint",
+        "arguments": {
+          "temperature_dataset_id": "era5land_temperature_daily",
+          "dewpoint_dataset_id": "era5land_dewpoint_daily",
+          "output_dataset_id": "era5land_relative_humidity_daily_estimated",
+          "variable": "rh",
+          "temporal_extent": ["2024-01-01", "2024-12-31"]
+        },
+        "result": true
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -327,7 +368,7 @@ Workflows are loaded from three places, each overriding the previous on id colli
 
 | Source | Location | Loaded |
 |---|---|---|
-| Built-in | `open_climate_service/plugins/workflows/` | At startup |
+| Built-in | `open_geo_service/plugins/workflows/` | At startup |
 | Instance plugin | `plugins_dir/workflows/` | On each request |
 | Runtime-registered | `PUT /process_graphs/{id}` | Immediately |
 
@@ -350,7 +391,7 @@ my-instance/
         └── aggregate_for_dhis2.json
 ```
 
-Configure `plugins_dir` in `climate-service.yaml`:
+Configure `plugins_dir` in `geoservice.yaml`:
 
 ```yaml
 plugins_dir: ./plugins/

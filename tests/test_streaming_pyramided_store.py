@@ -24,9 +24,9 @@ pytest.importorskip("topozarr")
 pytest.importorskip("rioxarray")
 zarr = pytest.importorskip("zarr")
 
-from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset  # noqa: E402
-from open_climate_service.data_manager.services import downloader  # noqa: E402
-from open_climate_service.streaming.store import (  # noqa: E402
+from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset  # noqa: E402
+from open_geo_service.data_manager.services import downloader  # noqa: E402
+from open_geo_service.streaming.store import (  # noqa: E402
     committed_data_group,
     read_committed_period_ids,
     read_committed_spatial_coords,
@@ -163,9 +163,9 @@ def test_appending_does_not_un_declare_the_pyramid(tmp_path: Path) -> None:
     flat while having no data variables at the root at all. If the run then aborted before the
     end-of-sync rebuild, that is how it stayed.
     """
-    from open_climate_service.stac.media_types import attributes_declare_multiscales
-    from open_climate_service.streaming.protocol import GridSpec
-    from open_climate_service.streaming.store import write_geozarr_attrs
+    from open_geo_service.stac.media_types import attributes_declare_multiscales
+    from open_geo_service.streaming.protocol import GridSpec
+    from open_geo_service.streaming.store import write_geozarr_attrs
 
     store_path, repo = _pyramided_store(tmp_path)
 
@@ -197,9 +197,9 @@ def test_appending_does_not_un_declare_the_pyramid(tmp_path: Path) -> None:
 
 def test_a_flat_store_does_not_gain_a_multiscales_declaration(tmp_path: Path) -> None:
     """The preservation must be conditional — a flat store claiming a pyramid is worse."""
-    from open_climate_service.stac.media_types import attributes_declare_multiscales
-    from open_climate_service.streaming.protocol import GridSpec
-    from open_climate_service.streaming.store import write_geozarr_attrs
+    from open_geo_service.stac.media_types import attributes_declare_multiscales
+    from open_geo_service.streaming.protocol import GridSpec
+    from open_geo_service.streaming.store import write_geozarr_attrs
 
     flat = tmp_path / "flat.icechunk"
     repo = icechunk.Repository.open_or_create(icechunk.local_filesystem_storage(str(flat)))

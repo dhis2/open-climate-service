@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.ingestions.schemas import ArtifactRecord
-from open_climate_service.stac.services import _collection_description, _sanitize_variable_attrs
+from open_geo_service.ingestions.schemas import ArtifactRecord
+from open_geo_service.stac.services import _collection_description, _sanitize_variable_attrs
 
 _GENERATED_PREFIX = "Published GeoZarr dataset for"
 
@@ -33,7 +33,7 @@ def _artifact(name: str = "Relative Wealth Index") -> ArtifactRecord:
 def test_template_description_becomes_the_collection_description() -> None:
     caveat = (
         "Values are relative WITHIN a single country, not globally, so they cannot be compared "
-        "between countries or between OCS instances."
+        "between countries or between OGS instances."
     )
     assert _collection_description("rwi", _artifact(), {"description": caveat}) == caveat
 
@@ -85,7 +85,7 @@ def test_every_cf_2_6_2_variable_attribute_survives(attr: str) -> None:
     pass through. `references` matters most: it is the standard home for attribution, so a
     plugin should use it rather than inventing an `attribution` attribute.
 
-    CF is formally a netCDF convention and GeoZarr does not mandate it; OCS adopts it anyway
+    CF is formally a netCDF convention and GeoZarr does not mandate it; OGS adopts it anyway
     (`shared/cf.py`, and the STAC CF extension is already emitted), so 2.6.2 is what decides
     which of these belong on a variable rather than globally."""
     collection = _collection_with_attrs({"long_name": "X", attr: "value"})
@@ -152,7 +152,7 @@ def test_datasets_description_is_stripped_and_blank_becomes_null() -> None:
     Without this, `/datasets` published "   " where the STAC collection fell back to the
     generated sentence — and `description: >-` folded YAML routinely leaves a trailing newline.
     """
-    from open_climate_service.ingestions.services import _as_optional_text
+    from open_geo_service.ingestions.services import _as_optional_text
 
     assert _as_optional_text("  Caveat.\n") == "Caveat."
     for blank in ("", "   ", "\n\t "):

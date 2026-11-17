@@ -15,8 +15,8 @@ It is intended to answer:
 
 The main branch now centers on one narrow vertical slice:
 
-1. define dataset templates in the Open Climate Service registry
-2. define configured extents for the Open Climate Service instance
+1. define dataset templates in the Open Geo Service registry
+2. define configured extents for the Open Geo Service instance
 3. ingest data into a managed dataset for one data source plus one extent
 4. publish that managed dataset as a STAC collection under `/stac`
 5. expose native metadata under `/datasets`, STAC discovery under `/stac`, and raw Zarr access under `/zarr`
@@ -33,24 +33,24 @@ The public surface is intentionally small:
 
 ## Main Code References
 
-- [open_climate_service/main.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/main.py)
+- [open_geo_service/main.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/main.py)
   - app assembly and router mounting
-- [open_climate_service/ingestions/routes.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/ingestions/routes.py)
+- [open_geo_service/ingestions/routes.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/ingestions/routes.py)
   - ingestion, dataset, zarr, and sync routes
-- [open_climate_service/ingestions/services.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/ingestions/services.py)
+- [open_geo_service/ingestions/services.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/ingestions/services.py)
   - internal artifact persistence, dataset grouping, sync service wiring, Zarr browsing
-- [open_climate_service/ingestions/sync_engine.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/ingestions/sync_engine.py)
+- [open_geo_service/ingestions/sync_engine.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/ingestions/sync_engine.py)
   - sync planning and execution engine
-- [open_climate_service/ingestions/schemas.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/ingestions/schemas.py)
+- [open_geo_service/ingestions/schemas.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/ingestions/schemas.py)
   - public ingestion, dataset, and sync contracts
-- [open_climate_service/extents/routes.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/extents/routes.py)
+- [open_geo_service/extents/routes.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/extents/routes.py)
   - extent discovery endpoint
-- [open_climate_service/extents/services.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/extents/services.py)
-  - extent registry backed by CLIMATE_SERVICE_CONFIG
-- [open_climate_service/publications/services.py](https://github.com/dhis2/open-climate-service/blob/main/open_climate_service/publications/services.py)
+- [open_geo_service/extents/services.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/extents/services.py)
+  - extent registry backed by GEOSERVICE_CONFIG
+- [open_geo_service/publications/services.py](https://github.com/dhis2/open-geo-service/blob/main/open_geo_service/publications/services.py)
   - artifact publication and stable managed dataset id logic
-- `extent:` block in `climate-service.yaml` (CLIMATE_SERVICE_CONFIG)
-  - configured spatial extent for this Open Climate Service instance
+- `extent:` block in `geoservice.yaml` (GEOSERVICE_CONFIG)
+  - configured spatial extent for this Open Geo Service instance
 
 ## What Was Achieved
 
@@ -68,7 +68,7 @@ The public surface is intentionally small:
 
 Raw `bbox` and `country_code` are no longer part of the public ingestion payload.
 
-The route resolves `extent_id` inside Open Climate Service and then calls the downloader with concrete spatial inputs.
+The route resolves `extent_id` inside Open Geo Service and then calls the downloader with concrete spatial inputs.
 
 ### 2. Public ingestion responses now return datasets, not artifacts
 
@@ -140,13 +140,12 @@ Entry links point back into the canonical `/zarr/{dataset_id}/...` namespace.
 
 The branch exposes a dedicated STAC surface under:
 
-- `/stac`
 - `/stac/catalog.json`
-- `/stac/collections/{dataset_id}`
+- `/stac/{dataset_id}/collection.json`
 
 Published Zarr-backed managed datasets appear there as one STAC Collection per dataset. The `zarr` asset points to the canonical native `/zarr/{dataset_id}` route.
 
-`xstac` derives Datacube metadata from the opened Zarr-backed dataset, while the Open Climate Service service layer remains responsible for publication filtering, link construction, and Zarr asset metadata.
+`xstac` derives Datacube metadata from the opened Zarr-backed dataset, while the Open Geo Service service layer remains responsible for publication filtering, link construction, and Zarr asset metadata.
 
 Current STAC details:
 
@@ -164,7 +163,7 @@ Current STAC details:
 Published datasets are exposed as STAC collections:
 
 - `/stac/catalog.json`
-- `/stac/collections/{dataset_id}`
+- `/stac/{dataset_id}/collection.json`
 
 Dataset responses on the native FastAPI side include publication state and a link to the STAC collection. (The previous OGC API surface has been removed.)
 
@@ -209,26 +208,26 @@ Implemented sync behavior:
 ### Ingestion
 
 1. client submits `dataset_id`, `start`, optional `end`, and optional `extent_id`
-2. Open Climate Service resolves the data source from the registry
-3. Open Climate Service resolves `extent_id` to a concrete bbox or other configured spatial input
-4. Open Climate Service checks for an existing matching internal artifact
-5. if needed, Open Climate Service downloads the source data
-6. Open Climate Service prefers Zarr materialization and falls back to NetCDF when needed
-7. Open Climate Service computes realized coverage metadata
-8. Open Climate Service stores an internal artifact record
-9. if `publish=true`, Open Climate Service publishes the dataset as a STAC collection
+2. Open Geo Service resolves the data source from the registry
+3. Open Geo Service resolves `extent_id` to a concrete bbox or other configured spatial input
+4. Open Geo Service checks for an existing matching internal artifact
+5. if needed, Open Geo Service downloads the source data
+6. Open Geo Service prefers Zarr materialization and falls back to NetCDF when needed
+7. Open Geo Service computes realized coverage metadata
+8. Open Geo Service stores an internal artifact record
+9. if `publish=true`, Open Geo Service publishes the dataset as a STAC collection
 10. the route returns the public managed dataset view
 
 ### Dataset publication
 
 1. publication derives a stable managed dataset id
 2. STAC collection documents are derived dynamically from the published artifact state
-3. the dataset becomes available immediately under `/stac/collections/{dataset_id}`
+3. the dataset becomes available immediately under `/stac/{dataset_id}/collection.json`
 
 ### Raw data access
 
 1. `/datasets/{dataset_id}` exposes native metadata and version summary
-2. `/stac/collections/{dataset_id}` exposes standards-friendly discovery metadata for direct Zarr-opening clients
+2. `/stac/{dataset_id}/collection.json` exposes standards-friendly discovery metadata for direct Zarr-opening clients
 3. `/zarr/{dataset_id}` exposes the raw Zarr store layout when the latest version is Zarr-backed
 
 ### Sync
@@ -258,9 +257,8 @@ Implemented sync behavior:
 
 ### Standards-facing
 
-- `GET /stac`
 - `GET /stac/catalog.json`
-- `GET /stac/collections/{dataset_id}`
+- `GET /stac/{dataset_id}/collection.json`
 
 ## What Is Still Deferred
 

@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = "open_climate_service"
+module-name = "open_geo_service"
 
 [tool.uv]
 override-dependencies = [
@@ -26,15 +26,15 @@ override-dependencies = [
 ]
 
 [project]
-name = "open-climate-service"
-version = "0.1.1"
+name = "open-geo-service"
+version = "0.2.0"
 requires-python = ">=3.12"
-description = "Climate and Earth Observation data API"
+description = "Climate, Earth Observation and geospatial data API"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 authors = [{ name = "University of Oslo", email = "climate@dhis2.org" }]
 readme = "README.md"
-keywords = ["dhis2", "climate", "zarr", "stac", "geospatial"]
+keywords = ["dhis2", "geospatial", "climate", "earth-observation", "zarr", "stac"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
@@ -62,7 +62,7 @@ xarray = [
 # DHIS2 Web API client, for the server-side org unit provider and DHIS2 delivery, and for
 # the client-side import example. Pure Python; installs with pip on any platform.
 dhis2 = ["dhis2-client>=0.3.2"]
-# Full server stack — required to run your own Open Climate Service instance.
+# Full server stack — required to run your own Open Geo Service instance.
 server = [
     # Overlap-weighted zonal statistics for `aggregate_spatial_weighted`, through xvec.
     "exactextract>=0.3.0",
@@ -85,19 +85,12 @@ server = [
     "xstac>=1.0,<2",
     "xarray>=2025.12.0",
     "zarr>=3.1.6,<4",
-    "icechunk>=2.0,<3",
+    "icechunk>=2.2,<3",
     "geozarr-toolkit==0.1.*",
-    # 0.1.3 added the `nearest` coarsening method, so categorical pyramids no longer need a
-    # local decimation path (carbonplan/topozarr#26). `mode` is still ours — see downloader.
-    # The floor is 0.1.4 rather than 0.1.3 for a packaging reason: `topozarr` and
-    # `topozarr-core` are separate distributions, and 0.1.3 declared only
-    # `topozarr-core>=0.1.0,<0.2` — too loose, since the `nearest` kernel exists only from core
-    # 0.1.2. That combination installs cleanly and then fails *at ingest time* with "method must
-    # be one of 'mean', 'max', 'min', 'sum'", because the Python layer accepts `nearest` and the
-    # Rust kernel rejects it. 0.1.4 pins `topozarr-core==0.1.4` and adds a lockstep release
-    # check (carbonplan/topozarr#28), so the pair can no longer be mismatched and OCS no longer
-    # needs a `topozarr-core` pin of its own. Do not lower this floor.
-    "topozarr>=0.1.4,<0.2",
+    # 0.2.2 writes each level's `proj:`/`spatial:` attrs, its `spatial_ref` coordinate and its
+    # affine in `multiscales.layout`, and sizes time shards from the source's time chunks. 0.3.0
+    # applies the encoding's codecs and drops the 4-D limit. `mode` is still ours (topozarr#26).
+    "topozarr>=0.3.0,<0.4",
     "rioxarray>=0.17",
     # Directly imported (shared/time.py, streaming, openeo). Capped to 2.x; pandas
     # 3.0 is a breaking major and not yet validated against this stack.
@@ -177,13 +170,13 @@ server = [
 ]
 
 [project.urls]
-Repository = "https://github.com/dhis2/open-climate-service"
-Documentation = "https://github.com/dhis2/open-climate-service/tree/main/docs"
-"Bug Tracker" = "https://github.com/dhis2/open-climate-service/issues"
-Changelog = "https://github.com/dhis2/open-climate-service/releases"
+Repository = "https://github.com/dhis2/open-geo-service"
+Documentation = "https://github.com/dhis2/open-geo-service/tree/main/docs"
+"Bug Tracker" = "https://github.com/dhis2/open-geo-service/issues"
+Changelog = "https://github.com/dhis2/open-geo-service/releases"
 
 [project.scripts]
-climate-service = "open_climate_service.cli:main"
+geoservice = "open_geo_service.cli:main"
 
 [tool.ruff]
 target-version = "py312"
@@ -201,7 +194,7 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D"]
 "**/__init__.py" = ["D104"]
-"open_climate_service/**/*.py" = ["D102", "D105", "D107"]
+"open_geo_service/**/*.py" = ["D102", "D105", "D107"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -209,6 +202,12 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
+
+[tool.pytest.ini_options]
+# Integration tests fetch from real data sources, so a plain run leaves them out; a later
+# `-m integration` replaces this selection (see `make test-integration`).
+addopts = "-m 'not integration'"
+markers = ["integration: fetches from a real data source; run with `make test-integration`"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -233,11 +232,11 @@ module = ["license_expression"]
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
-module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*", "tylertoo", "tylertoo.*"]
+module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "requests.*", "geopandas.*", "earthkit.*", "metpy.*", "matplotlib.*", "yaml", "xproj", "topozarr.*", "geozarr_toolkit", "xstac", "openeo_pg_parser_networkx", "openeo_pg_parser_networkx.*", "openeo_processes_dask", "openeo_processes_dask.*", "dask_geopandas", "dask_geopandas.*", "xclim", "xclim.*", "overturemaps", "overturemaps.*", "tylertoo", "tylertoo.*", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pyright]
-include = ["open_climate_service", "tests"]
+include = ["open_geo_service", "tests"]
 exclude = ["**/.venv"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"

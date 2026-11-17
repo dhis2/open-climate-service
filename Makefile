@@ -15,12 +15,12 @@ sync-gdal: ## Pin gdal override to the installed system libgdal version, then sy
 		uv sync --all-extras
 
 run: ## Start the app with uvicorn (honors PORT, default 9000)
-	uv run uvicorn open_climate_service.main:app --port $${PORT:-9000} --reload --reload-include "*.html" --reload-include "*.css" --reload-include "*.js" --reload-include "*.yaml" --reload-include "*.yml"
+	uv run uvicorn open_geo_service.main:app --port $${PORT:-9000} --reload --reload-include "*.html" --reload-include "*.css" --reload-include "*.js" --reload-include "*.yaml" --reload-include "*.yml"
 
 lint: ## Check linting, formatting, and types (no autofix)
 	uv run ruff check .
 	uv run ruff format --check .
-	uv run mypy open_climate_service/
+	uv run mypy open_geo_service/
 	uv run pyright
 
 fix: ## Autofix ruff lint and format issues
@@ -35,15 +35,18 @@ test: ## Run tests with pytest in parallel (PYTEST_WORKERS, default 2)
 test-serial: ## Run tests with pytest in one process, to diagnose a failure
 	uv run pytest tests/
 
+test-integration: ## Fetch from every built-in data source, one at a time; needs every source's key
+	uv run pytest -m integration tests/
+
 # Compose bind-mounts this into the container; a missing file would make Docker
 # create a directory at the mount point, so fail early with guidance instead.
-climate-service.yaml:
-	@echo "ERROR: climate-service.yaml is missing. Create it from the example:" >&2
-	@echo "  cp climate-service.yaml.example climate-service.yaml" >&2
+geoservice.yaml:
+	@echo "ERROR: geoservice.yaml is missing. Create it from the example:" >&2
+	@echo "  cp geoservice.yaml.example geoservice.yaml" >&2
 	@exit 1
 
-start: climate-service.yaml ## Start the Docker stack (builds images first)
+start: geoservice.yaml ## Start the Docker stack (builds images first)
 	docker compose up --build --remove-orphans
 
-restart: climate-service.yaml ## Tear down, rebuild, and start the Docker stack from scratch
+restart: geoservice.yaml ## Tear down, rebuild, and start the Docker stack from scratch
 	docker compose down -v && docker compose build --no-cache && docker compose up --remove-orphans

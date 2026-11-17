@@ -1,6 +1,6 @@
 ---
 template: home.html
-title: Open Climate Service
+title: Open Geo Service
 hide:
   - navigation
   - toc

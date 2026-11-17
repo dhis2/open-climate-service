@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.system import templates as landing
 
 # What a browser sends: `text/html` ahead of anything else.
 BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -58,7 +58,7 @@ def _visible_text(html: str) -> str:
 
 
 def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
-    from open_climate_service.ingestions.schemas import DatasetDetailRecord
+    from open_geo_service.ingestions.schemas import DatasetDetailRecord
 
     values: dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -149,6 +149,29 @@ def test_an_ingested_source_links_to_its_dataset() -> None:
         "coverage": "2020-01 – 2026-07",
         "status": "published",
     }
+
+
+@pytest.mark.parametrize(
+    ("display", "label"),
+    [
+        ({"range": [0, 20]}, "0 – 20"),
+        ({}, "p2 – p98"),
+        ({"range": [0, "p98"], "midpoint": 0}, "0 – p98 (centred on 0)"),
+    ],
+)
+def test_the_display_range_is_shown_as_the_template_states_it(display: dict[str, Any], label: str) -> None:
+    """The rule, not today's values, which come from the dataset and would go stale here."""
+    html = landing.render_data_source_page(_ingestable("chirps_monthly", display=display), "")
+
+    assert f"Display range {label}" in " ".join(_visible_text(html).split())
+    # A statistic says what it means on hover; a number needs no explaining.
+    assert ('<abbr title="98th percentile">p98</abbr>' in html) is ("p98" in label)
+
+
+def test_every_statistic_a_range_can_name_has_hover_text() -> None:
+    from open_geo_service.ingestions.schemas import ArtifactStatistics
+
+    assert set(landing.STATISTIC_TITLES) == set(ArtifactStatistics.model_fields)
 
 
 def test_the_data_source_page_is_served_with_the_form(client: TestClient) -> None:
@@ -277,7 +300,7 @@ def test_the_template_list_is_a_page_and_the_json_it_always_was(client: TestClie
 
     assert page.status_code == 200
     assert page.headers["content-type"].startswith("text/html")
-    assert page.headers["vary"] == "Accept"
+    assert "Accept" in page.headers["vary"].split(", ")
     assert 'data-views="sources"' in page.text
     assert "initList" in page.text, "the shared list script, not a second copy"
     assert 'href="/data-sources/chirps3_precipitation_daily"' in page.text
@@ -286,7 +309,7 @@ def test_the_template_list_is_a_page_and_the_json_it_always_was(client: TestClie
     listing = client.get("/data-sources")
 
     assert listing.headers["content-type"].startswith("application/json")
-    assert listing.headers["vary"] == "Accept"
+    assert "Accept" in listing.headers["vary"].split(", ")
     ids = {template["id"] for template in listing.json()}
     assert {"chirps3_precipitation_daily", "chirps3_precipitation_daily_normal_1991_2020"} <= ids
 
@@ -312,7 +335,7 @@ def test_the_template_url_answers_json_unless_html_is_preferred(
         assert response.status_code == 200, path
         expected = "text/html" if html else "application/json"
         assert response.headers["content-type"].startswith(expected), path
-        assert response.headers["vary"] == "Accept", path
+        assert "Accept" in response.headers["vary"].split(", "), path
 
 
 @pytest.mark.parametrize("collection", ["/datasets", "/data-sources", "/processes"])
@@ -347,7 +370,7 @@ def test_the_old_dataset_templates_paths_are_gone(client: TestClient, path: str)
 
 def test_every_api_group_has_a_note() -> None:
     """The /api page explains each group by its OpenAPI tag, so a renamed tag needs its note renamed."""
-    from open_climate_service.main import app
+    from open_geo_service.main import app
 
     tags = {tag for item in app.openapi()["paths"].values() for op in item.values() for tag in op.get("tags", [])}
 
@@ -443,9 +466,9 @@ def test_the_dataset_page_links_back_to_the_data_source(monkeypatch: pytest.Monk
     """
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: _ingestable("chirps_monthly"))
 
-    html = landing.render_dataset_page(_record("chirps_monthly"), "/ocs")
+    html = landing.render_dataset_page(_record("chirps_monthly"), "/geoservice")
 
-    assert 'href="/ocs/data-sources/chirps_monthly"' in html
+    assert 'href="/geoservice/data-sources/chirps_monthly"' in html
 
 
 def _ingest_defaults_start(today: date) -> str:

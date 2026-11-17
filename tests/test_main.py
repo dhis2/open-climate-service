@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-import open_climate_service.main as main
+import open_geo_service.main as main
 
 
 @pytest.mark.anyio
@@ -33,34 +35,12 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         def set_finished_listener(self, listener: object) -> None:
             calls.append("finished-listener-set" if listener is not None else "finished-listener-cleared")
 
-        def set_delivery_due_provider(self, provider: object) -> None:
-            calls.append("delivery-due-set" if provider is not None else "delivery-due-cleared")
-
         def set_event_consumer(self, consumer: object | None) -> None:
             # The same consumer as native jobs: a published managed dataset's update.
             calls.append("openeo-consumer-set" if consumer is not None else "openeo-consumer-unset")
 
         def shutdown(self) -> None:
             calls.append("openeo-shutdown")
-
-    class FakeAutomationService:
-        def consume(self, events: object) -> None:
-            pass
-
-        def start(self) -> None:
-            calls.append("automation-start")
-
-        def on_job_finished(self, record: object) -> None:
-            pass
-
-        def delivery_due_for(self, record: object) -> None:
-            return None
-
-        def reconcile_deliveries(self) -> None:
-            calls.append("automation-reconcile")
-
-        def replay(self) -> None:
-            calls.append("automation-replay")
 
     class FakeSchedulerService:
         def start(self) -> None:
@@ -71,10 +51,9 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(main, "get_job_service", lambda: FakeJobService())
     monkeypatch.setattr(main, "get_openeo_job_service", lambda: FakeOpenEOJobService())
-    monkeypatch.setattr(main, "get_workflow_automation_service", lambda: FakeAutomationService())
     monkeypatch.setattr(main, "get_scheduler_service", lambda: FakeSchedulerService())
 
-    from open_climate_service.openeo import processes
+    from open_geo_service.openeo import processes
 
     # The real warm-up, around a registry build that blocks its worker thread until released.
     loading = threading.Event()
@@ -93,15 +72,11 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
         assert await asyncio.to_thread(loading.wait, 1)
         assert calls == [
             "recover",
-            "automation-start",
             "consumer-set",
             "openeo-consumer-set",
-            "delivery-due-set",
             "finished-listener-set",
             "openeo-recover",
             "openeo-reconcile-publications",
-            "automation-reconcile",
-            "automation-replay",
             "scheduler-start",
         ]
         # Released only once shutdown has begun: shutdown must wait for the thread to finish.
@@ -109,15 +84,11 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
 
     assert calls == [
         "recover",
-        "automation-start",
         "consumer-set",
         "openeo-consumer-set",
-        "delivery-due-set",
         "finished-listener-set",
         "openeo-recover",
         "openeo-reconcile-publications",
-        "automation-reconcile",
-        "automation-replay",
         "scheduler-start",
         "processes-loaded",
         "consumer-unset",
@@ -131,7 +102,7 @@ async def test_lifespan_recovers_jobs_and_shuts_down(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.anyio
 async def test_the_process_registry_is_loaded_in_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.openeo import processes
+    from open_geo_service.openeo import processes
 
     loaded_on: list[str] = []
     monkeypatch.setattr(
@@ -148,7 +119,7 @@ async def test_the_process_registry_is_loaded_in_a_worker_thread(monkeypatch: py
 async def test_a_failed_warm_up_is_logged_and_left_to_first_use(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from open_climate_service.openeo import processes
+    from open_geo_service.openeo import processes
 
     def broken() -> list[dict[str, object]]:
         raise RuntimeError("plugin import failed")
@@ -165,11 +136,14 @@ async def test_a_failed_warm_up_is_logged_and_left_to_first_use(
 async def test_lifespan_runs_pending_store_collections_at_startup_and_periodically(
     monkeypatch: pytest.MonkeyPatch, read_only: bool
 ) -> None:
-    """What guarantees a failed attempt's data is freed even if the store is never synced again."""
+    """What guarantees a failed attempt's data is freed even if the store is never synced again.
+
+    The statistics backfill writes records too, so it follows the same rule, and is told to stop
+    when the app does."""
     import asyncio
     import threading
 
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     # The startup sweep returns at once. The first periodic one, which runs in a worker
     # thread, reports that it started and then waits to be released, so the app can be
@@ -189,6 +163,8 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
 
     monkeypatch.setattr(services, "collect_pending_garbage_everywhere", sweep)
     monkeypatch.setattr(services, "remove_leftover_rebuilds", lambda: 0)
+    backfills: list[Callable[[], bool]] = []
+    monkeypatch.setattr(services, "measure_missing_statistics", lambda should_stop: backfills.append(should_stop) or 0)
     monkeypatch.setattr(main.api_config, "is_read_only", lambda: read_only)
     monkeypatch.setattr(main, "_MAINTENANCE_INTERVAL_S", 0.01)
 
@@ -199,7 +175,6 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
     for factory in (
         "get_job_service",
         "get_openeo_job_service",
-        "get_workflow_automation_service",
         "get_scheduler_service",
     ):
         monkeypatch.setattr(main, factory, lambda: _Quiet())
@@ -221,6 +196,19 @@ async def test_lifespan_runs_pending_store_collections_at_startup_and_periodical
 
     if read_only:
         assert sweeps == []  # may share its data directory with a writing instance
+        assert backfills == []
     else:
         assert in_flight_done == 2  # once at startup, then on the interval
         assert len(sweeps) == in_flight_done, "the loop stops with the app"
+        [should_stop] = backfills
+        assert should_stop()
+
+
+def test_openapi_lists_each_operation_once(client: TestClient) -> None:
+    """A route that also answers HEAD lists only its GET, so no two operations share an id."""
+    paths = client.get("/openapi.json").json()["paths"]
+    operations = [(path, method, op["operationId"]) for path, item in paths.items() for method, op in item.items()]
+
+    assert [(path, method) for path, method, _ in operations if method == "head"] == []
+    ids = [operation_id for _, _, operation_id in operations]
+    assert len(ids) == len(set(ids))

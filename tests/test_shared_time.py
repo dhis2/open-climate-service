@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from open_climate_service.shared.time import (
+from open_geo_service.shared.time import (
     daily_period_ids,
     datetime_to_period_string,
     normalize_period_string,

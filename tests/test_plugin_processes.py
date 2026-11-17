@@ -6,7 +6,7 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service.process import get_process_metadata, process
+from open_geo_service.process import get_process_metadata, process
 
 
 def test_process_decorator_attaches_metadata() -> None:
@@ -56,14 +56,14 @@ def test_plugin_processes_appear_in_get_processes(
     tmp_path: Path,
 ) -> None:
     """A @process function in plugins_dir/processes/ appears in GET /processes."""
-    import open_climate_service.openeo.execution as execution_mod
+    import open_geo_service.openeo.execution as execution_mod
 
     processes_dir = tmp_path / "processes"
     processes_dir.mkdir()
     (processes_dir / "my_index.py").write_text(
         """
 import xarray as xr
-from open_climate_service.process import process
+from open_geo_service.process import process
 
 @process(summary="My custom climate index")
 def my_index(data: xr.DataArray, thresh: float = 0.5) -> xr.DataArray:
@@ -71,10 +71,10 @@ def my_index(data: xr.DataArray, thresh: float = 0.5) -> xr.DataArray:
 """,
         encoding="utf-8",
     )
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {tmp_path}\n", encoding="utf-8")
 
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
     # Invalidate the execution registry singleton so it picks up new plugins
     monkeypatch.setattr(execution_mod, "_registry", None)
 
@@ -89,14 +89,14 @@ def test_plugin_process_summary_in_catalog(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import open_climate_service.openeo.execution as execution_mod
+    import open_geo_service.openeo.execution as execution_mod
 
     processes_dir = tmp_path / "processes"
     processes_dir.mkdir()
     (processes_dir / "cdd.py").write_text(
         """
 import xarray as xr
-from open_climate_service.process import process
+from open_geo_service.process import process
 
 @process(summary="Consecutive dry days")
 def cdd(pr: xr.DataArray, thresh: str = "1mm/day") -> xr.DataArray:
@@ -104,9 +104,9 @@ def cdd(pr: xr.DataArray, thresh: str = "1mm/day") -> xr.DataArray:
 """,
         encoding="utf-8",
     )
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {tmp_path}\n", encoding="utf-8")
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
     monkeypatch.setattr(execution_mod, "_registry", None)
 
     response = client.get("/processes")

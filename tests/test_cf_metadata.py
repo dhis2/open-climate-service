@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.shared.cf import apply_cf_metadata, cf_attrs_from_template, validate_units
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.shared.cf import apply_cf_metadata, cf_attrs_from_template, validate_units
 
 
 def test_cf_attrs_from_template_extracts_cf_fields() -> None:
@@ -100,7 +100,7 @@ class TestDropUnserializableAttrs:
 
     def test_a_nested_mapping_is_dropped_from_a_coordinate(self) -> None:
         """dynamical.org's GEFS store publishes `statistics_approximate` exactly like this."""
-        from open_climate_service.shared.cf import drop_unserializable_attrs
+        from open_geo_service.shared.cf import drop_unserializable_attrs
 
         ds = self._cube()
         ds["x"].attrs["statistics_approximate"] = {"min": -180.0, "max": 179.75}
@@ -116,7 +116,7 @@ class TestDropUnserializableAttrs:
         chose to publish is worth keeping when it can be written."""
         import numpy as np
 
-        from open_climate_service.shared.cf import drop_unserializable_attrs
+        from open_geo_service.shared.cf import drop_unserializable_attrs
 
         ds = self._cube()
         ds["v"].attrs.update(
@@ -150,7 +150,7 @@ class TestDropUnserializableAttrs:
     def test_the_types_netcdf_refuses_are_dropped(self) -> None:
         """Derived by trying each against `to_netcdf`, not from the error message it raises —
         which mentions `Number` and so implies bool and complex are fine. They are not."""
-        from open_climate_service.shared.cf import drop_unserializable_attrs
+        from open_geo_service.shared.cf import drop_unserializable_attrs
 
         ds = self._cube()
         ds["v"].attrs.update(
@@ -170,7 +170,7 @@ class TestDropUnserializableAttrs:
         assert set(ds["v"].attrs) == {"keep"}
 
     def test_dataset_level_attributes_are_cleaned_too(self) -> None:
-        from open_climate_service.shared.cf import drop_unserializable_attrs
+        from open_geo_service.shared.cf import drop_unserializable_attrs
 
         ds = self._cube()
         ds.attrs.update({"provenance": {"nested": True}, "title": "kept"})
@@ -183,7 +183,7 @@ class TestDropUnserializableAttrs:
         """The point of the guard, asserted against the real writer rather than a type list."""
         import pytest
 
-        from open_climate_service.shared.cf import drop_unserializable_attrs
+        from open_geo_service.shared.cf import drop_unserializable_attrs
 
         ds = self._cube()
         ds["x"].attrs["statistics_approximate"] = {"min": -180.0, "max": 179.75}
@@ -196,7 +196,7 @@ class TestDropUnserializableAttrs:
 
 
 def test_netcdf_export_survives_a_store_carrying_geozarr_metadata(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """An OCS store's own root attributes are not NetCDF-writeable, by design.
+    """An OGS store's own root attributes are not NetCDF-writeable, by design.
 
     ``write_geozarr_attrs`` declares the GeoZarr convention as ``zarr_conventions``, a list of
     mappings. That is correct Zarr metadata with no NetCDF equivalent, so the store keeps it and
@@ -205,7 +205,7 @@ def test_netcdf_export_survives_a_store_carrying_geozarr_metadata(tmp_path) -> N
     import numpy as np
     import xarray as xr
 
-    from open_climate_service.openeo.jobs import _write_xarray
+    from open_geo_service.openeo.jobs import _write_xarray
 
     ds = xr.Dataset(
         {"v": (("t", "y", "x"), np.zeros((1, 2, 2), dtype="float32"))},

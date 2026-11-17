@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from open_climate_service.openeo import xclim_processes
-from open_climate_service.process import get_process_metadata
+from open_geo_service.openeo import xclim_processes
+from open_geo_service.process import get_process_metadata
 
 pytest.importorskip("xclim")
 

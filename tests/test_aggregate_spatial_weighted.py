@@ -6,7 +6,7 @@ import pytest
 import shapely
 import xarray as xr
 
-from open_climate_service.plugins.processes.aggregate_spatial_weighted import (
+from open_geo_service.plugins.processes.aggregate_spatial_weighted import (
     aggregate_spatial_weighted,
 )
 
@@ -223,7 +223,7 @@ def test_aggregate_spatial_fully_outside():
 
 def test_aggregate_spatial_nothing_inside_has_no_value_and_warns(caplog: pytest.LogCaptureFixture):
     # A CRS mismatch looks like this, so it is logged; the result still follows openEO.
-    with caplog.at_level("WARNING", logger="open_climate_service.shared.vectors"):
+    with caplog.at_level("WARNING", logger="open_geo_service.shared.vectors"):
         out = aggregate_spatial_weighted(_flat_grid(y_ascending=True), _box(-2, -2, -1, -1), "mean")
     assert np.isnan(out.isel(geometry=0))
     assert "None of the 1 geometries overlaps the raster" in caplog.text
@@ -306,7 +306,7 @@ def _series(steps: int = 6) -> xr.DataArray:
 
 
 def test_a_long_series_is_read_in_chunks_and_gives_the_same_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.processes import aggregate_spatial_weighted as module
+    from open_geo_service.plugins.processes import aggregate_spatial_weighted as module
 
     geom = _box(0.0, 0.0, 2.0, 2.0)
     whole = aggregate_spatial_weighted(_series(), geom, "mean")
@@ -321,7 +321,7 @@ def test_a_long_series_is_read_in_chunks_and_gives_the_same_result(monkeypatch: 
 
 
 def test_read_chunks_group_store_chunks_and_split_one_that_is_too_large(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.plugins.processes import aggregate_spatial_weighted as module
+    from open_geo_service.plugins.processes import aggregate_spatial_weighted as module
 
     # A day is 128 bytes, so 700 bytes holds five days.
     monkeypatch.setattr(module, "READ_CHUNK_BYTES", 700)

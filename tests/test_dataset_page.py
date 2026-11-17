@@ -12,9 +12,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.system import templates as landing
 
 
 def _template(template_id: str, **fields: Any) -> dict[str, Any]:
@@ -53,7 +53,7 @@ def _visible_text(html: str) -> str:
 
 
 def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
-    from open_climate_service.ingestions.schemas import DatasetDetailRecord
+    from open_geo_service.ingestions.schemas import DatasetDetailRecord
 
     values: dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -102,7 +102,7 @@ def test_the_dataset_endpoint_serves_a_page_only_to_clients_that_ask_for_one(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, accept: str, query: str, html: bool
 ) -> None:
     """Scripts that send `*/*` or no Accept header keep the JSON they always got."""
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
     headers = {"Accept": accept} if accept else {}
@@ -123,7 +123,7 @@ def test_both_representations_declare_that_they_vary_by_accept(
     Without `Vary: Accept` a shared proxy can hand an API client the HTML page it cached for a
     browser, which is exactly the JSON compatibility this endpoint promises to keep.
     """
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
 
@@ -131,7 +131,7 @@ def test_both_representations_declare_that_they_vary_by_accept(
         response = client.get("/datasets/chirps_monthly", headers={"Accept": accept})
 
         assert response.status_code == 200
-        assert response.headers["vary"] == "Accept", accept
+        assert "Accept" in response.headers["vary"].split(", "), accept
 
 
 def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
@@ -144,7 +144,7 @@ def test_the_page_drops_the_version_table_but_the_json_keeps_the_field(
     all but the most-synced dataset the table was also a single row. The field stays in the
     JSON, which is an API contract; only the table is gone.
     """
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
 
@@ -176,7 +176,7 @@ def test_the_dataset_list_serves_a_page_only_to_clients_that_ask_for_one(
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html" if html else "application/json")
-    assert response.headers["vary"] == "Accept"
+    assert "Accept" in response.headers["vary"].split(", ")
     if html:
         assert 'data-list data-page-size="12" data-views="datasets"' in response.text
         # Served from the shared asset, so the list behaves the same here as on the landing page.
@@ -212,7 +212,7 @@ def test_an_empty_dataset_list_points_to_the_data_sources(client: TestClient, mo
 
 def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The list is a page, so the breadcrumb goes to it rather than a landing-page fragment."""
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "get_dataset_or_404", lambda dataset_id: _record(dataset_id))
 
@@ -222,7 +222,7 @@ def test_the_breadcrumb_returns_to_the_dataset_list(client: TestClient, monkeypa
     assert "/#datasets" not in body
 
 
-def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp() -> None:
+def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp(monkeypatch: pytest.MonkeyPatch) -> None:
     view = landing._dataset_view(_record("never_rendered"), {"display": {"colormap": "blues"}})
 
     assert view["has_thumbnail"] is False
@@ -230,9 +230,18 @@ def test_a_dataset_without_a_thumbnail_gets_the_colormap_ramp() -> None:
     assert view["description"] == "First line wraps here. Second paragraph."
     assert view["coverage"] == "2020-01 – 2026-07"
 
+    # A list of colours is drawn through, and named as a custom scale rather than printed as a list.
+    custom = {"display": {"colormap": ["#000000", "#ffffff"], "range": [0, 1]}}
+    view = landing._dataset_view(_record("never_rendered"), custom)
+    assert view["ramp"].startswith("linear-gradient(90deg, #000000, ")
+    assert view["ramp"].endswith(", #ffffff)")
+    monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: _template("chirps_monthly", **custom))
+    text = " ".join(_visible_text(landing.render_dataset_page(_record(), "/geoservice")).split())
+    assert "Colour scale Custom" in text and "#000000" not in text
+
 
 def test_a_dataset_with_a_thumbnail_links_it() -> None:
-    from open_climate_service.shared.thumbnails import thumbnail_path
+    from open_geo_service.shared.thumbnails import thumbnail_path
 
     path = thumbnail_path("rendered_dataset")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +291,7 @@ def test_the_dataset_page_lists_the_identifier_first() -> None:
 def test_the_dataset_page_shows_temporal_coverage_under_the_title(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
 
-    html = landing.render_dataset_page(_record(), "/ocs")
+    html = landing.render_dataset_page(_record(), "/geoservice")
     title_end = html.index('<div class="dataset-page">')
 
     assert '<span class="range">2020-01 – 2026-07</span>' in html[:title_end]
@@ -315,7 +324,7 @@ def test_a_dataset_without_temporal_coverage_shows_no_coverage_line(monkeypatch:
         },
     )
 
-    assert 'class="page-coverage"' not in landing.render_dataset_page(record, "/ocs")
+    assert 'class="page-coverage"' not in landing.render_dataset_page(record, "/geoservice")
 
 
 @pytest.mark.parametrize(
@@ -373,9 +382,9 @@ def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
     collection, since a refresh may only overwrite what its own provider fetched."""
     from types import SimpleNamespace
 
-    from open_climate_service.features import providers as feature_providers
-    from open_climate_service.features import services as feature_services
-    from open_climate_service.features import templates as feature_templates
+    from open_geo_service.features import providers as feature_providers
+    from open_geo_service.features import services as feature_services
+    from open_geo_service.features import templates as feature_templates
 
     template = {"id": "districts", "name": "Districts", "license": "ODbL-1.0"}
     if provider:
@@ -391,10 +400,10 @@ def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
         registry_datasets, "get_dataset", lambda dataset_id: {"id": dataset_id} if raster_collision else None
     )
 
-    html = landing.render_dataset_page(_record("districts", itemType="feature", period_type=None), "/ocs")
+    html = landing.render_dataset_page(_record("districts", itemType="feature", period_type=None), "/geoservice")
     text = _visible_text(html)
 
-    assert ('href="/ocs/data-sources/districts"' in html) is linked
+    assert ('href="/geoservice/data-sources/districts"' in html) is linked
     # Never claims how the collection was made: a template is no evidence it was fetched.
     assert "Fetched from" not in text
     assert ("fetches it again from the provider" in text) is (blocked is None)
@@ -409,28 +418,31 @@ def test_a_vector_dataset_offers_refresh_only_where_the_refresh_would_run(
 def test_the_dataset_page_offers_the_map_viewer_for_both_and_a_colour_scale_only_for_a_raster(
     monkeypatch: pytest.MonkeyPatch, item_type: str, raster: bool
 ) -> None:
-    """The map viewer draws rasters and vectors, but a feature collection has no colour scale."""
+    """The map viewer draws rasters and vectors, but a feature collection has no colour scale.
+
+    With no template range, a raster's range is measured from the dataset, and the page says so."""
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
 
-    html = landing.render_dataset_page(_record(itemType=item_type), "/ocs")
+    html = landing.render_dataset_page(_record(itemType=item_type), "/geoservice")
 
     assert "Open in map viewer" in html
     assert ('class="ramp-bar"' in html) is raster
     assert ("--ramp: linear-gradient" in html) is raster
+    assert ("p2 – p98" in " ".join(_visible_text(html).split())) is raster
 
 
 def test_the_dataset_page_renders_under_the_mount(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: None)
 
-    html = landing.render_dataset_page(_record(), "/ocs")
+    html = landing.render_dataset_page(_record(), "/geoservice")
 
     assert "<p>Second paragraph.</p>" in html
-    assert 'href="/ocs/zarr/chirps_monthly"' in html
-    assert 'href="/ocs/datasets/chirps_monthly?f=json"' in html
-    assert 'href="/ocs/"' in html, "the header links home under the mount"
+    assert 'href="/geoservice/zarr/chirps_monthly"' in html
+    assert 'href="/geoservice/datasets/chirps_monthly?f=json"' in html
+    assert 'href="/geoservice/"' in html, "the header links home under the mount"
     # The rail carries the mount too. It names no Datasets entry yet: that entry is an area of
     # the landing page, which arrives in a later slice, and a link to a 404 is worse than none.
-    assert 'href="/ocs/map"' in html
+    assert 'href="/geoservice/map"' in html
     assert "#operator" not in html
     # "Data sources" is the rail entry; the dataset page itself names no template.
     assert "template" not in _visible_text(html).lower().replace("dataset templates", "")
@@ -455,17 +467,17 @@ def test_the_dataset_page_offers_sync_only_where_it_can_run(
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: template)
     monkeypatch.setattr(api_config, "is_read_only", lambda: read_only)
 
-    html = landing.render_dataset_page(_record(), "/ocs")
+    html = landing.render_dataset_page(_record(), "/geoservice")
 
     assert ('id="sync-form"' in html) is form
     if form:
-        assert 'action="/ocs/manage/sync"' in html
+        assert 'action="/geoservice/manage/sync"' in html
         # No publish choice: a sync keeps the dataset's current publication state, because
         # nothing here can change it and an incremental sync writes into the published store
         # either way.
         assert 'name="publish" value="on"' in html, "a published dataset stays published"
         assert "Publish after sync" not in html
-        assert 'data-plan-url="/ocs/sync/chirps_monthly/plan"' in html
+        assert 'data-plan-url="/geoservice/sync/chirps_monthly/plan"' in html
         assert 'placeholder="YYYY-MM"' in html
         assert "function runJobForm" in html
     else:
@@ -473,9 +485,9 @@ def test_the_dataset_page_offers_sync_only_where_it_can_run(
 
 
 def test_the_dataset_page_opens_the_map_on_that_dataset() -> None:
-    html = landing.render_dataset_page(_record("chirps monthly"), "/ocs")
+    html = landing.render_dataset_page(_record("chirps monthly"), "/geoservice")
 
-    assert 'href="/ocs/map?dataset=chirps%20monthly"' in html
+    assert 'href="/geoservice/map?dataset=chirps%20monthly"' in html
 
 
 def test_a_sync_leaves_an_unpublished_dataset_unpublished(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -502,7 +514,7 @@ def test_a_categorical_dataset_lists_its_classes_collapsed_instead_of_a_colour_s
     )
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda dataset_id: template)
 
-    html = landing.render_dataset_page(_record(), "/ocs")
+    html = landing.render_dataset_page(_record(), "/geoservice")
 
     assert '<details class="class-legend">' in html  # not open
     assert "Classes (2)" in html

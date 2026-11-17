@@ -20,9 +20,9 @@ import numpy as np
 import pytest
 import zarr
 
-from open_climate_service.shared.crs import is_builtin_crs
-from open_climate_service.streaming.protocol import GridSpec
-from open_climate_service.streaming.store import write_geozarr_attrs
+from open_geo_service.shared.crs import is_builtin_crs
+from open_geo_service.streaming.protocol import GridSpec
+from open_geo_service.streaming.store import write_geozarr_attrs
 
 
 def _init_group(path: Path) -> str:

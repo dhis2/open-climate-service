@@ -1,0 +1,3345 @@
+"""Services for ingestion, dataset persistence, and publication metadata."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import mimetypes
+import shutil
+import threading
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Protocol, TypeVar, cast
+from uuid import uuid4
+
+import portalocker
+from fastapi import HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.responses import Response
+from zarr.abc.store import ByteRequest, RangeByteRequest
+from zarr.core.buffer import default_buffer_prototype
+from zarr.core.sync import sync as zarr_sync
+
+from open_geo_service import config as api_config
+from open_geo_service.data_accessor.services.accessor import get_data_coverage_for_paths
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.extents.services import get_extent
+from open_geo_service.features import templates as feature_templates
+from open_geo_service.ingestions.artifact_paths import decode_record_paths, encode_record_paths
+from open_geo_service.ingestions.schemas import (
+    ArtifactCoverage,
+    ArtifactFormat,
+    ArtifactListResponse,
+    ArtifactPublication,
+    ArtifactRecord,
+    ArtifactRequestScope,
+    ArtifactStatistics,
+    ArtifactVersion,
+    CoverageSpatial,
+    CoverageTemporal,
+    DatasetAccessLink,
+    DatasetDetailRecord,
+    DatasetInput,
+    DatasetItemType,
+    DatasetListResponse,
+    DatasetProvenance,
+    DatasetPublication,
+    DatasetRecord,
+    DatasetVersionRecord,
+    FeatureDetail,
+    IngestionListResponse,
+    IngestionResponse,
+    PublicationStatus,
+    SyncAction,
+    SyncDetail,
+    SyncKind,
+    SyncResponse,
+    canonical_feature_crs,
+    parse_declared_artifact_version,
+)
+from open_geo_service.ingestions.sync_engine import SyncConfigurationError, plan_sync, run_sync
+from open_geo_service.publications.services import managed_dataset_id_for, publish_artifact
+from open_geo_service.shared.compute import get_job_slots
+from open_geo_service.shared.crs import transform_bbox
+from open_geo_service.shared.licences import DatasetLicence
+from open_geo_service.shared.persistence import atomic_text, index_lock
+from open_geo_service.shared.raster_contract import TIME_ALIASES
+from open_geo_service.shared.statistics import measure_statistics
+from open_geo_service.shared.storage_size import stored_bytes
+from open_geo_service.shared.thumbnails import write_dataset_thumbnail
+from open_geo_service.shared.time import (
+    datetime_to_period_string,
+    dekad_start,
+    has_calendar_periods,
+    next_period_string,
+    normalize_period_string,
+    utc_now,
+    utc_today,
+)
+from open_geo_service.shared.urls import path_segment as _segment
+from open_geo_service.streaming.orchestrator import run_static_ingest_sync, run_streaming_ingest_sync
+from open_geo_service.streaming.protocol import IngestionPlugin, StaticIngestionPlugin, close_ingestion_plugin
+from open_geo_service.streaming.store import (
+    is_store_empty,
+    open_or_create_repo,
+    read_committed_period_ids_ordered,
+)
+
+logger = logging.getLogger(__name__)
+MutationResult = TypeVar("MutationResult")
+StoreResult = TypeVar("StoreResult")
+
+
+# Per-store threading locks prevent two concurrent ingest/sync runs from writing
+# to the same Icechunk store simultaneously (which causes MVCC commit conflicts).
+class StoreWriteLock:
+    """Exclusive writer lock for one Icechunk store, across threads and across processes.
+
+    The thread lock alone was invisible to a second OGS process: an overlapping restart, an
+    auto-reload, or a second worker could run a write against the same store at the same
+    time, and Icechunk then rejected one of them with a commit conflict. The file lock beside
+    the store makes the second writer refuse up front instead. The operating system releases
+    it when the holding process exits, so a crash never leaves a store locked.
+    """
+
+    def __init__(self, store_path: Path) -> None:
+        self._thread_lock = threading.Lock()
+        self._lock_path = store_path.with_name(f"{store_path.name}.lock")
+        self._handle: Any | None = None
+
+    def acquire(self, blocking: bool = True) -> bool:
+        """Take the lock; with ``blocking=False`` return False at once when another writer holds it."""
+        if not self._thread_lock.acquire(blocking=blocking):
+            return False
+        try:
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(self._lock_path, "a+", encoding="utf-8")  # noqa: SIM115 -- held until release()
+            try:
+                flags = portalocker.LOCK_EX if blocking else portalocker.LOCK_EX | portalocker.LOCK_NB
+                portalocker.lock(handle, flags)
+            except portalocker.exceptions.LockException:
+                handle.close()
+                self._thread_lock.release()
+                return False
+        except BaseException:
+            self._thread_lock.release()
+            raise
+        self._handle = handle
+        return True
+
+    def release(self) -> None:
+        handle, self._handle = self._handle, None
+        try:
+            if handle is not None:
+                try:
+                    portalocker.unlock(handle)
+                finally:
+                    handle.close()
+        finally:
+            self._thread_lock.release()
+
+
+_store_locks: dict[str, StoreWriteLock] = {}
+_store_locks_mutex = threading.Lock()
+
+# Consolidated zarr metadata cache: (store_path, snapshot_id) → metadata dict.
+# Building consolidated metadata requires reading every zarr.json from the store;
+# the result is stable for the lifetime of a snapshot, so we cache it keyed to
+# the Icechunk branch tip.  Capped at 512 entries; the oldest half is evicted when
+# the limit is hit (one entry per ingest per dataset, so 512 entries ≈ 85 ingests
+# across 6 datasets before any eviction occurs).
+_consolidated_metadata_cache: dict[str, dict[str, object]] = {}
+_MAX_CONSOLIDATED_CACHE_ENTRIES = 512
+
+# Published raster artifacts for the store routes; see `_latest_published_raster_artifacts_cached`.
+_store_artifacts_cache: tuple[tuple[str, int, int, int], dict[str, "ArtifactRecord"]] | None = None
+# Record writes made by this process, so the cache never misses one of them.
+_records_write_count = 0
+
+# Icechunk repositories the store routes keep open, and the read-only session last opened on
+# each, by store path; see `_open_icechunk_store_or_404`. Dropped whenever the records change.
+_open_repositories: dict[str, Any] = {}
+_open_sessions: dict[str, _IcechunkSession] = {}
+# Chunk requests run in worker threads, and a map view sends many at once: one opens a store's
+# repository or session, and the others wait for it rather than opening their own.
+_open_stores_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class _StreamingMaterializationPlan:
+    """Cumulative bounds and periods to fetch, selected before store mutation."""
+
+    action: SyncAction
+    start: str | None
+    end: str | None
+    periods: list[str] | None
+    has_committed_periods: bool
+    committed_periods: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _StoreNormalizationResult:
+    """Outcome of normalizing a store, including whether its directory was swapped."""
+
+    completed: bool
+    swapped: bool = False
+
+
+def _acquire_store_lock(store_path: Path) -> StoreWriteLock:
+    """Return the exclusive writer lock for store_path, creating it if needed.
+
+    Every writer of a managed Icechunk store must hold this lock, whichever path it takes:
+    ingestion, sync, or an openEO job publishing a managed dataset.
+    """
+    key = str(store_path.resolve())
+    with _store_locks_mutex:
+        if key not in _store_locks:
+            _store_locks[key] = StoreWriteLock(Path(key))
+        return _store_locks[key]
+
+
+class _IcechunkReadableStore(Protocol):
+    def list_dir(self, prefix: str) -> AsyncIterator[str]: ...
+    def getsize(self, key: str) -> Coroutine[Any, Any, int]: ...
+    def get(self, key: str, prototype: Any, byte_range: ByteRequest | None = None) -> Coroutine[Any, Any, Any]: ...
+
+
+class _IcechunkSession:
+    """Thin holder for a readonly Icechunk session and its branch-tip snapshot id."""
+
+    __slots__ = ("store", "snapshot_id", "store_path")
+
+    def __init__(self, store: _IcechunkReadableStore, snapshot_id: str, store_path: str) -> None:
+        self.store = store
+        self.snapshot_id = snapshot_id
+        self.store_path = store_path
+
+    @property
+    def cache_key(self) -> str:
+        return f"{self.store_path}:{self.snapshot_id}"
+
+
+def _resolve_artifacts_dir() -> Path:
+    return api_config.get_data_root() / "artifacts"
+
+
+ARTIFACTS_DIR = _resolve_artifacts_dir()
+ARTIFACTS_INDEX_PATH = ARTIFACTS_DIR / "records.json"
+
+
+def ensure_store() -> None:
+    """Create the artifact metadata store if it does not exist."""
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    if ARTIFACTS_INDEX_PATH.exists():
+        return
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        if not ARTIFACTS_INDEX_PATH.exists():
+            atomic_text(ARTIFACTS_INDEX_PATH, "[]\n")
+
+
+def list_artifacts() -> ArtifactListResponse:
+    """Return all stored artifacts."""
+    return ArtifactListResponse(items=_materialized_records(_load_records()))
+
+
+def group_datasets() -> dict[str, list[ArtifactRecord]]:
+    """Return artifact records grouped by stable managed dataset id."""
+    grouped: dict[str, list[ArtifactRecord]] = {}
+    for record in list_artifacts().items:
+        grouped.setdefault(managed_dataset_id_for(record), []).append(record)
+    return grouped
+
+
+LOADABLE_RASTER_FORMATS = frozenset({ArtifactFormat.ICECHUNK, ArtifactFormat.ZARR})
+"""Stored formats a raster reader can open as a datacube.
+
+Kept beside the gate that applies it so the two cannot drift: admitting a format no reader
+opens turns a catalogue entry into a runtime failure, and excluding one a reader handles
+hides a dataset that works. `openeo/execution.py::_open_artifact` opens exactly these two —
+Icechunk through its own reader, a plain Zarr store through `open_zarr_dataset`.
+
+NETCDF is absent deliberately: nothing opens it as a datacube, and `_dataset_links` offers it
+as a download instead. GEOPARQUET is absent for a stronger reason: it is not a datacube at all,
+so no reader will ever open it here.
+"""
+
+
+def _latest_published_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the latest published artifact for each dataset id, whatever its format.
+
+    Publication and recency are format-neutral questions, so they are answered once here.
+    What each surface then *does* with a given format is the surface's own question, asked
+    by the two gates below.
+
+    Publication is filtered *before* recency, not after. Picking the newest record first and
+    then testing it would drop a dataset entirely whenever its newest artifact happens to be
+    unpublished — an ingest with `publish: false` over an already-published dataset would
+    take it out of both catalogues, even though the earlier published record remains the
+    correct catalogue representative.
+    """
+    result: dict[str, ArtifactRecord] = {}
+    for dataset_id, artifacts in group_datasets().items():
+        published = [artifact for artifact in artifacts if artifact.publication.status == PublicationStatus.PUBLISHED]
+        if not published:
+            continue
+        result[dataset_id] = max(published, key=lambda artifact: artifact.created_at)
+    return dict(sorted(result.items()))
+
+
+def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the published raster datacube for each dataset id.
+
+    This is the set that can actually be *opened* as a raster: openEO `/collections` and
+    `load_collection`, the native Zarr and Icechunk routes, and job-result assets all
+    dereference the record as a store, so all of them ask this question rather than the
+    catalogue one. Membership follows `LOADABLE_RASTER_FORMATS` — the shape a reader can
+    open, rather than one specific storage format — so a format that is not a datacube does
+    not belong here however it is catalogued.
+    """
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in LOADABLE_RASTER_FORMATS
+    }
+
+
+CATALOGUED_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
+"""Stored formats the STAC catalogue and openEO `/collections` describe.
+
+Wider than `LOADABLE_RASTER_FORMATS`, which is what can be opened as a raster datacube. A
+feature collection is a STAC collection (licence, attribution, extent, table schema) and,
+since CLIM-1326, an openEO collection too: `load_collection` loads it as a vector cube, the
+same thing `load_features` returns.
+"""
+
+
+def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the artifacts the STAC catalogue advertises.
+
+    Every published raster, plus every published feature collection. Publication and recency are
+    answered once, format-neutrally, by `_latest_published_artifacts_by_dataset`; this only
+    decides which formats the catalogue has a representation for. `stac/services.py` has one per
+    format — a datacube document for a raster, a table document for a collection — so admitting
+    GEOPARQUET here never advertises a child the catalogue cannot serve.
+
+    Deliberately not an alias for the raster gate, and the raster gate is deliberately not
+    widened: the Zarr and Icechunk routes and the raster branch of `load_collection` still
+    open only datacubes, so they keep asking the raster question.
+    """
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in CATALOGUED_FORMATS
+    }
+
+
+OPENEO_COLLECTION_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
+"""Stored formats `load_collection` can load: rasters as datacubes, GeoParquet as vector cubes."""
+
+
+def openeo_collection_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the artifacts openEO `/collections` advertises and `load_collection` loads.
+
+    Every published raster, loaded as a raster datacube, plus every published feature
+    collection, loaded as a vector cube (CLIM-1326). The same formats STAC describes today, but
+    a separate gate: openEO advertises what `load_collection` can consume, so a format STAC can
+    describe but `load_collection` cannot load must not reach openEO by following STAC's set.
+    """
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format in OPENEO_COLLECTION_FORMATS
+    }
+
+
+def published_table_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
+    """Return the published table dataset for each dataset id, the record the rows API reads."""
+    return {
+        dataset_id: artifact
+        for dataset_id, artifact in _latest_published_artifacts_by_dataset().items()
+        if artifact.format == ArtifactFormat.PARQUET
+    }
+
+
+def list_ingestions() -> IngestionListResponse:
+    """Return ingestion run records for operational/admin use."""
+    records = sorted(_materialized_records(_load_records()), key=lambda record: record.created_at, reverse=True)
+    items = [_build_ingestion_response(record) for record in records]
+    return IngestionListResponse(items=items)
+
+
+def get_artifact_or_404(artifact_id: str) -> ArtifactRecord:
+    """Return a single artifact or raise 404."""
+    for record in _materialized_records(_load_records()):
+        if record.artifact_id == artifact_id:
+            return record
+    raise HTTPException(status_code=404, detail=f"Artifact '{artifact_id}' not found")
+
+
+def get_dataset_for_artifact_or_404(artifact_id: str) -> DatasetDetailRecord:
+    """Return the managed dataset view corresponding to an internal artifact id."""
+    artifact = get_artifact_or_404(artifact_id)
+    return get_dataset_or_404(managed_dataset_id_for(artifact))
+
+
+def get_dataset_summary_for_artifact_or_404(artifact_id: str) -> DatasetRecord:
+    """Return the managed dataset summary corresponding to an internal artifact id."""
+    artifact = get_artifact_or_404(artifact_id)
+    dataset_id = managed_dataset_id_for(artifact)
+    artifacts = group_datasets().get(dataset_id)
+    if artifacts is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+    return _build_dataset_record(dataset_id, artifacts)
+
+
+def get_ingestion_or_404(artifact_id: str) -> IngestionResponse:
+    """Return an ingestion run record resolved to the managed dataset summary."""
+    return _build_ingestion_response(get_artifact_or_404(artifact_id))
+
+
+def list_datasets() -> DatasetListResponse:
+    """Return managed datasets grouped by stable dataset id."""
+    grouped = group_datasets()
+    items = [_build_dataset_record(dataset_id, artifacts) for dataset_id, artifacts in sorted(grouped.items())]
+    return DatasetListResponse(items=items)
+
+
+def get_dataset_or_404(dataset_id: str) -> DatasetDetailRecord:
+    """Return one managed dataset or raise 404."""
+    grouped = group_datasets()
+    artifacts = grouped.get(dataset_id)
+    if artifacts is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+    return _build_dataset_detail_record(dataset_id, artifacts)
+
+
+def get_latest_artifact_for_dataset_or_404(dataset_id: str) -> ArtifactRecord:
+    """Return the latest artifact backing a managed dataset."""
+    grouped = group_datasets()
+    artifacts = grouped.get(dataset_id)
+    if artifacts is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+    return max(artifacts, key=lambda artifact: artifact.created_at)
+
+
+def ensure_ingestable(dataset: dict[str, object]) -> None:
+    """Raise 400 unless *dataset* declares a source to fetch from.
+
+    Called at every entrance to ingestion, not only inside `create_artifact`. The async
+    branch of `POST /ingestions` (`Prefer: respond-async`) enqueues a job and returns 202
+    before `create_artifact` runs, so a check that lived only there turned a client mistake
+    into an accepted job that later failed — with a logged traceback, and with the 400 the
+    caller needed buried in the job record instead of in the response.
+
+    400 rather than 500. The request is well formed and the template is valid; it simply has
+    no upstream, which is a property of the dataset the caller named. A 500 says the server
+    broke and invites a retry that cannot succeed (CLIM-912).
+    """
+    if registry_datasets.is_ingestable(dataset):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Data source '{dataset['id']}' cannot be ingested: it declares no "
+            "'ingestion.plugin', so there is no source to fetch from. If it is a derived "
+            "product, it is published by a workflow through 'save_result' — run the workflow "
+            "that produces it (see GET /process_graphs). Otherwise, add an 'ingestion.plugin' "
+            "to the template. GET /data-sources reports 'ingestable' for every data source."
+        ),
+    )
+
+
+def create_artifact(
+    *,
+    dataset: dict[str, object],
+    start: str | None,
+    end: str | None,
+    bbox: list[float] | None,
+    country_code: str | None,
+    overwrite: bool,
+    publish: bool,
+    download_start: str | None = None,
+    download_end: str | None = None,
+    on_progress: Callable[[int | None, int | None, str | None], None] | None = None,
+    is_cancel_requested: Callable[[], bool] | None = None,
+    save_cursor: Callable[[dict[str, object]], None] | None = None,
+    periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
+) -> ArtifactRecord:
+    """Materialize one managed dataset artifact and persist its metadata.
+
+    ``on_update_planned`` is called once the plan is known and before anything is fetched,
+    only when the ingestion will change stored data. It receives the coverage end the data
+    had before this update, or None when every period is new or rewritten. An up-to-date
+    dataset returns its existing artifact without calling it.
+
+    Source dataset materialization is plugin-backed and always writes an
+    Icechunk store. Sync requests may still pass `download_start` and
+    `download_end`, but those only describe the requested append window. The
+    streaming engine remains store-authoritative and appends only periods that
+    are actually missing from the committed store.
+    """
+    # Before any request validation: whether this template can be ingested at all does not
+    # depend on the request, and checking it later meant an operator who picked a workflow
+    # output was first told to supply a start period — advice for a request that could never
+    # have succeeded.
+    ensure_ingestable(dataset)
+
+    if registry_datasets.is_timeless(dataset):
+        # No time axis, so no periods to resolve, plan or append: the plugin's `fetch` is called
+        # once (CLIM-1448). A start or end in the request has nothing to select and is ignored.
+        ingestion = dataset.get("ingestion")
+        plugin_path = str((ingestion or {}).get("plugin", "")).strip() if isinstance(ingestion, dict) else ""
+        return _create_streaming_artifact(
+            dataset=dataset,
+            plugin_path=plugin_path,
+            start=None,
+            end=None,
+            bbox=bbox,
+            country_code=country_code,
+            overwrite=overwrite,
+            publish=publish,
+            request_scope=ArtifactRequestScope(bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None),
+            on_progress=on_progress,
+            is_cancel_requested=is_cancel_requested,
+            on_update_planned=on_update_planned,
+        )
+
+    period_type = str(dataset["period_type"])
+    start = _resolve_request_start(start, dataset=dataset, period_type=period_type)
+    end = _normalize_optional_request_period(end, period_type=period_type, field_name="end")
+    download_start = _normalize_optional_request_period(
+        download_start, period_type=period_type, field_name="download_start"
+    )
+    download_end = _normalize_optional_request_period(download_end, period_type=period_type, field_name="download_end")
+    _validate_download_scope(
+        start=start,
+        end=end,
+        download_start=download_start,
+        download_end=download_end,
+    )
+    resolved_download_end = download_end if download_end is not None else end
+    if resolved_download_end is None:
+        if not has_calendar_periods(period_type):
+            # No "now" to end at either; the plugin enumerates the reference period's ordinals.
+            resolved_download_end = _LAST_ORDINAL
+        elif registry_datasets.is_future_facing(dataset):
+            # "Now" is this dataset's *start*, so using it as the end would collapse a
+            # seven-day forecast to a single day. Offer a generous horizon instead and let
+            # the plugin clip to whatever it actually publishes. `request_scope.end` stays
+            # None, so the coverage check does not hold the plugin to this wider bound.
+            resolved_download_end = _forecast_horizon(dataset, period_type)
+        else:
+            resolved_download_end = _current_request_period(period_type)
+    request_scope = ArtifactRequestScope(
+        start=start,
+        end=end,
+        bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox is not None else None,
+    )
+    # Guaranteed non-blank by the `is_ingestable` check above, which is the single definition
+    # of what makes a template ingestable; re-testing it here would let the two drift.
+    ingestion = dataset.get("ingestion")
+    plugin_path = str((ingestion or {}).get("plugin", "")).strip() if isinstance(ingestion, dict) else ""
+    return _create_streaming_artifact(
+        dataset=dataset,
+        plugin_path=plugin_path,
+        start=start,
+        end=resolved_download_end,
+        bbox=bbox,
+        country_code=country_code,
+        overwrite=overwrite,
+        publish=publish,
+        request_scope=request_scope,
+        on_progress=on_progress,
+        is_cancel_requested=is_cancel_requested,
+        save_cursor=save_cursor,
+        periods=periods,
+        on_update_planned=on_update_planned,
+    )
+
+
+DEFAULT_PRIMARY_GEOMETRY = "geometry"
+"""Geometry column name assumed when a caller does not name the one it wrote.
+
+The GeoParquet convention, and what every writer in scope produces. A parameter rather than a
+constant at the record site because a collection may carry more than one geometry column, and
+the writer is the only thing that knows which one is primary.
+"""
+
+
+def create_feature_artifact(
+    *,
+    template: dict[str, object],
+    features: Mapping[str, Any],
+    store_path: Path | str,
+    crs: str,
+    bbox: Sequence[float] | None = None,
+    primary_geometry: str = DEFAULT_PRIMARY_GEOMETRY,
+    provider: str | None = None,
+    version: ArtifactVersion | None = None,
+    publish: bool = True,
+) -> ArtifactRecord:
+    """Register one already-written feature collection as a managed dataset.
+
+    The vector sibling of `create_artifact`, and a separate door rather than a branch inside
+    it: `create_artifact` reads `period_type` on its first line and normalizes four period
+    arguments before dispatching, and none of that describes a bbox extract. What the two
+    share is everything *below* materialization — records, publication state, overwrite
+    semantics — which is why this ends at `register_artifact_record` rather than at a second
+    record store.
+
+    This does not write bytes. The GeoParquet file at `store_path` is the store's output
+    (CLIM-1068); what happens here is that a record starts existing, which is the only thing
+    that makes the file a collection. An unregistered GeoParquet file is ignored, however it
+    got there: the listing reads records, never the filesystem, so the store directory is not
+    an inbox.
+
+    `features` is a GeoJSON FeatureCollection, the one form the provider contract needs —
+    both sources in scope (a country's Overture divisions, a DHIS2 hierarchy) are small enough
+    to hold in memory, so there is no streaming-to-file variant to serve.
+
+    `crs` is required rather than defaulted, and describes the geometry as the GeoParquet at
+    `store_path` stores it — checked against the file's own footer rather than taken on trust.
+    ADR 0002 decision 9 makes an explicit CRS a property of every stored collection; a default
+    here would let a caller that reprojected before writing record WGS 84 by omission, and the
+    extent would then describe a store it does not match. A projected store is recorded with its
+    own extent as `coverage.spatial` and the WGS 84 one beside it.
+
+    Raises ValueError for a template or collection that cannot produce a record: a missing
+    `id_property`, a payload that is not a FeatureCollection, a malformed member, an empty
+    collection, a `store_path` with no file at it, or a declared CRS the stored file
+    contradicts. An empty collection is refused rather than registered, because a provider that
+    returned nothing is reporting a failure, and a record for it would advertise a collection
+    with no extent.
+
+    `provider` names the `@feature_provider` that produced `features`, stamped verbatim onto
+    `FeatureDetail.provider` (CLIM-926). None for a hand-registered collection. The caller's
+    own selected registry name, never read from the payload: a provider does not get to declare
+    its own identity, or one could claim ownership of a collection another provider wrote.
+    """
+    dataset_id = _require_template_str(template, "id")
+    dataset_name = _require_template_str(template, "name")
+    # Required by FeatureDetail too, but read here so the error names the template field the
+    # author has to fix rather than surfacing as a pydantic failure on a nested submodel.
+    id_property = _require_template_str(template, "id_property")
+    stored_crs = _require_feature_crs(crs, dataset_id=dataset_id)
+    requested_bbox = _requested_extract_bbox(bbox, dataset_id=dataset_id)
+    resolved_path = _require_written_feature_store(store_path, dataset_id=dataset_id)
+    _require_declaration_matches_file(resolved_path, declared_crs=stored_crs, dataset_id=dataset_id)
+    feature_list = _feature_collection_members(features, dataset_id=dataset_id)
+    # Deliberately not validated per feature here. That each id_property value is present and
+    # identifies exactly one feature is the identity contract, and it needs one implementation
+    # governing the stored collection, a provider's output and both export paths — CLIM-1068.
+    bounds = _feature_collection_bounds(feature_list, dataset_id=dataset_id)
+    record = ArtifactRecord(
+        artifact_id=str(uuid4()),
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        # A boundary set measures nothing and has no temporal axis. Both fields are optional
+        # precisely so this record does not have to invent values for them.
+        variable=None,
+        period_type=None,
+        # A provider reports what it actually fetched, so that wins over the template's
+        # declaration: the two can disagree, and only one of them was true of this extract.
+        # A provider that reports nothing leaves the declared `sync.version` in place.
+        version=version or _resolve_artifact_version(template),
+        format=ArtifactFormat.GEOPARQUET,
+        path=str(resolved_path),
+        asset_paths=[str(resolved_path)],
+        size_bytes=stored_bytes(resolved_path),
+        variables=[],
+        request_scope=ArtifactRequestScope(start=None, end=None, bbox=requested_bbox),
+        coverage=_feature_coverage(bounds, stored_crs=stored_crs, dataset_id=dataset_id),
+        created_at=datetime.now(UTC),
+        publication=ArtifactPublication(),
+        features=FeatureDetail(
+            id_property=id_property,
+            feature_count=len(feature_list),
+            primary_geometry=primary_geometry,
+            crs=stored_crs,
+            provider=provider,
+        ),
+    )
+    # Overwrite semantics, which is what a refresh is: replace this collection's name, extent
+    # and paths in place while keeping its artifact id and publication state. There is no
+    # version history for a feature collection — explaining why one run covered 47 districts
+    # and the next 48 needs a version string, not an archive. `_find_replaceable_artifact`
+    # is what makes that true across a changed extract window; see it for why.
+    return register_artifact_record(record, publish=publish)
+
+
+def _require_feature_crs(crs: str, *, dataset_id: str) -> str:
+    """Return the canonical form of a declared store CRS, or refuse what is not a CRS at all.
+
+    Two CRSs meet here and this is the only place that can tell them apart. The incoming
+    `features` payload is GeoJSON, which RFC 7946 defines as WGS 84, and `crs` describes the
+    GeoParquet already written at `store_path` — which the store may have reprojected on the
+    way in. The coverage below is what keeps both true: the extent derived from the GeoJSON is
+    recorded as `spatial_wgs84`, and `spatial` is that extent expressed in the store's own CRS,
+    which is the same arrangement every raster record uses.
+
+    A projected store was refused here until CLIM-1068, because until there was a CRS-correct
+    reader there was nothing that could window one. Now that there is, refusing would only
+    stop a collection being registered that the rest of the system can read.
+
+    Normalized through `canonical_feature_crs`, the same function `FeatureDetail` validates
+    with, so a provider declaring 'OGC:CRS84' — the spelling GeoJSON and GeoParquet both use —
+    or a lowercase 'epsg:4326' is accepted here and stored in the one spelling there.
+    """
+    canonical = canonical_feature_crs(crs)
+    if canonical is None:
+        raise ValueError(
+            f"feature collection '{dataset_id}' must declare the CRS of its stored geometry as an "
+            "authority code such as 'EPSG:4326'"
+        )
+    return canonical
+
+
+def _feature_coverage(bounds: CoverageSpatial, *, stored_crs: str, dataset_id: str) -> ArtifactCoverage:
+    """Return the coverage for a feature collection, with `spatial` in the store's own CRS.
+
+    `bounds` comes from GeoJSON coordinates, so it is a WGS 84 extent whatever the store holds.
+    The record's convention is that `spatial` is native and `spatial_wgs84` is the WGS 84 copy —
+    None when the two are the same — so a reprojected store records the projected extent as
+    `spatial` and keeps the WGS 84 one beside it, exactly as a raster in a projected CRS does.
+    Recording the WGS 84 extent as `spatial` for a projected store is the silent mismatch ADR
+    0002 decision 9 exists to prevent.
+    """
+    if stored_crs == "EPSG:4326":
+        return ArtifactCoverage(spatial=bounds, spatial_wgs84=None, temporal=CoverageTemporal(start=None, end=None))
+    try:
+        west, south, east, north = transform_bbox(
+            (bounds.xmin, bounds.ymin, bounds.xmax, bounds.ymax), source="EPSG:4326", target=stored_crs
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"feature collection '{dataset_id}' declares stored CRS {stored_crs}, but its features do "
+            f"not map into it: {exc}"
+        ) from exc
+    return ArtifactCoverage(
+        spatial=CoverageSpatial(xmin=west, ymin=south, xmax=east, ymax=north),
+        spatial_wgs84=bounds,
+        temporal=CoverageTemporal(start=None, end=None),
+    )
+
+
+def _require_written_feature_store(store_path: Path | str, *, dataset_id: str) -> Path:
+    """Return the resolved path of an already-written GeoParquet file, or refuse to register it.
+
+    `resolve()` makes a path absolute; it does not make a file exist. Registering a record that
+    points at nothing would succeed loudly and then fail silently: `_materialized_records` drops
+    any record whose backing storage is missing, so the collection would be published, logged as
+    registered, and absent from every listing — with a warning about a stale artifact as the
+    only trace, which reads as corruption rather than as a caller that passed the wrong path.
+
+    Checked before the record is built rather than after, so a caller that got the path wrong
+    learns it without a half-done registration. `is_file` rather than `exists`: a feature
+    collection is one GeoParquet file, and a directory at that path is the partitioned form this
+    release does not write or read.
+    """
+    resolved = Path(store_path).resolve()
+    if not resolved.is_file():
+        raise ValueError(
+            f"feature collection '{dataset_id}' has no GeoParquet file at {resolved}; the store "
+            "writes the file, and this registers what it wrote"
+        )
+    return resolved
+
+
+def _require_declaration_matches_file(path: Path, *, declared_crs: str, dataset_id: str) -> None:
+    """Refuse a declared CRS the stored file contradicts.
+
+    `crs` is the caller's word for what it wrote, and until here nothing checked it against the
+    bytes. Getting it wrong is not a cosmetic error: declaring an EPSG:4326 file as EPSG:3857
+    publishes coverage reprojected from degrees it never left, and every later read transforms
+    its window into metres against a file indexed in degrees — so the reads return nothing, or
+    the wrong rows, with no error anywhere.
+
+    GeoParquet records the CRS in its footer. Missing or unreadable metadata cannot establish
+    what was written; an omitted CRS in valid metadata means OGC:CRS84.
+    """
+    from open_geo_service.shared import geoparquet
+
+    actual = geoparquet.stored_crs(path)
+    if actual is None:
+        raise ValueError(f"feature collection '{dataset_id}' has no readable GeoParquet CRS at {path}")
+    if actual == declared_crs:
+        return
+    raise ValueError(
+        f"feature collection '{dataset_id}' is declared as {declared_crs}, but the GeoParquet at "
+        f"{path} stores {actual}; the record would describe a file it does not match"
+    )
+
+
+def _requested_extract_bbox(
+    bbox: Sequence[float] | None, *, dataset_id: str
+) -> tuple[float, float, float, float] | None:
+    """Return the requested extract window as a west/south/east/north tuple, or None.
+
+    Checked rather than indexed. A six-element bbox is GeoJSON's 3D form (RFC 7946 allows
+    elevation bounds in positions 2 and 5), and taking its first four numbers would silently
+    record `minx, miny, minz, maxx` — an extent that looks plausible and is wrong. Fewer than
+    four would raise IndexError from inside the record constructor rather than the ValueError
+    this entry point documents.
+    """
+    if bbox is None:
+        return None
+    values = list(bbox)
+    if len(values) != 4:
+        raise ValueError(
+            f"feature collection '{dataset_id}' was given a {len(values)}-element bbox; it must be "
+            "the four numbers west, south, east, north (a 3D bbox is not supported here)"
+        )
+    return (float(values[0]), float(values[1]), float(values[2]), float(values[3]))
+
+
+def _require_template_str(template: dict[str, object], key: str) -> str:
+    """Return a required string field from a feature collection template, verbatim.
+
+    Padding is rejected rather than stripped, and returning the value unchanged is the point:
+    `id` and `id_property` are compared exactly — against a managed dataset id and against a
+    property key in the stored file — so a helper that validated the stripped value and then
+    returned the padded one would pass a check the caller never made. `FeatureDetail` refuses
+    the padded name a few lines later regardless; failing here names the template field the
+    author has to fix instead.
+    """
+    value = template.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"feature collection template must declare a non-empty '{key}'")
+    if value != value.strip():
+        raise ValueError(
+            f"feature collection template declares '{key}' as {value!r}, with leading or "
+            "trailing whitespace; it is compared exactly, so declare it without padding"
+        )
+    return value
+
+
+def _feature_collection_members(features: object, *, dataset_id: str) -> list[Mapping[str, Any]]:
+    """Return the features of a GeoJSON FeatureCollection, or raise ValueError.
+
+    Takes `object` rather than the `Mapping` the caller's signature advertises, and that is the
+    point: this is the boundary where a provider's return value stops being trusted. A provider
+    is ordinary Python returning whatever it returns, so a list or None reaching here is a live
+    possibility rather than a type-system impossibility, and `.get` on one would raise
+    AttributeError — the wrong error, from the wrong layer, for a caller this module promises
+    ValueError to. Narrowing here also keeps the annotation on `create_feature_artifact` honest
+    about what it expects, without that annotation being mistaken for a guarantee.
+    """
+    if not isinstance(features, Mapping):
+        raise ValueError(
+            f"feature collection '{dataset_id}' must be a GeoJSON FeatureCollection object, got "
+            f"{type(features).__name__}"
+        )
+    if features.get("type") != "FeatureCollection":
+        raise ValueError(
+            f"feature collection '{dataset_id}' must be a GeoJSON FeatureCollection, got type {features.get('type')!r}"
+        )
+    members = features.get("features")
+    if not isinstance(members, Sequence) or isinstance(members, str | bytes):
+        raise ValueError(f"feature collection '{dataset_id}' has no 'features' array")
+    if not members:
+        raise ValueError(
+            f"feature collection '{dataset_id}' is empty; a provider that returned no features "
+            "is reporting a failure, so nothing is registered"
+        )
+    # Structural only: a member must be a Mapping and must say it is a Feature. Rejected, not
+    # filtered — dropping one would leave `feature_count` describing what survived the filter
+    # rather than what the provider supplied or the store holds, and that count is what answers
+    # "why did yesterday cover 47 districts and today 48". What a member *contains* is a
+    # different question: that each id_property value is present and identifies exactly one
+    # feature is the identity contract, and stays in CLIM-1068.
+    malformed = [
+        index
+        for index, member in enumerate(members)
+        if not isinstance(member, Mapping) or member.get("type") != "Feature"
+    ]
+    if malformed:
+        raise ValueError(
+            f"feature collection '{dataset_id}' has malformed members at "
+            f"{', '.join(str(index) for index in malformed)}; each must be a GeoJSON object "
+            "with type 'Feature'"
+        )
+    return [cast(Mapping[str, Any], member) for member in members]
+
+
+def _feature_collection_bounds(features: Sequence[Mapping[str, Any]], *, dataset_id: str) -> CoverageSpatial:
+    """Return the spatial extent of a FeatureCollection, computed from its coordinates.
+
+    Computed rather than read from an advertised `bbox` member. RFC 7946 permits one on a
+    FeatureCollection but nothing keeps it in step with the geometries, and this extent is what
+    the catalogue publishes, so it is derived from the shapes themselves.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    for index, feature in enumerate(features):
+        for x, y in _geometry_positions(feature.get("geometry"), dataset_id=dataset_id, index=index):
+            xs.append(x)
+            ys.append(y)
+    if not xs:
+        raise ValueError(f"feature collection '{dataset_id}' has no usable geometry, so it has no spatial extent")
+    return CoverageSpatial(xmin=min(xs), ymin=min(ys), xmax=max(xs), ymax=max(ys))
+
+
+_GEOMETRY_COORDINATE_DEPTH = {
+    "Point": 1,
+    "MultiPoint": 2,
+    "LineString": 2,
+    "MultiLineString": 3,
+    "Polygon": 3,
+    "MultiPolygon": 4,
+}
+"""How deeply each RFC 7946 geometry nests its coordinate arrays, positions included.
+
+A Point is one position; a Polygon is rings of positions, so three. Checking the depth is what
+separates a real geometry from one that merely looks like JSON: a Polygon carrying a bare
+position reads as a valid shape to a walker that only looks for numbers, and would contribute
+a point to the extent of a collection that is supposed to hold areas.
+
+GeometryCollection is absent deliberately — it nests *geometries*, not coordinates, and is
+handled on its own branch.
+"""
+
+
+def _geometry_positions(geometry: object, *, dataset_id: str, index: int) -> Iterator[tuple[float, float]]:
+    """Yield every (x, y) position in one feature's geometry, rejecting anything that is not one.
+
+    Validated rather than best-effort. The extent computed from these positions is what the
+    catalogue publishes and what a spatial read is checked against, so a geometry OGS cannot
+    interpret has to fail here: silently skipping it would publish an extent derived from the
+    features that happened to parse, and `feature_count` would still claim all of them.
+
+    An unlocated feature is refused too. RFC 7946 permits `geometry: null`, but a boundary with
+    no boundary cannot be aggregated over, joined to, or drawn, so a provider that emitted one
+    is reporting a failure rather than a feature.
+
+    What stays out of scope here: whether a polygon ring is closed and has four positions, and
+    whether coordinates fall in a plausible range for the declared CRS. Those are read against
+    the stored file by the reader that opens it (CLIM-1068); this rules out the payloads that
+    are not geometry at all.
+    """
+    if geometry is None:
+        raise ValueError(
+            f"feature collection '{dataset_id}' has an unlocated feature at {index}; every feature "
+            "must carry a geometry"
+        )
+    if not isinstance(geometry, Mapping):
+        raise ValueError(
+            f"feature collection '{dataset_id}' has a feature at {index} whose geometry is "
+            f"{type(geometry).__name__}, not a GeoJSON geometry object"
+        )
+    geometry_type = geometry.get("type")
+    if geometry_type == "GeometryCollection":
+        nested = geometry.get("geometries")
+        if not isinstance(nested, Sequence) or isinstance(nested, str | bytes) or not nested:
+            raise ValueError(
+                f"feature collection '{dataset_id}' has a feature at {index} whose "
+                "GeometryCollection declares no 'geometries' array"
+            )
+        for member in nested:
+            yield from _geometry_positions(member, dataset_id=dataset_id, index=index)
+        return
+    if not isinstance(geometry_type, str) or geometry_type not in _GEOMETRY_COORDINATE_DEPTH:
+        raise ValueError(
+            f"feature collection '{dataset_id}' has a feature at {index} with geometry type "
+            f"{geometry_type!r}; expected one of "
+            f"{', '.join(sorted([*_GEOMETRY_COORDINATE_DEPTH, 'GeometryCollection']))}"
+        )
+    yield from _coordinate_positions(
+        geometry.get("coordinates"),
+        depth=_GEOMETRY_COORDINATE_DEPTH[geometry_type],
+        dataset_id=dataset_id,
+        index=index,
+        geometry_type=geometry_type,
+    )
+
+
+def _coordinate_positions(
+    coordinates: object, *, depth: int, dataset_id: str, index: int, geometry_type: str
+) -> Iterator[tuple[float, float]]:
+    """Yield the (x, y) pairs of a coordinate array nested exactly *depth* levels deep."""
+
+    def fail(detail: str) -> ValueError:
+        return ValueError(f"feature collection '{dataset_id}' has a malformed {geometry_type} at {index}: {detail}")
+
+    if depth == 1:
+        if not isinstance(coordinates, Sequence) or isinstance(coordinates, str | bytes) or len(coordinates) < 2:
+            raise fail("a position must be an array of at least two numbers")
+        x, y = coordinates[0], coordinates[1]
+        # bool is an int in Python, and `[True, False]` is not a position.
+        if (
+            isinstance(x, bool)
+            or isinstance(y, bool)
+            or not isinstance(x, int | float)
+            or not isinstance(y, int | float)
+        ):
+            raise fail(f"a position must hold numbers, got {coordinates[:2]!r}")
+        # A third element is elevation (RFC 7946 permits one); the extent is 2D, so it is read
+        # past rather than rejected.
+        yield float(x), float(y)
+        return
+    if not isinstance(coordinates, Sequence) or isinstance(coordinates, str | bytes) or not coordinates:
+        raise fail(f"expected a non-empty array {depth} levels deep, got {coordinates!r}")
+    for member in coordinates:
+        yield from _coordinate_positions(
+            member, depth=depth - 1, dataset_id=dataset_id, index=index, geometry_type=geometry_type
+        )
+
+
+def _resolve_artifact_version(dataset: dict[str, object]) -> ArtifactVersion | None:
+    """Return the release identity to stamp on a newly materialized artifact.
+
+    Only a release-kind template's declared `sync.version` produces one, and it declares
+    both halves — the upstream's identifier and the authority whose scheme names it. Neither
+    half is inferred: deriving `value` from `coverage.temporal.end` is the coupling this
+    field exists to remove, and deriving `authority` from a display field such as `source`
+    would repeat that mistake one level up, since editing a label for presentation would
+    silently rename every release under it.
+
+    A dataset with no declared release identity has `version=None`, and release planning
+    falls back to period comparison for it, as it did before this field existed.
+    """
+    sync_config = dataset.get("sync")
+    if not isinstance(sync_config, dict) or sync_config.get("kind") != SyncKind.RELEASE:
+        return None
+    # One interpreter for the declaration, shared with registration and sync planning, so
+    # the version stamped here is the one the planner will compare against.
+    return parse_declared_artifact_version(sync_config.get("version"))
+
+
+def _period_order_key(period: str, period_type: str) -> str:
+    """Return a lexically sortable key for one normalized period id."""
+    if period_type == "climatology":
+        try:
+            return f"{int(period):03d}"
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Invalid climatology period '{period}'",
+            ) from exc
+    return period
+
+
+def _normalize_ordered_periods(
+    periods: list[str], *, period_type: str, source: str, require_ordered: bool = True
+) -> list[str]:
+    """Normalize periods and optionally require a unique, ascending sequence."""
+    try:
+        normalized = [normalize_period_string(period, period_type) for period in periods]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f"{source} returned an invalid period sequence: {exc}") from exc
+    if require_ordered:
+        keys = [_period_order_key(period, period_type) for period in normalized]
+        if len(set(normalized)) != len(normalized) or keys != sorted(keys):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{source} periods must be unique and in ascending order; refusing to mutate the store",
+            )
+    return normalized
+
+
+def _periods_are_contiguous(periods: list[str], period_type: str) -> bool:
+    """Return whether each period immediately follows the previous one."""
+    return all(next_period_string(previous, period_type) == current for previous, current in zip(periods, periods[1:]))
+
+
+def _validate_source_periods(
+    periods: list[str],
+    *,
+    start: str,
+    end: str,
+    period_type: str,
+    scope: str,
+) -> list[str]:
+    """Normalize and validate one source-provided materialization sequence."""
+    available = _normalize_ordered_periods(periods, period_type=period_type, source="Ingestion plugin")
+    if not available:
+        raise HTTPException(status_code=409, detail=f"Source has no data for the requested {scope}")
+    # Climatology plugins enumerate ordinal day-of-year values while the API and
+    # management UI use date-shaped dataset bounds. Those bounds describe the
+    # reference climate interval, not the ordinal materialization axis.
+    if period_type != "climatology" and available[0] != start:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Source cannot materialize the requested {scope} from {start}; first available is {available[0]}",
+        )
+    if period_type != "climatology" and _period_order_key(available[-1], period_type) > _period_order_key(
+        end, period_type
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Source returned period {available[-1]} beyond the requested {scope} ending {end}",
+        )
+    if not _periods_are_contiguous(available, period_type):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Source returned a non-contiguous period sequence for the requested {scope}",
+        )
+    return available
+
+
+def _no_op_streaming_plan(committed: list[str], current_start: str, current_end: str) -> _StreamingMaterializationPlan:
+    """Build the common plan for reusing an already complete store."""
+    return _StreamingMaterializationPlan(
+        action=SyncAction.NO_OP,
+        start=current_start,
+        end=current_end,
+        periods=committed,
+        has_committed_periods=True,
+        committed_periods=committed,
+    )
+
+
+def _plan_streaming_materialization(
+    *,
+    plugin: IngestionPlugin,
+    store_path: Path,
+    start: str,
+    end: str,
+    period_type: str,
+    overwrite: bool,
+    periods: list[str] | None,
+) -> _StreamingMaterializationPlan:
+    """Plan a contiguous union before allowing streaming ingest to write.
+
+    A forward request extends a contiguous committed prefix by enumerating only
+    the missing delta; the source need not reproduce committed history. Earlier
+    requests, gaps, or non-monotonic committed coordinates require a sibling-store
+    rematerialization and a source that can reproduce the complete union.
+    """
+    committed = _normalize_ordered_periods(
+        read_committed_period_ids_ordered(
+            store_path,
+            period_type,
+            time_dim=str(getattr(plugin, "time_dim", "t")),
+        ),
+        period_type=period_type,
+        source="Committed store",
+        require_ordered=False,
+    )
+    if overwrite or not committed:
+        available = _validate_source_periods(
+            periods if periods is not None else asyncio.run(plugin.periods(start, end)),
+            start=start,
+            end=end,
+            period_type=period_type,
+            scope="temporal scope",
+        )
+        return _StreamingMaterializationPlan(
+            action=SyncAction.REMATERIALIZE if overwrite else SyncAction.APPEND,
+            start=available[0] if period_type == "climatology" else start,
+            end=available[-1],
+            periods=available,
+            has_committed_periods=bool(committed),
+            committed_periods=committed,
+        )
+
+    climatology_has_reference_bounds = period_type == "climatology" and not (
+        start.isdigit() and end.isdigit() and 1 <= int(start) <= 366 and 1 <= int(end) <= 366
+    )
+    if climatology_has_reference_bounds:
+        # Date-shaped bounds describe the reference interval. Ask the source for
+        # the ordinal materialization scope so a partial store cannot define its
+        # own target and incorrectly appear complete.
+        available = _validate_source_periods(
+            periods if periods is not None else asyncio.run(plugin.periods(start, end)),
+            start=start,
+            end=end,
+            period_type=period_type,
+            scope="temporal scope",
+        )
+        start, end = available[0], available[-1]
+        periods = available
+
+    current_start = min(committed, key=lambda value: _period_order_key(value, period_type))
+    current_end = max(committed, key=lambda value: _period_order_key(value, period_type))
+    materialization_start = min((current_start, start), key=lambda value: _period_order_key(value, period_type))
+    materialization_end = max((current_end, end), key=lambda value: _period_order_key(value, period_type))
+    committed_is_contiguous = _periods_are_contiguous(committed, period_type)
+
+    # A request wholly contained by an already contiguous store cannot add data.
+    # Reuse the current artifact without asking a rolling source to enumerate
+    # historical periods that it may no longer expose.
+    if materialization_start == current_start and materialization_end == current_end and committed_is_contiguous:
+        return _no_op_streaming_plan(committed, current_start, current_end)
+
+    # A contiguous store that only needs a forward extension requires the source
+    # to enumerate the missing delta, not reproduce committed history. Reuse a
+    # sync planner's prefetched delta when present; direct ingestion queries it here.
+    if materialization_start == current_start and committed_is_contiguous:
+        expected_start = next_period_string(current_end, period_type)
+        source_periods = _normalize_ordered_periods(
+            periods if periods is not None else asyncio.run(plugin.periods(expected_start, materialization_end)),
+            period_type=period_type,
+            source="Ingestion plugin",
+        )
+        # Plugins should honor the requested bounds, but accepting an already
+        # committed leading prefix keeps broader source enumerators compatible.
+        delta = [
+            period
+            for period in source_periods
+            if _period_order_key(period, period_type) >= _period_order_key(expected_start, period_type)
+        ]
+        if not delta:
+            return _no_op_streaming_plan(committed, current_start, current_end)
+        if delta[0] != expected_start or not _periods_are_contiguous(delta, period_type):
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Source append periods must form a contiguous sequence beginning at {expected_start}"),
+            )
+        if _period_order_key(delta[-1], period_type) > _period_order_key(materialization_end, period_type):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Source returned period {delta[-1]} beyond the requested temporal union ending "
+                    f"{materialization_end}"
+                ),
+            )
+        return _StreamingMaterializationPlan(
+            action=SyncAction.APPEND,
+            start=current_start,
+            end=delta[-1],
+            periods=delta,
+            has_committed_periods=True,
+            committed_periods=committed,
+        )
+
+    available = _validate_source_periods(
+        asyncio.run(plugin.periods(materialization_start, materialization_end)),
+        start=materialization_start,
+        end=materialization_end,
+        period_type=period_type,
+        scope="temporal union",
+    )
+    available_set = set(available)
+    missing_committed = [period for period in committed if period not in available_set]
+    if missing_committed:
+        missing_summary = ", ".join(missing_committed[:5])
+        if len(missing_committed) > 5:
+            missing_summary += f" and {len(missing_committed) - 5} more"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Source can no longer reproduce committed period(s) required for the temporal union: " + missing_summary
+            ),
+        )
+
+    return _StreamingMaterializationPlan(
+        action=SyncAction.REMATERIALIZE,
+        start=materialization_start,
+        end=available[-1],
+        periods=available,
+        has_committed_periods=True,
+        committed_periods=committed,
+    )
+
+
+def _plan_static_materialization(*, store_path: Path, overwrite: bool) -> _StreamingMaterializationPlan:
+    """Plan an ingest of a static dataset without a time axis (CLIM-1448).
+
+    There are no periods to compare, so a stored dataset is current: an ingest without
+    ``overwrite`` keeps it, and one with ``overwrite`` fetches it again into a replacement that
+    is swapped in once it is complete.
+    """
+    has_store = store_path.exists() and not is_store_empty(store_path)
+    if has_store and not overwrite:
+        action = SyncAction.NO_OP
+    elif has_store:
+        action = SyncAction.REMATERIALIZE
+    else:
+        action = SyncAction.APPEND
+    # A stored dataset counts as committed data, so a failed rebuild of its replacement raises
+    # instead of swapping in a store that was never normalized.
+    return _StreamingMaterializationPlan(
+        action=action, start=None, end=None, periods=None, has_committed_periods=has_store
+    )
+
+
+def _previous_coverage_end(dataset: dict[str, object], plan: _StreamingMaterializationPlan) -> str | None:
+    """The coverage end stored data had before an update, or None when all of it is new.
+
+    Only a forward append keeps earlier periods as they were. A new store has none, and a
+    rematerialization rewrites every period, so both report None: everything up to the new
+    end changed.
+    """
+    if plan.action != SyncAction.APPEND or not plan.has_committed_periods:
+        return None
+    try:
+        existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return None
+    return existing.coverage.temporal.end
+
+
+def _create_streaming_artifact(
+    *,
+    dataset: dict[str, object],
+    plugin_path: str,
+    start: str | None,
+    end: str | None,
+    bbox: list[float] | None,
+    country_code: str | None,
+    overwrite: bool,
+    publish: bool,
+    request_scope: ArtifactRequestScope,
+    on_progress: Callable[[int | None, int | None, str | None], None] | None = None,
+    is_cancel_requested: Callable[[], bool] | None = None,
+    save_cursor: Callable[[dict[str, object]], None] | None = None,
+    periods: list[str] | None = None,
+    on_update_planned: Callable[[str | None], None] | None = None,
+) -> ArtifactRecord:
+    """Create or update one plugin-backed Icechunk artifact.
+
+    The same helper is used for both initial ingest and store-based sync. Planning
+    enumerates the missing delta for a forward append, or the complete scope for
+    a new store or rematerialization. The orchestrator receives the planned periods
+    and fetches only those not already committed in its target Icechunk store.
+    """
+    if bbox is None:
+        raise HTTPException(status_code=400, detail="Streaming ingest requires a bounding box")
+
+    ingestion = dataset.get("ingestion")
+    raw_params = ingestion.get("params") if isinstance(ingestion, dict) else None
+    if raw_params is None:
+        params: dict[str, object] = {}
+    elif isinstance(raw_params, dict):
+        params = dict(raw_params)
+    else:
+        raise HTTPException(status_code=500, detail="ingestion.params must be an object")
+    if country_code is not None:
+        params["country_code"] = country_code
+
+    store_path = downloader.get_icechunk_path(dataset)
+
+    lock = _acquire_store_lock(store_path)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail=f"An ingest or sync is already running for dataset '{dataset['id']}'. Wait for it to finish.",
+        )
+    plugin: IngestionPlugin | StaticIngestionPlugin | None = None
+    replacement_path: Path | None = None
+    rollback_repo: Any | None = None
+    rollback_branch: str | None = None
+    rollback_snapshot: str | None = None
+    published_swap_pending = False
+    store_committed = False
+    plugin_handed_to_orchestrator = False
+    ingest_completed = False
+    try:
+        timeless = registry_datasets.is_timeless(dataset)
+        plugin = _load_streaming_plugin(plugin_path, params=params, static=timeless)
+        # First thing under the lock, before anything looks at the store. A swap killed between
+        # its two renames leaves the published path missing and the data at `.retired`; ingest
+        # would read that as a brand-new store and write only the requested delta into a fresh
+        # one, after which recovery finds the target present and strands the whole history in
+        # `.retired`. Healing before any inspection makes the next sync an ordinary append.
+        recover_interrupted_swap(store_path)
+
+        if timeless:
+            plan = _plan_static_materialization(store_path=store_path, overwrite=overwrite)
+        else:
+            assert start is not None and end is not None
+            plan = _plan_streaming_materialization(
+                plugin=cast(IngestionPlugin, plugin),  # loaded against this contract above
+                store_path=store_path,
+                start=start,
+                end=end,
+                period_type=str(dataset["period_type"]),
+                overwrite=overwrite,
+                periods=periods,
+            )
+        if plan.action == SyncAction.NO_OP:
+            try:
+                existing = get_latest_artifact_for_dataset_or_404(str(dataset["id"]))
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                # Committed data may outlive its registration after a crash or
+                # loss of the index. Validate and register it without refetching.
+                logger.warning("Re-registering committed store '%s' without an artifact record", store_path)
+            else:
+                temporal = existing.coverage.temporal
+                # A timeless store has no periods to fall behind: what is stored is the dataset.
+                coverage_is_current = (
+                    timeless
+                    or str(dataset["period_type"]) == "climatology"
+                    or (temporal.start == plan.start and temporal.end == plan.end)
+                )
+                if coverage_is_current:
+                    if publish and existing.publication.status != PublicationStatus.PUBLISHED:
+                        return publish_artifact_record(existing.artifact_id)
+                    return existing
+                logger.warning(
+                    "Re-registering committed store '%s' because artifact coverage %s..%s is stale",
+                    store_path,
+                    temporal.start,
+                    temporal.end,
+                )
+        if plan.action != SyncAction.NO_OP and on_update_planned is not None:
+            on_update_planned(_previous_coverage_end(dataset, plan))
+        materialization_scope = request_scope.model_copy(update={"start": plan.start, "end": plan.end})
+
+        ingest_path = store_path
+        if plan.action == SyncAction.REMATERIALIZE and store_path.exists():
+            # Build a prepend/overwrite beside the published store. Fetching is the least
+            # reliable part of ingestion, so the current data remains readable until the
+            # contiguous replacement has been fetched, validated, and normalized.
+            replacement_path = store_path.with_name(f"{store_path.name}.replacement")
+            _remove_store_path(replacement_path)
+            ingest_path = replacement_path
+        elif plan.action != SyncAction.NO_OP and plan.has_committed_periods:
+            # Icechunk commits each fetched period independently. Keep a pre-ingest
+            # snapshot for failures after ingest completes (for example normalization
+            # or record persistence). Mid-ingest failures retain their committed prefix
+            # so a retry can resume instead of downloading successful periods again.
+            repo = open_or_create_repo(store_path)
+            snapshot = repo.lookup_branch("main")
+            branch = f"ogs-ingest-rollback-{uuid4().hex}"
+            repo.create_branch(branch, snapshot)
+            rollback_repo = repo
+            rollback_snapshot = snapshot
+            rollback_branch = branch
+
+        if plan.action != SyncAction.NO_OP and timeless:
+            plugin_handed_to_orchestrator = True
+            run_static_ingest_sync(
+                plugin=cast(StaticIngestionPlugin, plugin),
+                params=params,
+                dataset=dataset,
+                bbox=bbox,
+                store_path=ingest_path,
+                is_cancel_requested=is_cancel_requested,
+            )
+            ingest_completed = True
+        elif plan.action != SyncAction.NO_OP:
+            assert plan.start is not None and plan.end is not None
+            plugin_handed_to_orchestrator = True
+            result = run_streaming_ingest_sync(
+                plugin=cast(IngestionPlugin, plugin),
+                params=params,
+                dataset=dataset,
+                bbox=bbox,
+                start=plan.start,
+                end=plan.end,
+                store_path=ingest_path,
+                period_type=str(dataset["period_type"]),
+                on_progress=on_progress,
+                is_cancel_requested=is_cancel_requested,
+                save_cursor=save_cursor,
+                periods=plan.periods,
+                committed_periods=plan.committed_periods if ingest_path == store_path else [],
+            )
+            ingest_completed = True
+            if result.periods_written == 0 and not ingest_path.exists():
+                raise HTTPException(status_code=409, detail="Source has no data for the requested temporal scope")
+
+        coverage_data = get_data_coverage_for_paths(dataset, icechunk_path=str(ingest_path.resolve()))
+        if not coverage_data.get("has_data", True):
+            raise HTTPException(
+                status_code=409,
+                detail="Materialized artifact contains no data for the requested scope",
+            )
+
+        _spatial_wgs84_data = coverage_data["coverage"].get("spatial_wgs84")
+        coverage = ArtifactCoverage(
+            temporal=CoverageTemporal(**coverage_data["coverage"]["temporal"]),
+            spatial=CoverageSpatial(**coverage_data["coverage"]["spatial"]),
+            spatial_wgs84=CoverageSpatial(**_spatial_wgs84_data) if _spatial_wgs84_data else None,
+        )
+        # Temporal datasets validate against the cumulative materialization scope, not the raw
+        # user request. The latter remains on the record as operation provenance. A brand-new
+        # store may legitimately clamp its end to source availability; an update was already
+        # planned from the source's exact available period sequence. A non-temporal (ordinal)
+        # dataset — a day-of-year climatology, say — has no temporal coverage to match.
+        #
+        # A forecast is checked on its issue times, not its coverage. The request selects runs;
+        # coverage describes the dates those runs speak to, which reach past the requested
+        # window by design — a run issued today covering ten days is not an overshoot.
+        scope_temporal = coverage.temporal
+        forecast_reference = coverage_data.get("forecast_reference")
+        if forecast_reference:
+            scope_temporal = CoverageTemporal(**forecast_reference)
+        if scope_temporal.start is not None:
+            coverage_matches_plan = (
+                _temporal_coverage_matches_request_scope(scope_temporal, materialization_scope)
+                if plan.has_committed_periods
+                else _temporal_coverage_matches_streaming_request_scope(scope_temporal, materialization_scope)
+            )
+            if not coverage_matches_plan:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Materialized artifact coverage does not match the planned contiguous scope: "
+                        f"{'issue times' if forecast_reference else 'coverage'}="
+                        f"{scope_temporal.start}..{scope_temporal.end}, "
+                        f"plan={materialization_scope.start}..{materialization_scope.end}"
+                    ),
+                )
+
+        normalization = _maybe_build_pyramid(
+            ingest_path,
+            dataset,
+            retain_previous=plan.has_committed_periods and replacement_path is None,
+        )
+        if plan.action != SyncAction.NO_OP and plan.has_committed_periods and not normalization.completed:
+            raise RuntimeError(f"Could not normalize '{dataset['id']}'; the dataset update was rolled back")
+        if normalization.swapped and ingest_path == store_path and plan.has_committed_periods:
+            # Pyramid normalization replaced the published repository but retained
+            # the previous one until its matching artifact record is durable. From
+            # here, rollback first restores that repository and then resets its main
+            # branch to the pre-ingest snapshot retained above.
+            published_swap_pending = True
+        if replacement_path is not None:
+            _swap_store(replacement_path, store_path, retain_previous=True)
+            published_swap_pending = True
+        # Once per sync run, here rather than per commit: a streaming ingest commits one
+        # period at a time, so rendering on each would produce a few hundred PNGs during a
+        # historical backfill and keep the last. After the swap, so it renders the store that
+        # is actually published. Never raises — see write_dataset_thumbnail.
+        write_dataset_thumbnail(store_path, dataset)
+
+        record = ArtifactRecord(
+            artifact_id=str(uuid4()),
+            dataset_id=str(dataset["id"]),
+            dataset_name=str(dataset["name"]),
+            variable=str(dataset["variable"]),
+            period_type=str(dataset.get("period_type")) if dataset.get("period_type") is not None else None,
+            version=_resolve_artifact_version(dataset),
+            format=ArtifactFormat.ICECHUNK,
+            path=str(store_path.resolve()),
+            asset_paths=[str(store_path.resolve())],
+            # After the swap, like the thumbnail: the size and statistics of the store that is published.
+            size_bytes=stored_bytes(store_path),
+            statistics=measure_statistics(store_path, str(dataset["variable"])),
+            variables=[str(dataset["variable"])],
+            request_scope=request_scope,
+            coverage=coverage,
+            created_at=datetime.now(UTC),
+            publication=ArtifactPublication(),
+        )
+        stored_record = _upsert_artifact_record(
+            record,
+            overwrite=overwrite,
+        )
+        store_committed = True
+        if published_swap_pending:
+            # A swapped-out repository either disappeared with successful cleanup or
+            # remains only as a retired fallback. Never try to operate on its temporary
+            # branch through the newly published repository path.
+            rollback_repo = None
+            rollback_branch = None
+            rollback_snapshot = None
+        if publish and stored_record.publication.status != PublicationStatus.PUBLISHED:
+            return publish_artifact_record(stored_record.artifact_id)
+        return stored_record
+    finally:
+        try:
+            rollback_error: Exception | None = None
+            if published_swap_pending and not store_committed:
+                try:
+                    _rollback_store_swap(store_path)
+                    published_swap_pending = False
+                except Exception as exc:
+                    rollback_error = exc
+                    logger.error(
+                        "Could not restore the previous store for '%s' after artifact registration failed",
+                        store_path,
+                        exc_info=True,
+                    )
+            elif published_swap_pending:
+                try:
+                    _finalize_store_swap(store_path)
+                    published_swap_pending = False
+                except Exception:
+                    logger.warning("Could not clean up retired store '%s'", store_path, exc_info=True)
+            if not plugin_handed_to_orchestrator and plugin is not None:
+                try:
+                    close_ingestion_plugin(plugin)
+                except Exception:
+                    logger.warning("Could not close ingestion plugin after planning failure", exc_info=True)
+            if (
+                rollback_error is None
+                and rollback_repo is not None
+                and rollback_branch is not None
+                and rollback_snapshot is not None
+            ):
+                try:
+                    rolled_back = not store_committed and ingest_completed
+                    if rolled_back:
+                        rollback_repo.reset_branch("main", rollback_snapshot)
+                    try:
+                        rollback_repo.delete_branch(rollback_branch)
+                    except Exception as exc:
+                        # Recovery may already have removed the temporary ref. The
+                        # snapshot reset above is the operation that restores data;
+                        # an absent cleanup ref must not mask the original failure.
+                        if "ref not found" not in str(exc).lower():
+                            raise
+                    if rolled_back:
+                        # The reset left every period this attempt committed unreachable.
+                        # Still under the store lock, so nothing is mid-write. The retention
+                        # window keeps the attempt's recent commits, so a later collection
+                        # is marked pending for them.
+                        collect_unreachable_objects(rollback_repo, store_path)
+                        _mark_collection_pending(store_path)
+                except Exception as exc:
+                    if not store_committed:
+                        rollback_error = exc
+                    logger.error(
+                        "Could not %s append transaction for '%s'",
+                        "roll back" if not store_committed else "clean up",
+                        store_path,
+                        exc_info=True,
+                    )
+            if not store_committed and not ingest_completed and rollback_repo is not None:
+                # A forward append that failed part way keeps the periods it committed, so a
+                # retry can resume; the store has grown, so its recorded size must follow.
+                _refresh_recorded_size(store_path)
+            if replacement_path is not None:
+                # Failed fetches and validations leave only a disposable partial replacement. A
+                # successful swap has already moved this path away, making cleanup a no-op.
+                try:
+                    _remove_store_path(replacement_path)
+                except Exception:
+                    # Cleanup is best-effort: the published store is still intact and the next
+                    # overwrite removes this path before reuse. Do not mask the ingest failure.
+                    logger.warning("Could not remove replacement store '%s'", replacement_path, exc_info=True)
+            if rollback_error is not None:
+                raise RuntimeError(
+                    f"Ingestion failed and rollback could not complete for '{store_path}'. "
+                    f"Retained recovery data and branch '{rollback_branch}' at snapshot '{rollback_snapshot}'; "
+                    "inspect the store and its .retired/.failed paths before retrying."
+                ) from rollback_error
+        finally:
+            # Releasing the in-process writer lock must not depend on filesystem cleanup.
+            lock.release()
+
+
+def _retired_path(target: Path) -> Path:
+    return target.with_name(f"{target.name}.retired")
+
+
+def _remove_store_path(path: Path) -> None:
+    """Remove a disposable store path whether it is a directory, file, or symlink."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def recover_interrupted_swap(target: Path) -> bool:
+    """Restore a store left behind by a swap that was killed between its two renames.
+
+    ``_swap_store`` moves the published store aside before moving the rebuilt one in. An
+    exception between the two is handled there, but a SIGKILL or a host restart is not: the
+    published path then does not exist and the data sits at ``<name>.retired``, which no
+    reader looks for. Called before the store is opened, so the next sync heals it rather
+    than reporting an unreadable dataset.
+
+    An interrupted rollback also leaves its rejected replacement at ``.failed``.
+    Remove that copy only after the original store has been restored.
+
+    A pyramid rebuild killed part way leaves its partial copy at ``.rebuild``, which nothing
+    reads and which can be most of the store's size; it is removed here too. A rollback branch
+    left by a killed ingest means that attempt's commits were never cleaned up, so the objects
+    no branch reaches are then collected. A collection left pending by an earlier rollback runs
+    here too, once its retention window has passed.
+
+    Returns True when a recovery was performed.
+    """
+    retired = _retired_path(target)
+    failed = target.with_name(f"{target.name}.failed")
+    recovered = False
+    if not target.exists() and retired.is_dir():
+        retired.rename(target)
+        recovered = True
+        logger.warning("Recovered '%s' from '%s' after an interrupted swap", target.name, retired.name)
+    if _remove_rebuild_leftover(target):
+        recovered = True
+    # A rollback interrupted before or after restoring the retired store leaves
+    # its rejected replacement here. Delete it only once a usable target exists.
+    if target.exists() and failed.exists():
+        _remove_store_path(failed)
+        recovered = True
+    if not target.exists() and failed.exists():
+        raise RuntimeError(f"Cannot recover '{target}': only the rejected .failed store remains")
+    if target.exists() and (target / "repo").exists():
+        try:
+            repo = open_or_create_repo(target)
+            stale_branches = [branch for branch in repo.list_branches() if branch.startswith("ogs-ingest-rollback-")]
+            for branch in stale_branches:
+                repo.delete_branch(branch)
+            if stale_branches:
+                recovered = True
+                logger.warning("Removed %d stale ingest rollback branch(es) from '%s'", len(stale_branches), target)
+                collect_unreachable_objects(repo, target)
+                _mark_collection_pending(target)
+            collect_pending_garbage(target)
+        except Exception:
+            # Swap recovery must remain usable for older or partially damaged
+            # repositories whose branch metadata cannot be inspected.
+            logger.warning("Could not clean stale ingest rollback branches from '%s'", target, exc_info=True)
+    return recovered
+
+
+def _remove_rebuild_leftover(target: Path) -> bool:
+    """Remove the partial copy a killed pyramid rebuild left at ``<store>.rebuild``.
+
+    Safe whenever no rebuild of this store is running: the build writes there and swaps it in
+    within one locked ingest, and nothing ever reads it back. Returns True when one was removed.
+    """
+    leftover = target.with_name(f"{target.name}.rebuild")
+    if not leftover.exists():
+        return False
+    try:
+        _remove_store_path(leftover)
+    except OSError:
+        logger.warning("Could not remove leftover pyramid rebuild '%s'", leftover, exc_info=True)
+        return False
+    logger.warning("Removed leftover pyramid rebuild '%s' from an interrupted build", leftover.name)
+    return True
+
+
+def remove_leftover_rebuilds() -> int:
+    """Remove every ``*.icechunk.rebuild`` left in the store directory; returns how many.
+
+    Run at startup before this process recovers jobs. An older process may still be rebuilding
+    during an overlapping restart, so remove a leftover only while holding the target store's
+    writer lock. Recovery at the start of each ingest also removes one, but a dataset that is
+    never synced again would otherwise keep a partial copy of its whole store indefinitely.
+    """
+    directory = Path(downloader.DOWNLOAD_DIR)
+    if not directory.is_dir():
+        return 0
+    removed = 0
+    for leftover in directory.glob("*.icechunk.rebuild"):
+        target = leftover.with_suffix("")
+        lock = _acquire_store_lock(target)
+        if not lock.acquire(blocking=False):
+            continue
+        try:
+            removed += _remove_rebuild_leftover(target)
+        finally:
+            lock.release()
+    return removed
+
+
+# Unreachable objects younger than this are kept. Readers take no store lock, and one that
+# opened ``main`` while an ingest was committing sits on a snapshot the rollback makes
+# unreachable. Icechunk keeps every snapshot newer than the cutoff, and all it references, so
+# such a reader can keep reading for this long after the commit it opened. It is a window, not
+# a guarantee: a reader still on that interim snapshot after it can fail with "object not
+# found". Snapshots a branch still reaches, such as the version published before the failed
+# attempt, are never collected.
+_GC_RETENTION = timedelta(hours=1)
+
+
+def collect_unreachable_objects(repo: Any, store_path: Path) -> bool:
+    """Delete the snapshots, manifests and chunks that no branch or tag reaches.
+
+    A rolled-back ingest resets ``main`` to where it was, so every period the attempt
+    committed becomes unreachable, and Icechunk keeps it until collected: on the Norway
+    instance a daily store held 44 GB of such data, two thirds of its size. Only unreachable
+    objects are removed, so every version any branch or tag can reach is kept, and so is
+    anything committed within :data:`_GC_RETENTION`, which a pending collection frees later
+    (see :func:`collect_pending_garbage`).
+
+    Call with the store's write lock held. Never raises, and returns whether it ran; a failure
+    leaves the objects for a later collection and must not mask the ingest's own outcome.
+    """
+    try:
+        summary = repo.garbage_collect(datetime.now(UTC) - _GC_RETENTION)
+    except Exception:
+        logger.warning("Could not collect unreachable objects in '%s'", store_path, exc_info=True)
+        return False
+    freed = int(getattr(summary, "bytes_deleted", 0) or 0)
+    if freed:
+        logger.info(
+            "Collected %.1f MB of unreachable data from '%s' (%d snapshots)",
+            freed / 1e6,
+            store_path.name,
+            int(getattr(summary, "snapshots_deleted", 0) or 0),
+        )
+    return True
+
+
+def _collection_marker(store_path: Path) -> Path:
+    return store_path.with_name(f"{store_path.name}.gc-pending")
+
+
+def _mark_collection_pending(store_path: Path) -> None:
+    """Record that *store_path* holds unreachable objects too recent to collect yet.
+
+    A file beside the store holding the time, so the collection survives a restart and runs
+    whether or not the dataset is ever synced again. A later rollback moves the time forward.
+    """
+    try:
+        _collection_marker(store_path).write_text(datetime.now(UTC).isoformat())
+    except OSError:
+        logger.warning("Could not mark a pending collection for '%s'", store_path, exc_info=True)
+
+
+def collect_pending_garbage(store_path: Path) -> bool:
+    """Run a collection marked pending for *store_path* once its retention window has passed.
+
+    Call with the store's write lock held. Everything the marked rollback left unreachable was
+    committed before the marker's time, so a collection at least :data:`_GC_RETENTION` later
+    frees all of it; the marker is then removed. Returns True when a collection ran.
+    """
+    marker = _collection_marker(store_path)
+    try:
+        marked = datetime.fromisoformat(marker.read_text().strip())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        logger.warning("Unreadable pending-collection marker '%s'; collecting now", marker, exc_info=True)
+        marked = datetime.min.replace(tzinfo=UTC)
+    if datetime.now(UTC) - marked < _GC_RETENTION:
+        return False
+    if not (store_path / "repo").exists():
+        marker.unlink(missing_ok=True)
+        return False
+    if not collect_unreachable_objects(open_or_create_repo(store_path), store_path):
+        return False
+    marker.unlink(missing_ok=True)
+    return True
+
+
+def collect_pending_garbage_everywhere() -> int:
+    """Run every collection that is due, skipping a store an ingest holds; returns how many ran.
+
+    Called at startup and periodically on a writable instance, which is what guarantees a
+    failed attempt's data is freed even when it was the last ingest the store will see.
+    """
+    directory = Path(downloader.DOWNLOAD_DIR)
+    if not directory.is_dir():
+        return 0
+    collected = 0
+    for marker in directory.glob("*.icechunk.gc-pending"):
+        store_path = marker.with_suffix("")
+        lock = _acquire_store_lock(store_path)
+        if not lock.acquire(blocking=False):
+            continue  # an ingest is running; its own recovery or the next sweep collects
+        try:
+            collected += collect_pending_garbage(store_path)
+        except Exception:
+            logger.warning("Pending collection failed for '%s'", store_path, exc_info=True)
+        finally:
+            lock.release()
+    return collected
+
+
+def _swap_store(staging: Path, target: Path, *, retain_previous: bool = False) -> None:
+    """Move ``staging`` into ``target``'s place, keeping the original until the swap lands.
+
+    Two directory renames on one filesystem rather than a copy, so the cost is metadata
+    rather than bytes. Two caveats, both real:
+
+    * **The target does not exist between the renames.** A reader that opens the store in that
+      window fails. The window is two metadata operations wide, but it is not zero.
+    * **Only an exception is rolled back here.** A process kill or host restart between the
+      renames leaves the published path missing, which :func:`recover_interrupted_swap`
+      repairs on the next sync.
+
+    Neither is fixable by reordering: POSIX has no atomic directory exchange that Python
+    exposes portably. The durable answer is to publish through a pointer that can be switched
+    atomically, which is CLIM-880 — this keeps the window small and recoverable meanwhile.
+    """
+    retired = _retired_path(target)
+    shutil.rmtree(retired, ignore_errors=True)
+    target.rename(retired)
+    try:
+        staging.rename(target)
+    except Exception:
+        retired.rename(target)  # leave the store exactly as it was
+        raise
+    if not retain_previous:
+        shutil.rmtree(retired, ignore_errors=True)
+
+
+def _finalize_store_swap(target: Path) -> None:
+    """Discard the previous store after its replacement record is durable."""
+    _remove_store_path(_retired_path(target))
+
+
+def _rollback_store_swap(target: Path) -> None:
+    """Restore the retained store when replacement metadata cannot be persisted."""
+    retired = _retired_path(target)
+    if not retired.exists():
+        raise FileNotFoundError(f"Cannot roll back '{target}': retained store '{retired}' is missing")
+    failed = target.with_name(f"{target.name}.failed")
+    _remove_store_path(failed)
+    target.rename(failed)
+    try:
+        retired.rename(target)
+    except Exception:
+        failed.rename(target)
+        raise
+    _remove_store_path(failed)
+
+
+def _maybe_build_pyramid(
+    store_path: Path,
+    dataset: dict[str, object],
+    *,
+    retain_previous: bool = False,
+) -> _StoreNormalizationResult:
+    """Apply GeoZarr conventions and a multiscale pyramid to the committed Icechunk store.
+
+    Streaming ingest writes a flat store with root GeoZarr attrs but no
+    ``spatial_ref`` CRS coordinate or pyramid levels. This rewrites the store via
+    ``write_to_icechunk_store`` to add them, so every Icechunk store follows the
+    same GeoZarr layout regardless of size.
+
+    ``write_to_icechunk_store`` would overwrite the very store it is reading from, so the
+    rewrite goes to a sibling store which is then swapped in. That keeps the source readable
+    while topozarr streams the pyramid out of it, which is what lets the build stay lazy
+    instead of materialising the whole store in RAM.
+
+    A *temporal append* to an already-normalised flat store produces nothing new, though:
+    ``spatial_ref`` is a scalar that survives the append and streaming refreshes the root
+    attrs on every commit. We detect that case and skip the read-rewrite entirely, avoiding
+    the write amplification of re-emitting the whole store on every sync.
+
+    A temporal append to a pyramid store only needs the coarser levels extended to the
+    periods level 0 has gained, which ``append_pyramid_levels`` does in place. Anything else
+    (a first ingest, a replacement, a changed resampling method) rebuilds.
+
+    Returns whether normalization completed and whether it swapped the store.
+    Errors remain logged and swallowed so a brand-new plain flat artifact can
+    still be registered; callers updating an existing store use the result to
+    roll back instead.
+    """
+    from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
+
+    try:
+        appended = downloader.append_pyramid_levels(
+            store_path, pyramid_method=downloader.resampling_method_from_template(dataset)
+        )
+    except Exception:
+        # One commit, so a failure leaves the store as the ingest committed it.
+        logger.warning("Could not append to the pyramid levels of '%s'; rebuilding", store_path.name, exc_info=True)
+        appended = None
+    if appended is not None:
+        return _StoreNormalizationResult(completed=True)
+
+    try:
+        # Stored chunks, one period each, not merged along time: topozarr sizes each level's
+        # time shards from the source's dask chunks, and a sync appends one period at a time,
+        # so a shard several periods wide would be rewritten on every append (CLIM-879).
+        # Splitting merged chunks afterwards instead made the build five times slower and
+        # larger in memory, since every split re-reads its merged block (CLIM-1765).
+        ds = open_icechunk_dataset(store_path, merge_time=False)
+    except Exception:
+        logger.warning("Could not open Icechunk store for GeoZarr write; skipping", exc_info=True)
+        return _StoreNormalizationResult(completed=False)
+
+    try:
+        # None for a static dataset without a time axis (CLIM-1448).
+        t_dim = next((d for d in ("t", *TIME_ALIASES) if d in ds.sizes), None)
+        already_normalized = "spatial_ref" in ds.coords or "spatial_ref" in ds.variables
+        if already_normalized and "x" in ds.sizes and "y" in ds.sizes and not downloader.needs_pyramid(ds):
+            # A flat, already-normalized store needs no read-rewrite — but streaming ingests
+            # append one period at a time, leaving the time coordinate chunked at size 1.
+            # That makes a map client fetch one tiny chunk per timestep to read the axis
+            # (thousands of requests for a multi-year daily store), so re-chunk just the
+            # coordinate here (cheap; data variables untouched).
+            if t_dim is not None:
+                try:
+                    downloader.ensure_time_coordinate_chunking(store_path, t_dim)
+                except Exception:
+                    logger.warning("Time-coordinate re-chunk failed for '%s'", store_path.name, exc_info=True)
+            logger.info(
+                "Store '%s' is already GeoZarr-normalized and flat; skipping read-rewrite",
+                store_path.name,
+            )
+            return _StoreNormalizationResult(completed=True)
+        # `ds` reads lazily from `store_path`, and the rewrite overwrites that same store —
+        # the aliasing is why this used to materialise everything first. Build into a sibling
+        # store and swap it in, so the source stays readable while topozarr streams the
+        # pyramid out of it. The cost moves from RAM (the whole store: 3.47 GB for Uganda's
+        # GPP) to transient disk (one extra copy, reclaimed on success).
+        staging = store_path.with_name(f"{store_path.name}.rebuild")
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            downloader.write_to_icechunk_store(
+                ds,
+                staging,
+                t_dim=t_dim,
+                pyramid_method=downloader.resampling_method_from_template(dataset),
+                commit_message="Applied GeoZarr conventions",
+            )
+            ds.close()  # drop the read session before the directory moves under it
+            _swap_store(staging, store_path, retain_previous=retain_previous)
+        finally:
+            # A failed build leaves a partial copy of the whole store behind. That matters most
+            # when the failure *was* disk exhaustion: the flat-store fallback below would
+            # otherwise run with the transient copy still occupying the space. A successful
+            # swap has already moved `staging` away, so this is a no-op then.
+            shutil.rmtree(staging, ignore_errors=True)
+    except Exception:
+        logger.error(
+            "GeoZarr/pyramid write failed for '%s'; flat Icechunk artifact will be used as-is",
+            store_path.name,
+            exc_info=True,
+        )
+        return _StoreNormalizationResult(completed=False)
+    finally:
+        ds.close()
+    return _StoreNormalizationResult(completed=True, swapped=True)
+
+
+def _load_streaming_plugin(
+    plugin_path: str, *, params: dict[str, object], static: bool = False
+) -> IngestionPlugin | StaticIngestionPlugin:
+    """Load and instantiate one streaming plugin class from a dotted import path.
+
+    A static dataset's plugin is checked against the static contract (``fetch``), every other
+    against the temporal one (``periods`` and ``fetch_period``).
+
+    Template-defined `ingestion.params` are treated as plugin
+    configuration and passed to the constructor here. The same params are also
+    forwarded later to `fetch_period(...)` so plugins may keep configuration in
+    constructor state, per-call kwargs, or both.
+    """
+    from open_geo_service.shared.plugin_loader import instantiate_plugin, instantiate_static_plugin
+
+    module_path, _, attr_name = plugin_path.rpartition(".")
+    if not module_path or not attr_name:
+        raise HTTPException(status_code=500, detail=f"Invalid ingestion.plugin path '{plugin_path}'")
+    try:
+        plugin: IngestionPlugin | StaticIngestionPlugin = (
+            instantiate_static_plugin(plugin_path, dict(params))
+            if static
+            else instantiate_plugin(plugin_path, dict(params))
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to load ingestion.plugin '%s'", plugin_path, exc_info=exc)
+        raise HTTPException(status_code=500, detail=f"Failed to load ingestion.plugin '{plugin_path}'") from exc
+    return plugin
+
+
+def register_artifact_record(record: ArtifactRecord, *, publish: bool, replace_store: bool = False) -> ArtifactRecord:
+    """Store a pre-built artifact record and optionally publish it to STAC.
+
+    ``replace_store`` is for a writer that replaces one managed store as a whole, such
+    as openEO ``save_result``. It keeps that store's logical artifact id and publication
+    state even when the rewrite changes request scope, and coalesces stale duplicate
+    records for the same store. Other callers retain request-scope overwrite semantics.
+    """
+    stored = _upsert_artifact_record(record, overwrite=True, replace_store=replace_store)
+    if publish and stored.publication.status != PublicationStatus.PUBLISHED:
+        return publish_artifact_record(stored.artifact_id)
+    return stored
+
+
+def publish_artifact_record(artifact_id: str) -> ArtifactRecord:
+    """Publish an artifact and persist publication metadata."""
+    published = publish_artifact(get_artifact_or_404(artifact_id))
+
+    def mutate(records: list[ArtifactRecord]) -> ArtifactRecord:
+        for index, record in enumerate(records):
+            if record.artifact_id != artifact_id:
+                continue
+            records[index] = published
+            return published
+        raise HTTPException(status_code=404, detail=f"Artifact '{artifact_id}' not found")
+
+    return _mutate_records(mutate)
+
+
+def sync_dataset(
+    *,
+    dataset_id: str,
+    end: str | None,
+    publish: bool,
+    on_progress: Callable[[int | None, int | None, str | None], None] | None = None,
+) -> SyncResponse:
+    """Resolve sync inputs and delegate managed-dataset sync to the sync engine.
+
+    The service layer stays thin on purpose: it validates that the requested
+    public dataset id resolves to a managed dataset plus a source template, then
+    hands execution to `sync_engine.run_sync(...)`.
+    """
+    latest_artifact = get_latest_artifact_for_dataset_or_404(dataset_id)
+    _refuse_non_raster_sync(latest_artifact)
+    source_dataset = registry_datasets.get_dataset(latest_artifact.dataset_id)
+    if source_dataset is None:
+        raise HTTPException(status_code=404, detail=f"Source dataset '{latest_artifact.dataset_id}' not found")
+    extent = get_extent()
+    resolved_country_code = extent.get("country_code") if extent else None
+    try:
+        return run_sync(
+            latest_artifact=latest_artifact,
+            source_dataset=source_dataset,
+            requested_end=end,
+            country_code=resolved_country_code,
+            publish=publish,
+            create_artifact_fn=create_artifact,
+            get_dataset_fn=get_dataset_or_404,
+            on_progress=on_progress,
+        )
+    except SyncConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def plan_sync_dataset(
+    *,
+    dataset_id: str,
+    end: str | None,
+) -> SyncDetail:
+    """Return the sync plan for a managed dataset without downloading or writing artifacts."""
+    latest_artifact = get_latest_artifact_for_dataset_or_404(dataset_id)
+    _refuse_non_raster_sync(latest_artifact)
+    source_dataset = registry_datasets.get_dataset(latest_artifact.dataset_id)
+    if source_dataset is None:
+        raise HTTPException(status_code=404, detail=f"Source dataset '{latest_artifact.dataset_id}' not found")
+    try:
+        return plan_sync(
+            latest_artifact=latest_artifact,
+            source_dataset=source_dataset,
+            requested_end=end,
+        )
+    except SyncConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _refuse_non_raster_sync(artifact: ArtifactRecord) -> None:
+    """Refuse to plan or run a raster sync for a record that is not a raster.
+
+    The whole sync engine is period arithmetic: it resolves a target end, compares it against
+    `coverage.temporal.end` and appends or rematerializes the missing periods. A feature
+    collection has no temporal axis and no `period_type`, so every one of those steps is
+    meaningless for it, and rematerialize would call `create_artifact` — the raster door.
+
+    Refused here with a message that says so, rather than leaving it to fail further in. A
+    feature collection refreshes by re-running its provider (CLIM-926), which lands on
+    `create_feature_artifact` and replaces the record in place.
+    """
+    if artifact.format != ArtifactFormat.GEOPARQUET:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Dataset '{managed_dataset_id_for(artifact)}' is a feature collection and is not "
+            "synced on the raster period axis; refresh it by re-running its provider"
+        ),
+    )
+
+
+def get_dataset_zarr_store_file_or_404(
+    dataset_id: str, relative_path: str, range_header: str | None = None
+) -> Response | dict[str, object]:
+    """Serve a file, metadata document, or directory listing within a dataset Zarr store."""
+    artifact = _latest_published_raster_artifacts_cached().get(dataset_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+    if artifact.format == ArtifactFormat.ZARR:
+        return _get_filesystem_zarr_store_path_or_404(
+            artifact=artifact,
+            relative_path=relative_path,
+            range_header=range_header,
+        )
+    session = _open_icechunk_store_or_404(artifact)
+    return _get_icechunk_store_path_or_404(
+        dataset_id=dataset_id, session=session, relative_path=relative_path, range_header=range_header
+    )
+
+
+def serve_icechunk_file(dataset_id: str, file_path: str) -> FileResponse:
+    """Serve a raw Icechunk store file for native SDK access via icechunk.http_storage()."""
+    artifact = _get_latest_published_icechunk_artifact(dataset_id)
+    store_root = Path(artifact.path or artifact.asset_paths[0]).resolve()
+
+    full_path = (store_root / file_path).resolve()
+    if not full_path.is_relative_to(store_root):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not full_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Icechunk store file not found: {file_path}")
+
+    return FileResponse(full_path, media_type="application/octet-stream")
+
+
+def _latest_published_raster_artifacts_cached() -> dict[str, ArtifactRecord]:
+    """Return `latest_published_raster_artifacts_by_dataset()`, recomputed only when records.json changes.
+
+    A map view requests hundreds of chunks, and resolving the dataset from scratch reads, validates
+    and path-resolves every record on the instance each time. Record writes replace records.json
+    whole, so the cache is keyed on its path, modification time and size, which catches writes by
+    other processes, and on this process's write count, which catches writes the modification time
+    cannot tell apart where it is coarse. A store deleted from disk without a record change stays in
+    the result until the next write; serving it then fails as a missing path.
+    """
+    global _store_artifacts_cache
+    try:
+        stat = ARTIFACTS_INDEX_PATH.stat()
+    except OSError:
+        return latest_published_raster_artifacts_by_dataset()
+    key = (str(ARTIFACTS_INDEX_PATH), stat.st_mtime_ns, stat.st_size, _records_write_count)
+    if _store_artifacts_cache is not None and _store_artifacts_cache[0] == key:
+        return _store_artifacts_cache[1]
+    artifacts = latest_published_raster_artifacts_by_dataset()
+    _store_artifacts_cache = (key, artifacts)
+    # A rebuilt store can sit at the same path as the one it replaced; reopen everything.
+    with _open_stores_lock:
+        _open_repositories.clear()
+        _open_sessions.clear()
+    return artifacts
+
+
+def _get_latest_published_icechunk_artifact(dataset_id: str) -> ArtifactRecord:
+    """Return the latest published Icechunk artifact for dataset_id, or raise 404/409."""
+    artifacts = _latest_published_raster_artifacts_cached()
+    artifact = artifacts.get(dataset_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+    if artifact.format != ArtifactFormat.ICECHUNK:
+        raise HTTPException(status_code=409, detail=f"Dataset '{dataset_id}' is not Icechunk-backed")
+    return artifact
+
+
+def _open_icechunk_store_or_404(artifact: ArtifactRecord) -> _IcechunkSession:
+    """Return a read-only session on the tip of a published artifact's `main` branch.
+
+    The repository stays open between requests, so its snapshot and manifests stay in its cache,
+    and the session is reopened only when the branch has moved. A chunk request then costs one
+    read of the branch ref besides the chunk itself (CLIM-1580). Each open repository keeps its
+    own caches until the records change and everything is reopened.
+
+    A store without a `main` branch is a 404; any other failure to read the branch is a 500.
+    """
+    if artifact.format != ArtifactFormat.ICECHUNK:
+        raise HTTPException(status_code=409, detail="Artifact is not an Icechunk-backed Zarr store")
+    store_path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
+    if store_path is None:
+        raise HTTPException(status_code=409, detail="Artifact has no resolvable store path")
+
+    import icechunk
+
+    repo = _open_repositories.get(store_path)
+    if repo is None:
+        with _open_stores_lock:
+            repo = _open_repositories.get(store_path)
+            if repo is None:
+                path = Path(store_path).resolve()
+                if not path.exists():
+                    raise HTTPException(status_code=404, detail="Icechunk store path does not exist on disk")
+                repo = icechunk.Repository.open(icechunk.local_filesystem_storage(str(path)))
+                _open_repositories[store_path] = repo
+    try:
+        snapshot_id = repo.lookup_branch("main")
+    except icechunk.IcechunkError as exc:
+        # Drop the repository, so a transient failure is not kept for the next request.
+        with _open_stores_lock:
+            if _open_repositories.get(store_path) is repo:
+                del _open_repositories[store_path]
+        if isinstance(exc, icechunk.RefNotFoundError):
+            raise HTTPException(status_code=404, detail="Icechunk store has no main branch") from exc
+        raise _store_read_failed(store_path, exc) from exc
+    session = _open_sessions.get(store_path)
+    if session is None or session.snapshot_id != snapshot_id:
+        with _open_stores_lock:
+            session = _open_sessions.get(store_path)
+            if session is None or session.snapshot_id != snapshot_id:
+                store = cast(_IcechunkReadableStore, repo.readonly_session(snapshot_id=snapshot_id).store)
+                session = _IcechunkSession(store=store, snapshot_id=snapshot_id, store_path=store_path)
+                _open_sessions[store_path] = session
+    return session
+
+
+def _run_async(coroutine: Coroutine[Any, Any, StoreResult]) -> StoreResult:
+    """Run an async Icechunk store call from sync route and service code.
+
+    On zarr's long-lived I/O loop: a new event loop per call cost more than the read itself.
+    """
+    return zarr_sync(coroutine)
+
+
+def _store_read_failed(where: str, exc: Exception) -> HTTPException:
+    """A 500 for a store that exists but cannot be read, logged with its cause.
+
+    Raised as an HTTPException rather than left to escape: an unhandled error is answered above
+    the CORS middleware, so the browser would see a CORS failure instead of the 500.
+    """
+    logger.error("Icechunk read failed at %s: %s", where, exc)
+    return HTTPException(status_code=500, detail="Icechunk store could not be read")
+
+
+def _icechunk_list_dir(store: _IcechunkReadableStore, prefix: str) -> list[str]:
+    async def collect() -> list[str]:
+        items: list[str] = []
+        async for item in store.list_dir(prefix):
+            items.append(item)
+        return items
+
+    return _run_async(collect())
+
+
+def _icechunk_get(store: _IcechunkReadableStore, key: str, byte_range: ByteRequest | None = None) -> bytes | None:
+    """The bytes at *key*, or *byte_range* of them; None for anything Icechunk cannot address.
+
+    A browser probing an unknown store asks for keys that are not Zarr keys at all, and Icechunk
+    rejects those as ``KeyError`` (``NodeNotFoundError`` is one) or as ``InvalidInputError:
+    invalid zarr key format`` for paths outside the Zarr namespace entirely (``repo``,
+    ``refs/branch.main/ref.json`` — the layout probes zarr-viewer uses to decide whether a URL
+    is an Icechunk repository).
+
+    Both mean "not here", so both must answer None. Letting the second escape turned a probe
+    into a 500, and because an unhandled 500 is raised above the CORS middleware it reached the
+    browser with no ``Access-Control-Allow-Origin`` — reported as a CORS failure, which is not
+    where anyone would look for a missing-key bug.
+
+    Any other Icechunk error, such as a ``StorageError`` for a chunk file that is gone, is a 500:
+    answering it as missing would show a fill value where the data is broken.
+    """
+    from icechunk import IcechunkError, InvalidInputError
+
+    try:
+        buffer: Any = _run_async(store.get(key, prototype=default_buffer_prototype(), byte_range=byte_range))
+    except (KeyError, InvalidInputError):
+        return None
+    except IcechunkError as exc:
+        raise _store_read_failed(key, exc) from exc
+    if buffer is None:
+        return None
+    if hasattr(buffer, "to_bytes"):
+        return cast(bytes, buffer.to_bytes())
+    return cast(bytes, buffer)
+
+
+def _icechunk_getsize(store: _IcechunkReadableStore, key: str) -> int | None:
+    """The size of the value at *key*, from the manifest; None where `_icechunk_get` gives None.
+
+    Icechunk reports an unwritten chunk as size 0 rather than missing; a written value never is,
+    so 0 is None too, and a range request on the chunk is a 404 (fill value), not a 416.
+    """
+    from icechunk import IcechunkError, InvalidInputError
+
+    try:
+        size = _run_async(store.getsize(key))
+    except (KeyError, FileNotFoundError, InvalidInputError):
+        return None
+    except IcechunkError as exc:
+        raise _store_read_failed(key, exc) from exc
+    return size or None
+
+
+def _build_icechunk_consolidated_metadata(session: _IcechunkSession) -> dict[str, object]:
+    """Recursively build zarr v3 consolidated metadata for all groups and arrays in the store.
+
+    Icechunk explicitly blocks ``zarr.consolidate_metadata()`` because its transactional
+    snapshot system makes a static .zmetadata incompatible with multi-writer safety.
+    We generate equivalent consolidated metadata dynamically at serve time so that HTTP
+    clients can open the store with a single request (``consolidated=True``) without
+    needing server-side directory enumeration.
+
+    Results are cached per (store_path, snapshot_id) so repeated requests within the
+    lifetime of a snapshot — which is the common case between ingests — read once and
+    serve many times.
+    """
+    cached = _consolidated_metadata_cache.get(session.cache_key)
+    if cached is not None:
+        return cached
+
+    if len(_consolidated_metadata_cache) >= _MAX_CONSOLIDATED_CACHE_ENTRIES:
+        evict_count = _MAX_CONSOLIDATED_CACHE_ENTRIES // 2
+        for key in list(_consolidated_metadata_cache)[:evict_count]:
+            # pop(..., None) rather than del: this can run in a worker thread, so a
+            # concurrent request may have already evicted the same key.
+            _consolidated_metadata_cache.pop(key, None)
+
+    node_metadata: dict[str, object] = {}
+
+    def traverse(prefix: str) -> None:
+        try:
+            children = _icechunk_list_dir(session.store, prefix)
+        except Exception:
+            logger.warning("Failed to list Icechunk store prefix '%s' for consolidated metadata", prefix, exc_info=True)
+            return
+        for child in sorted(children):
+            path = f"{prefix}/{child}" if prefix else child
+            meta_bytes = _icechunk_get(session.store, f"{path}/zarr.json")
+            if meta_bytes is not None:
+                meta: dict[str, object] = json.loads(meta_bytes.decode("utf-8"))
+                node_metadata[path] = meta
+                if meta.get("node_type") == "group":
+                    traverse(path)
+
+    traverse("")
+    result: dict[str, object] = {"kind": "inline", "must_understand": False, "metadata": node_metadata}
+    _consolidated_metadata_cache[session.cache_key] = result
+    return result
+
+
+def _consolidated_metadata_for_group(session: _IcechunkSession, group_path: str) -> dict[str, object]:
+    """Consolidated metadata for the group at *group_path*, keyed relative to that group.
+
+    Cut from the store-wide metadata rather than traversed again, so a level group costs no
+    extra store reads and shares the root's per-snapshot cache.
+    """
+    consolidated = _build_icechunk_consolidated_metadata(session)
+    if not group_path:
+        return consolidated
+    prefix = f"{group_path}/"
+    nodes = cast(dict[str, object], consolidated["metadata"])
+    subtree = {path.removeprefix(prefix): meta for path, meta in nodes.items() if path.startswith(prefix)}
+    return {**consolidated, "metadata": subtree}
+
+
+def _normalize_zarr_relative_path(relative_path: str) -> str:
+    """Normalize a requested Zarr key path and reject unsafe segments."""
+    if "\\" in relative_path:
+        raise HTTPException(status_code=400, detail="Zarr path must use '/' separators")
+    target = relative_path.strip("/")
+    if target == "":
+        return ""
+    segments = target.split("/")
+    if any(segment in {"", ".", ".."} for segment in segments):
+        raise HTTPException(status_code=400, detail="Zarr path contains invalid segments")
+    return target
+
+
+def _requested_byte_range(range_header: str | None, total: int) -> tuple[int, int] | None:
+    """The inclusive (start, end) a ``Range`` header asks of *total* bytes; None for all of them.
+
+    Raises ValueError for a range that cannot be satisfied.
+    """
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    spec = range_header[len("bytes=") :].strip()
+    if spec.startswith("-"):
+        start, end = max(0, total - int(spec[1:])), total - 1
+    elif spec.endswith("-"):
+        start, end = int(spec[:-1]), total - 1
+    else:
+        first, _, last = spec.partition("-")
+        start, end = int(first), int(last)
+    if start > end or start >= total or end >= total:
+        raise ValueError("unsatisfiable range")
+    return start, end
+
+
+def _range_not_satisfiable(total: int) -> Response:
+    return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+
+
+def _partial_content(part: bytes, start: int, end: int, total: int, media_type: str) -> Response:
+    return Response(
+        content=part,
+        status_code=206,
+        media_type=media_type,
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{total}",
+            "Content-Length": str(len(part)),
+            "Accept-Ranges": "bytes",
+        },
+    )
+
+
+def _serve_bytes_ranged(content: bytes, media_type: str, range_header: str | None) -> Response:
+    """Serve bytes with HTTP range request support (RFC 7233).
+
+    Zarrita's sharding_indexed codec requires range requests to read the shard index
+    suffix and individual inner chunks without downloading the full shard file.
+    """
+    total = len(content)
+    try:
+        requested = _requested_byte_range(range_header, total)
+    except ValueError:
+        return _range_not_satisfiable(total)
+    if requested is None:
+        return Response(
+            content=content, media_type=media_type, headers={"Accept-Ranges": "bytes", "Content-Length": str(total)}
+        )
+    start, end = requested
+    return _partial_content(content[start : end + 1], start, end, total, media_type)
+
+
+def _serve_icechunk_range_or_none(
+    store: _IcechunkReadableStore, key: str, media_type: str, range_header: str | None
+) -> Response | None:
+    """Answer a range request by reading only that range of *key*; None when there is no range.
+
+    The size comes from the manifest, so the read is the requested bytes and nothing more.
+    """
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    total = _icechunk_getsize(store, key)
+    if total is None:
+        raise HTTPException(status_code=404, detail=f"Zarr path '{key}' not found")
+    try:
+        requested = _requested_byte_range(range_header, total)
+    except ValueError:
+        return _range_not_satisfiable(total)
+    if requested is None:
+        return None
+    start, end = requested
+    part = _icechunk_get(store, key, RangeByteRequest(start, end + 1))
+    if part is None:
+        raise HTTPException(status_code=404, detail=f"Zarr path '{key}' not found")
+    return _partial_content(part, start, end, total, media_type)
+
+
+def _get_icechunk_store_path_or_404(
+    dataset_id: str, session: _IcechunkSession, relative_path: str, range_header: str | None = None
+) -> Response | dict[str, object]:
+    store = session.store
+    target = _normalize_zarr_relative_path(relative_path)
+    if target == "":
+        # The store root. A Zarr library never asks for it — it treats the URL as a base and
+        # appends keys — but a person pasting the URL does, and FastAPI's redirect sends the
+        # slashless form here too, so 404 made the root of every store look like a dead store.
+        # Serve the group metadata it stands for, which is also what the appended request gets.
+        target = "zarr.json"
+
+    media_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
+    if not target.endswith("zarr.json"):
+        ranged = _serve_icechunk_range_or_none(store, target, media_type, range_header)
+        if ranged is not None:
+            return ranged
+
+    # One store read per request: an absent key reads as None, without asking first whether it exists.
+    payload = _icechunk_get(store, target)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
+    if target.endswith("zarr.json"):
+        meta = json.loads(payload.decode("utf-8"))
+        # Inject consolidated metadata into every group's zarr.json so xarray can
+        # enumerate variables when accessing the store over HTTP, without needing
+        # directory listing or a separate consolidation step.  Result is cached
+        # per snapshot so repeated requests within a snapshot lifetime are free.
+        # Every group, not just the root: a pyramid level (`/zarr/{id}/0`) is the URL
+        # an analysis client opens for full-resolution data, and without its own
+        # subtree it opens as an empty dataset.
+        if meta.get("node_type") == "group":
+            group_path = target.removesuffix("zarr.json").rstrip("/")
+            meta["consolidated_metadata"] = _consolidated_metadata_for_group(session, group_path)
+        return JSONResponse(content=meta)
+    return _serve_bytes_ranged(payload, media_type, None)
+
+
+def _get_filesystem_zarr_store_path_or_404(
+    *,
+    artifact: ArtifactRecord,
+    relative_path: str,
+    range_header: str | None = None,
+) -> Response | dict[str, object]:
+    """Serve one key from a plain filesystem-backed Zarr store."""
+    store_path = artifact.path or (artifact.asset_paths[0] if artifact.asset_paths else None)
+    if store_path is None:
+        raise HTTPException(status_code=409, detail="Artifact has no resolvable store path")
+    store_root = Path(store_path).resolve()
+    if not store_root.is_dir():
+        raise HTTPException(status_code=404, detail="Zarr store path does not exist on disk")
+
+    target = _normalize_zarr_relative_path(relative_path)
+    if target == "":
+        # Prefer the Zarr v3 root document, while retaining access to legacy v2 stores.
+        for root_key in ("zarr.json", ".zgroup", ".zmetadata"):
+            if (store_root / root_key).is_file():
+                target = root_key
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Zarr root metadata not found")
+
+    full_path = (store_root / target).resolve()
+    if not full_path.is_relative_to(store_root) or not full_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Zarr path '{relative_path}' not found")
+
+    payload = full_path.read_bytes()
+    if full_path.name in {"zarr.json", ".zgroup", ".zarray", ".zattrs", ".zmetadata"}:
+        try:
+            return JSONResponse(content=json.loads(payload.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=500, detail=f"Invalid Zarr metadata at '{target}'") from exc
+    media_type, _ = mimetypes.guess_type(target)
+    return _serve_bytes_ranged(payload, media_type or "application/octet-stream", range_header)
+
+
+def _decode_record(item: dict[str, object]) -> ArtifactRecord:
+    """Rebuild a record from its stored form, applying schema and path migrations."""
+    return ArtifactRecord.model_validate(decode_record_paths(_upgrade_legacy_record(item)))
+
+
+def _encode_records(records: list[ArtifactRecord]) -> str:
+    """Serialize records for disk, with store paths in their data-root-relative form."""
+    payload = [encode_record_paths(record.model_dump(mode="json")) for record in records]
+    return f"{json.dumps(payload, indent=2)}\n"
+
+
+def _load_records() -> list[ArtifactRecord]:
+    ensure_store()
+    raw = json.loads(ARTIFACTS_INDEX_PATH.read_text(encoding="utf-8"))
+    return [_decode_record(item) for item in raw]
+
+
+def _save_records(records: list[ArtifactRecord]) -> None:
+    global _records_write_count
+    ensure_store()
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        atomic_text(ARTIFACTS_INDEX_PATH, _encode_records(records))
+        _records_write_count += 1
+
+
+def _store_artifact_record(record: ArtifactRecord) -> ArtifactRecord:
+    """Persist a newly created artifact record while avoiding lost updates."""
+
+    def mutate(records: list[ArtifactRecord]) -> ArtifactRecord:
+        existing = _find_artifact_by_request_scope(
+            records=records,
+            dataset_id=record.dataset_id,
+            request_scope=record.request_scope,
+            format=record.format,
+        )
+        if existing is not None and existing.coverage == record.coverage:
+            return existing
+
+        records.append(record)
+        return record
+
+    return _mutate_records(mutate)
+
+
+def _upsert_artifact_record(
+    record: ArtifactRecord,
+    *,
+    overwrite: bool,
+    replace_store: bool = False,
+) -> ArtifactRecord:
+    """Persist a new or replacement artifact record for the same logical request scope."""
+    if not overwrite:
+        return _store_artifact_record(record)
+
+    def mutate(records: list[ArtifactRecord]) -> ArtifactRecord:
+        if replace_store:
+            if record.path is None:
+                raise ValueError("Replacing a managed store requires its path")
+            store_path = str(Path(record.path).resolve())
+            matching = [
+                stored
+                for stored in records
+                if stored.dataset_id == record.dataset_id
+                and stored.format == record.format
+                and stored.path is not None
+                and str(Path(stored.path).resolve()) == store_path
+            ]
+            if matching:
+                store_existing = next(
+                    (
+                        stored
+                        for stored in reversed(matching)
+                        if stored.publication.status == PublicationStatus.PUBLISHED
+                    ),
+                    matching[-1],
+                )
+                replacement = record.model_copy(
+                    update={
+                        "artifact_id": store_existing.artifact_id,
+                        "publication": store_existing.publication,
+                    }
+                )
+                matching_ids = {stored.artifact_id for stored in matching}
+                records[:] = [stored for stored in records if stored.artifact_id not in matching_ids]
+                records.append(replacement)
+                return replacement
+        existing = _find_replaceable_artifact(records=records, record=record)
+        if existing is None:
+            records.append(record)
+            return record
+
+        replacement = record.model_copy(
+            update={
+                "artifact_id": existing.artifact_id,
+                "publication": existing.publication,
+            }
+        )
+        for index, current in enumerate(records):
+            if current.artifact_id != existing.artifact_id:
+                continue
+            records[index] = replacement
+            return replacement
+        raise HTTPException(status_code=404, detail=f"Artifact '{existing.artifact_id}' not found")
+
+    return _mutate_records(mutate)
+
+
+def _refresh_recorded_size(store_path: Path) -> None:
+    """Re-measure *store_path* and record it on the newest record for that path, if there is one.
+
+    For a failed append that kept its committed periods. Best-effort: a size is a figure for
+    display, so this logs rather than raising and never masks the failure that led here.
+    """
+    try:
+        path = str(store_path.resolve())
+        size = stored_bytes(store_path)
+
+        def update(records: list[ArtifactRecord]) -> None:
+            matching = [index for index, record in enumerate(records) if record.path == path]
+            if matching:
+                newest = max(matching, key=lambda index: records[index].created_at)
+                records[newest] = records[newest].model_copy(update={"size_bytes": size})
+
+        _mutate_records(update)
+    except Exception:
+        logger.warning("Could not refresh the recorded size of '%s'", store_path, exc_info=True)
+
+
+def measure_missing_statistics(should_stop: Callable[[], bool] = lambda: False) -> int:
+    """Measure each Icechunk store whose newest record lacks a statistic; return how many were filled.
+
+    Run in the background at startup, so a dataset written before statistics were measured, or
+    whose measurement failed, gets them without waiting for its next sync, and a static one
+    without being ingested again. Kept rather than run once: it is also how a statistic a later
+    release adds reaches existing datasets, since a record measured before it holds None for it,
+    and with nothing missing it only reads the records.
+
+    One store at a time, each holding a job slot, so it waits behind running ingests instead of
+    adding to them. Only the newest record of a store is measured, as only it is read. Written
+    only if that record is unchanged, so statistics a sync recorded meanwhile are kept. A store
+    with no finite value measures as None and is tried again at the next start.
+    """
+    newest: dict[str, ArtifactRecord] = {}
+    for record in _load_records():
+        if record.path is None:
+            continue
+        if record.path not in newest or record.created_at > newest[record.path].created_at:
+            newest[record.path] = record
+    slots = get_job_slots()
+    filled = 0
+    for record in newest.values():
+        if record.format != ArtifactFormat.ICECHUNK or _fully_measured(record.statistics) or record.variable is None:
+            continue
+        if record.path is None or not Path(record.path).exists():
+            continue
+        if not slots.acquire(should_stop):
+            break
+        try:
+            statistics = measure_statistics(record.path, record.variable)
+        finally:
+            slots.release()
+        if statistics is not None and _fill_statistics(record, statistics):
+            filled += 1
+    return filled
+
+
+def _fully_measured(statistics: ArtifactStatistics | None) -> bool:
+    """Whether *statistics* holds every statistic this release measures."""
+    return statistics is not None and all(value is not None for value in statistics.model_dump().values())
+
+
+def _fill_statistics(measured: ArtifactRecord, statistics: ArtifactStatistics) -> bool:
+    """Record *statistics* on *measured* if it is still stored unchanged and still lacks one."""
+
+    def fill(records: list[ArtifactRecord]) -> bool:
+        for index, current in enumerate(records):
+            if current.artifact_id == measured.artifact_id and current.created_at == measured.created_at:
+                if _fully_measured(current.statistics):
+                    return False
+                records[index] = current.model_copy(update={"statistics": statistics})
+                return True
+        return False
+
+    return _mutate_records(fill)
+
+
+def _mutate_records(mutation: Callable[[list[ArtifactRecord]], MutationResult]) -> MutationResult:
+    """Apply a read-modify-write mutation under an exclusive lock.
+
+    The lock is a sibling file and the index is replaced whole, so readers, which take no lock,
+    see the records before the write or after it and never a partly written file.
+    """
+    global _records_write_count
+    ensure_store()
+    with index_lock(ARTIFACTS_INDEX_PATH):
+        raw = ARTIFACTS_INDEX_PATH.read_text(encoding="utf-8")
+        records = [_decode_record(item) for item in json.loads(raw or "[]")]
+        result = mutation(records)
+        atomic_text(ARTIFACTS_INDEX_PATH, _encode_records(records))
+        _records_write_count += 1
+        return result
+
+
+def _normalize_request_period(value: str, *, period_type: str, field_name: str) -> str:
+    """Normalize a required request period or raise a clear client error."""
+    try:
+        return normalize_period_string(value, period_type)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name} period '{value}': {exc}",
+        ) from exc
+
+
+def _normalize_optional_request_period(value: str | None, *, period_type: str, field_name: str) -> str | None:
+    """Normalize an optional request period or raise a clear client error."""
+    if value is None:
+        return None
+    return _normalize_request_period(value, period_type=period_type, field_name=field_name)
+
+
+_FIRST_ORDINAL = "1"
+_LAST_ORDINAL = "366"
+"""The widest scope of a climatology, whose ids are day-of-year (or month) ordinals.
+
+Used only when a request leaves the bounds out. The plugin enumerates the ordinals its reference
+period has, so the bounds name "all of it" rather than select a part.
+"""
+
+
+def _resolve_request_start(value: str | None, *, dataset: dict[str, object], period_type: str) -> str:
+    """Return the normalized start period, substituting "now" for a forecast dataset.
+
+    A future-facing dataset may omit ``start``: its periods lie ahead of now, so any fixed
+    date would be stale by the next day and a scheduled re-ingest would silently drift out
+    of the forecast window. Omitting it means "from now", resolved here in the dataset's
+    native period format.
+
+    Note what is deliberately *not* done: ``None`` is never passed through to
+    ``plugin.periods()``. Every existing plugin's signature is ``periods(start: str, end:
+    str)`` and several parse the value immediately (``date.fromisoformat(start)``), so
+    handing them ``None`` would turn an omitted field into a ``TypeError`` deep inside a
+    plugin. Resolving here keeps the plugin contract exactly as it is.
+
+    A historical dataset with no start is a client error, not a defaulted one — silently
+    ingesting from "now" backwards would be a guess about intent, and the whole record is
+    rarely what someone wants.
+    """
+    if value is not None:
+        return _normalize_request_period(value, period_type=period_type, field_name="start")
+
+    if not has_calendar_periods(period_type):
+        # A climatology's ids are ordinals and its reference period is fixed by the template,
+        # so there is no start to ask for: the scope is all of it, from the first ordinal.
+        return _FIRST_ORDINAL
+
+    if not registry_datasets.is_future_facing(dataset):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Dataset '{dataset.get('id')}' requires a start period: its periods are historical. "
+                "Only datasets declaring 'temporal_direction: future' (e.g. forecasts) may omit it."
+            ),
+        )
+    return _current_request_period(period_type)
+
+
+def _forecast_horizon(dataset: dict[str, object], period_type: str) -> str:
+    """Return how far ahead to ask a forecast plugin for, when no end was requested.
+
+    Prefers the template's declared ``extents.temporal.end``. Otherwise offers a year
+    ahead — deliberately generous, because the real limit belongs to the plugin (its own
+    lead-time parameter) and a bound here would silently truncate a longer forecast. The
+    plugin is expected to clip to what it publishes; ``request_scope.end`` remains None so
+    the coverage check does not require it to fill this whole window.
+
+    A year rather than no bound at all keeps ``periods()`` typed as ``end: str``, so a
+    plugin author never has to handle a missing end.
+    """
+    declared = registry_datasets.declared_temporal_end(dataset)
+    if declared:
+        return declared
+    # 365 days rather than replace(year=+1): the latter raises "day is out of range for
+    # month" on 29 February, since the following year has no such date — a crash on leap
+    # day for a horizon that is approximate by design. Read the date once, so a run
+    # crossing midnight cannot mix two different days.
+    horizon = utc_today() + timedelta(days=365)
+    if period_type == "yearly":
+        return str(horizon.year)
+    if period_type == "monthly":
+        return f"{horizon.year:04d}-{horizon.month:02d}"
+    if period_type in {"hourly", "weekly"}:
+        return datetime_to_period_string(datetime.combine(horizon, datetime.min.time(), tzinfo=UTC), period_type)
+    return horizon.isoformat()
+
+
+def _current_request_period(period_type: str) -> str:
+    """Return "now" as a dataset-native period string.
+
+    Used for both an omitted ``end`` (sync through the latest period) and an omitted
+    ``start`` on a future-facing dataset (ingest from now forward).
+    """
+    if period_type == "hourly":
+        return datetime_to_period_string(utc_now(), period_type)
+    if period_type == "daily":
+        return utc_today().isoformat()
+    if period_type == "dekadal":
+        return dekad_start(utc_today()).isoformat()
+    if period_type == "weekly":
+        return datetime_to_period_string(utc_now(), period_type)
+    if period_type == "monthly":
+        today = utc_today()
+        return f"{today.year:04d}-{today.month:02d}"
+    if period_type == "yearly":
+        return str(utc_today().year)
+    if period_type == "climatology":
+        # Day-of-year climatology: the plugin enumerates 1..366 regardless of the
+        # request range, so the end value is unused — return a stable sentinel.
+        return "366"
+    raise HTTPException(status_code=400, detail=f"Invalid period_type '{period_type}' for request period defaulting")
+
+
+def _validate_download_scope(
+    *,
+    start: str,
+    end: str | None,
+    download_start: str | None,
+    download_end: str | None,
+) -> None:
+    """Validate optional delta download scope against the normalized request scope."""
+    if (download_start is None) != (download_end is None):
+        raise HTTPException(
+            status_code=400,
+            detail="download_start and download_end must either both be provided or both be omitted",
+        )
+    if download_start is None or download_end is None:
+        return
+    if download_start < start:
+        raise HTTPException(status_code=400, detail="download_start must be greater than or equal to start")
+    if download_end < download_start:
+        raise HTTPException(status_code=400, detail="download_end must be greater than or equal to download_start")
+    if end is not None and download_end > end:
+        raise HTTPException(status_code=400, detail="download_end must be less than or equal to end")
+
+
+def _find_replaceable_artifact(*, records: list[ArtifactRecord], record: ArtifactRecord) -> ArtifactRecord | None:
+    """Return the stored record an overwrite should replace, by that format's own identity.
+
+    A raster is identified by its request scope: two ingests of the same dataset over different
+    periods or extents are different materializations, and both are kept, which is what gives a
+    dataset its version history.
+
+    A feature collection has no version history by design — a refresh updates in place — so its
+    identity is the managed dataset itself. Matching it on request scope instead would make a
+    refresh that widened the extract window, or omitted the bbox, append a second record rather
+    than replace the first: the collection would gain a "version", the older record would keep
+    the publication state, and `feature_count` would answer for whichever record won the
+    recency test. Format is part of the match so this can never reach across a dataset id that
+    holds both, which nothing produces today and nothing should silently start doing.
+    """
+    # A table dataset keeps its history in its rows, not in records, so it has one record too.
+    if record.format in (ArtifactFormat.GEOPARQUET, ArtifactFormat.PARQUET):
+        for stored in reversed(records):
+            if stored.dataset_id == record.dataset_id and stored.format == record.format:
+                return stored
+        return None
+    return _find_artifact_by_request_scope(
+        records=records,
+        dataset_id=record.dataset_id,
+        request_scope=record.request_scope,
+        format=record.format,
+    )
+
+
+def _find_artifact_by_request_scope(
+    *,
+    records: list[ArtifactRecord],
+    dataset_id: str,
+    request_scope: ArtifactRequestScope,
+    format: ArtifactFormat | None = None,
+) -> ArtifactRecord | None:
+    """Return the latest materialized record for the same operation request.
+
+    Persistence allows cumulative coverage to extend beyond a finite incremental
+    request. The caller compares coverage when deduplicating and replaces the record
+    explicitly for overwrite semantics.
+    """
+    for record in reversed(records):
+        if record.dataset_id != dataset_id or record.request_scope != request_scope:
+            continue
+        if format is not None and record.format != format:
+            continue
+        if _artifact_storage_exists(record):
+            return record
+    return None
+
+
+def _materialized_records(records: list[ArtifactRecord]) -> list[ArtifactRecord]:
+    """Return only artifact records whose backing storage still exists."""
+    materialized: list[ArtifactRecord] = []
+    for record in records:
+        if _artifact_storage_exists(record):
+            materialized.append(record)
+            continue
+        logger.warning("Ignoring stale artifact '%s' because backing storage is missing", record.artifact_id)
+    return materialized
+
+
+def _artifact_storage_exists(record: ArtifactRecord) -> bool:
+    """Return whether an artifact's on-disk backing files are still present."""
+    paths: list[str] = []
+    if record.path is not None:
+        paths.append(record.path)
+    if record.asset_paths:
+        paths.extend(record.asset_paths)
+    if not paths:
+        return False
+    return all(Path(path).exists() for path in paths)
+
+
+def _temporal_coverage_matches_request_scope(
+    temporal: CoverageTemporal,
+    request_scope: ArtifactRequestScope,
+) -> bool:
+    """Return whether temporal coverage exactly matches the requested temporal scope."""
+    if temporal.start != request_scope.start:
+        return False
+    # Open-ended requests intentionally reuse the latest artifact for the same
+    # logical start/scope even though the realized end is time-dependent.
+    if request_scope.end is not None and temporal.end != request_scope.end:
+        return False
+    return True
+
+
+def _temporal_coverage_matches_streaming_request_scope(
+    temporal: CoverageTemporal,
+    request_scope: ArtifactRequestScope,
+) -> bool:
+    """Return whether streaming coverage is compatible with the requested scope.
+
+    Plugin-backed streaming ingest may legitimately clamp the realized end of an
+    artifact to the source's latest available period. That should still be
+    treated as a successful ingest as long as the coverage starts where
+    requested and does not extend beyond the requested temporal end.
+
+    Start handling remains strict by design. A later-than-requested start
+    indicates the realized dataset does not cover the requested opening period
+    at all, while a shorter realized end can be a normal consequence of source
+    availability clamping.
+    """
+    if temporal.start != request_scope.start:
+        return False
+    if request_scope.end is not None and temporal.end is not None and temporal.end > request_scope.end:
+        return False
+    return True
+
+
+def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> DatasetRecord:
+    latest = max(artifacts, key=lambda artifact: artifact.created_at)
+    if latest.format == ArtifactFormat.GEOPARQUET:
+        source_dataset = feature_templates.get_feature_template(latest.dataset_id) or {}
+    elif latest.format == ArtifactFormat.PARQUET:
+        # Table templates come with CLIM-1556; until then a table has only its record.
+        source_dataset = {}
+    else:
+        source_dataset = registry_datasets.get_dataset(latest.dataset_id) or {}
+    return DatasetRecord(
+        dataset_id=dataset_id,
+        source_dataset_id=latest.source_dataset_id or latest.dataset_id,
+        dataset_name=latest.dataset_name,
+        short_name=_as_optional_str(source_dataset.get("short_name")),
+        description=_as_optional_text(source_dataset.get("description")),
+        item_type=_item_type_for(latest),
+        variable=latest.variable,
+        period_type=_dataset_period_type(latest, source_dataset),
+        units=_as_optional_str(source_dataset.get("units")) or latest.units,
+        resolution=_as_optional_str(source_dataset.get("resolution")),
+        source=_template_source(source_dataset),
+        source_url=_as_optional_str(source_dataset.get("source_url")),
+        license=_licence_for(source_dataset).stac_license,
+        license_url=_licence_for(source_dataset).url,
+        extent=latest.coverage,
+        last_updated=latest.created_at,
+        links=_dataset_links(dataset_id, latest, published=_latest_published(artifacts)),
+        publication=DatasetPublication(
+            status=latest.publication.status,
+            published_at=latest.publication.published_at,
+        ),
+    )
+
+
+def _build_ingestion_response(artifact: ArtifactRecord) -> IngestionResponse:
+    """Build an operational ingestion response from one stored artifact record."""
+    return IngestionResponse(
+        ingestion_id=artifact.artifact_id,
+        status="completed",
+        dataset=get_dataset_summary_for_artifact_or_404(artifact.artifact_id),
+    )
+
+
+def _build_dataset_detail_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> DatasetDetailRecord:
+    base = _build_dataset_record(dataset_id, artifacts)
+    ordered_artifacts = sorted(artifacts, key=lambda artifact: artifact.created_at, reverse=True)
+    return DatasetDetailRecord(
+        **base.model_dump(),
+        versions=[
+            DatasetVersionRecord(
+                created_at=artifact.created_at,
+                format=artifact.format,
+                coverage=artifact.coverage,
+                request_scope=artifact.request_scope,
+            )
+            for artifact in ordered_artifacts
+        ],
+        provenance=dataset_provenance(ordered_artifacts[0]),
+    )
+
+
+def recorded_inputs(record: ArtifactRecord) -> list[dict[str, str | None]]:
+    """The inputs the producing job read, once each: their dataset, source, artifact and snapshot ids.
+
+    Only these ids leave the recorded execution evidence, so nothing else it may hold is
+    published. A collection the graph loaded more than once is listed once.
+    """
+    execution = record.provenance.execution if record.provenance is not None else None
+    sources = execution.get("sources") if isinstance(execution, dict) else None
+    inputs: list[dict[str, str | None]] = []
+    for source in sources if isinstance(sources, list) else []:
+        if not isinstance(source, dict) or not isinstance(source.get("collection_id"), str):
+            continue
+        entry = {key: source.get(key) for key in ("collection_id", "source_dataset_id", "artifact_id", "snapshot_id")}
+        if entry not in inputs:
+            inputs.append(entry)
+    return inputs
+
+
+def dataset_provenance(record: ArtifactRecord) -> DatasetProvenance | None:
+    """How a workflow-produced artifact was made, and which of its inputs have changed since.
+
+    An input is compared with what `load_collection` would read now: a different artifact, or
+    another snapshot of the same Icechunk store, means it was re-ingested or synced since. An
+    input without snapshots, such as a feature collection, keeps its artifact id when refreshed,
+    so whether it changed cannot be told.
+    """
+    from open_geo_service.openeo.jobs import store_head
+
+    provenance = record.provenance
+    if provenance is None:
+        return None
+    execution = provenance.execution or {}
+    current_artifacts = openeo_collection_artifacts_by_dataset()
+    inputs: list[DatasetInput] = []
+    for recorded in recorded_inputs(record):
+        dataset_id = str(recorded["collection_id"])
+        current = current_artifacts.get(dataset_id)
+        current_snapshot = (
+            store_head(Path(current.path))
+            if current is not None and current.format == ArtifactFormat.ICECHUNK and current.path
+            else None
+        )
+        changed: bool | None = None
+        if current is not None and recorded["artifact_id"] is not None:
+            if recorded["artifact_id"] != current.artifact_id:
+                changed = True
+            elif recorded["snapshot_id"] is not None and current_snapshot is not None:
+                changed = recorded["snapshot_id"] != current_snapshot
+        inputs.append(
+            DatasetInput(
+                dataset_id=dataset_id,
+                source_dataset_id=recorded["source_dataset_id"],
+                artifact_id=recorded["artifact_id"],
+                snapshot_id=recorded["snapshot_id"],
+                current_snapshot_id=current_snapshot,
+                changed=changed,
+                href=f"/datasets/{_segment(dataset_id)}",
+            )
+        )
+    process_sha256 = execution.get("process_sha256")
+    return DatasetProvenance(
+        producer_job_id=provenance.producer_job_id,
+        producer_job_href=f"/jobs/{_segment(provenance.producer_job_id)}",
+        process_sha256=process_sha256 if isinstance(process_sha256, str) else None,
+        ogs_version=provenance.ogs_version,
+        output_snapshot_id=provenance.output_snapshot_id,
+        inputs=inputs,
+    )
+
+
+def _dataset_period_type(latest: ArtifactRecord, source_dataset: dict[str, Any]) -> str | None:
+    """Return the dataset's period type, or None only where there genuinely is no period axis.
+
+    `period_type` became optional for feature collections, and the fallback below is what keeps
+    that from quietly changing an existing raster response. A raster whose template has been
+    removed has always reported "unknown" here rather than omitting the field, and a client
+    reading that string is entitled to keep receiving it; a null would be a new value to handle
+    for a case that has nothing to do with this work.
+
+    A feature collection gets None instead, which is not a missing value but the true one: a
+    boundary set has no temporal axis to name. `itemType` is the field that says which of the
+    two a null means, which is why the discriminator exists.
+
+    The format is answered first, before anything is read from the template. `source_dataset` is
+    resolved by dataset id, so a feature collection whose id also names a raster template — an
+    older template, or one an operator left behind — would otherwise pick up that template's
+    `period_type` and publish `itemType: "feature"` beside `period_type: "daily"`. The record's
+    own format is the authority on whether a period axis exists; the template is only ever the
+    source of what to call one.
+    """
+    if latest.format == ArtifactFormat.GEOPARQUET:
+        return None
+    if latest.format == ArtifactFormat.PARQUET:
+        return latest.period_type
+    declared = _as_optional_str(source_dataset.get("period_type")) or latest.period_type
+    if declared is None and source_dataset and registry_datasets.is_timeless(source_dataset):
+        # A static raster without a time axis (CLIM-1448): no period axis, like a feature collection.
+        # A cadence recorded for a workflow result that has one still wins, above. Only a template
+        # can say so: with no template left, the period type is unknown, as before.
+        return None
+    return declared if declared is not None else "unknown"
+
+
+def _item_type_for(artifact: ArtifactRecord) -> DatasetItemType:
+    """Return the public `itemType` discriminator for one stored record.
+
+    Read from `format` rather than from the presence of `features`, so the discriminator and
+    the thing it discriminates cannot disagree: format is what every other branch in the
+    codebase dispatches on, and a record that somehow carried feature detail under a raster
+    format would still be opened as a raster.
+    """
+    if artifact.format == ArtifactFormat.GEOPARQUET:
+        return DatasetItemType.FEATURE
+    if artifact.format == ArtifactFormat.PARQUET:
+        return DatasetItemType.TABLE
+    return DatasetItemType.COVERAGE
+
+
+def _latest_published(artifacts: list[ArtifactRecord]) -> ArtifactRecord | None:
+    """Return the artifact every published-data surface resolves for this dataset, or None.
+
+    The same rule `_latest_published_artifacts_by_dataset` applies, from the same grouping:
+    filter by publication *first*, then take the newest. Recomputed from the caller's own list
+    rather than read back through that function, because `_build_dataset_record` runs once per
+    dataset and the gate rescans every artifact in the store.
+    """
+    published = [artifact for artifact in artifacts if artifact.publication.status == PublicationStatus.PUBLISHED]
+    return max(published, key=lambda artifact: artifact.created_at) if published else None
+
+
+def _dataset_links(
+    dataset_id: str, latest: ArtifactRecord, *, published: ArtifactRecord | None
+) -> list[DatasetAccessLink]:
+    """Build the access links for a dataset, each keyed on the artifact its route resolves.
+
+    Two different artifacts answer here, which is why `published` is separate from `latest`.
+    Every published-data route — `/zarr`, `/stac`, `/features` — resolves the latest
+    *published* artifact, so an ingest with `publish: false` over an already-published dataset
+    leaves those routes serving the earlier record. Keying the links on `latest` instead made
+    `/datasets` withhold links to collections STAC was still advertising: the newest artifact was
+    unpublished, so `published` read false, while the catalogue went on serving the older one.
+
+    `download` stays on `latest`, because `download_artifact_file` resolves the latest artifact
+    regardless of publication. The rule is the same throughout: a link says what its own route
+    will do.
+    """
+    links = [DatasetAccessLink(href=f"/datasets/{_segment(dataset_id)}", rel="self", title="Dataset detail")]
+    if published is not None and published.format in LOADABLE_RASTER_FORMATS:
+        links.append(DatasetAccessLink(href=f"/zarr/{_segment(dataset_id)}", rel="zarr", title="Zarr store"))
+    # Tracks `stac_eligible_artifacts_by_dataset` exactly, so `/datasets` never offers a
+    # catalogue link the catalogue itself does not serve, nor withholds one it does.
+    if published is not None and published.format in CATALOGUED_FORMATS:
+        links.append(
+            DatasetAccessLink(href=f"/stac/{_segment(dataset_id)}/collection.json", rel="stac", title="STAC collection")
+        )
+    if published is not None and published.format == ArtifactFormat.GEOPARQUET:
+        links.append(
+            DatasetAccessLink(
+                href=f"/features/{_segment(dataset_id)}", rel="features", title="Feature collection detail"
+            )
+        )
+    if published is not None and published.format == ArtifactFormat.PARQUET:
+        links.append(DatasetAccessLink(href=f"/tables/{_segment(dataset_id)}/rows", rel="rows", title="Table rows"))
+    if latest.format == ArtifactFormat.NETCDF:
+        links.append(
+            DatasetAccessLink(
+                href=f"/datasets/{_segment(dataset_id)}/download", rel="download", title="Download NetCDF"
+            )
+        )
+    return links
+
+
+def _as_optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _licence_for(source_dataset: dict[str, Any]) -> "DatasetLicence":
+    """The dataset's parsed licence (CLIM-946), never None — undeclared resolves to `other`."""
+    from open_geo_service.shared.licences import parse_licence
+
+    return parse_licence(source_dataset.get("license"))
+
+
+def _template_source(template: Mapping[str, Any]) -> str | None:
+    """The short name of where a dataset comes from, for the listing and its tiles.
+
+    A raster template says it in ``source``; a feature template declares structured
+    ``providers`` instead, so the first declared provider's name stands in for it.
+    """
+    source = _as_optional_str(template.get("source"))
+    if source is not None:
+        return source
+    providers = template.get("providers")
+    if isinstance(providers, list):
+        for provider in providers:
+            if isinstance(provider, dict):
+                name = _as_optional_str(provider.get("name"))
+                if name is not None:
+                    return name
+    return None
+
+
+def _as_optional_text(value: object) -> str | None:
+    """A prose field, normalised the way the STAC path normalises it.
+
+    `_as_optional_str` passes a string through untouched, which is right for an identifier but
+    wrong for prose: `description: >-` folded YAML leaves a trailing newline, and a
+    whitespace-only value is a mistake rather than a description. Without this, `/datasets`
+    would publish "   " where the STAC collection falls back to the generated sentence — two
+    public catalogue surfaces disagreeing about the same template field.
+
+    Deliberately not applied to `short_name`, `units` and the rest: widening the change would
+    alter fields this ticket has no reason to touch.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _upgrade_legacy_record(item: dict[str, object]) -> dict[str, object]:
+    """Backfill newer schema fields for records created before migrations existed."""
+    if "request_scope" not in item:
+        coverage = item.get("coverage")
+        if isinstance(coverage, dict):
+            spatial = coverage.get("spatial")
+            temporal = coverage.get("temporal")
+            bbox: tuple[float, float, float, float] | None = None
+            if isinstance(spatial, dict):
+                xmin = spatial.get("xmin")
+                ymin = spatial.get("ymin")
+                xmax = spatial.get("xmax")
+                ymax = spatial.get("ymax")
+                if (
+                    isinstance(xmin, int | float)
+                    and isinstance(ymin, int | float)
+                    and isinstance(xmax, int | float)
+                    and isinstance(ymax, int | float)
+                ):
+                    bbox = (float(xmin), float(ymin), float(xmax), float(ymax))
+
+            start = ""
+            end: str | None = None
+            if isinstance(temporal, dict):
+                raw_start = temporal.get("start")
+                raw_end = temporal.get("end")
+                if isinstance(raw_start, str):
+                    start = raw_start
+                if isinstance(raw_end, str):
+                    end = raw_end
+
+            item["request_scope"] = {
+                "start": start,
+                "end": end,
+                "bbox": bbox,
+            }
+    return item

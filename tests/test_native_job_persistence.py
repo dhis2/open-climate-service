@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.jobs import store
-from open_climate_service.jobs.models import JobRecord, JobStatus
-from open_climate_service.shared.time import utc_now
+from open_geo_service.jobs import store
+from open_geo_service.jobs.models import JobRecord, JobStatus
+from open_geo_service.shared.time import utc_now
 
 
 def _increment(directory: str, ready: Any, start: Any):
@@ -61,9 +61,9 @@ def test_processes_do_not_lose_updates_across_atomic_replacement(tmp_path: Path,
 
 
 def test_failed_replace_preserves_reservations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service import config
-    from open_climate_service.exports.reservations import find_delivery, reserve_delivery, submission_lock
-    from open_climate_service.shared import persistence
+    from open_geo_service import config
+    from open_geo_service.exports.reservations import find_delivery, reserve_delivery, submission_lock
+    from open_geo_service.shared import persistence
 
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path)
     arguments: dict[str, Any] = dict(

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service import migrate_layout
+from open_geo_service import config as api_config
+from open_geo_service import migrate_layout
 
 
 @pytest.fixture
@@ -35,8 +37,8 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  ingestion:\n    plugin: datasets.chelsa.ChelsaPlugin\n    params: {}\n"
     )
     (plugins / "datasets" / "chelsa.py").write_text(
-        "from open_climate_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin\n"
-        "import open_climate_service.plugins.features.dhis2\n"
+        "from open_geo_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin\n"
+        "import open_geo_service.plugins.features.dhis2\n"
         "from datasets import load_dataset\n"
         "import datasets_extra\n"
         "\n"
@@ -45,18 +47,18 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (plugins / "datasets" / "chirps_override.yaml").write_text(
         "- id: chirps_override\n  name: CHIRPS override\n  variable: precip\n  period_type: daily\n"
         "  sync:\n    kind: static\n"
-        "  ingestion:\n    plugin: open_climate_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin\n"
+        "  ingestion:\n    plugin: open_geo_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin\n"
     )
     (plugins / "features").mkdir()
     (plugins / "features" / "regions.yaml").write_text("- id: regions\n  name: Regions\n  id_property: id\n")
     (plugins / "processes").mkdir()
     (plugins / "processes" / "indices.py").write_text(
-        "from open_climate_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin\n"
+        "from open_geo_service.plugins.datasets.chirps3 import CHIRPS3DailyPlugin\n"
     )
 
-    config = tmp_path / "climate-service.yaml"
+    config = tmp_path / "geoservice.yaml"
     config.write_text(f"data_dir: {data}\nplugins_dir: ./plugins\n")
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config))
     api_config._cache = None
     return tmp_path
 
@@ -79,17 +81,17 @@ def test_moves_data_and_plugins_and_rewrites_what_names_them(instance: Path) -> 
 
     assert sorted(p.name for p in plugins.iterdir()) == ["processes", "rasters", "vectors"]
     process = (plugins / "processes" / "indices.py").read_text()
-    assert process == "from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin\n", (
+    assert process == "from open_geo_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin\n", (
         "a module outside the template folders imports from them too"
     )
     assert "plugin: rasters.chelsa.ChelsaPlugin" in (plugins / "rasters" / "chelsa.yaml").read_text()
     module = (plugins / "rasters" / "chelsa.py").read_text()
-    assert "from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin" in module
-    assert "import open_climate_service.plugins.vectors.dhis2" in module
+    assert "from open_geo_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin" in module
+    assert "import open_geo_service.plugins.vectors.dhis2" in module
     assert "from datasets import load_dataset" in module, "a bare datasets import is another package"
     assert "import datasets_extra" in module, "a module that only starts with the word is left alone"
     override = (plugins / "rasters" / "chirps_override.yaml").read_text()
-    assert "plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin" in override
+    assert "plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin" in override
     assert "datasets = ['not an import']" in module, "only imports are rewritten"
 
 
@@ -101,6 +103,16 @@ def test_running_it_again_changes_nothing(instance: Path, capsys: pytest.Capture
     assert migrate_layout.main([]) == 0
     assert "Nothing to migrate" in capsys.readouterr().out
     assert (instance / "data" / "artifacts" / "records.json").read_text() == records
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_rewriting_the_records_keeps_their_mode(instance: Path) -> None:
+    """The records are replaced through an owner-only temporary file; the migration must not leave them owner-only."""
+    index = instance / "data" / "artifacts" / "records.json"
+    index.chmod(0o644)
+
+    assert migrate_layout.main([]) == 0
+    assert stat.S_IMODE(index.stat().st_mode) == 0o644
 
 
 def test_a_dry_run_reports_and_changes_nothing(instance: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -125,8 +137,8 @@ def test_refuses_when_an_old_and_a_new_folder_both_exist(instance: Path, capsys:
 
 def test_the_service_reads_the_migrated_instance(instance: Path) -> None:
     """The point of the move: after it, the loaders find the plugins and the records resolve."""
-    from open_climate_service.data_registry.services import datasets as registry
-    from open_climate_service.features import templates as feature_templates
+    from open_geo_service.data_registry.services import datasets as registry
+    from open_geo_service.features import templates as feature_templates
 
     migrate_layout.main([])
     registry.reset_template_caches()
@@ -141,7 +153,7 @@ def test_a_data_dir_reached_through_a_symlink_is_migrated(instance: Path) -> Non
     link.symlink_to(instance / "data")
     index = instance / "data" / "artifacts" / "records.json"
     index.write_text(json.dumps([{"artifact_id": "a", "path": str(link / "downloads" / "chirps.icechunk")}]) + "\n")
-    (instance / "climate-service.yaml").write_text(f"data_dir: {link}\nplugins_dir: ./plugins\n")
+    (instance / "geoservice.yaml").write_text(f"data_dir: {link}\nplugins_dir: ./plugins\n")
     api_config._cache = None
 
     assert migrate_layout.main([]) == 0

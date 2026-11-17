@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters.gefs_forecast import GefsForecastPlugin
-from open_climate_service.shared import forecast
+from open_geo_service.plugins.rasters.gefs_forecast import GefsForecastPlugin
+from open_geo_service.shared import forecast
 
 INITS = np.array(["2026-01-01T00", "2026-01-02T00"], dtype="datetime64[ns]")
 # Day 0 3-hourly (8 steps), day 1 6-hourly (4 steps), then one step into day 2. The widening

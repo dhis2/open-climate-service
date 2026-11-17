@@ -11,9 +11,9 @@ import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.process_registry import Process
 
-from open_climate_service.openeo import jobs
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.execution import (
+from open_geo_service.openeo import jobs
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.openeo.execution import (
     _augment_with_workflows,
     _build_process_registry,
     _resolve_workflow_parameters,
@@ -135,7 +135,7 @@ def test_method_selects_reducer(method: str, expected: float) -> None:
 
 def test_builtin_workflows_use_literal_process_ids() -> None:
     """openEO requires `process_id` to be a literal string; a `{from_parameter}` process_id
-    is non-portable (standard validators reject it) even though OCS resolves it at runtime.
+    is non-portable (standard validators reject it) even though OGS resolves it at runtime.
     Guard against reintroducing the pattern in any built-in workflow — use a process that
     takes the choice as an argument (e.g. reduce_by_method) instead."""
     import importlib.resources
@@ -153,7 +153,7 @@ def test_builtin_workflows_use_literal_process_ids() -> None:
                 found += _non_literal_process_ids(value, f"{path}[{i}]")
         return found
 
-    pkg = importlib.resources.files("open_climate_service") / "plugins" / "workflows"
+    pkg = importlib.resources.files("open_geo_service") / "plugins" / "workflows"
     checked = 0
     for resource in pkg.iterdir():
         if not resource.name.endswith(".json"):

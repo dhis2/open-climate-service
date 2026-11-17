@@ -16,10 +16,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.features import providers as feature_providers
-from open_climate_service.features import templates as feature_templates
-from open_climate_service.ingestions import services as ingestion_services
+from open_geo_service import config as api_config
+from open_geo_service.features import providers as feature_providers
+from open_geo_service.features import templates as feature_templates
+from open_geo_service.ingestions import services as ingestion_services
 
 TEMPLATES = """
 - id: demo_regions

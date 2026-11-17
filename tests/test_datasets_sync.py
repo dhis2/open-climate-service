@@ -7,8 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from open_climate_service.ingestions import services, sync_engine
-from open_climate_service.ingestions.schemas import (
+from open_geo_service.ingestions import services, sync_engine
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -26,7 +26,7 @@ from open_climate_service.ingestions.schemas import (
     SyncKind,
     SyncResponse,
 )
-from open_climate_service.shared.time import next_period_string
+from open_geo_service.shared.time import next_period_string
 
 
 def _version(value: str, authority: str = "worldpop") -> ArtifactVersion:
@@ -263,7 +263,7 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
     )
 
@@ -320,7 +320,7 @@ def test_plan_sync_for_plugin_backed_icechunk_uses_committed_store_state(
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -441,7 +441,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_without
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -482,7 +482,7 @@ def test_plan_sync_for_plugin_backed_icechunk_skips_non_local_store_path(
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -528,7 +528,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_win
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -575,7 +575,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_fil
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -617,7 +617,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_st
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -650,7 +650,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_co
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -685,7 +685,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_unt
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -720,7 +720,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_for_rel
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -757,7 +757,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_co
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -788,7 +788,7 @@ def test_sync_dataset_append_policy_falls_back_for_plugin_backed_non_icechunk_ar
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
     )
 
@@ -1343,7 +1343,7 @@ def test_a_malformed_declaration_raises_rather_than_reading_as_no_version() -> N
 def test_release_identity_compares_on_the_pair_not_the_value() -> None:
     """Same value under a different authority is a different release."""
     assert _version("R2025A") == _version("R2025A")
-    assert _version("R2025A") != _version("R2025A", authority="ocs")
+    assert _version("R2025A") != _version("R2025A", authority="geoservice")
     assert _version("R2025A") != _version("R2025B")
 
 
@@ -1353,7 +1353,7 @@ def test_authority_must_be_a_machine_identifier() -> None:
         with pytest.raises(ValidationError):
             ArtifactVersion(value="R2025A", authority=rejected)
 
-    for accepted in ["worldpop", "overture", "ocs", "dhis2", "dhis2.national-hmis", "worldpop_global2"]:
+    for accepted in ["worldpop", "overture", "geoservice", "dhis2", "dhis2.national-hmis", "worldpop_global2"]:
         assert ArtifactVersion(value="R2025A", authority=accepted).authority == accepted
 
 
@@ -1762,17 +1762,20 @@ def test_sync_dataset_forwards_country_code_from_extent(monkeypatch: pytest.Monk
 def test_maybe_build_pyramid_calls_write_to_icechunk_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import xarray as xr
 
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.ingestions.services import _maybe_build_pyramid
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.ingestions.services import _maybe_build_pyramid
 
     icechunk_path = tmp_path / "dataset.icechunk"
     icechunk_path.mkdir()
 
     ds = xr.Dataset()
-    monkeypatch.setattr(
-        "open_climate_service.data_accessor.services.accessor.open_icechunk_dataset",
-        lambda _: ds,
-    )
+    opened: list[dict[str, object]] = []
+
+    def fake_open(_: Path, **kw: object) -> xr.Dataset:
+        opened.append(kw)
+        return ds
+
+    monkeypatch.setattr("open_geo_service.data_accessor.services.accessor.open_icechunk_dataset", fake_open)
 
     written: list[tuple] = []
 
@@ -1785,6 +1788,8 @@ def test_maybe_build_pyramid_calls_write_to_icechunk_store(tmp_path: Path, monke
     result = _maybe_build_pyramid(icechunk_path, {"id": "ds1", "variable": "precip"})
 
     assert len(written) == 1
+    # One period per dask chunk, so topozarr keeps one period per time shard (CLIM-1765).
+    assert opened == [{"merge_time": False}]
     # The rewrite cannot target the store it is reading from, so it goes to a sibling and is
     # swapped in. What matters to callers is where it ends up, and that nothing is left over.
     assert written[0][1] == icechunk_path.with_name(f"{icechunk_path.name}.rebuild")
@@ -1802,8 +1807,8 @@ def test_maybe_build_pyramid_skips_rewrite_for_normalized_flat_store(
     import numpy as np
     import xarray as xr
 
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.ingestions.services import _maybe_build_pyramid
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.ingestions.services import _maybe_build_pyramid
 
     icechunk_path = tmp_path / "dataset.icechunk"
     icechunk_path.mkdir()
@@ -1820,8 +1825,8 @@ def test_maybe_build_pyramid_skips_rewrite_for_normalized_flat_store(
         },
     )
     monkeypatch.setattr(
-        "open_climate_service.data_accessor.services.accessor.open_icechunk_dataset",
-        lambda _: ds,
+        "open_geo_service.data_accessor.services.accessor.open_icechunk_dataset",
+        lambda _, **__: ds,
     )
 
     written: list[tuple] = []
@@ -1837,16 +1842,16 @@ def test_maybe_build_pyramid_skips_rewrite_for_normalized_flat_store(
 def test_maybe_build_pyramid_falls_back_on_build_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import xarray as xr
 
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.ingestions.services import _maybe_build_pyramid
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.ingestions.services import _maybe_build_pyramid
 
     icechunk_path = tmp_path / "dataset.icechunk"
     icechunk_path.mkdir()
 
     ds = xr.Dataset()
     monkeypatch.setattr(
-        "open_climate_service.data_accessor.services.accessor.open_icechunk_dataset",
-        lambda _: ds,
+        "open_geo_service.data_accessor.services.accessor.open_icechunk_dataset",
+        lambda _, **__: ds,
     )
 
     def fake_write_fail(*_a: object, **_k: object) -> None:
@@ -1881,7 +1886,7 @@ def test_plan_sync_append_for_icechunk_artifact(
             "id": "chirps3_precipitation_daily",
             "period_type": "daily",
             "sync": {"kind": "temporal", "execution": "append"},
-            "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
+            "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"},
         },
         latest_artifact=latest,
         requested_end="2026-01-31",
@@ -1891,7 +1896,7 @@ def test_plan_sync_append_for_icechunk_artifact(
 
 
 def test_swap_store_replaces_the_target_and_cleans_up(tmp_path: Path) -> None:
-    from open_climate_service.ingestions.services import _swap_store
+    from open_geo_service.ingestions.services import _swap_store
 
     target = tmp_path / "ds.icechunk"
     target.mkdir()
@@ -1910,7 +1915,7 @@ def test_swap_store_replaces_the_target_and_cleans_up(tmp_path: Path) -> None:
 
 def test_swap_store_puts_the_original_back_when_the_swap_fails(tmp_path: Path) -> None:
     """A failed swap must not leave the dataset without a store."""
-    from open_climate_service.ingestions.services import _swap_store
+    from open_geo_service.ingestions.services import _swap_store
 
     target = tmp_path / "ds.icechunk"
     target.mkdir()
@@ -1928,7 +1933,7 @@ def test_recover_interrupted_swap_restores_a_store_killed_between_renames(tmp_pa
     """A SIGKILL between the two renames leaves the published path missing and the data at
     `.retired`, which no reader looks for. The exception handler cannot cover that case.
     """
-    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.ingestions.services import recover_interrupted_swap
 
     target = tmp_path / "ds.icechunk"
     retired = tmp_path / "ds.icechunk.retired"
@@ -1946,7 +1951,7 @@ def test_recover_interrupted_swap_leaves_a_healthy_store_alone(tmp_path: Path) -
 
     Restoring over a healthy store would roll back a completed swap.
     """
-    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.ingestions.services import recover_interrupted_swap
 
     target = tmp_path / "ds.icechunk"
     target.mkdir()
@@ -1960,20 +1965,20 @@ def test_recover_interrupted_swap_leaves_a_healthy_store_alone(tmp_path: Path) -
 
 
 def test_recover_interrupted_swap_is_a_no_op_for_a_brand_new_dataset(tmp_path: Path) -> None:
-    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.ingestions.services import recover_interrupted_swap
 
     assert recover_interrupted_swap(tmp_path / "never-existed.icechunk") is False
 
 
 def test_recover_interrupted_swap_removes_stale_ingest_rollback_branches(tmp_path: Path) -> None:
-    from open_climate_service.ingestions.services import recover_interrupted_swap
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.streaming.store import open_or_create_repo
 
     target = tmp_path / "ds.icechunk"
     repo = open_or_create_repo(target)
     snapshot = repo.lookup_branch("main")
-    repo.create_branch("ocs-ingest-rollback-first", snapshot)
-    repo.create_branch("ocs-ingest-rollback-second", snapshot)
+    repo.create_branch("ogs-ingest-rollback-first", snapshot)
+    repo.create_branch("ogs-ingest-rollback-second", snapshot)
 
     assert recover_interrupted_swap(target) is True
     assert repo.list_branches() == {"main"}
@@ -1997,9 +2002,9 @@ def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(
     """
     from types import SimpleNamespace
 
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.ingestions import services as ingestion_services
-    from open_climate_service.ingestions.schemas import ArtifactRequestScope
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.ingestions.schemas import ArtifactRequestScope
 
     target = tmp_path / "ds.icechunk"
     retired = tmp_path / "ds.icechunk.retired"
@@ -2079,7 +2084,7 @@ def test_an_interrupted_swap_is_healed_before_ingest_reads_the_store(
 
 @pytest.mark.parametrize("restored", [False, True])
 def test_recover_interrupted_rollback_removes_rejected_store(tmp_path: Path, restored: bool) -> None:
-    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.ingestions.services import recover_interrupted_swap
 
     target = tmp_path / "ds.icechunk"
     retired = tmp_path / "ds.icechunk.retired"
@@ -2100,7 +2105,7 @@ def test_recover_interrupted_rollback_removes_rejected_store(tmp_path: Path, res
 def test_interrupted_rollback_preserves_copies_if_restore_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.ingestions.services import recover_interrupted_swap
 
     target = tmp_path / "ds.icechunk"
     retired = tmp_path / "ds.icechunk.retired"
@@ -2120,7 +2125,7 @@ def test_interrupted_rollback_preserves_copies_if_restore_fails(
 
 
 def test_rollback_refuses_to_claim_success_without_retained_store(tmp_path: Path) -> None:
-    from open_climate_service.ingestions.services import _rollback_store_swap
+    from open_geo_service.ingestions.services import _rollback_store_swap
 
     target = tmp_path / "ds.icechunk"
     target.mkdir()
@@ -2130,7 +2135,7 @@ def test_rollback_refuses_to_claim_success_without_retained_store(tmp_path: Path
 
 
 def test_recovery_does_not_publish_a_rejected_store_without_original(tmp_path: Path) -> None:
-    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.ingestions.services import recover_interrupted_swap
 
     target = tmp_path / "ds.icechunk"
     failed = tmp_path / "ds.icechunk.failed"
@@ -2172,12 +2177,12 @@ def _rolled_back_store(target: Path) -> Any:
     Chunks are 16 KB of random values, too large to compress below the size Icechunk inlines
     into manifests, so each is a file.
     """
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.streaming.store import open_or_create_repo
 
     repo = open_or_create_repo(target)
     _commit_days(repo, range(0, 3), "seed")
     before = repo.lookup_branch("main")
-    repo.create_branch("ocs-ingest-rollback-attempt", before)
+    repo.create_branch("ogs-ingest-rollback-attempt", before)
     for day in range(3, 13):
         _commit_days(repo, range(day, day + 1), f"append {day}")
     repo.reset_branch("main", before)
@@ -2187,7 +2192,7 @@ def _rolled_back_store(target: Path) -> Any:
 @pytest.fixture
 def collect_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
     """Collect with no retention, so objects committed moments ago are eligible."""
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "_GC_RETENTION", timedelta(0))
 
@@ -2197,8 +2202,8 @@ def test_collection_keeps_the_snapshot_a_reader_opened_during_the_attempt(tmp_pa
     import numpy as np
     import xarray as xr
 
-    from open_climate_service.ingestions.services import collect_unreachable_objects
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.ingestions.services import collect_unreachable_objects
+    from open_geo_service.streaming.store import open_or_create_repo
 
     target = tmp_path / "ds.icechunk"
     repo = open_or_create_repo(target)
@@ -2221,11 +2226,11 @@ def test_collecting_unreachable_objects_frees_a_rolled_back_attempt(tmp_path: Pa
     import numpy as np
     import xarray as xr
 
-    from open_climate_service.ingestions.services import collect_unreachable_objects
+    from open_geo_service.ingestions.services import collect_unreachable_objects
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("ogs-ingest-rollback-attempt")
     before = _chunk_files(target)
 
     collect_unreachable_objects(repo, target)
@@ -2238,8 +2243,8 @@ def test_collecting_unreachable_objects_frees_a_rolled_back_attempt(tmp_path: Pa
 
 def test_collection_keeps_what_a_branch_still_reaches(tmp_path: Path, collect_immediately: None) -> None:
     """Only unreachable data goes: commits another branch points at survive the reset."""
-    from open_climate_service.ingestions.services import collect_unreachable_objects
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.ingestions.services import collect_unreachable_objects
+    from open_geo_service.streaming.store import open_or_create_repo
 
     target = tmp_path / "ds.icechunk"
     repo = open_or_create_repo(target)
@@ -2258,7 +2263,7 @@ def test_collection_keeps_what_a_branch_still_reaches(tmp_path: Path, collect_im
 
 def test_recovery_collects_what_a_killed_ingest_left_unreachable(tmp_path: Path, collect_immediately: None) -> None:
     """A killed ingest leaves its rollback branch; recovery removes it and collects what it pinned."""
-    from open_climate_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.ingestions.services import recover_interrupted_swap
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
@@ -2272,8 +2277,8 @@ def test_recovery_collects_what_a_killed_ingest_left_unreachable(tmp_path: Path,
 @pytest.fixture
 def short_retention(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> float:
     """A real retention window, one second long, so a test can wait it out."""
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.ingestions import services
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(services, "_GC_RETENTION", timedelta(seconds=1))
     monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
@@ -2288,11 +2293,11 @@ def test_a_collection_left_pending_frees_the_attempt_once_due(tmp_path: Path, sh
     """
     import time
 
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("ogs-ingest-rollback-attempt")
     before = _chunk_files(target)
 
     services.collect_unreachable_objects(repo, target)
@@ -2309,11 +2314,11 @@ def test_a_collection_left_pending_frees_the_attempt_once_due(tmp_path: Path, sh
 def test_the_next_ingest_runs_a_pending_collection(tmp_path: Path, short_retention: float) -> None:
     import time
 
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("ogs-ingest-rollback-attempt")
     before = _chunk_files(target)
     services._mark_collection_pending(target)
     time.sleep(short_retention)
@@ -2327,11 +2332,11 @@ def test_the_next_ingest_runs_a_pending_collection(tmp_path: Path, short_retenti
 def test_the_sweep_skips_a_store_an_ingest_holds(tmp_path: Path, short_retention: float) -> None:
     import time
 
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     target = tmp_path / "ds.icechunk"
     repo = _rolled_back_store(target)
-    repo.delete_branch("ocs-ingest-rollback-attempt")
+    repo.delete_branch("ogs-ingest-rollback-attempt")
     services._mark_collection_pending(target)
     time.sleep(short_retention)
     lock = services._acquire_store_lock(target)
@@ -2344,8 +2349,8 @@ def test_the_sweep_skips_a_store_an_ingest_holds(tmp_path: Path, short_retention
 
 
 def test_recovery_removes_a_leftover_pyramid_rebuild(tmp_path: Path) -> None:
-    from open_climate_service.ingestions.services import recover_interrupted_swap
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.ingestions.services import recover_interrupted_swap
+    from open_geo_service.streaming.store import open_or_create_repo
 
     target = tmp_path / "ds.icechunk"
     open_or_create_repo(target)
@@ -2359,8 +2364,8 @@ def test_recovery_removes_a_leftover_pyramid_rebuild(tmp_path: Path) -> None:
 
 
 def test_startup_sweep_removes_every_leftover_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.ingestions.services import remove_leftover_rebuilds
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.ingestions.services import remove_leftover_rebuilds
 
     monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
     for name in ("a", "b"):
@@ -2376,8 +2381,8 @@ def test_startup_sweep_removes_every_leftover_rebuild(tmp_path: Path, monkeypatc
 def test_startup_sweep_skips_rebuild_for_store_another_writer_holds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.ingestions import services
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.ingestions import services
 
     monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
     target = tmp_path / "active.icechunk"

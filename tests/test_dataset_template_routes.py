@@ -17,8 +17,8 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service.data_accessor.services import accessor
-from open_climate_service.data_manager.services import downloader
+from open_geo_service.data_accessor.services import accessor
+from open_geo_service.data_manager.services import downloader
 
 
 @pytest.fixture(autouse=True)

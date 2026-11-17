@@ -15,8 +15,8 @@ import pytest
 xr = pytest.importorskip("xarray")
 pytest.importorskip("icechunk")
 
-from open_climate_service.data_manager.services.utils import get_time_dim  # noqa: E402
-from open_climate_service.shared import forecast  # noqa: E402
+from open_geo_service.data_manager.services.utils import get_time_dim  # noqa: E402
+from open_geo_service.shared import forecast  # noqa: E402
 
 
 def _cube(inits: list[str], leads: int = 5, *, with_valid_coord: bool = True):  # `xr` is an importorskip variable
@@ -119,7 +119,7 @@ def test_coverage_reports_the_horizon_and_the_issue_times_separately(tmp_path: P
     """
     import icechunk
 
-    from open_climate_service.data_accessor.services.accessor import _coverage_from_dataset
+    from open_geo_service.data_accessor.services.accessor import _coverage_from_dataset
 
     cube = _cube(["2026-03-01", "2026-03-02", "2026-03-03"], leads=5)
     store = tmp_path / "fc.icechunk"
@@ -136,7 +136,7 @@ def test_coverage_reports_the_horizon_and_the_issue_times_separately(tmp_path: P
 
 def test_coverage_omits_the_issue_times_for_a_plain_cube() -> None:
     """`forecast_reference` present would make the scope check use the wrong axis."""
-    from open_climate_service.data_accessor.services.accessor import _coverage_from_dataset
+    from open_geo_service.data_accessor.services.accessor import _coverage_from_dataset
 
     plain = xr.Dataset(
         {"v": (("t", "y", "x"), np.zeros((2, 4, 3), dtype="float32"))},
@@ -152,7 +152,7 @@ def test_coverage_omits_the_issue_times_for_a_plain_cube() -> None:
 
 
 def test_stac_declares_both_axes_with_the_issue_times_as_the_temporal_one() -> None:
-    from open_climate_service.stac.services import _build_forecast_dimensions
+    from open_geo_service.stac.services import _build_forecast_dimensions
 
     dims = _build_forecast_dimensions(_cube(["2026-03-01", "2026-03-02"], leads=3))
 
@@ -165,12 +165,12 @@ def test_stac_declares_both_axes_with_the_issue_times_as_the_temporal_one() -> N
     assert lead["values"] == [1, 2, 3]
     assert lead["unit"] == "day"
     # Without the hint a viewer offers a dropdown of horizons rather than stepping them.
-    assert lead["open_climate_service:control"] == "slider"
+    assert lead["ogs:control"] == "slider"
 
 
 def test_stac_declares_nothing_for_a_plain_cube() -> None:
     plain = xr.Dataset({"v": ("t", [1.0])}, coords={"t": np.array(["2026-01-01"], dtype="datetime64[ns]")})
-    from open_climate_service.stac.services import _build_forecast_dimensions
+    from open_geo_service.stac.services import _build_forecast_dimensions
 
     assert _build_forecast_dimensions(plain) == {}
 
@@ -195,7 +195,7 @@ def test_lead_values_reads_both_spellings_of_the_lead_axis() -> None:
 
 def test_stac_publishes_days_not_nanoseconds() -> None:
     """`int()` on a decoded lead axis publishes 86400000000000 against `"unit": "day"`."""
-    from open_climate_service.stac.services import _build_forecast_dimensions
+    from open_geo_service.stac.services import _build_forecast_dimensions
 
     dims = _build_forecast_dimensions(_timedelta_lead_cube(["2026-03-01"], leads=3))
     assert dims[forecast.LEAD_DIM]["values"] == [1, 2, 3]
@@ -214,14 +214,14 @@ def test_valid_time_recompute_handles_a_decoded_lead_axis() -> None:
 
 def test_the_layout_contract_accepts_a_forecast_cube() -> None:
     """A forecast store has no `t` by design, so the contract must not read that as a defect."""
-    from open_climate_service.shared.raster_contract import ContractViolation, published_contract_violations
+    from open_geo_service.shared.raster_contract import ContractViolation, published_contract_violations
 
     kinds = [v.kind for v in published_contract_violations(_cube(["2026-03-01"]))]
     assert ContractViolation.TEMPORAL_DIM_NAME not in kinds
 
 
 def test_the_contract_still_requires_t_on_a_plain_cube() -> None:
-    from open_climate_service.shared.raster_contract import ContractViolation, published_contract_violations
+    from open_geo_service.shared.raster_contract import ContractViolation, published_contract_violations
 
     plain = xr.Dataset(
         {"v": (("time", "y", "x"), np.zeros((1, 4, 3), dtype="float32"))},
@@ -240,7 +240,7 @@ def test_committed_periods_of_a_forecast_store_are_its_issue_times(tmp_path: Pat
     horizon as "already ingested", which is 35 days ahead, so no new run is ever due."""
     import icechunk
 
-    from open_climate_service.streaming.store import read_committed_period_ids
+    from open_geo_service.streaming.store import read_committed_period_ids
 
     cube = _cube(["2026-03-01", "2026-03-02"], leads=5)
     store = tmp_path / "fc.icechunk"
@@ -305,7 +305,7 @@ def test_coverage_of_a_seasonal_cube_spans_the_months_it_describes() -> None:
 
 
 def test_stac_declares_the_lead_unit_it_finds() -> None:
-    from open_climate_service.stac.services import _build_forecast_dimensions
+    from open_geo_service.stac.services import _build_forecast_dimensions
 
     daily = _build_forecast_dimensions(_cube(["2026-03-01"], leads=3))[forecast.LEAD_DIM]
     seasonal = _build_forecast_dimensions(_month_lead_cube(["2026-07-01"], leads=6))[forecast.LEAD_DIM]

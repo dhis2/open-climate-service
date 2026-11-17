@@ -1,53 +1,55 @@
-# Open Climate Service
+# Open Geo Service
 
 An open-source platform that integrates data from many different sources to produce tailored climate services — to help make informed decisions, manage risks, and adapt to climate change.
 
 > **Status: under active development.** APIs and data models may change without notice.
 
-**Documentation: <https://dhis2.github.io/open-climate-service/>**
+> **Renamed from Open Climate Service.** The package is now `open-geo-service` (module `open_geo_service`), the image `ghcr.io/dhis2/open-geo-service`, the CLI `geoservice`, the config file `geoservice.yaml` and the env vars `GEOSERVICE_*` (was `CLIMATE_SERVICE_*`). There are no aliases: update them together.
+
+**Documentation: <https://dhis2.github.io/open-geo-service/>**
 
 Each instance is configured for a specific country or region: it scopes all data extraction, processing, and storage to that spatial extent, draws from sources such as CHIRPS, ERA5, and WorldPop, stores outputs as GeoZarr, and exposes them through open standards (STAC, Zarr over HTTP, openEO). It runs independently of DHIS2 and can be deployed on local, cloud-hosted, or sovereign country infrastructure.
 
 ## Install
 
 ```bash
-pip install open-climate-service            # client only — talk to an instance over HTTP
-pip install open-climate-service[xarray]    # + open published datasets as xarray
-pip install open-climate-service[dhis2]     # + DHIS2 Web API client (available from OCS 0.1.1)
+pip install open-geo-service            # client only — talk to an instance over HTTP
+pip install open-geo-service[xarray]    # + open published datasets as xarray
+pip install open-geo-service[dhis2]     # + DHIS2 Web API client
 ```
 
 The client, `[xarray]` and `[dhis2]` extras install with `pip` on any platform.
 
-> **Running a server?** Don't `pip install` the `[server]` extra — it depends on packages with upstream version pins (e.g. `geojson-pydantic`, `zarr`) that need dependency **overrides** to resolve, which `uv` applies but `pip` cannot. Run an instance with **uv** or **Docker** instead — see [Run a server](#run-a-server), the [quick start](https://dhis2.github.io/open-climate-service/setup_guide/) (try it locally), and the [instance guide](https://dhis2.github.io/open-climate-service/instance_guide/) (operational deployments), which give you a ready-to-use `pyproject.toml` with the required overrides.
+> **Running a server?** Don't `pip install` the `[server]` extra — it depends on packages with upstream version pins (e.g. `geojson-pydantic`, `zarr`) that need dependency **overrides** to resolve, which `uv` applies but `pip` cannot. Run an instance with **uv** or **Docker** instead — see [Run a server](#run-a-server), the [quick start](https://dhis2.github.io/open-geo-service/setup_guide/) (try it locally), and the [instance guide](https://dhis2.github.io/open-geo-service/instance_guide/) (operational deployments), which give you a ready-to-use `pyproject.toml` with the required overrides.
 
 ## Quick start (client)
 
 ```python
-from open_climate_service import ClimateService
+from open_geo_service import GeoService
 
-service = ClimateService("https://my-instance.example.org")
+service = GeoService("https://my-instance.example.org")
 datasets = service.datasets()  # discover published collections
 ds = service.open_dataset(datasets[0]["id"])  # open as xarray (needs the [xarray] extra)
 ```
 
 ## Run a server
 
-To try it locally, see the [quick start](https://dhis2.github.io/open-climate-service/setup_guide/); for an operational deployment, see the [instance guide](https://dhis2.github.io/open-climate-service/instance_guide/). In short:
+To try it locally, see the [quick start](https://dhis2.github.io/open-geo-service/setup_guide/); for an operational deployment, see the [instance guide](https://dhis2.github.io/open-geo-service/instance_guide/). In short:
 
 ```bash
 uv sync --extra server
-uv run uvicorn open_climate_service.main:app --reload
+uv run uvicorn open_geo_service.main:app --reload
 ```
 
 ## Documentation
 
-- [Quick start](https://dhis2.github.io/open-climate-service/setup_guide/) — try it locally and ingest data
-- [Instance guide](https://dhis2.github.io/open-climate-service/instance_guide/) — run a service for your country (recommended)
-- [Using the web interface](https://dhis2.github.io/open-climate-service/web_interface/) — manage ingestion, sync, and the map viewer
-- [Accessing data](https://dhis2.github.io/open-climate-service/user_guide/) — the Python client, STAC, and xarray
-- [openEO](https://dhis2.github.io/open-climate-service/openeo/) — process graphs, workflows, and exports
-- [API reference](https://dhis2.github.io/open-climate-service/managed_data_api_guide/)
-- [Roadmap](https://dhis2.github.io/open-climate-service/roadmap/) · [Team](https://dhis2.github.io/open-climate-service/team/)
+- [Quick start](https://dhis2.github.io/open-geo-service/setup_guide/) — try it locally and ingest data
+- [Instance guide](https://dhis2.github.io/open-geo-service/instance_guide/) — run a service for your country (recommended)
+- [Using the web interface](https://dhis2.github.io/open-geo-service/web_interface/) — manage ingestion, sync, and the map viewer
+- [Accessing data](https://dhis2.github.io/open-geo-service/user_guide/) — the Python client, STAC, and xarray
+- [openEO](https://dhis2.github.io/open-geo-service/openeo/) — process graphs, workflows, and exports
+- [API reference](https://dhis2.github.io/open-geo-service/managed_data_api_guide/)
+- [Roadmap](https://dhis2.github.io/open-geo-service/roadmap/) · [Team](https://dhis2.github.io/open-geo-service/team/)
 
 ## Development
 
@@ -57,7 +59,10 @@ make run    # start the dev server with hot reload
 make lint   # ruff + mypy + pyright
 make test   # pytest on 2 workers; PYTEST_WORKERS=4 for more
 make test-serial  # pytest in one process, to diagnose a failure
+make test-integration  # fetch from every built-in data source; needs their keys
 ```
+
+Dependabot opens a weekly PR with the minor and patch updates of the Python dependencies, a separate PR for each major update, and one PR for GitHub Actions updates ([.github/dependabot.yml](.github/dependabot.yml)).
 
 ## License
 
