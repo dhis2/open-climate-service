@@ -698,14 +698,17 @@ def _collection_description(dataset_id: str, artifact: ArtifactRecord, source_da
 
 
 def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str, Any]:
-    """This instance as the `processor` of a workflow-produced collection.
+    """This instance as the `producer` and `processor` of a workflow-produced collection.
 
-    The processing extension accepts its fields on a Collection only under a producer or
+    The instance made this data from its inputs, so it is a producer beside the template's. With
+    the same name as the host, Portolan reads the collection as official rather than as a mirror
+    of the template's producer, which would need a `via` link to an upstream copy that does not
+    exist. The processing extension accepts its fields on a Collection only under a producer or
     processor provider, an asset, or summaries; at the root they do not validate.
     """
     provider: dict[str, Any] = {
         "name": _get_catalog_title(),
-        "roles": ["processor"],
+        "roles": ["producer", "processor"],
         "url": absolute_url(request, "/"),
         "processing:datetime": artifact.created_at.isoformat().replace("+00:00", "Z"),
     }
