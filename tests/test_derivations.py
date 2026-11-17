@@ -50,6 +50,27 @@ def _recipe_body() -> dict[str, Any]:
     return {"arguments": dict(_ANOMALY.arguments), "refresh_on": "observed_dataset_id"}
 
 
+def test_built_in_monthly_anomalies_refresh_after_their_source() -> None:
+    drivers = {recipe.output: recipe.input for recipe in derivations.list_recipes()}
+
+    assert {
+        output: drivers.get(output)
+        for output in (
+            "chirps3_precipitation_monthly_anomaly_1991_2020",
+            "chirps3_precipitation_monthly_relative_anomaly_1991_2020",
+            "era5land_temperature_monthly_anomaly_1991_2020",
+            "era5land_precipitation_monthly_anomaly_1991_2020",
+            "era5land_precipitation_monthly_relative_anomaly_1991_2020",
+        )
+    } == {
+        "chirps3_precipitation_monthly_anomaly_1991_2020": "chirps3_precipitation_monthly",
+        "chirps3_precipitation_monthly_relative_anomaly_1991_2020": "chirps3_precipitation_monthly",
+        "era5land_temperature_monthly_anomaly_1991_2020": "era5land_temperature_monthly",
+        "era5land_precipitation_monthly_anomaly_1991_2020": "era5land_precipitation_monthly",
+        "era5land_precipitation_monthly_relative_anomaly_1991_2020": "era5land_precipitation_monthly",
+    }
+
+
 def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch) -> None:
     derivations.validate_recipes()  # the built-in recipes run
 
