@@ -328,9 +328,9 @@
       // Slider for a continuous / evenly-spaced axis (temporal, or an ordinal axis
       // with a regular numeric `step` such as day-of-year); dropdown for a categorical
       // or irregular one (sex, the irregular age bands). An explicit
-      // `open_geo_service:control` on the dimension overrides the heuristic.
+      // `ogs:control` on the dimension overrides the heuristic.
       function controlForDim(dim) {
-        const hint = dim["open_geo_service:control"];
+        const hint = dim["ogs:control"];
         if (hint === "slider" || hint === "dropdown") return hint;
         if (dim.type === "temporal" || typeof dim.step === "number") return "slider";
         return "dropdown";
@@ -740,7 +740,7 @@
             };
         const fillValue = renders.nodata ?? null;
         const variable =
-          renders["open_geo_service:variable"] ??
+          renders["ogs:variable"] ??
           Object.keys(collection["cube:variables"] ?? {})[0] ??
           "data";
 
@@ -762,7 +762,7 @@
         // The CRS code alone is enough here. From 0.8.0 ZarrLayer resolves a code through
         // proj4's own registry, which carries every UTM zone among others, so a projected
         // store no longer needs a proj4 definition handed to it. That retires both the
-        // `open_geo_service:proj4` hint we used to publish and the epsg.io fetch that
+        // `ogs:proj4` hint we used to publish and the epsg.io fetch that
         // backed it up (CLIM-833) — one fewer non-standard field, and no third-party
         // request on the render path.
         //

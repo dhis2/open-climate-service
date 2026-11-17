@@ -827,7 +827,7 @@ def _add_crs_render_hints(*, template: pystac.Collection, ds: xr.Dataset, store_
     """Surface CRS render hints on the collection for projected (non-built-in) stores.
 
     A client reprojecting Zarr on the fly needs to resolve the store's CRS. We used to hand
-    it a proj4 string under ``open_geo_service:proj4`` because zarr-layer 0.6.1 accepted
+    it a proj4 string under ``ogs:proj4`` because zarr-layer 0.6.1 accepted
     only its two built-in codes or an explicit proj4 definition. From 0.8.0 it resolves a
     code through proj4's own registry, and a code proj4 does not ship through the full
     definition the store publishes for itself (``shared/crs.py``, ``store_crs_attrs``) — so
@@ -1494,7 +1494,7 @@ def _build_renders(artifact: ArtifactRecord, source_dataset: dict[str, Any]) -> 
         "title": artifact.dataset_name,
         "assets": ["zarr"],
         "colormap": {str(i): color for i, color in enumerate(colormap_stops(colormap))},
-        "open_geo_service:variable": artifact.variable,
+        "ogs:variable": artifact.variable,
     }
     if isinstance(colormap, str):
         render["colormap_name"] = colormap
