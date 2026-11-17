@@ -8,43 +8,43 @@ import pytest
 import xarray as xr
 import zarr
 
-from open_climate_service.data_accessor.services.accessor import (
+from open_geo_service.data_accessor.services.accessor import (
     _coverage_from_dataset,
     open_icechunk_dataset,
     open_zarr_dataset,
 )
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.ingestions import services as ingestion_services
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.ingestions import services as ingestion_services
 
 
 def test_resolve_download_dir_uses_data_dir_from_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text("data_dir: ./data\nextent:\n  id: test\n", encoding="utf-8")
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     assert downloader._resolve_download_dir() == tmp_path / "data" / "rasters"
 
 
 def test_resolve_download_dir_uses_xdg_when_no_config(monkeypatch: pytest.MonkeyPatch) -> None:
     with tempfile.TemporaryDirectory() as xdg:
-        monkeypatch.delenv("CLIMATE_SERVICE_CONFIG", raising=False)
+        monkeypatch.delenv("GEOSERVICE_CONFIG", raising=False)
         monkeypatch.setenv("XDG_DATA_HOME", xdg)
-        assert downloader._resolve_download_dir() == Path(xdg) / "climate-service" / "rasters"
+        assert downloader._resolve_download_dir() == Path(xdg) / "geoservice" / "rasters"
 
 
 def test_resolve_artifacts_dir_uses_data_dir_from_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text("data_dir: ./data\nextent:\n  id: test\n", encoding="utf-8")
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     assert ingestion_services._resolve_artifacts_dir() == tmp_path / "data" / "artifacts"
 
 
 def test_resolve_artifacts_dir_uses_xdg_when_no_config(monkeypatch: pytest.MonkeyPatch) -> None:
     with tempfile.TemporaryDirectory() as xdg:
-        monkeypatch.delenv("CLIMATE_SERVICE_CONFIG", raising=False)
+        monkeypatch.delenv("GEOSERVICE_CONFIG", raising=False)
         monkeypatch.setenv("XDG_DATA_HOME", xdg)
-        assert ingestion_services._resolve_artifacts_dir() == Path(xdg) / "climate-service" / "artifacts"
+        assert ingestion_services._resolve_artifacts_dir() == Path(xdg) / "geoservice" / "artifacts"
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ def _dask_chunks(ds: xr.Dataset) -> tuple[int, int, int]:
 
 def test_open_icechunk_dataset_merges_stored_chunks_along_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One stored day per chunk becomes several per dask chunk; space keeps the stored chunks."""
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     # 5 stored chunks of 8x8 float32 (256 bytes each) per dask chunk
     monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 5 * 256)
@@ -200,7 +200,7 @@ def test_open_icechunk_dataset_can_keep_the_stored_time_chunks(tmp_path: Path) -
 
 def test_open_icechunk_dataset_keeps_whole_shards_along_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A sharded store's time chunk is a multiple of the shard, sized from its inner chunks."""
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 5 * 256)
     _daily_store(tmp_path / "sharded.icechunk", encoding={"chunks": (1, 8, 8), "shards": (2, 16, 16)})
@@ -213,7 +213,7 @@ def test_open_icechunk_dataset_keeps_whole_shards_along_time(tmp_path: Path, mon
 
 
 def test_open_icechunk_dataset_merges_a_pyramid_level_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 5 * 256)
     _daily_store(tmp_path / "pyramid.icechunk", group="0")
@@ -237,7 +237,7 @@ def test_open_icechunk_dataset_caps_the_time_chunk_at_the_series(tmp_path: Path)
 def test_open_icechunk_dataset_leaves_chunks_that_reach_the_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 256)
     _daily_store(tmp_path / "large.icechunk")
@@ -392,7 +392,7 @@ def test_write_to_icechunk_store_preserves_native_crs_ignoring_instance_crs(
     Regression for ERA5-Land (native WGS84) being mislabeled with the instance
     UTM CRS, which put degree coordinates off-map when rendered as metres.
     """
-    from open_climate_service import config as api_config
+    from open_geo_service import config as api_config
 
     # Force a non-WGS84 instance CRS — the writer must ignore it entirely.
     monkeypatch.setattr(api_config, "get_crs", lambda: "EPSG:32633")
@@ -634,7 +634,7 @@ def test_uniform_chunks_leaves_a_legal_trailing_remainder_alone() -> None:
 
 def test_open_icechunk_dataset_caps_the_steps_for_a_small_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A tiny grid would fit years in one chunk by size; the step cap keeps it parallel."""
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     monkeypatch.setattr(accessor, "READ_CHUNK_MAX_STEPS", 7)
     # 256-byte chunks against the default 16 MiB target: bytes alone would allow every day
@@ -647,7 +647,7 @@ def test_open_icechunk_dataset_caps_the_steps_for_a_small_grid(tmp_path: Path, m
 
 
 def test_open_icechunk_dataset_step_cap_keeps_whole_shards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     monkeypatch.setattr(accessor, "READ_CHUNK_MAX_STEPS", 7)
     _daily_store(tmp_path / "sharded.icechunk", encoding={"chunks": (1, 8, 8), "shards": (2, 16, 16)})
@@ -683,7 +683,7 @@ def test_open_icechunk_dataset_keeps_every_variables_shards_whole(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Shards of 2 and 3 days: the one time chunk is a multiple of both, 6."""
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 10 * 256)
     _two_variable_store(tmp_path / "merged.icechunk", shards=(2, 3))
@@ -699,7 +699,7 @@ def test_open_icechunk_dataset_keeps_every_variables_shards_whole(
 def test_open_icechunk_dataset_keeps_stored_chunks_when_no_common_multiple_fits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     monkeypatch.setattr(accessor, "READ_CHUNK_TARGET_BYTES", 10 * 256)
     _two_variable_store(tmp_path / "merged.icechunk", shards=(4, 3))  # common multiple 12 > 10 steps

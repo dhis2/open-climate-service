@@ -13,11 +13,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.data_manager.services.downloader import resampling_method_from_template
-from open_climate_service.plugins.processes.aggregate_spatial_classes import aggregate_spatial_classes
-from open_climate_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
-from open_climate_service.shared.cf import cf_attrs_from_template
-from open_climate_service.shared.classes import (
+from open_geo_service.data_manager.services.downloader import resampling_method_from_template
+from open_geo_service.plugins.processes.aggregate_spatial_classes import aggregate_spatial_classes
+from open_geo_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
+from open_geo_service.shared.cf import cf_attrs_from_template
+from open_geo_service.shared.classes import (
     Classification,
     cf_flag_attrs,
     classification_from_template,
@@ -190,7 +190,7 @@ def test_total_keeps_the_time_axis_of_the_levels() -> None:
 
 def test_a_series_read_in_bounded_slices_gives_the_same_answer(monkeypatch: pytest.MonkeyPatch) -> None:
     """A long daily series is read a slice at a time, as aggregate_spatial_weighted does."""
-    from open_climate_service.plugins.processes import aggregate_spatial_weighted as weighted
+    from open_geo_service.plugins.processes import aggregate_spatial_weighted as weighted
 
     days = [[[d % 4, (d + 1) % 4], [(d + 2) % 4, (d + 3) % 4]] for d in range(6)]
     heat = _categorical(
@@ -245,9 +245,9 @@ def test_a_categorical_dataset_is_never_averaged() -> None:
 def test_a_published_collection_carries_its_classes_in_stac(
     client: Any, monkeypatch: pytest.MonkeyPatch, template: dict[str, Any]
 ) -> None:
-    from open_climate_service.ingestions import services as ingestion_services
-    from open_climate_service.shared.classes import STAC_CLASSIFICATION_EXTENSION
-    from open_climate_service.stac import services as stac_services
+    from open_geo_service.ingestions import services as ingestion_services
+    from open_geo_service.shared.classes import STAC_CLASSIFICATION_EXTENSION
+    from open_geo_service.stac import services as stac_services
 
     from .test_stac import _artifact, _minimal_xstac_payload
 
@@ -288,8 +288,8 @@ def test_an_ingested_categorical_dataset_loads_with_its_classes(
     """The classes reach the cube through the store, written at ingest, with nothing added at load."""
     import yaml
 
-    from open_climate_service.data_registry.services import datasets as registry
-    from open_climate_service.openeo.execution import _load_collection_impl
+    from open_geo_service.data_registry.services import datasets as registry
+    from open_geo_service.openeo.execution import _load_collection_impl
 
     dataset_id = "heat_levels_ingest_test"
     template = {

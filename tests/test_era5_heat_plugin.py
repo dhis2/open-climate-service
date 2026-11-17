@@ -5,12 +5,12 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters.era5_heat import (
+from open_geo_service.plugins.rasters.era5_heat import (
     ERA5HeatDailyUTCIPlugin,
     ERA5HeatZarrDailyFromHourlyPlugin,
     ERA5HeatZarrHourlyPlugin,
 )
-from open_climate_service.shared.zarr import CachedTimeSeriesZarr
+from open_geo_service.shared.zarr import CachedTimeSeriesZarr
 
 _TEST_BBOX = [28.0, -3.0, 29.0, -2.0]
 

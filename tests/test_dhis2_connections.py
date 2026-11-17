@@ -12,8 +12,8 @@ import httpx
 import pytest
 import yaml
 
-from open_climate_service import config
-from open_climate_service.exports.dhis2 import get_connection, get_connection_config
+from open_geo_service import config
+from open_geo_service.exports.dhis2 import get_connection, get_connection_config
 
 
 def _write_config(path: Path, value: object) -> None:
@@ -23,7 +23,7 @@ def _write_config(path: Path, value: object) -> None:
 
 @pytest.fixture
 def connection_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    path = tmp_path / "climate-service.yaml"
+    path = tmp_path / "geoservice.yaml"
     path.write_text(
         "dhis2_connections:\n"
         "  - id: national-hmis\n"
@@ -31,7 +31,7 @@ def connection_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "    token_env: TEST_DHIS2_TOKEN\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(path))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(path))
     monkeypatch.delenv("TEST_DHIS2_TOKEN", raising=False)
     return path
 
@@ -186,7 +186,7 @@ def test_missing_or_invalid_token(connection_file: Path, monkeypatch: pytest.Mon
         if "\x00" in token:
             # Real process environments cannot contain NUL; exercise header validation directly.
             monkeypatch.setattr(
-                "open_climate_service.exports.dhis2.os.environ", dict(os.environ) | {"TEST_DHIS2_TOKEN": token}
+                "open_geo_service.exports.dhis2.os.environ", dict(os.environ) | {"TEST_DHIS2_TOKEN": token}
             )
         else:
             monkeypatch.setenv("TEST_DHIS2_TOKEN", token)
@@ -254,7 +254,7 @@ def test_external_provider_uses_only_public_accessor(
     module_file = tmp_path / "external_provider.py"
     module_file.write_text(
         "from contextlib import closing\n"
-        "from open_climate_service.exports.dhis2 import get_connection\n"
+        "from open_geo_service.exports.dhis2 import get_connection\n"
         "def fetch(connection_id, level):\n"
         "    with closing(get_connection(connection_id)) as client:\n"
         "        return client.get_org_units_geojson(level=level)\n"

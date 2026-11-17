@@ -13,15 +13,15 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service import config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.extents import services as extent_services
-from open_climate_service.ingestions import processes, services
-from open_climate_service.jobs import service as job_service_module
-from open_climate_service.jobs import store as native_store
-from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent, JobRecord, JobStatus
-from open_climate_service.shared.time import utc_now
-from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
+from open_geo_service import config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.extents import services as extent_services
+from open_geo_service.ingestions import processes, services
+from open_geo_service.jobs import service as job_service_module
+from open_geo_service.jobs import store as native_store
+from open_geo_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent, JobRecord, JobStatus
+from open_geo_service.shared.time import utc_now
+from open_geo_service.streaming import BaseDatasetPlugin, normalize_period
 
 from .conftest import WebhookReceiver
 
@@ -169,10 +169,10 @@ def test_failed_ingestion_emits_nothing(instance: dict[str, Any]) -> None:
 def test_a_scheduled_sync_reports_its_failure_and_its_recovery(
     instance: dict[str, Any], webhook: WebhookReceiver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.ingestions import sync_engine
-    from open_climate_service.notifications import webhook as notifications
-    from open_climate_service.scheduler.config import DatasetSyncSchedule
-    from open_climate_service.scheduler.dispatcher import enqueue_sync
+    from open_geo_service.ingestions import sync_engine
+    from open_geo_service.notifications import webhook as notifications
+    from open_geo_service.scheduler.config import DatasetSyncSchedule
+    from open_geo_service.scheduler.dispatcher import enqueue_sync
 
     instance["dataset"]["sync"] = {"kind": "temporal"}
     monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *_: instance["plugin"].available)
@@ -244,7 +244,7 @@ def test_recovered_ingestion_emits_the_event_its_committed_attempt_owed(instance
             created_at=utc_now(),
             attempt=1,
             request={
-                "__fn_path__": "open_climate_service.ingestions.processes.execute_ingestion",
+                "__fn_path__": "open_geo_service.ingestions.processes.execute_ingestion",
                 "dataset_id": _DATASET_ID,
                 "start": "2026-01-01",
                 "end": "2026-01-02",
@@ -311,7 +311,7 @@ def test_inline_sync_is_recorded_as_a_completed_job_with_its_event(
     # Before this change only queued and scheduled syncs reached the event consumers.
     instance["dataset"]["sync"] = {"kind": "temporal"}
     monkeypatch.setattr(
-        "open_climate_service.shared.plugin_loader.instantiate_plugin", lambda *args, **kwargs: instance["plugin"]
+        "open_geo_service.shared.plugin_loader.instantiate_plugin", lambda *args, **kwargs: instance["plugin"]
     )
     _ingest(instance)
     instance["plugin"].available.append("2026-01-03")

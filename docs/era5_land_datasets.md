@@ -1,6 +1,6 @@
 # ERA5-Land datasets
 
-ERA5-Land is a global reanalysis of land surface variables produced by ECMWF. It provides a consistent record from 1950 to the near-present at ~9 km resolution. The Open Climate Service ships six ERA5-Land data sources covering temperature and precipitation at daily and monthly resolution.
+ERA5-Land is a global reanalysis of land surface variables produced by ECMWF. It provides a consistent record from 1950 to the near-present at ~9 km resolution. The Open Geo Service ships six ERA5-Land data sources covering temperature and precipitation at daily and monthly resolution.
 
 ## Setup
 
@@ -25,7 +25,7 @@ EDH_API_KEY=<your-standard-api-key>
 CDS_API_KEY=<your-cds-api-key>
 ```
 
-**Set up before this release?** OCS no longer reads `~/.netrc` or `~/.ecmwfdatastoresrc`; move both keys into `.env`. The daily datasets read from CDS, so they need the CDS key even where they once needed only Earth Data Hub.
+**Set up before this release?** Open Geo Service no longer reads `~/.netrc` or `~/.ecmwfdatastoresrc`; move both keys into `.env`. The daily datasets read from CDS, so they need the CDS key even where they once needed only Earth Data Hub.
 
 ### Ingest your first ERA5-Land dataset
 

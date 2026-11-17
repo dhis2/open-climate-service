@@ -8,8 +8,8 @@ import numpy as np
 import xarray as xr
 from openeo_pg_parser_networkx.process_registry import Process
 
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.execution import (
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.openeo.execution import (
     _augment_with_workflows,
     _build_process_registry,
 )

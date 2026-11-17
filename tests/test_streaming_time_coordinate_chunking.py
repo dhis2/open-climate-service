@@ -16,11 +16,11 @@ import pytest
 import xarray as xr
 import zarr
 
-from open_climate_service import config
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.extents import services as extent_services
-from open_climate_service.ingestions import processes, services
-from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
+from open_geo_service import config
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.extents import services as extent_services
+from open_geo_service.ingestions import processes, services
+from open_geo_service.streaming import BaseDatasetPlugin, normalize_period
 
 _DATASET_ID = "monthly_temperature"
 _MONTHS = [f"2025-{m:02d}" for m in range(1, 13)]

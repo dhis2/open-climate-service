@@ -1,6 +1,6 @@
 # Dataset-update automation
 
-When a successful ingestion or sync changes stored data, OCS records a durable `dataset.updated`
+When a successful ingestion or sync changes stored data, Open Geo Service records a durable `dataset.updated`
 event. Two things act on it, each with its own page:
 
 - **Keep a derived dataset current.** An anomaly, a normal or another dataset a workflow
@@ -32,7 +32,7 @@ checkpoint: if the process stops after committing data but before recording the 
 that update event cannot be recovered automatically.
 
 An ingestion job notes in its checkpoint that it is about to change stored data, before
-fetching anything. If OCS stops after the data is committed but before the job completes,
+fetching anything. If Open Geo Service stops after the data is committed but before the job completes,
 the recovered job finds the data current and still emits the event it owed, exactly once.
 
 The event says what changed: `dataset_id`, `artifact_id`, `action` (`ingest`, the sync
@@ -66,14 +66,14 @@ derived dataset needs nothing special.
 - **The snapshot is provenance, not a version.** `output_snapshot_id` is the physical Icechunk
   snapshot the job committed. The artifact records it under `provenance`, with the producing
   job and the execution evidence (process digest and input artifacts, source datasets and input
-  snapshots); its logical `version` stays empty unless OCS releases the dataset.
+  snapshots); its logical `version` stays empty unless Open Geo Service releases the dataset.
 - **Provenance is shown, and so is an input that has moved on.** `GET /datasets/{id}` returns
-  it under `provenance`: the producing job, the process digest, the OCS version that ran it and
+  it under `provenance`: the producing job, the process digest, the Open Geo Service version that ran it and
   each input with the snapshot the job read. An input is `changed` when what `load_collection`
   would read now is another artifact or another snapshot, so a dataset computed before its
   input's last sync says so; the dataset page shows the same. The STAC collection links each
   input as `derived_from` and names this instance as its `processor` provider, which carries the
-  processing time and OCS version.
+  processing time and Open Geo Service version.
 
 The job records its intent before writing, marks the publication `committing` at the
 cancellation gate just before the commit, and writes the outcome and event together after
@@ -100,7 +100,7 @@ feature collection declared under `plugins/vectors/` (see
 `FeatureCollection`. This shorthand is resolved when the pipeline submits its job and is not a
 general openEO process-graph argument: direct process graphs call `load_features` explicitly.
 
-The reference is never resolved into geometry at submission. Instead OCS rewrites it into a
+The reference is never resolved into geometry at submission. Instead Open Geo Service rewrites it into a
 sibling node in the process graph that the workflow calls `load_features` on:
 
 ```json
@@ -118,7 +118,7 @@ sibling node in the process graph that the workflow calls `load_features` on:
 ```
 
 This keeps a country's whole org unit hierarchy out of the persisted job record. At submission,
-OCS resolves the current feature record and stores only the collection id, its refresh timestamp,
+Open Geo Service resolves the current feature record and stores only the collection id, its refresh timestamp,
 and a `load_features` call. The timestamp pins execution to that record: if the collection is
 refreshed while the job is queued, the job refuses the stale binding instead of silently running
 against different geometry.
@@ -129,7 +129,7 @@ A pipeline run and a derived dataset refresh each run as an openEO batch job, vi
 `GET /jobs` and sharing the job pool with jobs submitted directly; there is no separate
 automation queue or concurrency limit. Each job's id is derived from the event it answers and
 its owner, so replaying an event at startup finds the existing job instead of creating another.
-If OCS stopped after creating a job but before queueing it, startup queues that existing job.
+If Open Geo Service stopped after creating a job but before queueing it, startup queues that existing job.
 
 Such a job runs up to 3 times, the first attempt included, under the same job id.
 
@@ -157,14 +157,14 @@ When the attempts run out, the job stays `error`. Its error names the attempt, f
 The job's `logs` field lists every attempt with its time and outcome. Re-running a failed job
 with `POST /jobs/{job_id}/results` starts a fresh attempt budget.
 
-Jobs submitted directly run once. A job still running in another OCS process, for example one
+Jobs submitted directly run once. A job still running in another Open Geo Service process, for example one
 that has not finished shutting down, is not marked failed at startup: it is left to that
 process, and taken over if the process exits without finishing it.
 
 ## Current boundary
 
-Automation dispatches workflows owned by the same OCS instance. It does not provide
+Automation dispatches workflows owned by the same Open Geo Service instance. It does not provide
 cross-service retries or distributed event consumption. A failing scheduled sync or pipeline
-can post to a webhook (see [Scheduled sync](scheduled_sync.md)). Exactly one writable OCS
+can post to a webhook (see [Scheduled sync](scheduled_sync.md)). Exactly one writable Open Geo Service
 process should perform automation until the stores and leadership model become shared and
 transactional.

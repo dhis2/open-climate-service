@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.data_registry.services.datasets import _validate_dataset_template
-from open_climate_service.ingestions.schemas import ArtifactStatistics
-from open_climate_service.shared.display import display_range
+from open_geo_service.data_registry.services.datasets import _validate_dataset_template
+from open_geo_service.ingestions.schemas import ArtifactStatistics
+from open_geo_service.shared.display import display_range
 
 MEASURED = ArtifactStatistics(min=-4.0, max=6.5, mean=1.0, p2=-3.0, p50=1.0, p98=5.0)
 BEFORE_PERCENTILES = ArtifactStatistics(min=-4.0, max=6.5)

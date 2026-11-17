@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from open_climate_service import plugin_discovery
-from open_climate_service.openeo import plugin_processes, workflows
+from open_geo_service import plugin_discovery
+from open_geo_service.openeo import plugin_processes, workflows
 
 
 def test_entry_point_processes_are_discovered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -20,7 +20,7 @@ def test_entry_point_processes_are_discovered(monkeypatch: pytest.MonkeyPatch, t
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "processes" / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "processes" / "myproc.py").write_text(
-        "from open_climate_service.process import process\n\n"
+        "from open_geo_service.process import process\n\n"
         "@process\n"
         "def my_plugin_process(data):\n"
         '    """A test plugin process."""\n'

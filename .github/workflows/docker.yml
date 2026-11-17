@@ -15,7 +15,7 @@ jobs:
       output: image
       push: true
       platforms: linux/amd64,linux/arm64
-      meta-images: ghcr.io/dhis2/open-climate-service
+      meta-images: ghcr.io/dhis2/open-geo-service
       set-meta-labels: true
     secrets:
       registry-auths: |

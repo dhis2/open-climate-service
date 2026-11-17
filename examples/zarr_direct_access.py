@@ -1,17 +1,17 @@
 """Open a published GeoZarr dataset directly and demonstrate spatial and temporal subsetting.
 
-Requires a running Open Climate Service instance with at least one published dataset.
+Requires a running Open Geo Service instance with at least one published dataset.
 Adjust BASE_URL if the API is not running on the default local address.
 """
 
-from open_climate_service import ClimateService
+from open_geo_service import GeoService
 
 BASE_URL = "http://127.0.0.1:9000"
 
 
 def main() -> None:
     """Open a Zarr store directly and demonstrate spatial and temporal subsetting."""
-    service = ClimateService(BASE_URL)
+    service = GeoService(BASE_URL)
     datasets = service.datasets()
     if not datasets:
         print("No published datasets found. Run an ingestion first.")

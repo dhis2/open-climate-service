@@ -13,7 +13,7 @@ import pytest
 @pytest.fixture
 def uvicorn_kwargs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """The keyword arguments `main()` hands to `uvicorn.run`, without starting a server."""
-    import open_climate_service.cli as cli
+    import open_geo_service.cli as cli
 
     captured: dict[str, Any] = {}
 
@@ -30,11 +30,11 @@ def uvicorn_kwargs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 def test_the_defaults_bind_locally(uvicorn_kwargs: dict[str, Any]) -> None:
-    from open_climate_service.cli import DEFAULT_HOST, DEFAULT_PORT, main
+    from open_geo_service.cli import DEFAULT_HOST, DEFAULT_PORT, main
 
     main()
 
-    assert uvicorn_kwargs["app"] == "open_climate_service.main:app"
+    assert uvicorn_kwargs["app"] == "open_geo_service.main:app"
     assert uvicorn_kwargs["host"] == DEFAULT_HOST
     assert uvicorn_kwargs["port"] == DEFAULT_PORT
     # None, not "": uvicorn's own default is 127.0.0.1 and an empty string would trust nothing.
@@ -42,7 +42,7 @@ def test_the_defaults_bind_locally(uvicorn_kwargs: dict[str, Any]) -> None:
 
 
 def test_the_environment_reaches_uvicorn(monkeypatch: pytest.MonkeyPatch, uvicorn_kwargs: dict[str, Any]) -> None:
-    from open_climate_service.cli import main
+    from open_geo_service.cli import main
 
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.setenv("PORT", "8080")
@@ -59,9 +59,9 @@ def test_the_entry_point_does_not_own_the_root_path(
 ) -> None:
     """One owner: the app reads `ROOT_PATH`, so it applies under `make run` and bare uvicorn
     too, and the entry point passing it as well would only be a second copy of the value."""
-    from open_climate_service.cli import main
+    from open_geo_service.cli import main
 
-    monkeypatch.setenv("ROOT_PATH", "/ocs")
+    monkeypatch.setenv("ROOT_PATH", "/geoservice")
     main()
 
     assert "root_path" not in uvicorn_kwargs

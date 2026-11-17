@@ -14,11 +14,11 @@ from typing import Any
 import pytest
 import xarray as xr
 
-from open_climate_service.data_registry.services import datasets
-from open_climate_service.features import providers as feature_providers
-from open_climate_service.features.templates import list_feature_templates
-from open_climate_service.shared.plugin_loader import instantiate_plugin, instantiate_static_plugin
-from open_climate_service.streaming.protocol import IngestionPlugin
+from open_geo_service.data_registry.services import datasets
+from open_geo_service.features import providers as feature_providers
+from open_geo_service.features.templates import list_feature_templates
+from open_geo_service.shared.plugin_loader import instantiate_plugin, instantiate_static_plugin
+from open_geo_service.streaming.protocol import IngestionPlugin
 
 _BBOX = [-11.75, 8.25, -11.25, 8.75]
 _COUNTRY_CODE = "SLE"

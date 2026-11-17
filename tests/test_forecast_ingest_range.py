@@ -15,11 +15,11 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import CreateIngestionRequest
-from open_climate_service.shared.time import utc_today
-from open_climate_service.system import templates as landing
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import CreateIngestionRequest
+from open_geo_service.shared.time import utc_today
+from open_geo_service.system import templates as landing
 
 
 def _write_template(tmp_path: Path, body: str, name: str = "forecast.yaml") -> None:
@@ -217,7 +217,7 @@ def test_forecast_horizon_survives_a_leap_day(monkeypatch: pytest.MonkeyPatch, p
 @pytest.mark.parametrize("period_type", ["daily", "monthly", "yearly", "hourly", "weekly"])
 def test_forecast_horizon_is_period_native(period_type: str) -> None:
     """It is handed straight to the plugin, so it has to parse as that period type."""
-    from open_climate_service.shared.time import normalize_period_string
+    from open_geo_service.shared.time import normalize_period_string
 
     horizon = ingestion_services._forecast_horizon({"id": "f"}, period_type)
     assert normalize_period_string(horizon, period_type) == horizon
@@ -342,7 +342,7 @@ def test_manage_form_start_rejection_is_dataset_aware(client: TestClient) -> Non
     failure there arrives after the response has begun. What changed is that it now consults
     ``is_future_facing()`` instead of rejecting every blank start.
     """
-    from open_climate_service.system import routes
+    from open_geo_service.system import routes
 
     source = Path(routes.__file__).read_text(encoding="utf-8")
     assert 'detail="Start date is required"' not in source

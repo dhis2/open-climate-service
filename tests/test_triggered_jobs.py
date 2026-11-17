@@ -16,15 +16,15 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from open_climate_service import config
-from open_climate_service.exports import service as export_service
-from open_climate_service.jobs import service as job_service_module
-from open_climate_service.jobs import store as native_store
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo.execution import SaveResultEnvelope
-from open_climate_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.time import utc_now
+from open_geo_service import config
+from open_geo_service.exports import service as export_service
+from open_geo_service.jobs import service as job_service_module
+from open_geo_service.jobs import store as native_store
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo.execution import SaveResultEnvelope
+from open_geo_service.openeo.schemas import OpenEOJobCreate, OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.time import utc_now
 
 _OWNER = "derive:rain_anomaly"
 _EXPORT = "rain-monthly"

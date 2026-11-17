@@ -1,8 +1,8 @@
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters import copdem
-from open_climate_service.plugins.rasters.copdem import CopDEMPlugin
+from open_geo_service.plugins.rasters import copdem
+from open_geo_service.plugins.rasters.copdem import CopDEMPlugin
 
 _TEST_BBOX = [28.7, -2.9, 28.8, -2.8]
 

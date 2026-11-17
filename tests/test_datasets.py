@@ -10,8 +10,8 @@ import xarray as xr
 import zarr
 from icechunk.store import IcechunkStore
 
-from open_climate_service.ingestions import services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service.ingestions import services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -24,9 +24,9 @@ from open_climate_service.ingestions.schemas import (
     DatasetPublication,
     PublicationStatus,
 )
-from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
-from open_climate_service.publications.services import managed_dataset_id_for
-from open_climate_service.shared.time import daily_period_ids
+from open_geo_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
+from open_geo_service.publications.services import managed_dataset_id_for
+from open_geo_service.shared.time import daily_period_ids
 
 
 class _PeriodsPlugin:
@@ -448,7 +448,7 @@ def test_a_record_write_never_leaves_readers_a_partial_records_file(
 
     Seen as 500s on chunk requests while the startup statistics pass rewrote the file in place.
     """
-    from open_climate_service.shared import persistence
+    from open_geo_service.shared import persistence
 
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
@@ -471,7 +471,7 @@ def test_a_record_write_never_leaves_readers_a_partial_records_file(
 def test_a_replace_refused_while_a_reader_holds_the_file_is_retried(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.shared import persistence
+    from open_geo_service.shared import persistence
 
     refusals = [PermissionError("held by a reader")]
     replace = persistence.os.replace
@@ -1304,7 +1304,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
             "params": {"stage": "final"},
         },
     }
@@ -1357,7 +1357,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
         publish=False,
     )
 
-    assert captured["plugin_path"] == "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"
+    assert captured["plugin_path"] == "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"
     assert captured["params"] == {"stage": "final"}
     assert captured["dataset_id"] == "chirps3_precipitation_daily"
     assert captured["zarr_path"] is None
@@ -1392,7 +1392,7 @@ def test_create_artifact_uses_streaming_plugin_for_store_based_sync(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
             "params": {"stage": "final"},
         },
     }
@@ -1646,7 +1646,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
         "variable": "pop_total",
         "period_type": "yearly",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.worldpop.WorldPopYearlyPlugin",
             "params": {"version": "global2"},
         },
     }
@@ -1688,7 +1688,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
         publish=False,
     )
 
-    assert captured["plugin_path"] == "open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin"
+    assert captured["plugin_path"] == "open_geo_service.plugins.rasters.worldpop.WorldPopYearlyPlugin"
     assert captured["params"] == {"version": "global2", "country_code": "SLE"}
     run_kwargs = captured["run"]
     assert isinstance(run_kwargs, dict)
@@ -1699,10 +1699,10 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
 def test_load_streaming_plugin_rejects_non_callable_symbol() -> None:
     with pytest.raises(
         services.HTTPException,
-        match="Failed to load ingestion.plugin 'open_climate_service.ingestions.services.logger'",
+        match="Failed to load ingestion.plugin 'open_geo_service.ingestions.services.logger'",
     ):
         services._load_streaming_plugin(
-            "open_climate_service.ingestions.services.logger",
+            "open_geo_service.ingestions.services.logger",
             params={},
         )
 
@@ -1716,17 +1716,17 @@ def test_load_streaming_plugin_rejects_symbol_outside_plugin_protocol(monkeypatc
 
     with pytest.raises(
         services.HTTPException,
-        match="Failed to load ingestion.plugin 'open_climate_service.ingestions.services._NotAPlugin'",
+        match="Failed to load ingestion.plugin 'open_geo_service.ingestions.services._NotAPlugin'",
     ):
         services._load_streaming_plugin(
-            "open_climate_service.ingestions.services._NotAPlugin",
+            "open_geo_service.ingestions.services._NotAPlugin",
             params={"stage": "final"},
         )
 
 
 def test_load_streaming_plugin_filters_runtime_only_params_for_constructor() -> None:
     plugin = services._load_streaming_plugin(
-        "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+        "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         params={"stage": "final", "country_code": "SLE"},
     )
 
@@ -1745,7 +1745,7 @@ def test_create_artifact_allows_streaming_coverage_clamped_to_source_availabilit
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1809,7 +1809,7 @@ def test_create_artifact_rejects_streaming_coverage_with_late_start(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1860,7 +1860,7 @@ def test_create_artifact_returns_409_when_streaming_plugin_has_no_periods(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1895,7 +1895,7 @@ def test_create_artifact_overwrite_replaces_existing_icechunk_store_on_success(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1970,7 +1970,7 @@ def test_create_artifact_overwrite_restores_store_when_record_write_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2262,7 +2262,7 @@ def test_create_artifact_overwrite_keeps_existing_store_when_fetch_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2312,7 +2312,7 @@ def test_create_artifact_overwrite_releases_lock_when_replacement_cleanup_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2376,7 +2376,7 @@ def test_create_artifact_overwrite_keeps_existing_store_when_replacement_is_inva
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2457,7 +2457,7 @@ def test_create_artifact_rejects_partial_download_scope(monkeypatch: pytest.Monk
         "period_type": "daily",
         # An ingestable template: the scope validation under test runs after the check that
         # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
-        "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3"},
+        "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:
@@ -2487,7 +2487,7 @@ def test_create_artifact_rejects_download_scope_outside_request_scope(monkeypatc
         "period_type": "daily",
         # An ingestable template: the scope validation under test runs after the check that
         # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
-        "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3"},
+        "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:

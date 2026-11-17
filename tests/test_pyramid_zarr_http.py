@@ -27,12 +27,12 @@ pytest.importorskip("topozarr")
 pytest.importorskip("aiohttp")
 uvicorn = pytest.importorskip("uvicorn")
 
-from open_climate_service.data_manager.services.downloader import (  # noqa: E402
+from open_geo_service.data_manager.services.downloader import (  # noqa: E402
     needs_pyramid,
     write_to_icechunk_store,
 )
-from open_climate_service.ingestions import services as ingestion_services  # noqa: E402
-from open_climate_service.ingestions.schemas import (  # noqa: E402
+from open_geo_service.ingestions import services as ingestion_services  # noqa: E402
+from open_geo_service.ingestions.schemas import (  # noqa: E402
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -42,11 +42,11 @@ from open_climate_service.ingestions.schemas import (  # noqa: E402
     CoverageTemporal,
     PublicationStatus,
 )
-from open_climate_service.main import app  # noqa: E402
-from open_climate_service.openeo.jobs import _result_assets  # noqa: E402
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus  # noqa: E402
-from open_climate_service.shared.time import utc_now  # noqa: E402
-from open_climate_service.stac import services as stac_services  # noqa: E402
+from open_geo_service.main import app  # noqa: E402
+from open_geo_service.openeo.jobs import _result_assets  # noqa: E402
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus  # noqa: E402
+from open_geo_service.shared.time import utc_now  # noqa: E402
+from open_geo_service.stac import services as stac_services  # noqa: E402
 
 DATASET_ID = "chirps3_precipitation_daily"
 SIZE = 1100  # just over the 1024 x 1024 pyramid threshold

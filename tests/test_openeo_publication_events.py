@@ -21,18 +21,18 @@ import pytest
 import xarray as xr
 from fastapi import HTTPException
 
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import PublicationStatus
-from open_climate_service.jobs import store as native_store
-from open_climate_service.jobs.events import persisted_events, read_event_log
-from open_climate_service.jobs.models import JobEvent
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo.execution import SaveResultEnvelope
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.time import utc_now
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import PublicationStatus
+from open_geo_service.jobs import store as native_store
+from open_geo_service.jobs.events import persisted_events, read_event_log
+from open_geo_service.jobs.models import JobEvent
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo.execution import SaveResultEnvelope
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.time import utc_now
 from tests.test_managed_publish_units import managed_instance  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 _DATASET = "derived_precip"
@@ -598,7 +598,7 @@ def test_a_crash_after_the_event_is_durable_finishes_without_a_second_event(
 def test_a_crash_after_finished_but_before_dispatch_is_delivered_by_startup_replay(
     service: Any, received: list[JobEvent], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.jobs.events import persisted_events
+    from open_geo_service.jobs.events import persisted_events
 
     _job("job-1", 5.0, monkeypatch)
 
@@ -887,15 +887,15 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
 ) -> None:
     import jsonschema
 
-    from open_climate_service import __version__
-    from open_climate_service import config as api_config
+    from open_geo_service import __version__
+    from open_geo_service import config as api_config
     from tests.test_feature_store import _register
     from tests.test_initial_ingestion_event import _Plugin
 
     source = "chirps3_precipitation_daily"
     plugin = _Plugin()
     monkeypatch.setattr(ingestion_services, "_load_streaming_plugin", lambda *args, **kwargs: plugin)
-    monkeypatch.setattr("open_climate_service.shared.plugin_loader.instantiate_plugin", lambda *a, **k: plugin)
+    monkeypatch.setattr("open_geo_service.shared.plugin_loader.instantiate_plugin", lambda *a, **k: plugin)
     input_artifact = ingestion_services.create_artifact(
         dataset=registry_datasets.get_dataset(source) or {},
         start="2026-01-01",
@@ -926,7 +926,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
         "producer_job_id": "job-1",
         "producer_job_href": "/jobs/job-1",
         "process_sha256": "f" * 64,
-        "ocs_version": __version__,
+        "ogs_version": __version__,
         "output_snapshot_id": _head(),
         "inputs": [
             {
@@ -965,7 +965,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     schema = json.loads((Path(__file__).parent / "data" / "stac_processing_v1.2.0.json").read_text())
     jsonschema.validate(collection, schema)
     [processor] = [provider for provider in collection["providers"] if "processor" in provider["roles"]]
-    assert processor["processing:software"] == {"open-climate-service": __version__}
+    assert processor["processing:software"] == {"open-geo-service": __version__}
     # As a STAC checker reads it: this instance is the one host, last; every link on this host,
     # the relative README and AGENTS among them, answers HEAD; `proj:code` is declared at v2.0.0;
     # and the Portolan profile is declared.
@@ -1041,7 +1041,7 @@ def test_the_event_log_combines_both_owners_in_a_stable_order(
 ) -> None:
     from datetime import UTC, datetime
 
-    from open_climate_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.jobs.models import JobRecord, JobStatus
 
     _job("job-1", 5.0, monkeypatch)
     service._execute("job-1")

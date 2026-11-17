@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from open_climate_service.shared.time import (
+from open_geo_service.shared.time import (
     SUPPORTED_PERIOD_TYPES,
     Cadence,
     daily_period_ids,
@@ -183,7 +183,7 @@ def test_dekad_bounds_tile_the_month_without_gap_or_overlap() -> None:
 
 def test_next_period_start_steps_by_the_covered_dekads_own_length() -> None:
     """A fixed +10 days would land mid-month for every 11-day and 8-day third dekad."""
-    from open_climate_service.shared.time import next_period_string
+    from open_geo_service.shared.time import next_period_string
 
     assert next_period_string("2026-01-01", "dekadal") == "2026-01-11"
     assert next_period_string("2026-01-11", "dekadal") == "2026-01-21"
@@ -196,7 +196,7 @@ def test_next_period_start_steps_by_the_covered_dekads_own_length() -> None:
 
 
 def test_next_period_start_never_repeats_or_skips_a_dekad_across_a_year() -> None:
-    from open_climate_service.shared.time import next_period_string
+    from open_geo_service.shared.time import next_period_string
 
     expected = dekad_period_ids("2026-01-01", "2026-12-31")
     walked = [expected[0]]
@@ -206,9 +206,9 @@ def test_next_period_start_never_repeats_or_skips_a_dekad_across_a_year() -> Non
 
 
 def test_sync_and_request_defaults_return_the_current_dekad() -> None:
-    from open_climate_service.ingestions.services import _current_request_period
-    from open_climate_service.ingestions.sync_engine import _default_target_end
-    from open_climate_service.shared.time import utc_today
+    from open_geo_service.ingestions.services import _current_request_period
+    from open_geo_service.ingestions.sync_engine import _default_target_end
+    from open_geo_service.shared.time import utc_today
 
     today = dekad_start(utc_today()).isoformat()
     assert _default_target_end(period_type="dekadal") == today
@@ -216,7 +216,7 @@ def test_sync_and_request_defaults_return_the_current_dekad() -> None:
 
 
 def test_template_validation_accepts_dekadal_and_rejects_an_unsupported_cadence() -> None:
-    from open_climate_service.data_registry.services.datasets import _validate_dataset_template
+    from open_geo_service.data_registry.services.datasets import _validate_dataset_template
 
     base = {"id": "gpp", "sync": {"kind": "temporal"}, "ingestion": {"plugin": "pkg.Cls"}}
     _validate_dataset_template({**base, "period_type": "dekadal"}, source="t.yaml")
@@ -226,7 +226,7 @@ def test_template_validation_accepts_dekadal_and_rejects_an_unsupported_cadence(
 
 
 def test_stac_declares_an_irregular_step_as_null_rather_than_a_duration() -> None:
-    from open_climate_service.stac.services import _override_time_step
+    from open_geo_service.stac.services import _override_time_step
 
     collection = {"cube:dimensions": {"t": {"type": "temporal", "extent": ["2026-01-01", "2026-12-31"]}}}
     _override_time_step(collection, None, cadence=Cadence.IRREGULAR)
@@ -235,7 +235,7 @@ def test_stac_declares_an_irregular_step_as_null_rather_than_a_duration() -> Non
 
 
 def test_stac_leaves_an_xstac_inferred_step_alone_when_the_cadence_is_unknown() -> None:
-    from open_climate_service.stac.services import _override_time_step
+    from open_geo_service.stac.services import _override_time_step
 
     collection = {"cube:dimensions": {"t": {"type": "temporal", "step": "P1D"}}}
     _override_time_step(collection, None, cadence=Cadence.UNKNOWN)
@@ -243,7 +243,7 @@ def test_stac_leaves_an_xstac_inferred_step_alone_when_the_cadence_is_unknown() 
 
 
 def test_stac_still_sets_a_duration_for_a_regular_cadence() -> None:
-    from open_climate_service.stac.services import _override_time_step
+    from open_geo_service.stac.services import _override_time_step
 
     collection = {"cube:dimensions": {"t": {"type": "temporal"}}}
     _override_time_step(collection, "P1M", cadence=Cadence.REGULAR)
@@ -254,7 +254,7 @@ def test_coverage_is_reported_in_dekad_ids_for_a_dekadal_store() -> None:
     """Coverage runs through numpy_datetime_to_period_string, so it must snap too."""
     import xarray as xr
 
-    from open_climate_service.data_accessor.services.accessor import _coverage_from_dataset
+    from open_geo_service.data_accessor.services.accessor import _coverage_from_dataset
 
     ids = dekad_period_ids("2026-01-01", "2026-03-31")
     assert len(ids) == 9
@@ -272,7 +272,7 @@ def test_dhis2_export_refuses_a_dekadal_dataset_rather_than_inventing_a_period()
     """DHIS2 has no dekad period type, so there is no correct id to emit."""
     import pandas as pd
 
-    from open_climate_service.openeo.jobs import _format_dhis2_timestamp
+    from open_geo_service.openeo.jobs import _format_dhis2_timestamp
 
     with pytest.raises(ValueError, match="Unsupported period_type 'dekadal'"):
         _format_dhis2_timestamp(pd.Timestamp("2026-01-11"), "dekadal")
@@ -283,7 +283,7 @@ def test_irregular_cadence_lists_its_timestamps_as_values() -> None:
     the real timestamps — otherwise a time control collapses to a single position."""
     import xarray as xr
 
-    from open_climate_service.stac.services import _add_temporal_values
+    from open_geo_service.stac.services import _add_temporal_values
 
     ids = dekad_period_ids("2026-01-01", "2026-03-31")
     stamps = np.array(ids, dtype="datetime64[ns]")
@@ -304,7 +304,7 @@ def test_irregular_cadence_lists_its_timestamps_as_values() -> None:
 def test_temporal_values_are_not_added_to_a_non_temporal_dimension() -> None:
     import xarray as xr
 
-    from open_climate_service.stac.services import _add_temporal_values
+    from open_geo_service.stac.services import _add_temporal_values
 
     ds = xr.Dataset({"v": ("t", np.zeros(2, "f4"))}, coords={"t": [0, 1]})
     collection = {"cube:dimensions": {"t": {"type": "other"}}}
@@ -315,7 +315,7 @@ def test_temporal_values_are_not_added_to_a_non_temporal_dimension() -> None:
 def test_irregular_step_is_null_even_when_a_resolution_is_declared() -> None:
     """No duration can describe a variable-length cadence, so a declared
     extents.temporal.resolution must not make a dekadal store look regular."""
-    from open_climate_service.stac.services import _override_time_step
+    from open_geo_service.stac.services import _override_time_step
 
     collection = {"cube:dimensions": {"t": {"type": "temporal"}}}
     _override_time_step(collection, "P10D", cadence=Cadence.IRREGULAR)
@@ -335,7 +335,7 @@ def test_period_type_is_required_unless_the_dataset_is_static() -> None:
     """Sync planning and coverage index period_type unguarded, so an absent one on a
     temporal dataset registers and then raises a KeyError further in. Static is exempt:
     an openEO save_result output legitimately has no cadence."""
-    from open_climate_service.data_registry.services.datasets import _validate_dataset_template
+    from open_geo_service.data_registry.services.datasets import _validate_dataset_template
 
     temporal = {"id": "x", "sync": {"kind": "temporal"}, "ingestion": {"plugin": "p.C"}}
     with pytest.raises(ValueError, match="must define period_type"):
@@ -347,7 +347,7 @@ def test_period_type_is_required_unless_the_dataset_is_static() -> None:
 
 
 def test_quarterly_template_is_rejected_at_registration() -> None:
-    from open_climate_service.data_registry.services.datasets import _validate_dataset_template
+    from open_geo_service.data_registry.services.datasets import _validate_dataset_template
 
     with pytest.raises(ValueError, match="unsupported period_type 'quarterly'"):
         _validate_dataset_template(

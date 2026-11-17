@@ -9,12 +9,12 @@ import xarray as xr
 import yaml
 from xclim.core.units import units2pint
 
-from open_climate_service.plugins.rasters import era5_land_cds, era5_land_edh
-from open_climate_service.plugins.rasters.era5_land_cds import (
+from open_geo_service.plugins.rasters import era5_land_cds, era5_land_edh
+from open_geo_service.plugins.rasters.era5_land_cds import (
     ERA5LandCDSDailyFromHourlyPlugin,
     ERA5LandCDSDailyRelHumPlugin,
 )
-from open_climate_service.plugins.rasters.era5_land_edh import ERA5LandEDHMonthlyFromDailyPlugin
+from open_geo_service.plugins.rasters.era5_land_edh import ERA5LandEDHMonthlyFromDailyPlugin
 
 _CDS_BBOX = [28.0, -3.0, 29.5, -1.5]
 # Crosses the prime meridian, which the EDH store's 0-360 longitude axis wraps.

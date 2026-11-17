@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = "open_climate_service"
+module-name = "open_geo_service"
 
 [tool.uv]
 override-dependencies = [
@@ -26,15 +26,15 @@ override-dependencies = [
 ]
 
 [project]
-name = "open-climate-service"
+name = "open-geo-service"
 version = "0.1.1"
 requires-python = ">=3.12"
-description = "Climate and Earth Observation data API"
+description = "Climate, Earth Observation and geospatial data API"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 authors = [{ name = "University of Oslo", email = "climate@dhis2.org" }]
 readme = "README.md"
-keywords = ["dhis2", "climate", "zarr", "stac", "geospatial"]
+keywords = ["dhis2", "geospatial", "climate", "earth-observation", "zarr", "stac"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
@@ -62,7 +62,7 @@ xarray = [
 # DHIS2 Web API client, for the server-side org unit provider and DHIS2 delivery, and for
 # the client-side import example. Pure Python; installs with pip on any platform.
 dhis2 = ["dhis2-client>=0.3.2"]
-# Full server stack — required to run your own Open Climate Service instance.
+# Full server stack — required to run your own Open Geo Service instance.
 server = [
     # Overlap-weighted zonal statistics for `aggregate_spatial_weighted`, through xvec.
     "exactextract>=0.3.0",
@@ -158,13 +158,13 @@ server = [
 ]
 
 [project.urls]
-Repository = "https://github.com/dhis2/open-climate-service"
-Documentation = "https://github.com/dhis2/open-climate-service/tree/main/docs"
-"Bug Tracker" = "https://github.com/dhis2/open-climate-service/issues"
-Changelog = "https://github.com/dhis2/open-climate-service/releases"
+Repository = "https://github.com/dhis2/open-geo-service"
+Documentation = "https://github.com/dhis2/open-geo-service/tree/main/docs"
+"Bug Tracker" = "https://github.com/dhis2/open-geo-service/issues"
+Changelog = "https://github.com/dhis2/open-geo-service/releases"
 
 [project.scripts]
-climate-service = "open_climate_service.cli:main"
+geoservice = "open_geo_service.cli:main"
 
 [tool.ruff]
 target-version = "py312"
@@ -182,7 +182,7 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D"]
 "**/__init__.py" = ["D104"]
-"open_climate_service/**/*.py" = ["D102", "D105", "D107"]
+"open_geo_service/**/*.py" = ["D102", "D105", "D107"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -224,7 +224,7 @@ module = ["apscheduler", "apscheduler.*", "rasterio.*", "pygeofilter.*", "reques
 ignore_missing_imports = true
 
 [tool.pyright]
-include = ["open_climate_service", "tests"]
+include = ["open_geo_service", "tests"]
 exclude = ["**/.venv"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"

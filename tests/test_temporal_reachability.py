@@ -19,31 +19,31 @@ import pytest
 import xarray as xr
 from openeo_pg_parser_networkx.process_registry import Process
 
-from open_climate_service import config
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-from open_climate_service.exports.service import (
+from open_geo_service import config
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+from open_geo_service.exports.service import (
     _drop_periods,
     check_execution_declarations,
     incomplete_periods_to_drop,
     render_named_export,
     resolve_named_export,
 )
-from open_climate_service.jobs import service as job_service_module
-from open_climate_service.jobs import store as native_store
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.jobs import check_ad_hoc_period_reachability
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.provenance import (
+from open_geo_service.jobs import service as job_service_module
+from open_geo_service.jobs import store as native_store
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.openeo.jobs import check_ad_hoc_period_reachability
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.provenance import (
     capture_execution,
     observe_temporal_aggregation,
     record_incomplete_periods,
     record_reduction,
     record_source,
 )
-from open_climate_service.shared.time import (
+from open_geo_service.shared.time import (
     Reachability,
     cadence_of,
     export_period_label,
@@ -273,7 +273,7 @@ def _cube(stamps: np.ndarray, value: float = 1.0) -> xr.DataArray:
 @pytest.mark.parametrize("method", ["sum", "mean"])
 def test_aggregate_dekads_leaves_the_same_evidence(method: str) -> None:
     """Coverage evidence is independent of the reducer used for dekads-to-months."""
-    from open_climate_service.plugins.processes.aggregate_dekads import aggregate_dekads
+    from open_geo_service.plugins.processes.aggregate_dekads import aggregate_dekads
 
     stamps = np.array(["2025-01-01", "2025-01-11", "2025-01-21", "2025-02-01", "2025-02-11"], dtype="datetime64[ns]")
     with capture_execution({}) as evidence:
@@ -729,7 +729,7 @@ def test_load_stamps_the_declared_cadence_and_steps_rewrite_it(monkeypatch: pyte
     assert cadence_of(execution.stamp_declared_cadence(_cube(_days("2025-01-01", "2025-01-03")), "x")) == "daily"
     monkeypatch.setattr(registry, "get_dataset", lambda dataset_id: None)
     assert cadence_of(execution.stamp_declared_cadence(_cube(_days("2025-01-01", "2025-01-03")), "x")) is None
-    from open_climate_service.plugins.processes.aggregate_dekads import aggregate_dekads
+    from open_geo_service.plugins.processes.aggregate_dekads import aggregate_dekads
 
     dekads = np.array(["2025-01-01", "2025-01-11", "2025-01-21"], dtype="datetime64[ns]")
     assert cadence_of(aggregate_dekads(stamp_cadence(_cube(dekads), "dekadal"), period="month")) == "monthly"

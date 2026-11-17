@@ -9,9 +9,9 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service.client import (
+from open_geo_service.client import (
     _FALLBACK_BASE_URL,
-    ClimateService,
+    GeoService,
     _id_from_href,
     list_datasets,
     open_dataset,
@@ -72,7 +72,7 @@ def test_id_from_href_strips_trailing_slash() -> None:
 
 def test_list_datasets_returns_child_links() -> None:
     catalog = _make_catalog(["http://localhost/stac/chirps3_precipitation_daily_rwa/collection.json"])
-    with patch("open_climate_service.client.httpx.get", return_value=_make_response(catalog)) as mock_get:
+    with patch("open_geo_service.client.httpx.get", return_value=_make_response(catalog)) as mock_get:
         result = list_datasets("http://localhost")
 
     mock_get.assert_called_once_with("http://localhost/stac/catalog.json", timeout=30)
@@ -83,14 +83,14 @@ def test_list_datasets_returns_child_links() -> None:
 
 def test_list_datasets_returns_empty_for_no_children() -> None:
     catalog = {"links": [{"rel": "root", "href": "http://localhost/stac/catalog.json"}]}
-    with patch("open_climate_service.client.httpx.get", return_value=_make_response(catalog)):
+    with patch("open_geo_service.client.httpx.get", return_value=_make_response(catalog)):
         result = list_datasets("http://localhost")
 
     assert result == []
 
 
 def test_list_datasets_raises_on_http_error() -> None:
-    with patch("open_climate_service.client.httpx.get") as mock_get:
+    with patch("open_geo_service.client.httpx.get") as mock_get:
         mock_get.return_value.raise_for_status.side_effect = httpx.HTTPStatusError(
             "404", request=MagicMock(), response=MagicMock()
         )
@@ -114,7 +114,7 @@ def test_open_dataset_fetches_collection_and_opens_zarr(tmp_path: Path) -> None:
     ds.to_zarr(str(zarr_path), mode="w", consolidated=True)
 
     collection = _make_collection(str(zarr_path))
-    with patch("open_climate_service.client.httpx.get", return_value=_make_response(collection)):
+    with patch("open_geo_service.client.httpx.get", return_value=_make_response(collection)):
         result = open_dataset("chirps3_precipitation_daily_rwa", base_url="http://localhost")
 
     try:
@@ -127,7 +127,7 @@ def test_open_dataset_fetches_collection_and_opens_zarr(tmp_path: Path) -> None:
 
 
 def test_open_dataset_raises_on_http_error() -> None:
-    with patch("open_climate_service.client.httpx.get") as mock_get:
+    with patch("open_geo_service.client.httpx.get") as mock_get:
         mock_get.return_value.raise_for_status.side_effect = httpx.HTTPStatusError(
             "404", request=MagicMock(), response=MagicMock()
         )
@@ -137,7 +137,7 @@ def test_open_dataset_raises_on_http_error() -> None:
 
 def test_open_dataset_uses_default_base_url() -> None:
     collection = _make_collection("/dev/null")
-    with patch("open_climate_service.client.httpx.get", return_value=_make_response(collection)) as mock_get:
+    with patch("open_geo_service.client.httpx.get", return_value=_make_response(collection)) as mock_get:
         with patch("xarray.open_zarr", return_value=MagicMock()):
             open_dataset("any_dataset")
 
@@ -147,9 +147,9 @@ def test_open_dataset_uses_default_base_url() -> None:
 def test_open_dataset_uses_env_var_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     # Arbitrary host:port — the point is that the env var is honored verbatim,
     # independent of the default base URL or port.
-    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "http://env-host:4321")
+    monkeypatch.setenv("GEOSERVICE_BASE_URL", "http://env-host:4321")
     collection = _make_collection("/dev/null")
-    with patch("open_climate_service.client.httpx.get", return_value=_make_response(collection)) as mock_get:
+    with patch("open_geo_service.client.httpx.get", return_value=_make_response(collection)) as mock_get:
         with patch("xarray.open_zarr", return_value=MagicMock()):
             open_dataset("any_dataset")
 
@@ -160,20 +160,20 @@ def test_open_dataset_uses_env_var_base_url(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_open_zarr_without_xarray_raises_helpful_error() -> None:
-    from open_climate_service.client import _open_zarr
+    from open_geo_service.client import _open_zarr
 
     # Simulate xarray not being installed (the base client has no xarray).
-    with patch("open_climate_service.client.importlib.util.find_spec", return_value=None):
-        with pytest.raises(ModuleNotFoundError, match=r"open-climate-service\[xarray\]"):
+    with patch("open_geo_service.client.importlib.util.find_spec", return_value=None):
+        with pytest.raises(ModuleNotFoundError, match=r"open-geo-service\[xarray\]"):
             _open_zarr("s3://bucket/x.zarr", {})
 
 
-# ── ClimateService class ───────────────────────────────────────────────────────
+# ── GeoService class ───────────────────────────────────────────────────────
 
 
-def _make_service(base_url: str = "http://localhost") -> tuple[ClimateService, MagicMock]:
-    """Return a ClimateService with a mocked internal httpx.Client."""
-    service = ClimateService(base_url)
+def _make_service(base_url: str = "http://localhost") -> tuple[GeoService, MagicMock]:
+    """Return a GeoService with a mocked internal httpx.Client."""
+    service = GeoService(base_url)
     mock_http = MagicMock()
     service._http = mock_http
     return service, mock_http
@@ -284,7 +284,7 @@ def test_execute_writes_file_result_to_path(tmp_path: Path) -> None:
 
 
 def test_context_manager_closes_http_session() -> None:
-    with ClimateService("http://localhost") as service:
+    with GeoService("http://localhost") as service:
         mock_http = MagicMock()
         service._http = mock_http
 
@@ -292,8 +292,8 @@ def test_context_manager_closes_http_session() -> None:
 
 
 def test_accepts_custom_timeout() -> None:
-    with patch("open_climate_service.client.httpx.Client") as mock_cls:
-        ClimateService("http://localhost", timeout=60)
+    with patch("open_geo_service.client.httpx.Client") as mock_cls:
+        GeoService("http://localhost", timeout=60)
     mock_cls.assert_called_once_with(timeout=60)
 
 
@@ -307,16 +307,16 @@ def test_strips_trailing_slash() -> None:
 # ── error detail (CLIM-1140) ───────────────────────────────────────────────────
 
 
-def _service_on(http: httpx.Client, base_url: str = "http://testserver") -> ClimateService:
-    service = ClimateService(base_url)
+def _service_on(http: httpx.Client, base_url: str = "http://testserver") -> GeoService:
+    service = GeoService(base_url)
     service._http.close()
     service._http = http
     return service
 
 
-def _service_replying(status_code: int, **response: Any) -> ClimateService:
+def _service_replying(status_code: int, **response: Any) -> GeoService:
     transport = httpx.MockTransport(lambda request: httpx.Response(status_code, **response))
-    return _service_on(httpx.Client(transport=transport), "http://ocs.example")
+    return _service_on(httpx.Client(transport=transport), "http://ogs.example")
 
 
 def test_an_unknown_collection_names_what_was_missing(client: TestClient) -> None:
@@ -375,6 +375,6 @@ def test_an_empty_error_body_still_raises_the_status() -> None:
 def test_the_module_level_functions_keep_the_detail_too() -> None:
     request = httpx.Request("GET", "http://localhost/stac/catalog.json")
     response = httpx.Response(503, json={"detail": "Catalog is rebuilding"}, request=request)
-    with patch("open_climate_service.client.httpx.get", return_value=response):
+    with patch("open_geo_service.client.httpx.get", return_value=response):
         with pytest.raises(httpx.HTTPStatusError, match="Catalog is rebuilding"):
             list_datasets("http://localhost")

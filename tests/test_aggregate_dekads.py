@@ -15,22 +15,22 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.processes.aggregate_dekads import aggregate_dekads
-from open_climate_service.shared.time import dekad_period_ids
+from open_geo_service.plugins.processes.aggregate_dekads import aggregate_dekads
+from open_geo_service.shared.time import dekad_period_ids
 
 
 @pytest.fixture
-def ocs_logs(caplog: pytest.LogCaptureFixture) -> Any:
-    """Capture warnings from the OCS package logger.
+def geoservice_logs(caplog: pytest.LogCaptureFixture) -> Any:
+    """Capture warnings from the OGS package logger.
 
     ``startup.py`` sets ``propagate = False`` on it, so caplog's root handler never sees
     the records. Same shim as tests/test_raster_contract.py.
     """
-    package_logger = logging.getLogger("open_climate_service")
+    package_logger = logging.getLogger("open_geo_service")
     previous = package_logger.propagate
     package_logger.propagate = True
     try:
-        with caplog.at_level(logging.WARNING, logger="open_climate_service"):
+        with caplog.at_level(logging.WARNING, logger="open_geo_service"):
             yield caplog
     finally:
         package_logger.propagate = previous
@@ -144,11 +144,11 @@ def test_unknown_period_and_method_are_rejected() -> None:
         aggregate_dekads(cube, method="median")
 
 
-def test_summing_a_per_day_rate_is_warned_about(ocs_logs: Any) -> None:
+def test_summing_a_per_day_rate_is_warned_about(geoservice_logs: Any) -> None:
     """Adding daily rates does not produce a total, and the units say so."""
     cube = _cube(dekad_period_ids("2026-01-01", "2026-01-31"), units="gC/m2/day")
     aggregate_dekads(cube, method="sum")
-    assert "per-day rate" in ocs_logs.text
+    assert "per-day rate" in geoservice_logs.text
 
 
 def test_provenance_records_the_weighting() -> None:
@@ -163,11 +163,11 @@ def test_the_process_is_registered_and_the_workflow_wires_to_it() -> None:
     import json
     from pathlib import Path
 
-    from open_climate_service.openeo.execution import _build_process_registry
+    from open_geo_service.openeo.execution import _build_process_registry
 
     assert "aggregate_dekads" in _build_process_registry().store["predefined"]
 
-    path = Path("open_climate_service/plugins/workflows/aggregate_dekads_to_period.json")
+    path = Path("open_geo_service/plugins/workflows/aggregate_dekads_to_period.json")
     graph = json.loads(path.read_text())["process_graph"]
     # A literal process_id, not one parameterised through `from_parameter` — the latter is
     # not openEO-spec-compliant and was removed from the other aggregate workflows.
@@ -195,27 +195,27 @@ def test_sum_omits_a_missing_dekad_rather_than_scaling_the_rest_up() -> None:
     assert float(aggregate_dekads(rate_holed, method="mean").isel(t=0, y=0, x=0)) == pytest.approx(10.0)
 
 
-def test_sum_warns_when_a_target_period_is_only_partly_covered(ocs_logs: Any) -> None:
+def test_sum_warns_when_a_target_period_is_only_partly_covered(geoservice_logs: Any) -> None:
     """A month's "total" computed from one dekad is the kind of number that gets published."""
     cube = _cube(["2026-01-21"], units="gC/m2")  # the last dekad of January only
 
     result = aggregate_dekads(cube, period="month", method="sum")
 
     assert result.sizes["t"] == 1
-    assert "partial total" in ocs_logs.text
-    assert "2026-01-01" in ocs_logs.text
+    assert "partial total" in geoservice_logs.text
+    assert "2026-01-01" in geoservice_logs.text
 
 
-def test_mean_does_not_warn_about_partial_coverage(ocs_logs: Any) -> None:
+def test_mean_does_not_warn_about_partial_coverage(geoservice_logs: Any) -> None:
     """A day-weighted mean over the dekads that exist is well defined, so it is not flagged."""
     aggregate_dekads(_cube(["2026-01-21"]), period="month", method="mean")
-    assert "partial total" not in ocs_logs.text
+    assert "partial total" not in geoservice_logs.text
 
 
-def test_fully_covered_months_are_not_flagged(ocs_logs: Any) -> None:
+def test_fully_covered_months_are_not_flagged(geoservice_logs: Any) -> None:
     cube = _cube(dekad_period_ids("2026-01-01", "2026-12-31"), units="gC/m2")
     aggregate_dekads(cube, period="month", method="sum")
-    assert "partial total" not in ocs_logs.text
+    assert "partial total" not in geoservice_logs.text
 
 
 def test_a_monthly_cube_is_refused_even_though_the_1st_starts_a_dekad() -> None:

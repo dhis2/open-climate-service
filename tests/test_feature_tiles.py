@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.features import services as feature_services
-from open_climate_service.features import store, tiles
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import ArtifactRecord
+from open_geo_service import config as api_config
+from open_geo_service.features import services as feature_services
+from open_geo_service.features import store, tiles
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import ArtifactRecord
 
 TEMPLATE = {"id": "districts", "name": "District boundaries", "id_property": "code"}
 

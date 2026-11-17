@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.data_registry.services import datasets as registry_datasets
-from open_climate_service.shared.cf import apply_cf_metadata, cf_attrs_from_template, validate_units
+from open_geo_service.data_registry.services import datasets as registry_datasets
+from open_geo_service.shared.cf import apply_cf_metadata, cf_attrs_from_template, validate_units
 
 
 def test_cf_attrs_from_template_extracts_cf_fields() -> None:

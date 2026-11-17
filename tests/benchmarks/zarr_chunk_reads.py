@@ -5,7 +5,7 @@ in the PR.
 
     uv run python tests/benchmarks/zarr_chunk_reads.py [--concurrency 6] [--rounds 5]
 
-It writes a daily CHIRPS-shaped store over Nepal's extent (3 years at 0.05 degrees) with OCS's
+It writes a daily CHIRPS-shaped store over Nepal's extent (3 years at 0.05 degrees) with OGS's
 own writer into a temporary data root, registers it as a published dataset, serves the app with
 uvicorn and requests every chunk of the store, `--rounds` times, `--concurrency` at a time.
 Each round is one map view's worth of chunk requests, repeated. A second pass asks for the first
@@ -33,10 +33,10 @@ import pandas as pd
 import uvicorn
 import xarray as xr
 
-# OCS is imported only after `_use_temporary_instance`, never at module level: store paths are
+# OGS is imported only after `_use_temporary_instance`, never at module level: store paths are
 # resolved from the config when their modules are imported, and the app's lifespan recovers jobs
 # and starts the scheduler, so an import under the developer's `.env` would read and write their
-# instance. The client processes import this module too, and never import OCS.
+# instance. The client processes import this module too, and never import OGS.
 
 DATASET_ID = "chirps3_precipitation_daily"
 
@@ -50,15 +50,15 @@ data_dir: ./data
 
 
 def _use_temporary_instance(root: Path) -> Path:
-    """Point OCS at an instance under *root*, before anything from it is imported; returns its data root."""
-    config = root / "climate-service.yaml"
+    """Point OGS at an instance under *root*, before anything from it is imported; returns its data root."""
+    config = root / "geoservice.yaml"
     config.write_text(_CONFIG, encoding="utf-8")
-    os.environ["CLIMATE_SERVICE_CONFIG"] = str(config)
+    os.environ["GEOSERVICE_CONFIG"] = str(config)
     return root / "data"
 
 
 def _write_store(root: Path) -> tuple[Path, list[str]]:
-    from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+    from open_geo_service.data_manager.services.downloader import write_to_icechunk_store
 
     times = pd.date_range("2023-01-01", periods=1096, freq="D")
     ds = xr.Dataset(
@@ -79,8 +79,8 @@ def _write_store(root: Path) -> tuple[Path, list[str]]:
 
 
 def _register(store_path: Path) -> None:
-    from open_climate_service.ingestions import services
-    from open_climate_service.ingestions.schemas import (
+    from open_geo_service.ingestions import services
+    from open_geo_service.ingestions.schemas import (
         ArtifactCoverage,
         ArtifactFormat,
         ArtifactPublication,
@@ -119,7 +119,7 @@ def _register(store_path: Path) -> None:
 
 
 def _serve() -> tuple[str, uvicorn.Server, threading.Thread]:
-    from open_climate_service.main import app
+    from open_geo_service.main import app
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))

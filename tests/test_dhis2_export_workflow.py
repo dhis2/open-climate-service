@@ -16,22 +16,22 @@ import xarray as xr
 from fastapi.testclient import TestClient
 from openeo_pg_parser_networkx.process_registry import Process
 
-from open_climate_service import config
-from open_climate_service.exports import ExportReport
-from open_climate_service.exports.delivery_input import lease_export_input
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-from open_climate_service.exports.report import ExportOutcome
-from open_climate_service.exports.service import check_execution_declarations, resolve_named_export
-from open_climate_service.jobs import service as job_service_module
-from open_climate_service.jobs import store as native_store
-from open_climate_service.jobs.models import JobRecord, JobStatus
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.pipelines import exports as pipeline_exports
-from open_climate_service.shared.provenance import capture_execution, record_source
-from open_climate_service.shared.time import utc_now
+from open_geo_service import config
+from open_geo_service.exports import ExportReport
+from open_geo_service.exports.delivery_input import lease_export_input
+from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+from open_geo_service.exports.report import ExportOutcome
+from open_geo_service.exports.service import check_execution_declarations, resolve_named_export
+from open_geo_service.jobs import service as job_service_module
+from open_geo_service.jobs import store as native_store
+from open_geo_service.jobs.models import JobRecord, JobStatus
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.pipelines import exports as pipeline_exports
+from open_geo_service.shared.provenance import capture_execution, record_source
+from open_geo_service.shared.time import utc_now
 
 from .conftest import named_exports
 

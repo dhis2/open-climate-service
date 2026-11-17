@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.openeo import execution, plugin_processes, xclim_processes
-from open_climate_service.shared import cf
+from open_geo_service.openeo import execution, plugin_processes, xclim_processes
+from open_geo_service.shared import cf
 
 
 def _hold_the_plugin_load(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:

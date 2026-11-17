@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.streaming import bbox_slice, cell_pad
+from open_geo_service.streaming import bbox_slice, cell_pad
 
 # Nepal's configured extent, which aligns to no regular grid.
 NEPAL = (80.05, 26.35, 88.20, 30.45)

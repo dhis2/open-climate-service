@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service.data_registry.services import datasets
+from open_geo_service import config as api_config
+from open_geo_service.data_registry.services import datasets
 
 
 @pytest.mark.parametrize(
@@ -225,7 +225,7 @@ def test_dataset_registry_accepts_supported_sync_kind(
   sync:
     kind: temporal
   ingestion:
-    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
+    plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
         encoding="utf-8",
     )
@@ -248,7 +248,7 @@ def test_dataset_registry_accepts_ingestion_plugin_without_function(
   sync:
     kind: temporal
   ingestion:
-    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
+    plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
         encoding="utf-8",
     )
@@ -319,7 +319,7 @@ def test_dataset_registry_accepts_supported_sync_execution(
     kind: temporal
     execution: append
   ingestion:
-    plugin: open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
+    plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
         encoding="utf-8",
     )
@@ -333,11 +333,11 @@ def test_write_dataset_template_persists_into_plugins_dir(
     tmp_path: Path,
 ) -> None:
     plugins_dir = tmp_path / "plugins"
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {plugins_dir}\n", encoding="utf-8")
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
     monkeypatch.setattr(api_config, "_cache", None)
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
 
     path = datasets.write_dataset_template(
         {
@@ -362,11 +362,11 @@ def test_write_dataset_template_rejects_existing_file(
     tmp_path: Path,
 ) -> None:
     plugins_dir = tmp_path / "plugins"
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {plugins_dir}\n", encoding="utf-8")
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
     monkeypatch.setattr(api_config, "_cache", None)
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
 
     template = {
         "id": "derived_change",
@@ -388,11 +388,11 @@ def test_write_dataset_template_has_one_owner_under_concurrent_creation(
 ) -> None:
     """Only the publisher that atomically creates the file may later treat it as owned."""
     plugins_dir = tmp_path / "plugins"
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {plugins_dir}\n", encoding="utf-8")
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
     monkeypatch.setattr(api_config, "_cache", None)
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
     template = {
         "id": "concurrent_change",
         "name": "Concurrent Change",
@@ -421,11 +421,11 @@ def test_write_dataset_template_rejects_path_traversal_id(
     bad_id: str,
 ) -> None:
     plugins_dir = tmp_path / "plugins"
-    config_file = tmp_path / "climate-service.yaml"
+    config_file = tmp_path / "geoservice.yaml"
     config_file.write_text(f"plugins_dir: {plugins_dir}\n", encoding="utf-8")
     monkeypatch.setattr(datasets, "CONFIGS_DIR", None)
     monkeypatch.setattr(api_config, "_cache", None)
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
 
     with pytest.raises(ValueError, match="Invalid dataset id"):
         datasets.write_dataset_template(
@@ -492,7 +492,7 @@ def test_plugins_dir_overrides_entry_point_plugin(monkeypatch: pytest.MonkeyPatc
         lambda: [("p", {"id": "x", "name": "plugin", "sync": {"kind": "static"}})],
     )
     monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": str(tmp_path)})
-    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "climate-service.yaml")
+    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "geoservice.yaml")
     result = {d["id"]: d for d in datasets.list_datasets()}
     assert result["x"]["name"] == "plugins_dir"
 
@@ -568,7 +568,7 @@ def test_missing_plugins_dir_serves_built_ins_instead_of_raising(
     )
     absent = tmp_path / "not-created"
     monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": str(absent)})
-    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "climate-service.yaml")
+    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "geoservice.yaml")
 
     assert not absent.exists()
     assert {d["id"] for d in datasets.list_datasets()} == {"built_in", "from_plugin"}
@@ -583,7 +583,7 @@ def test_plugins_dir_of_the_wrong_type_still_raises(
     monkeypatch.setattr(datasets, "_load_builtin_datasets", lambda: [])
     monkeypatch.setattr(datasets, "_load_entry_point_datasets", lambda: [])
     monkeypatch.setattr(api_config, "get_config", lambda: {"plugins_dir": ["a", "list"]})
-    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "climate-service.yaml")
+    monkeypatch.setattr(api_config, "get_config_path", lambda: tmp_path / "geoservice.yaml")
 
     with pytest.raises(ValueError, match="must be a path string"):
         datasets.list_datasets()

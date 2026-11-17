@@ -16,16 +16,16 @@ import xarray as xr
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.openeo import execution
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo.execution import SaveResultEnvelope
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared import cancellation
-from open_climate_service.shared.cancellation import ExecutionCancelled, cancellation_scope, raise_if_cancelled
-from open_climate_service.shared.time import utc_now
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.openeo import execution
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo.execution import SaveResultEnvelope
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared import cancellation
+from open_geo_service.shared.cancellation import ExecutionCancelled, cancellation_scope, raise_if_cancelled
+from open_geo_service.shared.time import utc_now
 from tests.test_managed_publish_units import managed_instance  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 _DATASET = "derived_precip"
@@ -94,7 +94,7 @@ def _commit_messages(store: Path) -> list[str]:
 
 
 def _stored_value(store: Path) -> float:
-    from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
+    from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
 
     with open_icechunk_dataset(str(store)) as ds:
         return float(ds["precip"].isel(t=0, y=0, x=0))

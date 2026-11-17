@@ -11,19 +11,19 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service import config, plugin_discovery
-from open_climate_service.exports import RenderedExport
-from open_climate_service.exports.registry import load_export_plugins
-from open_climate_service.exports.service import render_named_export
-from open_climate_service.openeo.execution import SaveResultEnvelope
-from open_climate_service.openeo.jobs import (
+from open_geo_service import config, plugin_discovery
+from open_geo_service.exports import RenderedExport
+from open_geo_service.exports.registry import load_export_plugins
+from open_geo_service.exports.service import render_named_export
+from open_geo_service.openeo.execution import SaveResultEnvelope
+from open_geo_service.openeo.jobs import (
     OpenEOJobService,
     _build_dhis2_json_payload,
     _result_assets,
     store_create_job,
 )
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.time import utc_now
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.time import utc_now
 
 from .conftest import named_exports
 
@@ -145,7 +145,7 @@ def test_mapping_is_not_mutated_and_request_cannot_override_it(definition: dict[
 
 def _plugin_source(marker: str) -> str:
     return (
-        "from open_climate_service.exports import BaseExportPlugin, RenderedExport\n"
+        "from open_geo_service.exports import BaseExportPlugin, RenderedExport\n"
         "class ExampleExport(BaseExportPlugin):\n"
         "    id = 'example'\n"
         "    format = 'EXAMPLE'\n"
@@ -169,7 +169,7 @@ def _install_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     metadata = tmp_path / f"{name}-1.0.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n")
-    (metadata / "entry_points.txt").write_text(f"[open_climate_service.plugins]\n{name} = {name}\n")
+    (metadata / "entry_points.txt").write_text(f"[open_geo_service.plugins]\n{name} = {name}\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     plugin_discovery.rescan()
     return name
@@ -207,7 +207,7 @@ def test_sync_and_batch_external_export(
     definition.clear()
     definition.update(id="rainfall", plugin="example")
     envelope = SaveResultEnvelope(_frame(), "EXAMPLE", {"export": "rainfall"})
-    monkeypatch.setattr("open_climate_service.openeo.execution.run_process_graph", lambda *args: envelope)
+    monkeypatch.setattr("open_geo_service.openeo.execution.run_process_graph", lambda *args: envelope)
     formats = client.get("/file_formats").json()["output"]
     assert "export" in formats["EXAMPLE"]["parameters"]
     response = client.post("/result", json={"process_graph": {}})
@@ -215,7 +215,7 @@ def test_sync_and_batch_external_export(
     assert response.content == b"installed"
     assert response.headers["content-type"] == "application/x-example"
 
-    monkeypatch.setattr("open_climate_service.openeo.jobs._JOBS_DIR", tmp_path / "jobs")
+    monkeypatch.setattr("open_geo_service.openeo.jobs._JOBS_DIR", tmp_path / "jobs")
     service = OpenEOJobService()
     try:
         path = service._persist_result("job-example", envelope)
@@ -244,7 +244,7 @@ def test_sync_named_dhis2_in_read_only_mode(
 ):
     config.get_config()["read_only"] = True
     envelope = SaveResultEnvelope(_frame(), "DHIS2JSON", {"export": "rainfall"})
-    monkeypatch.setattr("open_climate_service.openeo.execution.run_process_graph", lambda *args: envelope)
+    monkeypatch.setattr("open_geo_service.openeo.execution.run_process_graph", lambda *args: envelope)
     response = client.post("/result", json={"process_graph": {}})
     assert response.status_code == 200
     assert response.json()["dataValues"][0]["value"] == "0"

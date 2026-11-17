@@ -14,9 +14,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from open_climate_service.features.providers import get_feature_provider
-from open_climate_service.plugins.vectors import dhis2 as provider
-from open_climate_service.plugins.vectors.dhis2 import (
+from open_geo_service.features.providers import get_feature_provider
+from open_geo_service.plugins.vectors import dhis2 as provider
+from open_geo_service.plugins.vectors.dhis2 import (
     _fetch_org_units,
     _normalise_feature,
     _require_unique_ids,

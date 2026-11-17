@@ -1,12 +1,12 @@
 """Process a collection via the openEO Python client.
 
 Replicates the canonical openEO docs example
-(https://open-eo.github.io/openeo-python-client/) against a local Open Climate Service
+(https://open-eo.github.io/openeo-python-client/) against a local Open Geo Service
 instance: connect → load_collection → apply rescale → max_time → batch job → results.
 
 Requires:
   pip install openeo
-  A running Open Climate Service with at least one published dataset.
+  A running Open Geo Service with at least one published dataset.
 Adjust BASE_URL if the API is not on the default local address.
 """
 

@@ -12,8 +12,8 @@ import pytest
 import xarray as xr
 from fastapi import HTTPException
 
-from open_climate_service.ingestions import services
-from open_climate_service.streaming import BaseDatasetPlugin, normalize_period
+from open_geo_service.ingestions import services
+from open_geo_service.streaming import BaseDatasetPlugin, normalize_period
 
 _PERIODS = [f"2026-01-{day:02d}" for day in range(1, 7)]
 
@@ -105,7 +105,7 @@ def test_commit_conflict_stops_the_loop_and_releases_the_lock(
 
 
 class _OtherProcessLock:
-    """Hold a file lock through a separate handle, as a second OCS process would."""
+    """Hold a file lock through a separate handle, as a second OGS process would."""
 
     def __init__(self, path: Path) -> None:
         import portalocker
@@ -155,9 +155,9 @@ def test_store_contention_is_refused_before_plugin_is_created(
 def test_publishing_a_managed_dataset_waits_for_the_store_writer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from open_climate_service.data_manager.services import downloader
-    from open_climate_service.data_registry.services import datasets as registry_datasets
-    from open_climate_service.openeo import jobs as openeo_jobs
+    from open_geo_service.data_manager.services import downloader
+    from open_geo_service.data_registry.services import datasets as registry_datasets
+    from open_geo_service.openeo import jobs as openeo_jobs
 
     monkeypatch.setattr(downloader, "DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr(
@@ -186,8 +186,8 @@ def test_publishing_a_managed_dataset_waits_for_the_store_writer(
 
 @pytest.fixture
 def jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs import store as native_store
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs import store as native_store
 
     monkeypatch.setattr(native_store, "JOBS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(native_store, "JOBS_INDEX_PATH", tmp_path / "jobs" / "jobs.json")
@@ -200,7 +200,7 @@ def jobs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
 def _await(jobs: Any, job_id: str, timeout: float = 20.0) -> Any:
     import time
 
-    from open_climate_service.jobs.models import JobStatus
+    from open_geo_service.jobs.models import JobStatus
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -212,7 +212,7 @@ def _await(jobs: Any, job_id: str, timeout: float = 20.0) -> Any:
 
 
 def _ingestion_job(**request: Any) -> Any:
-    from open_climate_service.ingestions import processes
+    from open_geo_service.ingestions import processes
 
     return {
         "func": processes.execute_ingestion,
@@ -225,10 +225,10 @@ def _ingestion_job(**request: Any) -> Any:
 def test_failed_job_exposes_failure_only_after_its_lock_is_free(
     ingestion: dict[str, Any], jobs: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.data_registry.services import datasets as registry_datasets
-    from open_climate_service.extents import services as extent_services
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobStatus
+    from open_geo_service.data_registry.services import datasets as registry_datasets
+    from open_geo_service.extents import services as extent_services
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobStatus
 
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda _: ingestion["dataset"])
     monkeypatch.setattr(extent_services, "get_extent_or_404", lambda: {"bbox": [1.0, 2.0, 3.0, 4.0]})
@@ -272,10 +272,10 @@ def test_failed_job_exposes_failure_only_after_its_lock_is_free(
 
 
 def test_job_running_in_another_process_is_not_recovered_or_rewritten(jobs: Any) -> None:
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobRecord, JobStatus
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.shared.time import utc_now
 
     ran: list[str] = []
     native_store.create_job_record(
@@ -305,11 +305,11 @@ def test_job_running_in_another_process_is_not_recovered_or_rewritten(jobs: Any)
 def test_recovery_still_requeues_a_job_nobody_is_running(
     jobs: Any, ingestion: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.data_registry.services import datasets as registry_datasets
-    from open_climate_service.extents import services as extent_services
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobRecord, JobStatus
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.data_registry.services import datasets as registry_datasets
+    from open_geo_service.extents import services as extent_services
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.shared.time import utc_now
 
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda _: ingestion["dataset"])
     monkeypatch.setattr(extent_services, "get_extent_or_404", lambda: {"bbox": [1.0, 2.0, 3.0, 4.0]})
@@ -321,7 +321,7 @@ def test_recovery_still_requeues_a_job_nobody_is_running(
             status=JobStatus.RUNNING,
             created_at=utc_now(),
             attempt=1,
-            request={"__fn_path__": "open_climate_service.ingestions.processes.execute_ingestion", **job["request"]},
+            request={"__fn_path__": "open_geo_service.ingestions.processes.execute_ingestion", **job["request"]},
         )
     )
     jobs.recover_pending_jobs()
@@ -330,10 +330,10 @@ def test_recovery_still_requeues_a_job_nobody_is_running(
 
 def _leased_running_job(job_id: str, request: dict[str, Any]) -> _OtherProcessLock:
     """A RUNNING job whose lease another process holds, as during an overlapping restart."""
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobRecord, JobStatus
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.shared.time import utc_now
 
     native_store.create_job_record(
         JobRecord(
@@ -342,7 +342,7 @@ def _leased_running_job(job_id: str, request: dict[str, Any]) -> _OtherProcessLo
             status=JobStatus.RUNNING,
             created_at=utc_now(),
             attempt=1,
-            request={"__fn_path__": "open_climate_service.ingestions.processes.execute_ingestion", **request},
+            request={"__fn_path__": "open_geo_service.ingestions.processes.execute_ingestion", **request},
         )
     )
     lease = job_service_module._lease_path(job_id)
@@ -352,9 +352,9 @@ def _leased_running_job(job_id: str, request: dict[str, Any]) -> _OtherProcessLo
 def test_job_abandoned_by_the_other_process_is_taken_over(
     jobs: Any, ingestion: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.data_registry.services import datasets as registry_datasets
-    from open_climate_service.extents import services as extent_services
-    from open_climate_service.jobs.models import JobStatus
+    from open_geo_service.data_registry.services import datasets as registry_datasets
+    from open_geo_service.extents import services as extent_services
+    from open_geo_service.jobs.models import JobStatus
 
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda _: ingestion["dataset"])
     monkeypatch.setattr(extent_services, "get_extent_or_404", lambda: {"bbox": [1.0, 2.0, 3.0, 4.0]})
@@ -374,9 +374,9 @@ def test_job_abandoned_by_the_other_process_is_taken_over(
 def test_job_finished_by_the_other_process_is_left_alone(jobs: Any) -> None:
     import time
 
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobStatus
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobStatus
+    from open_geo_service.shared.time import utc_now
 
     jobs.lease_poll_seconds = 0.05
     other = _leased_running_job("finished-elsewhere", {"dataset_id": "unused"})
@@ -400,8 +400,8 @@ def test_job_finished_by_the_other_process_is_left_alone(jobs: Any) -> None:
 def test_takeover_stops_at_shutdown(jobs: Any) -> None:
     import time
 
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobStatus
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobStatus
 
     jobs.lease_poll_seconds = 0.05
     other = _leased_running_job("left-at-shutdown", {"dataset_id": "unused"})
@@ -420,12 +420,12 @@ def test_worker_losing_the_lease_handoff_still_gets_the_job_taken_over(
     """Recovery here released the lease; another process won it before this worker started."""
     import time
 
-    from open_climate_service.data_registry.services import datasets as registry_datasets
-    from open_climate_service.extents import services as extent_services
-    from open_climate_service.jobs import service as job_service_module
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobRecord, JobStatus
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.data_registry.services import datasets as registry_datasets
+    from open_geo_service.extents import services as extent_services
+    from open_geo_service.jobs import service as job_service_module
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.shared.time import utc_now
 
     monkeypatch.setattr(registry_datasets, "get_dataset", lambda _: ingestion["dataset"])
     monkeypatch.setattr(extent_services, "get_extent_or_404", lambda: {"bbox": [1.0, 2.0, 3.0, 4.0]})
@@ -437,7 +437,7 @@ def test_worker_losing_the_lease_handoff_still_gets_the_job_taken_over(
             status=JobStatus.ACCEPTED,
             created_at=utc_now(),
             request={
-                "__fn_path__": "open_climate_service.ingestions.processes.execute_ingestion",
+                "__fn_path__": "open_geo_service.ingestions.processes.execute_ingestion",
                 **_ingestion_job()["request"],
             },
         )
@@ -465,7 +465,7 @@ def test_worker_losing_the_lease_handoff_still_gets_the_job_taken_over(
 
 
 def test_no_watcher_starts_once_the_service_is_stopping(jobs: Any) -> None:
-    from open_climate_service.jobs import service as job_service_module
+    from open_geo_service.jobs import service as job_service_module
 
     lease = job_service_module._lease_path("late")
     other = _OtherProcessLock(lease.with_suffix(lease.suffix + ".lock"))

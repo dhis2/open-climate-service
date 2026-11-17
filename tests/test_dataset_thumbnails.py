@@ -27,10 +27,10 @@ from fastapi.testclient import TestClient
 from matplotlib import colormaps
 from matplotlib.colors import to_hex
 
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.shared import thumbnails
-from open_climate_service.shared.thumbnails import (
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.shared import thumbnails
+from open_geo_service.shared.thumbnails import (
     THUMBNAIL_LONG_SIDE_PIXELS,
     colormap_stops,
     decimate,
@@ -313,7 +313,7 @@ def test_a_thumbnail_never_materialises_more_than_it_draws(tmp_path: Path, monke
 def test_the_store_is_closed_once_the_pixels_are_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A sync run touches every dataset it syncs; leaving each one's Icechunk and Zarr backend
     resources open behind the thumbnail is a leak that only shows up at scale."""
-    from open_climate_service.data_accessor.services import accessor
+    from open_geo_service.data_accessor.services import accessor
 
     closed: list[bool] = []
     real_open = accessor.open_icechunk_dataset
@@ -408,7 +408,7 @@ def test_every_built_in_template_colormap_resolves_to_itself() -> None:
     matches case-insensitively; matplotlib does not, so `blues`, `rdbu_r` and `reds` all
     raise when passed straight to it — 18 of the 27 built-in templates. Falling back to the
     default would render every one of them in the wrong colours while still "working"."""
-    from open_climate_service.data_registry.services import datasets as registry
+    from open_geo_service.data_registry.services import datasets as registry
 
     declared = [
         template["display"]["colormap"]
@@ -430,7 +430,7 @@ def test_a_list_of_colours_is_a_ramp_through_them() -> None:
 
 
 def test_an_unknown_colormap_falls_back_instead_of_raising(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="open_climate_service.shared.thumbnails"):
+    with caplog.at_level(logging.WARNING, logger="open_geo_service.shared.thumbnails"):
         assert resolve_colormap("not-a-colormap").name == "viridis"
         assert resolve_colormap("not-a-colormap").name == "viridis"
     # Logged on every fallback, so each map viewer request that draws it shows in the logs.
@@ -555,7 +555,7 @@ def test_a_multi_period_sync_never_reaches_the_renderer(tmp_path: Path, monkeypa
     """Half of "once per run, at the end". A streaming sync commits per period, so a renderer
     reached from the commit path would run once per period — a few hundred times on a
     historical backfill, all but the last discarded."""
-    from open_climate_service.streaming import orchestrator as streaming_orchestrator
+    from open_geo_service.streaming import orchestrator as streaming_orchestrator
 
     renders: list[Any] = []
     monkeypatch.setattr(thumbnails, "render_png", lambda *a, **k: renders.append(a))
@@ -660,7 +660,7 @@ def test_one_ingest_produces_exactly_one_render(tmp_path: Path, monkeypatch: pyt
 
 
 def _published_artifact() -> Any:
-    from open_climate_service.ingestions.schemas import (
+    from open_geo_service.ingestions.schemas import (
         ArtifactCoverage,
         ArtifactFormat,
         ArtifactPublication,
@@ -703,7 +703,7 @@ def _published(monkeypatch: pytest.MonkeyPatch) -> None:
     metadata xstac derives, so opening a real Icechunk store would only add a fixture to
     maintain. `_minimal_collection` mirrors what xstac returns.
     """
-    from open_climate_service.stac import services as stac_services
+    from open_geo_service.stac import services as stac_services
 
     stac_services._clear_xstac_collection_cache()
     monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=[_published_artifact()]))
