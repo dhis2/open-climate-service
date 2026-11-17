@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.shared.zarr import CachedTimeSeriesZarr
+from open_geo_service.shared.zarr import CachedTimeSeriesZarr
 
 _STEPS = 30
 _CHUNK = 5

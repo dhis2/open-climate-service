@@ -1,6 +1,6 @@
 """Dataset licences: declaration and publication (CLIM-946).
 
-The failure this guards against is silent. OCS published the constant `various` on every
+The failure this guards against is silent. OGS published the constant `various` on every
 collection, so a CC-BY-NC source was published as though it carried no restriction.
 
 Propagation to derived products is deliberately not here. It is a separate change with a
@@ -17,7 +17,7 @@ import re
 import pytest
 import yaml
 
-from open_climate_service.shared.licences import (
+from open_geo_service.shared.licences import (
     ATTRIBUTION,
     NON_COMMERCIAL,
     STAC_LICENSE_OTHER,
@@ -25,7 +25,7 @@ from open_climate_service.shared.licences import (
     parse_licence,
 )
 
-_BUILTIN_TEMPLATES = sorted(glob.glob("open_climate_service/plugins/rasters/*.yaml"))
+_BUILTIN_TEMPLATES = sorted(glob.glob("open_geo_service/plugins/rasters/*.yaml"))
 
 
 # -- parsing ----------------------------------------------------------------------------
@@ -112,7 +112,7 @@ def test_undeclared_publishes_as_other() -> None:
 @pytest.mark.parametrize("path", _BUILTIN_TEMPLATES, ids=lambda p: pathlib.Path(p).name)
 def test_every_builtin_template_declares_a_licence(path: str) -> None:
     """No built-in may rely on the default. A user seeing a layer should be able to see what
-    they may do with it, and `other` is what OCS says when nobody has said anything."""
+    they may do with it, and `other` is what OGS says when nobody has said anything."""
     undeclared = [
         t.get("id")
         for t in yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
@@ -215,7 +215,7 @@ def test_no_derived_builtin_declares_away_its_sources_obligations(derived_id: st
     """
     licences = _builtin_licences()
     derived, source = licences[derived_id], licences[source_id]
-    assert derived.known and source.known, "a shipped licence OCS cannot parse"
+    assert derived.known and source.known, "a shipped licence OGS cannot parse"
     assert source.obligations <= derived.obligations, (
         f"{derived_id} drops {sorted(source.obligations - derived.obligations)} required by {source_id}"
     )
@@ -245,13 +245,13 @@ def test_explicit_obligations_are_used_when_nothing_else_supplies_them() -> None
     assert licence.obligations == frozenset({ATTRIBUTION})
 
 
-# -- valid SPDX identifiers OCS has not reviewed -------------------------------------------
+# -- valid SPDX identifiers OGS has not reviewed -------------------------------------------
 
 
 @pytest.mark.parametrize("identifier", ["BSD-3-Clause", "ISC", "Zlib", "EUPL-1.2", "ODC-By-1.0"])
 def test_a_valid_spdx_identifier_is_preserved_even_when_unreviewed(identifier: str) -> None:
     """The general contract, not one hand-listed example. Identity is SPDX's question and
-    obligations are OCS's; while a single table answered both, every valid identifier nobody
+    obligations are OGS's; while a single table answered both, every valid identifier nobody
     had reviewed was demoted to a free-form name and published as `other`. `ODC-By-1.0` is the
     one that shows the cost — an open-data licence a climate source could plausibly carry."""
     licence = parse_licence(identifier)
@@ -264,7 +264,7 @@ def test_every_reviewed_identifier_is_a_real_spdx_identifier() -> None:
     """The two tables must agree on the identifiers they share. A typo in the obligations
     table would otherwise sit there silently: the licence would parse to no identifier at all
     and publish as `other`, with its reviewed obligations never consulted."""
-    from open_climate_service.shared.licences import _SPDX_OBLIGATIONS, _canonical_spdx
+    from open_geo_service.shared.licences import _SPDX_OBLIGATIONS, _canonical_spdx
 
     assert {identifier: _canonical_spdx(identifier) for identifier in _SPDX_OBLIGATIONS} == {
         identifier: identifier for identifier in _SPDX_OBLIGATIONS
@@ -309,7 +309,7 @@ def test_a_string_that_is_neither_an_identifier_nor_a_known_name_is_reported() -
     shows "not declared" — indistinguishable from declaring nothing, which is the one outcome
     this module exists to make impossible. Parsing still degrades quietly; the validator is
     where it has to be said."""
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     problem = licence_declaration_problem("CC-BY-4.O")
     assert problem is not None
@@ -320,7 +320,7 @@ def test_a_string_that_is_neither_an_identifier_nor_a_known_name_is_reported() -
 def test_a_string_that_resolves_to_something_is_not_reported(declared: str) -> None:
     """An identifier in any case, a valid-but-unreviewed one, and a licence known by name are
     all fine as plain strings; only an unresolvable one is worth a warning."""
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     assert licence_declaration_problem(declared) is None
 
@@ -375,7 +375,7 @@ def test_matching_obligations_do_not_make_two_licences_the_same_one() -> None:
 
 
 def test_a_recognised_name_contradicts_even_an_unreviewed_identifier() -> None:
-    """Whether OCS has recorded what `ISC` requires has no bearing on whether it is the
+    """Whether OGS has recorded what `ISC` requires has no bearing on whether it is the
     Copernicus licence. The check was skipped entirely for identifiers outside the obligations
     table."""
     licence = parse_licence({"id": "ISC", "name": "NASA Earth Science Data", "url": "https://x"})
@@ -404,7 +404,7 @@ def test_parsing_a_contradictory_licence_logs_nothing() -> None:
     re-read each time, so a warning here would log for as long as the template existed — the
     behaviour `_warn_once` exists to stop (CLIM-904). Asserted by call count, because a
     "warns once" claim about a per-request function is only true until the second request."""
-    from open_climate_service.shared import licences
+    from open_geo_service.shared import licences
 
     records: list[logging.LogRecord] = []
 
@@ -427,7 +427,7 @@ def test_parsing_a_contradictory_licence_logs_nothing() -> None:
 def test_the_validator_names_the_contradiction_rather_than_calling_it_unreadable() -> None:
     """ "Unreadable" sends the author hunting for a typo when the declaration parses fine and
     simply says two different things."""
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     problem = licence_declaration_problem(
         {"id": "CC0-1.0", "name": "Licence to Use Copernicus Products", "url": "https://x"}
@@ -450,13 +450,13 @@ def test_the_validator_names_the_contradiction_rather_than_calling_it_unreadable
 def test_ignored_obligations_are_reported_whatever_supplied_the_terms(declared: dict) -> None:
     """Parametrised over both, because the two were checked in separate places and drifted.
 
-    `parse_licence` ignores an explicit list whenever the identifier *or* the name is one OCS
+    `parse_licence` ignores an explicit list whenever the identifier *or* the name is one OGS
     knows, but the validator reported only the identifier case. So Copernicus plus
     `obligations: [non-commercial]` was read as commercially usable and said nothing — the
-    operator asserted a restriction and OCS silently dropped it, which is the laundering
+    operator asserted a restriction and OGS silently dropped it, which is the laundering
     direction.
     """
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     problem = licence_declaration_problem(declared)
     assert problem is not None
@@ -466,7 +466,7 @@ def test_ignored_obligations_are_reported_whatever_supplied_the_terms(declared: 
 def test_the_report_names_both_what_was_asked_for_and_what_applies() -> None:
     """An operator who wrote non-commercial needs to see that attribution is what took effect,
     not just that something was ignored."""
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     problem = licence_declaration_problem(
         {"name": "Licence to Use Copernicus Products", "url": "https://x", "obligations": ["non-commercial"]}
@@ -486,7 +486,7 @@ def test_a_recognised_name_still_outranks_a_contradictory_obligations_list() -> 
 
 
 def test_a_sound_declaration_has_nothing_to_report() -> None:
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     assert licence_declaration_problem("CC-BY-4.0") is None
     assert licence_declaration_problem({"id": "CC-BY-4.0", "url": "https://x"}) is None
@@ -503,7 +503,7 @@ def test_conflicting_identifier_aliases_are_named_not_merely_undeclared() -> Non
     the parse outcome passes with the fix removed — which the matrix row above does, and which
     is why this exists separately.
     """
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     problem = licence_declaration_problem({"id": "CC0-1.0", "spdx": "CC-BY-NC-4.0"})
     assert problem is not None
@@ -520,7 +520,7 @@ def test_the_same_licence_under_both_aliases_is_not_a_conflict() -> None:
 # -- the declaration surface -----------------------------------------------------------------
 #
 # Four review rounds each found one more way for two parts of a `license` mapping to disagree
-# while OCS silently picked one: a prefix-matched name, an identifier contradicted by a name,
+# while OGS silently picked one: a prefix-matched name, an identifier contradicted by a name,
 # an obligations list beside a recognised name, and an identifier beside a conflicting alias.
 # One defect found four times. Finding them individually does not terminate, so the surface is
 # enumerated instead.
@@ -620,7 +620,7 @@ def _declaration(identifier: str, name: str, obligations: str, url: bool = True)
 
 
 def _outcome(declaration: dict) -> str:
-    from open_climate_service.shared.licences import licence_declaration_problem
+    from open_geo_service.shared.licences import licence_declaration_problem
 
     if parse_licence(declaration) is UNDECLARED:
         return _UNDECLARED

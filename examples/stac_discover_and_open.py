@@ -1,19 +1,19 @@
 """Discover published datasets via the STAC catalog and open one with xarray.
 
-Requires a running Open Climate Service instance and at least one published dataset.
+Requires a running Open Geo Service instance and at least one published dataset.
 Adjust BASE_URL if the API is not running on the default local address.
 """
 
 import json
 
-from open_climate_service import ClimateService
+from open_geo_service import GeoService
 
 BASE_URL = "http://127.0.0.1:9000"
 
 
 def main() -> None:
     """Discover and open the first published dataset."""
-    service = ClimateService(BASE_URL)
+    service = GeoService(BASE_URL)
     datasets = service.datasets()
 
     if not datasets:

@@ -1,6 +1,6 @@
 # User Guide
 
-This guide shows how to discover and access data from a running Open Climate Service instance. It assumes the API is running locally at `http://127.0.0.1:9000` and that at least one dataset has been ingested and published.
+This guide shows how to discover and access data from a running Open Geo Service instance. It assumes the API is running locally at `http://127.0.0.1:9000` and that at least one dataset has been ingested and published.
 
 For configuring a new instance for your country, see the [instance guide](instance_guide.md). To browse datasets visually instead of through code, use the built-in [map viewer](web_interface.md#the-map-viewer-map). For the full ingestion and sync API reference, see [managed_data_api_guide.md](managed_data_api_guide.md).
 
@@ -34,18 +34,18 @@ The `assets.zarr` field contains everything needed to open the dataset:
 
 ## The Python client
 
-`open_climate_service` ships a lightweight `ClimateService` client. The base install
+`open_geo_service` ships a lightweight `GeoService` client. The base install
 needs only `httpx` and `pystac`; opening datasets as xarray adds the `xarray` extra:
 
 ```bash
-pip install open-climate-service            # client only — talk to an instance over HTTP
-pip install open-climate-service[xarray]    # + open published datasets as xarray
+pip install open-geo-service            # client only — talk to an instance over HTTP
+pip install open-geo-service[xarray]    # + open published datasets as xarray
 ```
 
 ```python
-from open_climate_service import ClimateService
+from open_geo_service import GeoService
 
-service = ClimateService("http://127.0.0.1:9000")
+service = GeoService("http://127.0.0.1:9000")
 
 # Discover published datasets (STAC catalog)
 for link in service.datasets():
@@ -65,7 +65,7 @@ data_value_set = service.execute(
                 "dataset_id": "era5land_temperature_monthly",
                 "temporal_extent": ["2025-01-01", "2025-12-31"],
                 "geometries": {"type": "FeatureCollection", "features": [...]},  # your org units
-                "export": "temperature-monthly",  # a named export in the instance configuration
+                "export": "temperature-monthly",  # the id of a pipeline that delivers to DHIS2
                 "method": "mean",
             },
             "result": True,
@@ -79,19 +79,19 @@ data_value_set = service.execute(
 `open_dataset` reads the Zarr asset advertised in the dataset's STAC collection and returns a lazy `xarray.Dataset` (requires the `xarray` extra):
 
 ```python
-from open_climate_service import ClimateService
+from open_geo_service import GeoService
 
-service = ClimateService("http://127.0.0.1:9000")
+service = GeoService("http://127.0.0.1:9000")
 
 datasets = service.datasets()
 ds = service.open_dataset(datasets[0]["id"])  # open whichever dataset is published first
 print(ds)
 ```
 
-The `base_url` defaults to the `CLIMATE_SERVICE_BASE_URL` environment variable (falling back to `http://127.0.0.1:9000`), so module-level functions work without any argument when the env var is set:
+The `base_url` defaults to the `GEOSERVICE_BASE_URL` environment variable (falling back to `http://127.0.0.1:9000`), so module-level functions work without any argument when the env var is set:
 
 ```python
-from open_climate_service.client import list_datasets, open_dataset  # reads CLIMATE_SERVICE_BASE_URL
+from open_geo_service.client import list_datasets, open_dataset  # reads GEOSERVICE_BASE_URL
 
 dataset_id = list_datasets()[0]["id"]
 ds = open_dataset(dataset_id)
@@ -125,7 +125,7 @@ print(spatial_mean.to_dataframe())
 
 ## What's next
 
-- **Process data** — run temporal aggregations, spatial filters, and custom calculations via openEO process graphs. See [openeo.md](openeo.md) and [`examples/openeo_process_graph.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/openeo_process_graph.py).
+- **Process data** — run temporal aggregations, spatial filters, and custom calculations via openEO process graphs. See [openeo.md](openeo.md) and [`examples/openeo_process_graph.py`](https://github.com/dhis2/open-geo-service/blob/main/examples/openeo_process_graph.py).
 - **Built-in datasets** — coverage, units, and sync behaviour of each source. See [built_in_datasets.md](built_in_datasets.md).
-- **Discovery scripts** — [`examples/stac_discover_and_open.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/stac_discover_and_open.py) and [`examples/zarr_direct_access.py`](https://github.com/dhis2/open-climate-service/blob/main/examples/zarr_direct_access.py).
+- **Discovery scripts** — [`examples/stac_discover_and_open.py`](https://github.com/dhis2/open-geo-service/blob/main/examples/stac_discover_and_open.py) and [`examples/zarr_direct_access.py`](https://github.com/dhis2/open-geo-service/blob/main/examples/zarr_direct_access.py).
 - **Admin API** — ingestion, sync, and publication reference. See [managed_data_api_guide.md](managed_data_api_guide.md).

@@ -13,20 +13,22 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service import config
-from open_climate_service.exports import ExportReport
-from open_climate_service.exports.delivery import deliver_named_export, submit_delivery
-from open_climate_service.exports.delivery_input import lease_export_input
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin, build_dhis2_report
-from open_climate_service.exports.report import ExportOutcome
-from open_climate_service.exports.service import write_named_export
-from open_climate_service.jobs import service as job_service_module
-from open_climate_service.jobs import store as native_store
-from open_climate_service.jobs.models import JobRecord, JobStatus
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-from open_climate_service.shared.provenance import json_digest
-from open_climate_service.shared.time import utc_now
+from open_geo_service import config
+from open_geo_service.exports import ExportReport
+from open_geo_service.exports.delivery import deliver_named_export, submit_delivery
+from open_geo_service.exports.delivery_input import lease_export_input
+from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin, build_dhis2_report
+from open_geo_service.exports.report import ExportOutcome
+from open_geo_service.exports.service import write_named_export
+from open_geo_service.jobs import service as job_service_module
+from open_geo_service.jobs import store as native_store
+from open_geo_service.jobs.models import JobRecord, JobStatus
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.shared.provenance import json_digest
+from open_geo_service.shared.time import utc_now
+
+from .conftest import named_exports
 
 
 def _data() -> pd.DataFrame:
@@ -43,16 +45,17 @@ def saved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
         config,
         "_cache",
         {
-            "exports": [
-                {
-                    "id": "rain",
-                    "plugin": "dhis2",
-                    "connection": "hmis",
-                    "period_type": "monthly",
-                    "series": [{"data_element": "BXgDHhPdFVU"}],
-                }
-            ],
             "dhis2_connections": [{"id": "hmis", "url": "https://hmis.example.org/dhis", "token_env": "TEST_TOKEN"}],
+        },
+    )
+    named_exports(
+        monkeypatch,
+        {
+            "id": "rain",
+            "plugin": "dhis2",
+            "connection": "hmis",
+            "period_type": "monthly",
+            "series": [{"data_element": "BXgDHhPdFVU"}],
         },
     )
     monkeypatch.delenv("TEST_TOKEN", raising=False)
@@ -151,7 +154,7 @@ def test_deliver_named_export_calls_plugin_send(saved: Path, fake_send: list[dic
 
 
 def test_deliver_named_export_raises_job_cancelled_when_cancelled(saved: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.jobs.models import JobCancelledError
+    from open_geo_service.jobs.models import JobCancelledError
 
     def send(
         self: Dhis2ExportPlugin,
@@ -325,7 +328,7 @@ def test_concurrent_submissions_reserve_before_enqueue(
 ):
     from concurrent.futures import ThreadPoolExecutor
 
-    from open_climate_service.exports.reservations import find_delivery
+    from open_geo_service.exports.reservations import find_delivery
 
     service = job_service_module.get_job_service()
     original = service.submit_callable_job
@@ -348,7 +351,7 @@ def test_concurrent_submissions_reserve_before_enqueue(
 def test_retry_repairs_reservation_after_enqueue_failure(
     saved: Path, fake_send: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
 ):
-    from open_climate_service.exports.reservations import find_delivery
+    from open_geo_service.exports.reservations import find_delivery
 
     service = job_service_module.get_job_service()
     original = service.submit_callable_job

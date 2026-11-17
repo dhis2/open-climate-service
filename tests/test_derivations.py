@@ -11,14 +11,14 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.data_registry import recipes
-from open_climate_service.data_registry.recipes import Recipe
-from open_climate_service.derivations import service as derivations
-from open_climate_service.jobs import dispatch
-from open_climate_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
-from open_climate_service.openeo import jobs as openeo_jobs
-from open_climate_service.openeo import workflows
-from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+from open_geo_service.data_registry import recipes
+from open_geo_service.data_registry.recipes import Recipe
+from open_geo_service.derivations import service as derivations
+from open_geo_service.jobs import dispatch
+from open_geo_service.jobs.models import DATASET_UPDATED_EVENT_TYPE, JobEvent
+from open_geo_service.openeo import jobs as openeo_jobs
+from open_geo_service.openeo import workflows
+from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
 from tests.test_managed_publish_units import managed_instance  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from tests.test_openeo_publication_events import (
     _DATASET,
@@ -77,15 +77,8 @@ def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch
             arguments={**_ANOMALY.arguments, "observed_dataset_id": "g"},
             refresh_on="observed_dataset_id",
         ),
-        Recipe(
-            output="i",
-            workflow="climate_anomaly",
-            arguments={**_ANOMALY.arguments, "observed_dataset_id": "j"},
-            refresh_on="observed_dataset_id",
-        ),
     ]
-    monkeypatch.setattr(derivations, "_recipes", lambda: broken)
-    monkeypatch.setattr(derivations, "_trigger_edges", lambda: {("i", "j")})  # a trigger writes j after i
+    monkeypatch.setattr(derivations, "list_recipes", lambda: broken)
 
     with pytest.raises(ValueError) as refused:
         derivations.validate_recipes()
@@ -98,7 +91,7 @@ def test_startup_refuses_recipes_that_cannot_run(monkeypatch: pytest.MonkeyPatch
         "'d': missing argument(s) normal_dataset_id, variable",
         "'e': set 'temporal_extent': a recipe without refresh_on runs over a fixed range",
         "'f': leave 'temporal_extent' out",
-        *(f"'{output}': its updates lead back to itself" for output in ("g", "h", "i")),
+        *(f"'{output}': its updates lead back to itself" for output in ("g", "h")),
         "'f': refresh_on names 'rain', which is not a dataset template",
     ):
         assert expected in message
@@ -160,14 +153,14 @@ class _Instance:
 
 @pytest.fixture
 def instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _Instance:
-    from open_climate_service.jobs import events as job_events
+    from open_geo_service.jobs import events as job_events
 
     state = _Instance()
     monkeypatch.setattr(derivations.api_config, "get_data_root", lambda: tmp_path)
     monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: state.openeo)
     monkeypatch.setattr(openeo_jobs, "store_list_jobs", lambda: list(state.openeo.jobs.values()))
     monkeypatch.setattr(job_events, "persisted_events", lambda: list(state.log))
-    monkeypatch.setattr(derivations, "_recipes", lambda: state.recipes)
+    monkeypatch.setattr(derivations, "list_recipes", lambda: state.recipes)
     monkeypatch.setattr(derivations, "_exists", lambda dataset_id: dataset_id in state.created)
     return state
 
@@ -230,6 +223,31 @@ def test_a_derived_dataset_is_refreshed_once_per_latest_update_of_its_input(
     assert len(fake.jobs) == 4
 
 
+def test_a_refresh_loads_a_feature_collection_bound_by_id_at_its_current_version(
+    instance: _Instance, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from open_geo_service.features import services as feature_services
+
+    refreshed = datetime(2026, 9, 1, 6, tzinfo=UTC)
+    monkeypatch.setattr(
+        feature_services, "registered_collections", lambda: {"districts": SimpleNamespace(created_at=refreshed)}
+    )
+    # climate_anomaly takes no geometry, so the workflow drops the argument; the node it reads is what counts.
+    bound = {**_ANOMALY.arguments, "geometries": {"from_features": "districts"}}
+    instance.recipes = [replace(_ANOMALY, arguments=bound)]
+    instance.created.add("rain_anomaly")
+    instance.log.append(_update(1))
+    derivations.consume([instance.log[-1]])
+
+    [job] = instance.openeo.jobs.values()
+    assert job.process["process_graph"]["features_districts"] == {
+        "process_id": "load_features",
+        "arguments": {"id": "districts", "version": refreshed.isoformat()},
+    }
+
+
 def test_updates_handled_at_once_start_one_refresh(instance: _Instance, monkeypatch: pytest.MonkeyPatch) -> None:
     instance.created.add("rain_anomaly")
     creating = threading.Event()
@@ -260,7 +278,7 @@ def test_a_caller_held_before_the_lock_refreshes_the_update_that_arrived_meanwhi
     range after B arrived, and publishing that would shrink the dataset's coverage."""
     from contextlib import contextmanager
 
-    from open_climate_service.shared import persistence
+    from open_geo_service.shared import persistence
 
     instance.created.add("rain_anomaly")
     waiting, release = threading.Event(), threading.Event()
@@ -334,13 +352,13 @@ def test_an_input_update_refreshes_the_derived_dataset_and_its_pipeline_hears_of
     and `test_run_once_stores_its_intent_first_and_delivers_once` in test_pipelines.py.
     """
     first_process = request.getfixturevalue("service")
-    from open_climate_service.jobs import store as native_store
-    from open_climate_service.jobs.models import JobRecord, JobStatus
-    from open_climate_service.pipelines import runner
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service.jobs import store as native_store
+    from open_geo_service.jobs.models import JobRecord, JobStatus
+    from open_geo_service.pipelines import runner
+    from open_geo_service.shared.time import utc_now
 
     recipe = replace(_ANOMALY, output=_DATASET)
-    monkeypatch.setattr(derivations, "_recipes", lambda: [recipe])
+    monkeypatch.setattr(derivations, "list_recipes", lambda: [recipe])
     running = [first_process]
     monkeypatch.setattr(openeo_jobs, "get_openeo_job_service", lambda: running[0])
     heard: list[str] = []

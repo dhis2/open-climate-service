@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.processes.compute_anomaly import compute_anomaly
+from open_geo_service.plugins.processes.compute_anomaly import compute_anomaly
 
 
 def _observed_doy(scale: float = 1.0, offset: float = 0.0) -> xr.DataArray:

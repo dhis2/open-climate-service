@@ -65,11 +65,11 @@ Calling it from a process graph is a single node:
 
 ## Built-in workflows
 
-Open Climate Service ships with ready-to-use workflows for aggregating **any published GeoZarr dataset** to a set of **GeoJSON features** (typically DHIS2 organisation units) and exporting DHIS2-ready output:
+Open Geo Service ships with ready-to-use workflows for aggregating **any published GeoZarr dataset** to a set of **GeoJSON features** (typically DHIS2 organisation units) and exporting DHIS2-ready output:
 
 | Workflow | Output |
 |---|---|
-| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a [named export](export_plugins.md), with a delivery manifest |
+| `aggregate_to_dhis2_json` | DHIS2 `dataValueSet` JSON through a pipeline's [named export](export_plugins.md), with a delivery manifest |
 | `aggregate_to_chap_csv` | CHAP wide CSV (`time_period`, `location`, one column per variable) |
 | `aggregate_by_features` | The aggregated vector cube itself, saved by the caller; the workflow [pipelines](web_interface.md#the-pipeline-pages-pipelines) use |
 
@@ -82,11 +82,11 @@ The first two run `load_collection → aggregate_spatial_weighted → save_resul
 | `dataset_id` | both | — | Published GeoZarr collection to aggregate (see `/datasets`) |
 | `temporal_extent` | both | — | `[start, end]` ISO-8601 dates |
 | `geometries` | both | — | GeoJSON `FeatureCollection`; each feature's `id` is the org unit / location |
-| `export` | DHIS2 only | — | ID of a named DHIS2 export in the instance configuration |
+| `export` | DHIS2 only | — | ID of a pipeline whose destination is DHIS2; its named export is used |
 | `method` | both | `mean` | Spatial aggregation method: `mean`, `min`, `max`, `sum`, or `median` |
 | `period_type` | CHAP only | `month` | Period type used to format each time step: `day`, `week`, `month`, `quarter`, `year` |
 
-The DHIS2 workflow takes no data element or period type. The named export supplies
+The DHIS2 workflow takes no data element or period type. The pipeline's named export supplies
 the data element mapping, period type, and DHIS2 connection, so the workflow stays
 the same on every instance. When the export declares `aggregation`, the workflow's
 `method` must match it or the run fails.
@@ -150,7 +150,7 @@ It runs `load_collection → reduce_dimension → save_result`, reducing the tim
 | `variable` | Variable/band name carried through to the published dataset |
 | `temporal_extent` | `[start, end]` ISO-8601 dates; the change is `value(last) − value(first)` within this range |
 
-The `output_dataset_id` must have a **dataset template** registered on the instance, in the built-in `plugins/rasters/` folder (or an instance's `plugins_dir/rasters/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Climate Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
+The `output_dataset_id` must have a **dataset template** registered on the instance, in the built-in `plugins/rasters/` folder (or an instance's `plugins_dir/rasters/`) with `sync: {kind: static}` and a `display` block. No ingestion plugin (`.py`) is needed — the data is produced by the workflow, not ingested. Open Geo Service bundles `worldpop_population_change` (a second entry in `worldpop.yaml`) for the population example below:
 
 ```yaml
 - id: worldpop_population_change
@@ -207,7 +207,7 @@ When the job finishes, the new change dataset appears under `/datasets` and on t
 | `frequency` | `dayofyear` (1–366, default) or `month` (1–12) |
 | `smoothing_window` | Circular day-of-year smoothing window in days (0 disables, default 31; ignored for `month`) |
 
-The `output_dataset_id` needs a **static dataset template** (`sync: {kind: static}`, `period_type: climatology`, a `display` block; no ingestion plugin) — auto-registered from the result and source metadata if none exists. Open Climate Service bundles the from-store monthly templates (`era5land_temperature_monthly_normal_1991_2020`, …) plus EDH-direct **day-of-year** ERA5-Land normals (`era5land_*_daily_normal_1991_2020`) that read the reference period straight from Earth Data Hub — no 30-year ingest needed.
+The `output_dataset_id` needs a **static dataset template** (`sync: {kind: static}`, `period_type: climatology`, a `display` block; no ingestion plugin) — auto-registered from the result and source metadata if none exists. Open Geo Service bundles the from-store monthly templates (`era5land_temperature_monthly_normal_1991_2020`, …) plus EDH-direct **day-of-year** ERA5-Land normals (`era5land_*_daily_normal_1991_2020`) that read the reference period straight from Earth Data Hub — no 30-year ingest needed.
 
 ### Example
 
@@ -368,7 +368,7 @@ Workflows are loaded from three places, each overriding the previous on id colli
 
 | Source | Location | Loaded |
 |---|---|---|
-| Built-in | `open_climate_service/plugins/workflows/` | At startup |
+| Built-in | `open_geo_service/plugins/workflows/` | At startup |
 | Instance plugin | `plugins_dir/workflows/` | On each request |
 | Runtime-registered | `PUT /process_graphs/{id}` | Immediately |
 
@@ -391,7 +391,7 @@ my-instance/
         └── aggregate_for_dhis2.json
 ```
 
-Configure `plugins_dir` in `climate-service.yaml`:
+Configure `plugins_dir` in `geoservice.yaml`:
 
 ```yaml
 plugins_dir: ./plugins/

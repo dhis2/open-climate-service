@@ -1,0 +1,77 @@
+{
+  "id": "temporal_change",
+  "summary": "Compute the net change of a variable between two periods and publish it as a new GeoZarr dataset",
+  "description": "Loads a published GeoZarr dataset over a time range and computes the per-pixel net change of its variable between the earliest and latest time step in that range (last − first), then publishes the result as a new GeoZarr dataset.\n\nUse it to map increase/decrease between two time periods — e.g. population change between two census years, NDVI change between two dekads, or temperature change between two periods. Positive values are increases and negative values are decreases, so the result is best displayed with a diverging colormap centred on zero.\n\nThe result is a 2-D (y, x) raster: the time dimension is reduced away, leaving one change value per pixel. To get the change between exactly two years, pass a `temporal_extent` whose start and end fall on those two periods (any intermediate steps are ignored — only the first and last contribute).\n\nIf the output dataset does not already have a registered static data source, Open Geo Service auto-registers one in the instance plugin registry using source metadata plus derived defaults for display and naming.\n\nZarr output cannot be produced synchronously, so run this as a batch job (`POST /jobs`, then `POST /jobs/{id}/results`):\n\n{\n  \"change\": {\n    \"process_id\": \"temporal_change\",\n    \"arguments\": {\n      \"dataset_id\": \"worldpop_population_global2_100m\",\n      \"output_dataset_id\": \"worldpop_population_change\",\n      \"variable\": \"pop_change\",\n      \"temporal_extent\": [\"2015-01-01\", \"2030-12-31\"]\n    },\n    \"result\": true\n  }\n}",
+  "parameters": [
+    {
+      "name": "dataset_id",
+      "description": "ID of the published GeoZarr collection to load (as listed under /datasets).",
+      "schema": { "type": "string" }
+    },
+    {
+      "name": "output_dataset_id",
+      "description": "ID of the change dataset to publish. If no static data source exists yet, Open Geo Service auto-registers one on publish.",
+      "schema": { "type": "string" }
+    },
+    {
+      "name": "variable",
+      "description": "Variable/band name carried through to the published change dataset.",
+      "schema": { "type": "string" }
+    },
+    {
+      "name": "temporal_extent",
+      "description": "Time range as [start, end] ISO-8601 date strings. The change is computed between the earliest and latest time step within this range (last − first).",
+      "schema": { "type": "array", "subtype": "temporal-interval" }
+    }
+  ],
+  "process_graph": {
+    "load": {
+      "process_id": "load_collection",
+      "arguments": {
+        "id": { "from_parameter": "dataset_id" },
+        "temporal_extent": { "from_parameter": "temporal_extent" }
+      }
+    },
+    "change": {
+      "process_id": "reduce_dimension",
+      "arguments": {
+        "data": { "from_node": "load" },
+        "dimension": "t",
+        "reducer": {
+          "process_graph": {
+            "last": {
+              "process_id": "last",
+              "arguments": { "data": { "from_parameter": "data" } }
+            },
+            "first": {
+              "process_id": "first",
+              "arguments": { "data": { "from_parameter": "data" } }
+            },
+            "diff": {
+              "process_id": "subtract",
+              "arguments": {
+                "x": { "from_node": "last" },
+                "y": { "from_node": "first" }
+              },
+              "result": true
+            }
+          }
+        }
+      }
+    },
+    "save": {
+      "process_id": "save_result",
+      "arguments": {
+        "data": { "from_node": "change" },
+        "format": "Zarr",
+        "options": {
+          "dataset_id": { "from_parameter": "output_dataset_id" },
+          "source_dataset_id": { "from_parameter": "dataset_id" },
+          "variable": { "from_parameter": "variable" },
+          "publish": true
+        }
+      },
+      "result": true
+    }
+  }
+}

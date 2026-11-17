@@ -11,9 +11,15 @@ import httpx
 import numpy as np
 import pytest
 
-from open_climate_service.plugins.rasters.clms_ndvi import CLMSNDVIDekadalPlugin
+from open_geo_service.plugins.rasters.clms_ndvi import CLMSNDVIDekadalPlugin
 
 _BBOX = [29.0, -2.0, 30.0, -1.0]
+
+
+@pytest.fixture(autouse=True)
+def _cdse_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CDSE_S3_ACCESS_KEY", "access")
+    monkeypatch.setenv("CDSE_S3_SECRET_KEY", "secret")
 
 
 def _write_dekad(path: Path) -> str:
@@ -127,14 +133,17 @@ def test_fetch_period_refuses_a_dekad_without_exactly_one_item(
 
 
 def test_refused_s3_read_names_the_cdse_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rasterio.env
     import rioxarray
     from rasterio.errors import RasterioIOError
 
     def refuse(*_: Any, **__: Any) -> NoReturn:
+        # The keys reach GDAL; rasterio drops them silently when a session cannot carry them.
+        assert rasterio.env.getenv()["AWS_SECRET_ACCESS_KEY"] == "secret"
         raise RasterioIOError("HTTP response code: 403 - AccessDenied")
 
     _fake_catalogue(monkeypatch, [[_item("2024-01-11", "s3://eodata/ndvi.tiff")]])
     monkeypatch.setattr(rioxarray, "open_rasterio", refuse)
 
-    with pytest.raises(PermissionError, match=r"\[cdse\] profile"):
+    with pytest.raises(PermissionError, match="Check CDSE_S3_ACCESS_KEY and CDSE_S3_SECRET_KEY"):
         CLMSNDVIDekadalPlugin().fetch_period("2024-01-11", _BBOX)

@@ -10,9 +10,11 @@ from uuid import uuid4
 
 import pytest
 
-from open_climate_service import plugin_discovery
-from open_climate_service.exports import ExportOutcome, ExportReport, merge_chunk_reports
-from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
+from open_geo_service import plugin_discovery
+from open_geo_service.exports import ExportOutcome, ExportReport, merge_chunk_reports
+from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+
+from .conftest import named_exports
 
 
 class FakeResponse:
@@ -169,7 +171,7 @@ def test_merge_chunk_reports_precedence() -> None:
 
 
 def test_send_splits_large_payload_into_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=2, poll_backoff_base=0.0, max_poll_attempts=1)
     values = _values(5)
@@ -191,7 +193,7 @@ def test_send_splits_large_payload_into_chunks(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_send_reuses_completed_checkpoint_and_skips_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=2, poll_backoff_base=0.0, max_poll_attempts=1)
     values = _values(5)
@@ -236,7 +238,7 @@ def test_send_reuses_completed_checkpoint_and_skips_unknown(monkeypatch: pytest.
 
 
 def test_send_stops_when_cancellation_requested(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=2, poll_backoff_base=0.0, max_poll_attempts=1)
     values = _values(5)
@@ -260,7 +262,7 @@ def test_send_stops_when_cancellation_requested(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_send_records_unknown_on_transport_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000)
     values = _values(3)
@@ -283,7 +285,7 @@ def test_send_records_unknown_on_transport_timeout(monkeypatch: pytest.MonkeyPat
 def test_send_reports_pre_submission_connection_failure(monkeypatch: pytest.MonkeyPatch, error_type: str) -> None:
     import httpx
 
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000)
     values = _values(1001)
@@ -325,7 +327,7 @@ def test_send_keeps_unknown_checkpoint_on_ambiguous_requests_connection_error(
 ) -> None:
     import requests
 
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000)
     client = FakeClient()
@@ -344,7 +346,7 @@ def test_send_keeps_unknown_checkpoint_on_ambiguous_requests_connection_error(
 
 
 def test_send_polls_async_import_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000, poll_backoff_base=0.0, max_poll_attempts=5)
     values = _values(2)
@@ -372,7 +374,7 @@ def test_send_polls_async_import_task(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_send_poll_budget_exhaustion_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.exports import dhis2 as dhis2_module
+    from open_geo_service.exports import dhis2 as dhis2_module
 
     plugin = _plugin(max_chunk_size=1000, poll_backoff_base=0.0, max_poll_attempts=3)
     values = _values(1)
@@ -398,7 +400,7 @@ def _install_delivery_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     metadata = tmp_path / f"{name}-1.0.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n", encoding="utf-8")
-    (metadata / "entry_points.txt").write_text(f"[open_climate_service.plugins]\n{name} = {name}\n", encoding="utf-8")
+    (metadata / "entry_points.txt").write_text(f"[open_geo_service.plugins]\n{name} = {name}\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     plugin_discovery.rescan()
     return name
@@ -408,7 +410,7 @@ _EXTERNAL_DELIVERY_SOURCE = """
 import datetime as dt
 import hashlib
 
-from open_climate_service.exports import (
+from open_geo_service.exports import (
     BaseExportPlugin,
     RenderedExport,
     ExportOutcome,
@@ -477,12 +479,11 @@ plugin = ChunkedDelivery()
 
 
 def test_third_party_delivery_plugin_uses_only_public_apis(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from open_climate_service import config
-    from open_climate_service.exports.registry import load_export_plugins
-    from open_climate_service.exports.service import render_named_export
+    from open_geo_service.exports.registry import load_export_plugins
+    from open_geo_service.exports.service import render_named_export
 
     _install_delivery_fixture(tmp_path, monkeypatch)
-    config.get_config()["exports"] = [{"id": "chunky", "plugin": "chunky"}]
+    named_exports(monkeypatch, {"id": "chunky", "plugin": "chunky"})
     plugin = load_export_plugins()["chunky"]
     assert plugin.supports_delivery is True
 
@@ -507,7 +508,7 @@ def test_third_party_delivery_plugin_uses_only_public_apis(monkeypatch: pytest.M
 
 
 def test_restart_after_remote_acceptance_does_not_resend(monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.exports import dhis2
+    from open_geo_service.exports import dhis2
 
     plugin = _plugin(poll_backoff_base=0)
     client = FakeClient()
@@ -536,7 +537,7 @@ def test_restart_after_remote_acceptance_does_not_resend(monkeypatch: pytest.Mon
     ],
 )
 def test_corrupt_checkpoint_refuses_resubmission(monkeypatch: pytest.MonkeyPatch, state: dict[str, Any]):
-    from open_climate_service.exports import dhis2
+    from open_geo_service.exports import dhis2
 
     values = _values(1)
     client = FakeClient()
@@ -549,7 +550,7 @@ def test_corrupt_checkpoint_refuses_resubmission(monkeypatch: pytest.MonkeyPatch
 
 
 def test_nested_async_task_is_checkpointed_and_polled_on_restart(monkeypatch: pytest.MonkeyPatch):
-    from open_climate_service.exports import dhis2
+    from open_geo_service.exports import dhis2
 
     plugin = _plugin(max_poll_attempts=1, poll_backoff_base=0)
     client = FakeClient()
@@ -576,7 +577,7 @@ def test_nested_async_task_is_checkpointed_and_polled_on_restart(monkeypatch: py
 def test_pinned_client_response_contract(monkeypatch: pytest.MonkeyPatch, status_code: int, outcome: ExportOutcome):
     import httpx
 
-    from open_climate_service import config
+    from open_geo_service import config
 
     pytest.importorskip("dhis2_client")
     monkeypatch.setattr(
@@ -611,7 +612,7 @@ def test_pinned_client_response_contract(monkeypatch: pytest.MonkeyPatch, status
 def test_warning_summary_is_partial_not_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     import httpx
 
-    from open_climate_service import config
+    from open_geo_service import config
 
     pytest.importorskip("dhis2_client")
     monkeypatch.setattr(
@@ -645,19 +646,19 @@ def test_warning_summary_is_partial_not_rejected(monkeypatch: pytest.MonkeyPatch
 
 
 def test_installed_plugin_can_deliver_through_framework(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    from open_climate_service import config
-    from open_climate_service.exports.delivery import deliver_named_export
-    from open_climate_service.exports.delivery_input import lease_export_input
-    from open_climate_service.exports.service import write_named_export
-    from open_climate_service.openeo import jobs
-    from open_climate_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
-    from open_climate_service.shared.provenance import json_digest
-    from open_climate_service.shared.time import utc_now
+    from open_geo_service import config
+    from open_geo_service.exports.delivery import deliver_named_export
+    from open_geo_service.exports.delivery_input import lease_export_input
+    from open_geo_service.exports.service import write_named_export
+    from open_geo_service.openeo import jobs
+    from open_geo_service.openeo.schemas import OpenEOJobRecord, OpenEOJobStatus
+    from open_geo_service.shared.provenance import json_digest
+    from open_geo_service.shared.time import utc_now
 
     _install_delivery_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(jobs, "_JOBS_DIR", tmp_path / "jobs")
     monkeypatch.setattr(config, "get_data_root", lambda: tmp_path)
-    config.get_config()["exports"] = [{"id": "chunky", "plugin": "chunky", "connection": "hmis"}]
+    named_exports(monkeypatch, {"id": "chunky", "plugin": "chunky", "connection": "hmis"})
     config.get_config()["dhis2_connections"] = [
         {"id": "hmis", "url": "https://example.org", "token_env": "UNSET_TEST_TOKEN"},
     ]

@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from open_climate_service import config as api_config
-from open_climate_service.ingestions import services
-from open_climate_service.ingestions.artifact_paths import to_absolute, to_portable
-from open_climate_service.ingestions.schemas import (
+from open_geo_service import config as api_config
+from open_geo_service.ingestions import services
+from open_geo_service.ingestions.artifact_paths import to_absolute, to_portable
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -26,12 +26,12 @@ from open_climate_service.ingestions.schemas import (
 def _use_data_dir(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> Path:
     """Point the instance config at data_dir and return it."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    config_file = data_dir.parent / "climate-service.yaml"
+    config_file = data_dir.parent / "geoservice.yaml"
     config_file.write_text(
         f"data_dir: {data_dir}\nextent:\n  id: test\n  bbox: [0, 0, 1, 1]\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("CLIMATE_SERVICE_CONFIG", str(config_file))
+    monkeypatch.setenv("GEOSERVICE_CONFIG", str(config_file))
     api_config._cache = None
     return data_dir
 
@@ -152,7 +152,7 @@ def test_shadowing_an_existing_recorded_store_is_logged(
     external = tmp_path / "mnt" / "rasters" / "chirps3.icechunk"
     external.mkdir(parents=True)
     # startup.py detaches the package logger from the root handler caplog installs
-    monkeypatch.setattr(logging.getLogger("open_climate_service"), "propagate", True)
+    monkeypatch.setattr(logging.getLogger("open_geo_service"), "propagate", True)
 
     with caplog.at_level("WARNING"):
         to_absolute(str(external))

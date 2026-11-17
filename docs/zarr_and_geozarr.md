@@ -1,6 +1,6 @@
 # Zarr and GeoZarr
 
-This document explains why the Open Climate Service uses Zarr as its primary storage format, how Zarr stores are structured and served, and how GeoZarr root attributes enable map rendering.
+This document explains why the Open Geo Service uses Zarr as its primary storage format, how Zarr stores are structured and served, and how GeoZarr root attributes enable map rendering.
 
 ---
 
@@ -31,7 +31,7 @@ Climate datasets are large, multi-dimensional arrays: a daily precipitation data
 
 ## ARCO: Analysis-Ready, Cloud-Optimized
 
-The stores produced by the Open Climate Service are an instance of the **ARCO** pattern — a term from the climate science community describing datasets that are simultaneously ready for analysis and optimised for cloud access.
+The stores produced by the Open Geo Service are an instance of the **ARCO** pattern — a term from the climate science community describing datasets that are simultaneously ready for analysis and optimised for cloud access.
 
 The two halves of the term map directly onto the choices described in this document:
 
@@ -43,7 +43,7 @@ The two halves of the term map directly onto the choices described in this docum
 
 **Cloud-optimized** means the data can be accessed efficiently over HTTP without downloading the whole file. The Zarr and GeoZarr formats provide all the necessary properties — chunk-level access, HTTP-native serving, multiscale pyramids, and cloud compatibility.
 
-The Open Climate Service targets the same access pattern at country scale for arbitrary source datasets.
+The Open Geo Service targets the same access pattern at country scale for arbitrary source datasets.
 
 ---
 
@@ -62,7 +62,7 @@ The flat vs. pyramid decision is made at build time based on spatial size (see [
 
 ## Chunk sizing
 
-**Time:** a store written by an ingestion or sync holds one time step per chunk. Periods are fetched and appended one at a time, and nothing rechunks along time afterwards, so drawing one date on a map reads only that date's chunks, and a long time series for one place reads one chunk per step. A store published from an openEO job keeps the time chunks of the job's result, which can hold several steps each. The `t` coordinate array is chunked in blocks of up to 4096 values, so a client reads the whole axis in a few requests.
+**Time:** a store holds one time step per chunk. An ingestion or sync fetches and appends periods one at a time, and a store published from an openEO job without a pyramid is rechunked to one step per chunk (and one value per chunk on any other non-spatial axis, such as a normal's `dayofyear`) before it is written. So drawing one date on a map reads only that date's chunks, and a long time series for one place reads one chunk per step. The `t` coordinate array is chunked in blocks of up to 4096 values, so a client reads the whole axis in a few requests.
 
 **Space** depends on the layout:
 
@@ -128,13 +128,15 @@ transforms have run, so they reflect the final stored data.
 
 `zarr_conventions` for a flat store contains the base GeoZarr convention declaration. For pyramid stores it also includes a `multiscales` entry that declares the level structure.
 
-The pyramid metadata follows the **GeoZarr `multiscales.layout` format** (not OME-NGFF). Each level is described as a `layout` entry with an `asset` key pointing to the level path, plus `transform.scale` and `transform.translation` values for that level.
+The pyramid metadata follows the **GeoZarr `multiscales.layout` format** (not OME-NGFF). Each level is described as a `layout` entry with an `asset` key pointing to the level path, its `transform.scale` and `transform.translation` relative to the level it is derived from, and its own `spatial:transform` and `spatial:shape`. Each level group also carries `proj:code`, `proj:wkt2` and the `spatial:` attributes, a `spatial_ref` coordinate with the GDAL `GeoTransform`, and a CF `grid_mapping` on its data arrays, so GDAL and QGIS can open any level with its own georeferencing.
+
+Every level of an ingested pyramid holds one time step per shard. A sync appends one period at a time, and appending into a shard several periods wide would rewrite that shard on every append. A pyramid published from an openEO job keeps the time chunks of the job's result, which can hold several steps each; it is not appended to.
 
 ---
 
 ## CRS handling
 
-The Open Climate Service **does not reproject** data during ingestion — each dataset is
+The Open Geo Service **does not reproject** data during ingestion — each dataset is
 stored as its source delivers it, so the stored coordinates keep the source's native CRS.
 The framework records that CRS in the GeoZarr metadata (the `proj:code` root attribute and
 the per-variable `spatial_ref` coordinate) so clients and the map viewer can position the
@@ -217,7 +219,7 @@ shipped as the spec evolved — Private Network Access and its successor Local N
 an allowlist of origins that already includes the two viewers above. Add others with:
 
 ```
-CLIMATE_SERVICE_ZARR_BROWSER_ORIGINS="https://inspect.geozarr.org,https://your-viewer.example"
+GEOSERVICE_ZARR_BROWSER_ORIGINS="https://inspect.geozarr.org,https://your-viewer.example"
 ```
 
 **Browser side, yours to grant.** Current Chrome additionally requires *user permission* to reach
@@ -241,7 +243,7 @@ network.
 
 ## How Zarr stores are served
 
-The Open Climate Service provides two endpoints for accessing the same Icechunk store:
+The Open Geo Service provides two endpoints for accessing the same Icechunk store:
 
 ### `/zarr/{dataset_id}` — vanilla zarr clients (web maps, xarray)
 

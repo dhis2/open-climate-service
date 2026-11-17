@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from open_climate_service.stac.media_types import (
+from open_geo_service.stac.media_types import (
     MULTISCALES_CONVENTION_UUID,
     WEB_OPTIMIZED_ZARR_MEDIA_TYPE,
     ZARR_V3_MEDIA_TYPE,
@@ -127,7 +127,7 @@ class TestZarrMediaType:
         def _boom(*_args: object, **_kwargs: object) -> dict[str, Any]:
             raise RuntimeError("store is locked")
 
-        monkeypatch.setattr("open_climate_service.stac.media_types.read_root_attributes", _boom)
+        monkeypatch.setattr("open_geo_service.stac.media_types.read_root_attributes", _boom)
         assert zarr_media_type("/tmp/whatever.icechunk", icechunk=True) == ZARR_V3_MEDIA_TYPE
 
 
@@ -135,7 +135,7 @@ class TestIcechunkDetectionEndToEnd:
     """The Icechunk path against a store written by the real pipeline.
 
     The rest of this module builds root metadata by hand, which cannot catch a mismatch between
-    what OCS *writes* and what this module *looks for* — the two are on opposite sides of the
+    what OGS *writes* and what this module *looks for* — the two are on opposite sides of the
     contract. These write real stores and read them back.
     """
 
@@ -157,18 +157,18 @@ class TestIcechunkDetectionEndToEnd:
 
     def _write(self, tmp_path: Path, ny: int, nx: int) -> str:
         pytest.importorskip("icechunk")
-        from open_climate_service.data_manager.services.downloader import write_to_icechunk_store
+        from open_geo_service.data_manager.services.downloader import write_to_icechunk_store
 
         store_path = tmp_path / f"{ny}x{nx}.icechunk"
         write_to_icechunk_store(self._cube(ny, nx), store_path, t_dim="t", crs="EPSG:4326")
         return str(store_path)
 
-    def test_a_pyramided_store_written_by_ocs_is_detected(self, tmp_path: Path) -> None:
+    def test_a_pyramided_store_written_by_ogs_is_detected(self, tmp_path: Path) -> None:
         # Past the 2048x2048 pyramid threshold, so the writer builds a multiscales layout.
         store = self._write(tmp_path, 2100, 2400)
         assert zarr_media_type(store, icechunk=True) == WEB_OPTIMIZED_ZARR_MEDIA_TYPE
 
-    def test_a_flat_store_written_by_ocs_is_not(self, tmp_path: Path) -> None:
+    def test_a_flat_store_written_by_ogs_is_not(self, tmp_path: Path) -> None:
         store = self._write(tmp_path, 64, 64)
         assert zarr_media_type(store, icechunk=True) == ZARR_V3_MEDIA_TYPE
 

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.processes.climatological_normal import climatological_normal
+from open_geo_service.plugins.processes.climatological_normal import climatological_normal
 
 
 def _daily_cube() -> xr.DataArray:

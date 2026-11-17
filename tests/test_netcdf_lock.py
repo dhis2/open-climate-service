@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from open_climate_service.shared import netcdf
-from open_climate_service.shared.netcdf import NETCDF_LOCK, load_netcdf, load_netcdfs, write_netcdf
+from open_geo_service.shared import netcdf
+from open_geo_service.shared.netcdf import NETCDF_LOCK, load_netcdf, load_netcdfs, write_netcdf
 
 
 def _write(path: Path, day: str) -> Path:
@@ -68,7 +68,7 @@ def test_a_write_holds_the_lock_and_the_file_reads_back(tmp_path: Path, monkeypa
 
 
 def test_the_download_endpoint_writes_under_the_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.data_accessor.services.accessor import xarray_to_temporary_netcdf
+    from open_geo_service.data_accessor.services.accessor import xarray_to_temporary_netcdf
 
     source = load_netcdf(_write(tmp_path / "a.nc", "2024-01-01"))  # written before the check is in place
     seen: list[bool] = []

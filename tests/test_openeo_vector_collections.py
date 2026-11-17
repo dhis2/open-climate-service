@@ -12,11 +12,11 @@ import xarray as xr
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.features import services as feature_services
-from open_climate_service.features import templates as feature_templates
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service import config as api_config
+from open_geo_service.features import services as feature_services
+from open_geo_service.features import templates as feature_templates
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -26,8 +26,8 @@ from open_climate_service.ingestions.schemas import (
     CoverageTemporal,
     PublicationStatus,
 )
-from open_climate_service.openeo import execution
-from open_climate_service.stac import services as stac_services
+from open_geo_service.openeo import execution
+from open_geo_service.stac import services as stac_services
 
 DATACUBE_EXTENSION = "https://stac-extensions.github.io/datacube/v2.3.0/schema.json"
 REGIONS_TEMPLATE = {"id": "regions", "name": "Regions", "id_property": "code"}
@@ -172,7 +172,7 @@ def test_three_dimensional_geometry_types_are_named_by_their_geojson_type(
     client: TestClient, regions: ArtifactRecord, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GeoParquet may declare "Polygon Z"; the openEO API enumerates only GeoJSON type names."""
-    from open_climate_service.features import store as feature_store
+    from open_geo_service.features import store as feature_store
 
     monkeypatch.setattr(feature_store, "stored_geometry_types", lambda _record: ["Polygon Z", "Point"])
 
@@ -193,7 +193,7 @@ def rain_and_regions(monkeypatch: pytest.MonkeyPatch, regions: ArtifactRecord) -
 
 
 def test_load_collection_loads_a_vector_collection_as_load_features_does(rain_and_regions: None) -> None:
-    from open_climate_service.plugins.processes.load_features import load_features
+    from open_geo_service.plugins.processes.load_features import load_features
 
     loaded = execution._load_collection_impl("regions")
 

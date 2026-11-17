@@ -19,8 +19,8 @@ import xarray as xr
 import xvec  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activates .xvec
 from shapely.geometry import box
 
-from open_climate_service.openeo import jobs
-from open_climate_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
+from open_geo_service.openeo import jobs
+from open_geo_service.plugins.processes.aggregate_spatial_weighted import aggregate_spatial_weighted
 
 _NORTH = [[0, 2], [4, 2], [4, 4], [0, 4], [0, 2]]
 _SOUTH = [[0, 0], [4, 0], [4, 2], [0, 2], [0, 0]]
@@ -259,8 +259,8 @@ def test_every_renderer_excludes_the_same_non_value_columns() -> None:
     """The named-export plugin picks its value column by elimination too, from its own copy of
     the list. Three copies drifted apart once already, so the CHAP path accepted a cube the
     DHIS2JSON path refused. One shared set, one test."""
-    from open_climate_service.exports.dhis2_renderer import Dhis2ExportPlugin
-    from open_climate_service.exports.tabular import _build_dhis2_json_payload
+    from open_geo_service.exports.dhis2_renderer import Dhis2ExportPlugin
+    from open_geo_service.exports.tabular import _build_dhis2_json_payload
 
     frame = _result().to_dataframe().reset_index()
     options = {
@@ -308,7 +308,7 @@ def _frame(index: Any) -> gpd.GeoDataFrame:
     ],
 )
 def test_a_named_dhis2_export_accepts_ids_a_frame_or_cube_carries(geometries: Any) -> None:
-    from open_climate_service.shared.provenance import capture_execution
+    from open_geo_service.shared.provenance import capture_execution
 
     with capture_execution(_NAMED_DHIS2_EXPORT) as evidence:
         result = aggregate_spatial_weighted(_grid(), geometries(), "mean")
@@ -320,7 +320,7 @@ def test_a_named_dhis2_export_accepts_ids_a_frame_or_cube_carries(geometries: An
 
 def test_a_named_dhis2_export_still_refuses_positional_ids() -> None:
     """A GeoDataFrame's default 0, 1, 2 index is a position, not an org unit."""
-    from open_climate_service.shared.provenance import capture_execution
+    from open_geo_service.shared.provenance import capture_execution
 
     with capture_execution(_NAMED_DHIS2_EXPORT), pytest.raises(ValueError, match="explicit feature identifiers"):
         aggregate_spatial_weighted(_grid(), _frame(pd.RangeIndex(2)), "mean")
@@ -341,7 +341,7 @@ def test_the_builtin_keeps_the_crs_and_drops_the_grid_mapping() -> None:
     """openEO's own aggregate_spatial hands xvec a bare list of shapes, so its index had no CRS
     (GeoParquet then claimed WGS 84 for UTM metres), and it kept the raster's scalar grid-mapping
     coordinate, which the DHIS2 export then took for a second value column."""
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     aggregate_spatial = execution._build_process_registry()["aggregate_spatial"].implementation
     districts = gpd.GeoDataFrame(
@@ -397,7 +397,7 @@ def test_two_aggregations_merge_on_their_feature_ids() -> None:
     """openEO's merge_cubes takes set differences of the labels, and shapes cannot be sorted
     ("'<' not supported between instances of 'Polygon'"). The cubes are merged on `feature_id`
     and keep their shapes and CRS, so a CHAP export of two predictors works."""
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     merge_cubes = execution._build_process_registry()["merge_cubes"].implementation
     rain = _grid().t2m.rename("tp") * 2
@@ -414,7 +414,7 @@ def test_two_aggregations_merge_on_their_feature_ids() -> None:
 
 
 def test_a_vector_cube_does_not_merge_with_a_raster() -> None:
-    from open_climate_service.openeo import execution
+    from open_geo_service.openeo import execution
 
     merge_cubes = execution._build_process_registry()["merge_cubes"].implementation
     with pytest.raises(ValueError, match="only be merged with another vector cube"):
@@ -434,6 +434,6 @@ def test_a_vector_cube_does_not_merge_with_a_raster() -> None:
     ],
 )
 def test_holds_shapes_reads_the_dtype_or_the_first_value_that_is_not_null(values: Any, expected: bool) -> None:
-    from open_climate_service.shared.vectors import holds_shapes
+    from open_geo_service.shared.vectors import holds_shapes
 
     assert holds_shapes(values) is expected

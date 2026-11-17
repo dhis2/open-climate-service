@@ -3,6 +3,7 @@ name: Build and push Docker image
 on:
   push:
     branches: [main]
+    tags: ["v*"]
 
 jobs:
   build:
@@ -15,7 +16,11 @@ jobs:
       output: image
       push: true
       platforms: linux/amd64,linux/arm64
-      meta-images: ghcr.io/dhis2/open-climate-service
+      meta-images: ghcr.io/dhis2/open-geo-service
+      meta-tags: |
+        type=ref,event=branch
+        type=semver,pattern={{version}}
+        type=semver,pattern={{major}}.{{minor}}
       set-meta-labels: true
     secrets:
       registry-auths: |

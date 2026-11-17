@@ -16,8 +16,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.system import templates as landing
+from open_geo_service import config as api_config
+from open_geo_service.system import templates as landing
 
 AREAS = ["overview", "datasets", "data-sources", "workflows", "processes"]
 
@@ -219,7 +219,7 @@ def test_the_json_representation_is_unchanged(client: TestClient) -> None:
 
 
 def _record(dataset_id: str = "chirps_monthly", **fields: Any) -> Any:
-    from open_climate_service.ingestions.schemas import DatasetDetailRecord
+    from open_geo_service.ingestions.schemas import DatasetDetailRecord
 
     values: dict[str, Any] = {
         "dataset_id": dataset_id,
@@ -283,15 +283,15 @@ def test_processes_are_tagged_with_their_origin() -> None:
 
     assert processes["load_collection"]["origin"] == "core"
     assert processes["add"]["origin"] == "core"
-    assert processes["spi"]["origin"] == "ocs"
+    assert processes["spi"]["origin"] == "geoservice"
     assert {"xclim", "earthkit"} <= {p["origin"] for p in processes.values()}
-    # OCS first, openEO core last, so the default view leads with what is specific to OCS.
+    # OGS first, openEO core last, so the default view leads with what is specific to OGS.
     origins = [p["origin"] for p in processes.values()]
-    assert origins[0] == "ocs" and origins[-1] == "core"
+    assert origins[0] == "geoservice" and origins[-1] == "core"
 
 
-def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.MonkeyPatch) -> None:
-    from open_climate_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
+def test_a_plugin_overriding_an_indicator_counts_as_ogs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from open_geo_service.openeo import earthkit_processes, plugin_processes, processes, xclim_processes
 
     def indicator() -> None: ...
 
@@ -302,7 +302,7 @@ def test_a_plugin_overriding_an_indicator_counts_as_ocs(monkeypatch: pytest.Monk
     monkeypatch.setattr(earthkit_processes, "scan", lambda: [])
     monkeypatch.setattr(plugin_processes, "load_plugin_processes", lambda: [("tg_mean", override)])
 
-    assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "ocs", "abs": "core"}
+    assert {p["id"]: p["origin"] for p in landing._load_processes()} == {"tg_mean": "geoservice", "abs": "core"}
 
 
 # --- the extent globe ---------------------------------------------------------------------

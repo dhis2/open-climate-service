@@ -12,10 +12,10 @@ import rioxarray  # noqa: F401  # pyright: ignore[reportUnusedImport]  # activat
 import xarray as xr
 from openeo_pg_parser_networkx.process_registry import Process
 
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.openeo import jobs
-from open_climate_service.openeo import workflows as workflow_store
-from open_climate_service.openeo.execution import (
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.openeo import jobs
+from open_geo_service.openeo import workflows as workflow_store
+from open_geo_service.openeo.execution import (
     _augment_with_workflows,
     _build_process_registry,
 )
@@ -102,12 +102,12 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  sync:\n"
         "    kind: temporal\n"
         "  ingestion:\n"
-        "    plugin: open_climate_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin\n",
+        "    plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(registry, "CONFIGS_DIR", configs)
     registry.reset_template_caches()
-    monkeypatch.setattr("open_climate_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "rasters")
+    monkeypatch.setattr("open_geo_service.data_manager.services.downloader.DOWNLOAD_DIR", tmp_path / "rasters")
     (tmp_path / "rasters").mkdir()
     return tmp_path
 

@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.features import store as feature_store
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.tables import store
+from open_geo_service import config as api_config
+from open_geo_service.features import store as feature_store
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.tables import store
 
 FIRST = datetime(2026, 3, 1, tzinfo=UTC)
 LATER = datetime(2026, 4, 1, tzinfo=UTC)
@@ -378,7 +378,7 @@ def _cube(values: list[float], reducer: str | None = "mean") -> Any:
     import numpy as np
     import xarray as xr
 
-    from open_climate_service.shared.vectors import SPATIAL_REDUCER_ATTR
+    from open_geo_service.shared.vectors import SPATIAL_REDUCER_ATTR
 
     cube = xr.DataArray(
         np.array(values, dtype="float64").reshape(1, 2),
@@ -395,7 +395,7 @@ _MAPPING = {"dataset_id": "precip_districts", "collection_id": "districts", "nam
 
 
 def test_the_destination_renders_rows_and_delivers_them_through_the_writer() -> None:
-    from open_climate_service.exports.table import plugin
+    from open_geo_service.exports.table import plugin
 
     rendered = plugin.render(_cube([1.5, math.nan]), plugin.validate_mapping(dict(_MAPPING)))
     assert rendered.record_count == 2 and rendered.periods == ("2026-01-01",)
@@ -419,7 +419,7 @@ def test_the_destination_renders_rows_and_delivers_them_through_the_writer() -> 
 def test_a_dry_run_send_checks_without_writing_and_a_refusal_is_a_rejected_report(
     stores: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.exports.table import plugin
+    from open_geo_service.exports.table import plugin
 
     rendered = plugin.render(_cube([1.0, 2.0]), plugin.validate_mapping(dict(_MAPPING)))
     assert plugin.send(rendered.content, "tables", dry_run=True).outcome == "dry_run"
@@ -434,7 +434,7 @@ def test_a_dry_run_send_checks_without_writing_and_a_refusal_is_a_rejected_repor
 
 
 def test_the_destination_refuses_a_result_with_more_than_one_value_per_feature_and_period() -> None:
-    from open_climate_service.exports.table import plugin
+    from open_geo_service.exports.table import plugin
 
     cube = _cube([1.0, 2.0]).to_dataset()
     cube["other"] = cube["tp"] * 2
@@ -447,9 +447,9 @@ def test_a_per_class_result_is_one_row_per_feature_period_and_class() -> None:
     import numpy as np
     import xarray as xr
 
-    from open_climate_service.exports.table import plugin
-    from open_climate_service.plugins.processes.aggregate_spatial_classes import aggregate_spatial_classes
-    from open_climate_service.shared.classes import cf_flag_attrs, classification_from_template
+    from open_geo_service.exports.table import plugin
+    from open_geo_service.plugins.processes.aggregate_spatial_classes import aggregate_spatial_classes
+    from open_geo_service.shared.classes import cf_flag_attrs, classification_from_template
 
     classes = classification_from_template(
         {"id": "heat", "classes": [{"value": 0, "label": "None"}, {"value": 1, "label": "Danger"}]}
@@ -486,8 +486,8 @@ def test_a_per_class_result_is_one_row_per_feature_period_and_class() -> None:
 
 
 def test_destination_checks_name_a_held_dataset_id_and_a_missing_collection() -> None:
-    from open_climate_service.exports.base import DestinationContext
-    from open_climate_service.exports.table import plugin
+    from open_geo_service.exports.base import DestinationContext
+    from open_geo_service.exports.table import plugin
 
     context = DestinationContext(export_id="p", datasets=(), feature_collections=("regions",))
     checks = {check.id: check for check in plugin.check_destination({"dataset_id": "districts"}, context)}
@@ -555,7 +555,7 @@ def test_a_later_write_keeps_an_unpublished_dataset_unpublished(client: TestClie
 
 
 def test_a_destination_payload_for_another_period_type_is_rejected(stores: Path) -> None:
-    from open_climate_service.exports.table import plugin
+    from open_geo_service.exports.table import plugin
 
     _write([_row("D1", 1.0)])  # monthly
     with pytest.raises(ValueError, match="is monthly; it cannot take daily rows"):
@@ -596,12 +596,12 @@ def _render_daily_as_months(monkeypatch: pytest.MonkeyPatch, last_day: str) -> A
     import xarray as xr
     from openeo_pg_parser_networkx.process_registry import Process
 
-    from open_climate_service.exports.base import DestinationContext, PipelineDataset
-    from open_climate_service.exports.service import render_resolved_export, resolve_export_definition
-    from open_climate_service.exports.table import plugin
-    from open_climate_service.openeo import execution
-    from open_climate_service.shared.provenance import record_source
-    from open_climate_service.shared.time import stamp_cadence
+    from open_geo_service.exports.base import DestinationContext, PipelineDataset
+    from open_geo_service.exports.service import render_resolved_export, resolve_export_definition
+    from open_geo_service.exports.table import plugin
+    from open_geo_service.openeo import execution
+    from open_geo_service.shared.provenance import record_source
+    from open_geo_service.shared.time import stamp_cadence
 
     days = pd.date_range("2026-01-01", last_day, freq="D")
 
@@ -664,7 +664,7 @@ def _render_daily_as_months(monkeypatch: pytest.MonkeyPatch, last_day: str) -> A
 
 def test_a_graph_that_aggregates_daily_data_to_months_writes_monthly_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     """pandas labels each month by its last day; the rows are stored at its first."""
-    from open_climate_service.exports.table import plugin
+    from open_geo_service.exports.table import plugin
 
     rendered = _render_daily_as_months(monkeypatch, "2026-02-28")
     assert rendered.periods == ("2026-01", "2026-02")
@@ -689,7 +689,7 @@ def test_a_month_the_source_does_not_fully_cover_is_refused(monkeypatch: pytest.
 def test_a_result_without_a_cadence_takes_the_period_of_its_axis() -> None:
     import numpy as np
 
-    from open_climate_service.exports.service import render_resolved_export, resolve_export_definition
+    from open_geo_service.exports.service import render_resolved_export, resolve_export_definition
 
     resolved = resolve_export_definition({"id": "p", "plugin": "table", **_MAPPING})
     months = _cube([1.0, 2.0]).isel(t=[0, 0]).assign_coords(t=np.array(["2026-01-01", "2026-02-01"], "datetime64[ns]"))

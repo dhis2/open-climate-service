@@ -1,15 +1,18 @@
 import os
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
 import icechunk
+import numpy as np
 import pytest
 import xarray as xr
+import zarr
 from fastapi.testclient import TestClient
 from icechunk.store import IcechunkStore
 
-from open_climate_service.ingestions import services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service.ingestions import services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -22,9 +25,9 @@ from open_climate_service.ingestions.schemas import (
     DatasetPublication,
     PublicationStatus,
 )
-from open_climate_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
-from open_climate_service.publications.services import managed_dataset_id_for
-from open_climate_service.shared.time import daily_period_ids
+from open_geo_service.plugins.rasters.chirps3 import CHIRPS3DailyPlugin
+from open_geo_service.publications.services import managed_dataset_id_for
+from open_geo_service.shared.time import daily_period_ids
 
 
 class _PeriodsPlugin:
@@ -446,7 +449,7 @@ def test_a_record_write_never_leaves_readers_a_partial_records_file(
 
     Seen as 500s on chunk requests while the startup statistics pass rewrote the file in place.
     """
-    from open_climate_service.shared import persistence
+    from open_geo_service.shared import persistence
 
     artifacts_dir = tmp_path / "artifacts"
     monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
@@ -469,7 +472,7 @@ def test_a_record_write_never_leaves_readers_a_partial_records_file(
 def test_a_replace_refused_while_a_reader_holds_the_file_is_retried(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.shared import persistence
+    from open_geo_service.shared import persistence
 
     refusals = [PermissionError("held by a reader")]
     replace = persistence.os.replace
@@ -483,6 +486,24 @@ def test_a_replace_refused_while_a_reader_holds_the_file_is_retried(
     persistence.atomic_text(tmp_path / "index.json", "[]")
 
     assert (tmp_path / "index.json").read_text(encoding="utf-8") == "[]"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_record_write_keeps_the_records_file_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replacement is written through an owner-only temporary file; records.json must not become owner-only."""
+    umask = os.umask(0)
+    os.umask(umask)
+    artifacts_dir = tmp_path / "artifacts"
+    index_path = artifacts_dir / "records.json"
+    monkeypatch.setattr(services, "ARTIFACTS_DIR", artifacts_dir)
+    monkeypatch.setattr(services, "ARTIFACTS_INDEX_PATH", index_path)
+
+    services._save_records([_artifact(artifact_id="first")])
+    assert stat.S_IMODE(index_path.stat().st_mode) == 0o666 & ~umask
+
+    index_path.chmod(0o640)
+    services._save_records([_artifact(artifact_id="second")])
+    assert stat.S_IMODE(index_path.stat().st_mode) == 0o640
 
 
 def _published_icechunk_store(
@@ -533,6 +554,46 @@ def test_zarr_route_keeps_an_icechunk_store_open_and_follows_new_commits(
     assert before == [before[0]] * 3
     assert after != before[0]
     assert (len(opens), len(sessions)) == (1, 2)
+
+
+def test_parallel_first_chunk_requests_open_a_store_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A map view's first chunk requests arrive together, in worker threads; one opens the store for all."""
+    import threading
+    import time
+
+    _published_icechunk_store(tmp_path / "parallel.icechunk", monkeypatch, [1.0])
+    opens: list[object] = []
+    sessions: list[object] = []
+    open_repository, open_session = icechunk.Repository.open, icechunk.Repository.readonly_session
+
+    def slow_open(storage: object) -> icechunk.Repository:
+        opens.append(storage)
+        time.sleep(0.05)  # Long enough for every request to reach the cache before the first open ends.
+        return open_repository(storage)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(icechunk.Repository, "open", slow_open)
+    monkeypatch.setattr(
+        icechunk.Repository,
+        "readonly_session",
+        lambda self, *args, **kwargs: sessions.append(kwargs) or open_session(self, *args, **kwargs),
+    )
+    start = threading.Barrier(8)
+    bodies: list[bytes] = []
+
+    def chunk() -> None:
+        start.wait()
+        response = services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0")
+        assert isinstance(response, services.Response)
+        bodies.append(bytes(response.body))
+
+    threads = [threading.Thread(target=chunk) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(bodies) == 8 and len(set(bodies)) == 1
+    assert (len(opens), len(sessions)) == (1, 1)
 
 
 def test_zarr_route_reads_only_the_requested_range_of_an_icechunk_chunk(
@@ -588,6 +649,40 @@ def test_icechunk_route_lets_browsers_keep_files_named_by_id_and_revalidate_the_
     assert {top: cache_control(top) for top in named_by_id} == dict.fromkeys(named_by_id, "max-age=31536000, immutable")
     # Moves with the branch: a browser that kept it would serve the store as it was.
     assert cache_control("repo") == "no-cache"
+
+
+def test_zarr_route_answers_a_range_on_an_unwritten_icechunk_chunk_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Icechunk sizes an unwritten chunk as 0; a range on it is a 404, which clients read as the fill value."""
+    repo = _published_icechunk_store(tmp_path / "gaps.icechunk", monkeypatch, [1.0])
+    session = repo.writable_session("main")
+    gaps = zarr.open_group(session.store, mode="a").create_array(
+        "gaps", shape=(2,), chunks=(1,), dtype="f4", fill_value=float("nan")
+    )
+    gaps[0] = 1.0
+    session.commit("one chunk of two")
+
+    for range_header in ("bytes=0-3", "bytes=-4"):
+        with pytest.raises(services.HTTPException) as missing:
+            services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "gaps/c/1", range_header)
+        assert missing.value.status_code == 404
+
+
+def test_zarr_route_answers_an_unreadable_icechunk_chunk_as_a_server_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunk file that is gone is broken data, not missing data: a 500, never a 404 drawn as the fill value."""
+    store_path = tmp_path / "broken.icechunk"
+    # Random values, so the chunk is too large to be stored inline in the manifest.
+    _published_icechunk_store(store_path, monkeypatch, list(np.random.default_rng(0).random(4096)))
+    for chunk_file in (store_path / "chunks").iterdir():
+        chunk_file.unlink()
+
+    for range_header in (None, "bytes=0-3"):
+        with pytest.raises(services.HTTPException) as broken:
+            services.get_dataset_zarr_store_file_or_404("chirps3_precipitation_daily", "precip/c/0/0", range_header)
+        assert broken.value.status_code == 500
 
 
 def test_list_ingestions_returns_most_recent_first(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1229,7 +1324,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
             "params": {"stage": "final"},
         },
     }
@@ -1282,7 +1377,7 @@ def test_create_artifact_uses_streaming_plugin_for_direct_ingest(
         publish=False,
     )
 
-    assert captured["plugin_path"] == "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"
+    assert captured["plugin_path"] == "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin"
     assert captured["params"] == {"stage": "final"}
     assert captured["dataset_id"] == "chirps3_precipitation_daily"
     assert captured["zarr_path"] is None
@@ -1317,7 +1412,7 @@ def test_create_artifact_uses_streaming_plugin_for_store_based_sync(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
             "params": {"stage": "final"},
         },
     }
@@ -1571,7 +1666,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
         "variable": "pop_total",
         "period_type": "yearly",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.worldpop.WorldPopYearlyPlugin",
             "params": {"version": "global2"},
         },
     }
@@ -1613,7 +1708,7 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
         publish=False,
     )
 
-    assert captured["plugin_path"] == "open_climate_service.plugins.rasters.worldpop.WorldPopYearlyPlugin"
+    assert captured["plugin_path"] == "open_geo_service.plugins.rasters.worldpop.WorldPopYearlyPlugin"
     assert captured["params"] == {"version": "global2", "country_code": "SLE"}
     run_kwargs = captured["run"]
     assert isinstance(run_kwargs, dict)
@@ -1624,10 +1719,10 @@ def test_create_artifact_forwards_country_code_to_streaming_plugin(
 def test_load_streaming_plugin_rejects_non_callable_symbol() -> None:
     with pytest.raises(
         services.HTTPException,
-        match="Failed to load ingestion.plugin 'open_climate_service.ingestions.services.logger'",
+        match="Failed to load ingestion.plugin 'open_geo_service.ingestions.services.logger'",
     ):
         services._load_streaming_plugin(
-            "open_climate_service.ingestions.services.logger",
+            "open_geo_service.ingestions.services.logger",
             params={},
         )
 
@@ -1641,17 +1736,17 @@ def test_load_streaming_plugin_rejects_symbol_outside_plugin_protocol(monkeypatc
 
     with pytest.raises(
         services.HTTPException,
-        match="Failed to load ingestion.plugin 'open_climate_service.ingestions.services._NotAPlugin'",
+        match="Failed to load ingestion.plugin 'open_geo_service.ingestions.services._NotAPlugin'",
     ):
         services._load_streaming_plugin(
-            "open_climate_service.ingestions.services._NotAPlugin",
+            "open_geo_service.ingestions.services._NotAPlugin",
             params={"stage": "final"},
         )
 
 
 def test_load_streaming_plugin_filters_runtime_only_params_for_constructor() -> None:
     plugin = services._load_streaming_plugin(
-        "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+        "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         params={"stage": "final", "country_code": "SLE"},
     )
 
@@ -1670,7 +1765,7 @@ def test_create_artifact_allows_streaming_coverage_clamped_to_source_availabilit
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1734,7 +1829,7 @@ def test_create_artifact_rejects_streaming_coverage_with_late_start(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1785,7 +1880,7 @@ def test_create_artifact_returns_409_when_streaming_plugin_has_no_periods(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1820,7 +1915,7 @@ def test_create_artifact_overwrite_replaces_existing_icechunk_store_on_success(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -1895,7 +1990,7 @@ def test_create_artifact_overwrite_restores_store_when_record_write_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2187,7 +2282,7 @@ def test_create_artifact_overwrite_keeps_existing_store_when_fetch_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2237,7 +2332,7 @@ def test_create_artifact_overwrite_releases_lock_when_replacement_cleanup_fails(
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2301,7 +2396,7 @@ def test_create_artifact_overwrite_keeps_existing_store_when_replacement_is_inva
         "variable": "precip",
         "period_type": "daily",
         "ingestion": {
-            "plugin": "open_climate_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
+            "plugin": "open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin",
         },
     }
     store_path = tmp_path / "chirps3_precipitation_daily.icechunk"
@@ -2382,7 +2477,7 @@ def test_create_artifact_rejects_partial_download_scope(monkeypatch: pytest.Monk
         "period_type": "daily",
         # An ingestable template: the scope validation under test runs after the check that
         # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
-        "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3"},
+        "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:
@@ -2412,7 +2507,7 @@ def test_create_artifact_rejects_download_scope_outside_request_scope(monkeypatc
         "period_type": "daily",
         # An ingestable template: the scope validation under test runs after the check that
         # the dataset has a source at all (CLIM-912), so a bare template never reaches it.
-        "ingestion": {"plugin": "open_climate_service.plugins.rasters.chirps3"},
+        "ingestion": {"plugin": "open_geo_service.plugins.rasters.chirps3"},
     }
 
     with pytest.raises(services.HTTPException) as exc_info:

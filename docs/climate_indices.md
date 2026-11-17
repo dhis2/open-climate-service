@@ -1,6 +1,6 @@
 # Climate Indices
 
-The Open Climate Service exposes the full [xclim](https://xclim.readthedocs.io) indicator library — 179 peer-reviewed, CF-compliant climate extreme indices — as native openEO processes. Every indicator appears automatically in `GET /processes` and is callable by name from any openEO process graph or client, with no additional configuration.
+The Open Geo Service exposes the full [xclim](https://xclim.readthedocs.io) indicator library — 179 peer-reviewed, CF-compliant climate extreme indices — as native openEO processes. Every indicator appears automatically in `GET /processes` and is callable by name from any openEO process graph or client, with no additional configuration.
 
 ---
 
@@ -194,7 +194,7 @@ The auto-registered xclim processes can be overridden per-instance by placing a 
 # plugins/processes/climate_indices.py
 import xarray as xr
 import xclim.indicators.atmos as xclim_atmos
-from open_climate_service.process import process
+from open_geo_service.process import process
 
 
 @process(summary="Consecutive dry days (Rwanda threshold)")

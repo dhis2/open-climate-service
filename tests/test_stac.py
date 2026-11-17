@@ -10,8 +10,8 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -22,8 +22,8 @@ from open_climate_service.ingestions.schemas import (
     CoverageTemporal,
     PublicationStatus,
 )
-from open_climate_service.openeo import collections as openeo_collections
-from open_climate_service.stac import services as stac_services
+from open_geo_service.openeo import collections as openeo_collections
+from open_geo_service.stac import services as stac_services
 
 
 @pytest.fixture(autouse=True)
@@ -95,7 +95,7 @@ def test_stac_landing_returns_catalog(client: TestClient) -> None:
 
 
 def test_the_stac_documents_answer_head_as_a_static_host_does(client: TestClient) -> None:
-    """A link checker (Portolan's `rashid check`) sends HEAD to every link it does not fetch."""
+    """A STAC link checker sends HEAD to every link it does not fetch."""
     for path in ("/stac/catalog.json", "/stac/README.md", "/stac/AGENTS.md"):
         response = client.head(path)
         assert response.status_code == 200, path
@@ -150,6 +150,8 @@ def test_stac_landing_links_to_collections(client: TestClient) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert any(link["href"].endswith("/stac/catalog.json") for link in payload["links"] if link["rel"] == "root")
+    # The Portolan profile's versioned URI, its only conformance signal.
+    assert payload["stac_extensions"] == ["https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"]
 
 
 def test_catalog_self_link_reflects_request_path(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -338,7 +340,7 @@ def test_collections_logs_skipped_dataset_failures(client: TestClient, monkeypat
 
 
 def test_collection_uses_configured_base_url(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "https://climate.example.org")
+    monkeypatch.setenv("GEOSERVICE_BASE_URL", "https://climate.example.org")
     monkeypatch.setattr(
         ingestion_services,
         "list_artifacts",
@@ -474,11 +476,84 @@ def test_collection_uses_root_href_for_icechunk_store(
     # it is measured still gets every hint that does not need it.
     render = payload["renders"]["default"]
     assert render.get("rescale") == rescale
-    assert (render["colormap_name"], render["nodata"], render["open_climate_service:variable"]) == (
+    assert (render["colormap_name"], render["nodata"], render["ogs:variable"]) == (
         "blues",
         -9999.0,
         "precip",
     )
+
+
+class DryDaysPlugin:
+    """Two days of rain on a 2x2 grid, with dry cells and one missing cell."""
+
+    time_dim = "t"
+
+    async def periods(self, start: str, end: str) -> list[str]:
+        return ["2025-01-01", "2025-01-02"]
+
+    def fetch_period(self, period_id: str, bbox: list[float], **params: object) -> xr.Dataset:
+        values = {"2025-01-01": [[0.0, 4.0], [0.0, np.nan]], "2025-01-02": [[2.0, 0.0], [6.0, 0.0]]}[period_id]
+        return xr.Dataset(
+            {"precip": (("t", "y", "x"), np.array([values], dtype="float32"))},
+            coords={"t": [np.datetime64(period_id, "ns")], "y": [3.0, 1.0], "x": [1.0, 3.0]},
+        )
+
+
+def test_an_ingested_collection_publishes_measured_band_statistics(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Band statistics and nodata describe the stored data; the display hints stay in `renders`.
+
+    Ingested as a store written before statistics were measured, so the startup backfill has to
+    fill them in past the cached store metadata.
+    """
+    import yaml
+
+    from open_geo_service.data_registry.services import datasets as registry
+
+    dataset_id = "dry_days_band_test"
+    template = {
+        "id": dataset_id,
+        "name": "Dry days",
+        "variable": "precip",
+        "period_type": "daily",
+        "sync": {"kind": "temporal"},
+        "ingestion": {"plugin": "tests.test_stac.DryDaysPlugin"},
+        # As ERA5-Land precipitation does, to draw dry cells transparent.
+        "display": {"colormap": "blues", "nodata": 0.0},
+    }
+    (tmp_path / "dry.yaml").write_text(yaml.safe_dump([template]), encoding="utf-8")
+    monkeypatch.setattr(registry, "CONFIGS_DIR", tmp_path)
+    measure_statistics = ingestion_services.measure_statistics
+    monkeypatch.setattr(ingestion_services, "measure_statistics", lambda *_: None)
+    response = client.post(
+        "/ingestions",
+        json={
+            "dataset_id": dataset_id,
+            "start": "2025-01-01",
+            "end": "2025-01-02",
+            "bbox": [0, 0, 4, 4],
+            "publish": True,
+        },
+    )
+    assert response.status_code in (200, 201), response.text
+
+    collection = client.get(f"/stac/{dataset_id}/collection.json").json()
+
+    bands = collection["assets"]["zarr"]["bands"]
+    assert [band["name"] for band in bands] == list(collection["cube:variables"])
+    # The store's own fill value, not the display's 0.0, which would mark every dry cell missing.
+    assert bands[0]["nodata"] == "nan"
+    assert "statistics" not in bands[0]
+
+    monkeypatch.setattr(ingestion_services, "measure_statistics", measure_statistics)
+    assert ingestion_services.measure_missing_statistics() == 1
+
+    collection = client.get(f"/stac/{dataset_id}/collection.json").json()
+
+    bands = collection["assets"]["zarr"]["bands"]
+    assert bands[0]["statistics"] == {"minimum": 0.0, "maximum": 6.0, "mean": pytest.approx(12.0 / 7)}
+    assert collection["renders"]["default"]["nodata"] == 0.0
 
 
 def test_collection_returns_404_for_unknown_dataset(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -670,6 +745,7 @@ def test_build_collection_with_xstac_normalizes_pystac_collection(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        data_vars: dict[str, object] = {}
 
         def close(self) -> None:
             pass
@@ -704,6 +780,7 @@ def test_collection_reuses_cached_xstac_payload(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        data_vars: dict[str, object] = {}
 
         def close(self) -> None:
             pass
@@ -771,6 +848,7 @@ def test_collection_preserves_template_links_when_xstac_mutates_template(
 ) -> None:
     class DummyDataset:
         attrs: dict[str, object] = {}
+        data_vars: dict[str, object] = {}
 
         def close(self) -> None:
             pass
@@ -912,7 +990,7 @@ def test_build_collection_emits_crs_render_hints_for_projected_store(tmp_path: P
     assert payload["proj:code"] == "EPSG:32633"
     # The non-standard proj4 hint is retired (CLIM-833): zarr-layer resolves the code
     # through proj4's own registry, so only standard fields are published now.
-    assert "open_climate_service:proj4" not in payload
+    assert "ogs:proj4" not in payload
     assert payload["proj:wkt2"].startswith("PROJCRS")  # WKT2, not WKT1 (PROJCS)
     # proj:projjson — same CRS as a PROJJSON object (EPSG:32633 = UTM zone 33N)
     assert payload["proj:projjson"]["type"] == "ProjectedCRS"
@@ -958,7 +1036,7 @@ def test_build_collection_omits_crs_render_hints_for_wgs84(tmp_path: Path) -> No
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
     assert payload["proj:code"] == "EPSG:4326"
-    assert "open_climate_service:proj4" not in payload
+    assert "ogs:proj4" not in payload
     assert "proj:wkt2" not in payload
     assert "proj:bbox" not in payload
 
@@ -1053,7 +1131,7 @@ def test_build_collection_normalizes_crs84_alias_to_epsg4326(tmp_path: Path) -> 
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
     assert payload["proj:code"] == "EPSG:4326"  # normalized from OGC:CRS84
-    assert "open_climate_service:proj4" not in payload  # built-in → no hint
+    assert "ogs:proj4" not in payload  # built-in → no hint
     assert "proj:wkt2" not in payload
 
 
@@ -1072,7 +1150,7 @@ def test_build_collection_normalizes_crs84_alias_to_epsg4326(tmp_path: Path) -> 
     ],
 )
 def test_canonical_crs_code(code: str | int, expected: str) -> None:
-    from open_climate_service.shared.crs import canonical_crs_code
+    from open_geo_service.shared.crs import canonical_crs_code
 
     assert canonical_crs_code(code) == expected
 
@@ -1108,7 +1186,7 @@ def test_build_collection_crs_render_hints_use_store_wkt(tmp_path: Path) -> None
 
     payload = stac_services._build_collection_with_xstac(artifact=artifact, template=template)
 
-    assert "open_climate_service:proj4" not in payload
+    assert "ogs:proj4" not in payload
     assert payload["proj:wkt2"].startswith("PROJCRS")
 
 
@@ -1304,7 +1382,10 @@ def test_providers_are_published(client: TestClient, monkeypatch: pytest.MonkeyP
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    assert payload["providers"] == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+    *declared, host = payload["providers"]
+    assert declared == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+    # This instance, last and alone in the role, as a static catalog's checker expects.
+    assert host["roles"] == ["host"] and host["url"] == "http://testserver/"
 
 
 def test_malformed_providers_are_dropped_rather_than_published(
@@ -1321,7 +1402,24 @@ def test_malformed_providers_are_dropped_rather_than_published(
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    assert payload["providers"] == [{"name": "Real"}]
+    # A provider declared without roles made the data, so it is published as the producer.
+    assert payload["providers"][:-1] == [{"name": "Real", "roles": ["producer"]}]
+
+
+def test_a_template_host_is_not_relabelled_as_producer(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An upstream mirror need not have made the data: it loses the host role, not its provenance."""
+    _stub_with_template(
+        monkeypatch,
+        _artifact(artifact_id="lic7"),
+        {
+            "period_type": "daily",
+            "license": "CC-BY-4.0",
+            "providers": [{"name": "Maker"}, {"name": "Mirror", "roles": ["host"]}],
+        },
+    )
+    payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
+    assert payload["providers"][:-1] == [{"name": "Maker", "roles": ["producer"]}, {"name": "Mirror"}]
+    assert [p.get("roles") for p in payload["providers"]].count(["host"]) == 1
 
 
 # --- reference_system (CLIM-1004) -------------------------------------------------------
@@ -1369,7 +1467,7 @@ def test_reference_system_for_falls_back_to_4326_and_warns_on_an_uninterpretable
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Nothing honest can be published for a CRS we cannot parse, so say so in the log."""
-    # `startup.py` sets `propagate = False` on the `open_climate_service` logger, so caplog's
+    # `startup.py` sets `propagate = False` on the `open_geo_service` logger, so caplog's
     # root handler never sees these records and `caplog.text` stays empty. Attaching its
     # handler to the emitting logger works whatever the propagation policy is.
     emitting = logging.getLogger(stac_services.__name__)

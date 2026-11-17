@@ -10,8 +10,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.shared.statistics import measure_statistics, statistics_of
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.shared.statistics import measure_statistics, statistics_of
 
 
 def _store(tmp_path: Path, ds: xr.Dataset, *, t_dim: str | None) -> Path:

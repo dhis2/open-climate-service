@@ -8,9 +8,9 @@ from collections.abc import Generator, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.main import app
-from open_climate_service.read_only import is_blocked
+from open_geo_service import config as api_config
+from open_geo_service.main import app
+from open_geo_service.read_only import is_blocked
 
 from .conftest import MountedClientFactory
 
@@ -98,8 +98,8 @@ def read_only() -> Iterator[None]:
 
 @pytest.fixture
 def ro_client(read_only: None) -> Generator[TestClient, None, None]:
-    from open_climate_service.jobs.service import reset_job_service
-    from open_climate_service.openeo.jobs import reset_openeo_job_service
+    from open_geo_service.jobs.service import reset_job_service
+    from open_geo_service.openeo.jobs import reset_openeo_job_service
 
     with TestClient(app) as client:
         yield client
@@ -335,15 +335,15 @@ def test_policy_is_inert_when_the_flag_is_off(client: TestClient) -> None:
     assert client.post("/ingestions", json={}).status_code != 403  # ...but it is not applied
 
 
-@pytest.mark.parametrize("root_path", ["/ocs", "/ocs/"])
+@pytest.mark.parametrize("root_path", ["/geoservice", "/geoservice/"])
 def test_read_only_still_refuses_manage_under_a_mount_prefix(
     read_only: None, mounted_client_factory: MountedClientFactory, root_path: str
 ) -> None:
     """The policy matches route paths as the app declares them, so the prefix must come off.
 
-    Matched unstripped, `/ocs/manage` hits no closed prefix and read-only mode fails open. The
+    Matched unstripped, `/geoservice/manage` hits no closed prefix and read-only mode fails open. The
     trailing-slash case is the same failure one step later: uvicorn joins `root_path + path`
-    verbatim, so `/ocs/` yields `/ocs//manage`, which Starlette still routes to `/manage`.
+    verbatim, so `/geoservice/` yields `/geoservice//manage`, which Starlette still routes to `/manage`.
     """
     mounted = mounted_client_factory(root_path)
 
@@ -353,12 +353,12 @@ def test_read_only_still_refuses_manage_under_a_mount_prefix(
 
 
 def test_a_configured_base_url_path_cannot_bypass_read_only(read_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The policy reads the ASGI path, never the path of `CLIMATE_SERVICE_BASE_URL`.
+    """The policy reads the ASGI path, never the path of `GEOSERVICE_BASE_URL`.
 
     That path is a statement about the public origin, not about the incoming path. Stripping
     it would let a base URL of `https://public.example/jobs` take `/jobs` off the real route.
     """
-    monkeypatch.setenv("CLIMATE_SERVICE_BASE_URL", "https://public.example/jobs")
+    monkeypatch.setenv("GEOSERVICE_BASE_URL", "https://public.example/jobs")
     client = TestClient(app)
 
     assert client.get("/jobs").status_code == 403

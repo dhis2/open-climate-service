@@ -1,6 +1,6 @@
 # Built-in datasets
 
-The Open Climate Service ships with built-in data sources for commonly requested climate and population data. Each one describes an upstream dataset and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
+The Open Geo Service ships with built-in data sources for commonly requested climate and population data. Each one describes an upstream dataset and the rules for downloading, transforming, and syncing it. They are available in every instance without any additional configuration.
 
 To ingest a built-in dataset for your configured extent, see the [API reference](managed_data_api_guide.md). To add datasets beyond these, see [Adding custom datasets](adding_custom_datasets.md).
 
@@ -8,7 +8,7 @@ To ingest a built-in dataset for your configured extent, see the [API reference]
 
 ## ERA5-Land — temperature and precipitation
 
-ERA5-Land provides temperature and precipitation at daily and monthly resolution. Six data sources are available. Days and months run in UTC+0; the `utc_offset_hours` setting in `climate-service.yaml` is not applied to them yet.
+ERA5-Land provides temperature and precipitation at daily and monthly resolution. Six data sources are available. Days and months run in UTC+0; the `utc_offset_hours` setting in `geoservice.yaml` is not applied to them yet.
 
 See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, including dataset IDs, coverage, lag times, and guidance on choosing the right dataset for your use case.
 
@@ -127,9 +127,9 @@ System (LCCS) classes. This is a categorical dataset which uses categorical **mo
 resampling when building overviews rather than averaging the class codes. The no-data code (0) is
 stored as missing data.
 
-**Setup** — register for a Copernicus Climate Data Store account, configure the CDS credentials,
-and accept the dataset licence in the browser before ingesting. See the
-[CDS setup instructions](era5_land_datasets.md#copernicus-climate-data-store-monthly-datasets).
+**Setup** — register for a Copernicus Climate Data Store account, set its key as `CDS_API_KEY` in
+`.env`, and accept the dataset licence in the browser before ingesting. See the
+[CDS setup instructions](era5_land_datasets.md#copernicus-climate-data-store-daily-datasets).
 
 **Availability and sync** — the plugin discovers the allowed years from the CDS catalogue when
 listing available periods, so newly published years do not require a hardcoded plugin year limit.
@@ -157,13 +157,8 @@ country-sized extent; use the 30 m product where local detail matters.
 
 The datasets are static: they have no time axis, so each is ingested whole and shown without a time slider.
 
-It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account. Add your key to `~/.netrc`
-as for [ERA5-Land](era5_land_datasets.md), with the host `data.earthdatahub.destine.eu`:
-
-```
-machine data.earthdatahub.destine.eu
-  password <your-standard-api-key>
-```
+It needs an [Earth Data Hub](https://earthdatahub.destine.eu) account, with its key set as
+`EDH_API_KEY` in `.env` as for [ERA5-Land](era5_land_datasets.md).
 
 ---
 
@@ -196,15 +191,12 @@ It needs free Copernicus Data Space Ecosystem S3 keys:
 
 1. Create an account at [dataspace.copernicus.eu](https://dataspace.copernicus.eu/).
 2. Generate S3 keys at [eodata-s3keysmanager.dataspace.copernicus.eu](https://eodata-s3keysmanager.dataspace.copernicus.eu/). The secret key is shown only once.
-3. Add them as a `cdse` profile in `~/.aws/credentials`, after any profiles already there:
+3. Set them in `.env`:
 
 ```
-[cdse]
-aws_access_key_id = <your-access-key>
-aws_secret_access_key = <your-secret-key>
+CDSE_S3_ACCESS_KEY=<your-access-key>
+CDSE_S3_SECRET_KEY=<your-secret-key>
 ```
-
-**Windows:** use `%USERPROFILE%\.aws\credentials` with the same content.
 
 ---
 
@@ -267,10 +259,10 @@ them is a breach, and share-alike attaches to a publicly served derived database
 The built-in `dhis2` provider fetches organisation units with their boundaries from a DHIS2
 instance and stores them as a feature collection (GeoParquet). Each feature's id is the DHIS2 UID
 (`id_property: id`), so values aggregated to these boundaries can go straight back into DHIS2 as
-`orgUnit`. It needs the `dhis2` extra (`open-climate-service[dhis2]`) and a named connection. No
+`orgUnit`. It needs the `dhis2` extra (`open-geo-service[dhis2]`) and a named connection. No
 template is shipped, since the DHIS2 instance is yours: you declare one, as below.
 
-**1. Configure the connection** in `climate-service.yaml`, with the token in the environment (see
+**1. Configure the connection** in `geoservice.yaml`, with the token in the environment (see
 [named connections](importing_to_dhis2.md#named-connections-for-server-side-plugins)):
 
 ```yaml
@@ -281,7 +273,7 @@ dhis2_connections:
 ```
 
 **2. Declare a template** in the `vectors/` folder of your `plugins_dir`. Templates there are
-read only when `plugins_dir` is set in `climate-service.yaml`, for example `plugins_dir: ./plugins`;
+read only when `plugins_dir` is set in `geoservice.yaml`, for example `plugins_dir: ./plugins`;
 then add `plugins/vectors/districts.yaml`:
 
 ```yaml

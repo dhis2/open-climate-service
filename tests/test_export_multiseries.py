@@ -11,8 +11,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from open_climate_service import config
-from open_climate_service.exports.service import render_named_export
+from open_geo_service import config
+from open_geo_service.exports.service import render_named_export
+
+from .conftest import named_exports
 
 
 @pytest.mark.parametrize("field", ["category_option_combo", "attribute_option_combo"])
@@ -50,7 +52,8 @@ def definition(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             {"select": {"variable": "population"}, "data_element": "POPU0000001"},
         ],
     }
-    monkeypatch.setattr(config, "_cache", {"exports": [definition]})
+    monkeypatch.setattr(config, "_cache", {})
+    named_exports(monkeypatch, definition)
     return definition
 
 
@@ -175,8 +178,8 @@ def test_multi_series_ambiguous_empty_selector_rejected(definition: dict[str, An
 def test_multi_series_captures_all_contributing_sources(definition: dict[str, Any], tmp_path: Path):
     import hashlib
 
-    from open_climate_service.exports.manifest import ExportManifest
-    from open_climate_service.exports.service import write_named_export
+    from open_geo_service.exports.manifest import ExportManifest
+    from open_geo_service.exports.service import write_named_export
 
     definition["series"] = [
         {"select": {"variable": "temperature"}, "data_element": "TEMP0000001"},

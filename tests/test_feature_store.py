@@ -10,11 +10,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from open_climate_service import config as api_config
-from open_climate_service.features import services as feature_services
-from open_climate_service.features import store
-from open_climate_service.ingestions import services as ingestion_services
-from open_climate_service.ingestions.schemas import (
+from open_geo_service import config as api_config
+from open_geo_service.features import services as feature_services
+from open_geo_service.features import store
+from open_geo_service.ingestions import services as ingestion_services
+from open_geo_service.ingestions.schemas import (
     ArtifactCoverage,
     ArtifactFormat,
     ArtifactPublication,
@@ -24,7 +24,7 @@ from open_climate_service.ingestions.schemas import (
     CoverageSpatial,
     CoverageTemporal,
 )
-from open_climate_service.shared.features import validate_feature_ids
+from open_geo_service.shared.features import validate_feature_ids
 
 DISTRICTS_TEMPLATE: dict[str, object] = {
     "id": "districts",
@@ -1072,7 +1072,7 @@ def test_the_crs_check_accepts_a_file_that_agrees_with_the_declaration() -> None
 
 
 def test_a_file_without_readable_geoparquet_metadata_is_refused(tmp_path: Path) -> None:
-    from open_climate_service.shared import geoparquet
+    from open_geo_service.shared import geoparquet
 
     plain = tmp_path / "plain.parquet"
     plain.write_bytes(b"PAR1")
@@ -1279,7 +1279,7 @@ def test_an_unknown_crs_code_is_a_value_error_not_a_pyproj_error() -> None:
     Every caller of `transform_bbox` promises its own callers ValueError, so a leaked
     `CRSError` would surface as an internal error for a mistake a user can fix.
     """
-    from open_climate_service.shared.crs import transform_bbox
+    from open_geo_service.shared.crs import transform_bbox
 
     with pytest.raises(ValueError, match="EPSG:999999' is not a CRS this service can resolve"):
         transform_bbox((-13.5, 6.9, -10.1, 10.0), source="EPSG:4326", target="EPSG:999999")
@@ -1294,7 +1294,7 @@ def test_a_read_with_an_unknown_bbox_crs_reports_a_value_error() -> None:
 
 def test_provenance_fingerprints_a_tuple_backed_collection() -> None:
     """The recorder accepts what the validator accepts, or an execution loses its fingerprint."""
-    from open_climate_service.shared.provenance import capture_execution, record_features
+    from open_geo_service.shared.provenance import capture_execution, record_features
 
     pt = {"type": "Point", "coordinates": [0.0, 0.0]}
     collection = {
@@ -1312,7 +1312,7 @@ def test_provenance_fingerprints_a_tuple_backed_collection() -> None:
 
 def test_provenance_agrees_with_the_validator_about_an_integer_id() -> None:
     """One rule, one answer: identity validation and the manifest cannot disagree."""
-    from open_climate_service.shared.provenance import capture_execution, record_features
+    from open_geo_service.shared.provenance import capture_execution, record_features
 
     pt = {"type": "Point", "coordinates": [0.0, 0.0]}
     collection = {"type": "FeatureCollection", "features": [{"type": "Feature", "id": 7, "geometry": pt}]}
@@ -1325,7 +1325,7 @@ def test_provenance_agrees_with_the_validator_about_an_integer_id() -> None:
 
 
 def test_provenance_still_reports_broken_identity_as_invalid() -> None:
-    from open_climate_service.shared.provenance import capture_execution, record_features
+    from open_geo_service.shared.provenance import capture_execution, record_features
 
     pt = {"type": "Point", "coordinates": [0.0, 0.0]}
     collection = {

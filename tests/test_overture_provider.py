@@ -14,10 +14,10 @@ import pyarrow as pa
 import pytest
 from shapely.geometry import Polygon
 
-from open_climate_service.extents import services as extent_services
-from open_climate_service.features import providers as feature_providers
-from open_climate_service.features import services as feature_services
-from open_climate_service.plugins.vectors import overture
+from open_geo_service.extents import services as extent_services
+from open_geo_service.features import providers as feature_providers
+from open_geo_service.features import services as feature_services
+from open_geo_service.plugins.vectors import overture
 
 SIERRA_LEONE = [-13.5, 6.9, -10.1, 10.0]
 
@@ -397,7 +397,7 @@ def test_the_provider_module_imports_nothing_private() -> None:
     with open(source, encoding="utf-8") as handle:
         lines = [line.strip() for line in handle if line.strip().startswith(("import ", "from "))]
     private = [
-        line for line in lines if "open_climate_service" in line and any(part.startswith("_") for part in line.split())
+        line for line in lines if "open_geo_service" in line and any(part.startswith("_") for part in line.split())
     ]
     assert private == [], private
 
@@ -407,7 +407,7 @@ def test_the_provider_module_imports_nothing_private() -> None:
 
 def test_the_shipped_template_is_declared_and_names_this_provider() -> None:
     """The template ships built-in, so a `GET /data-sources` lists it with no config."""
-    from open_climate_service.features import templates as feature_templates
+    from open_geo_service.features import templates as feature_templates
 
     declared = {str(t["id"]): t for t in feature_templates.list_feature_templates()}
 
@@ -423,7 +423,7 @@ def test_template_params_reach_the_provider_as_keyword_arguments(
     stub_reader: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """What makes the YAML vocabulary real: an instance narrows the extract with no code change."""
-    from open_climate_service.features import templates as feature_templates
+    from open_geo_service.features import templates as feature_templates
 
     calls = stub_reader([_row("a", subtype="region", country="SL"), _row("b", subtype="county", country="SL")])
     monkeypatch.setattr(overture, "get_extent", lambda: {"bbox": SIERRA_LEONE, "country_code": "SLE"})
@@ -456,10 +456,10 @@ def test_the_reported_release_becomes_the_collection_version(
     stub_reader: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """End to end through the seam: provider -> record.version, authority naming the provider."""
-    from open_climate_service import config as api_config
-    from open_climate_service.features import services as feature_services
-    from open_climate_service.features import templates as feature_templates
-    from open_climate_service.ingestions import services as ingestion_services
+    from open_geo_service import config as api_config
+    from open_geo_service.features import services as feature_services
+    from open_geo_service.features import templates as feature_templates
+    from open_geo_service.ingestions import services as ingestion_services
 
     monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "vectors")
     artifacts = tmp_path / "artifacts"
@@ -486,8 +486,8 @@ def test_the_reported_release_becomes_the_collection_version(
 
 
 def _feature_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    from open_climate_service import config as api_config
-    from open_climate_service.ingestions import services as ingestion_services
+    from open_geo_service import config as api_config
+    from open_geo_service.ingestions import services as ingestion_services
 
     monkeypatch.setattr(api_config, "get_features_root", lambda: tmp_path / "vectors")
     artifacts = tmp_path / "artifacts"
@@ -526,7 +526,7 @@ def test_a_reported_version_overrides_a_conflicting_declared_one(
         lambda _name: lambda **_: ({"type": "FeatureCollection", "features": [_feat("a")]}, "2026-09-23.0"),
     )
     monkeypatch.setattr(
-        __import__("open_climate_service.features.templates", fromlist=["x"]),
+        __import__("open_geo_service.features.templates", fromlist=["x"]),
         "get_feature_template",
         lambda _id: _template(**_DECLARED_VERSION),
     )
@@ -547,7 +547,7 @@ def test_a_provider_reporting_nothing_leaves_the_declared_version_in_place(
         lambda _name: lambda **_: {"type": "FeatureCollection", "features": [_feat("a")]},
     )
     monkeypatch.setattr(
-        __import__("open_climate_service.features.templates", fromlist=["x"]),
+        __import__("open_geo_service.features.templates", fromlist=["x"]),
         "get_feature_template",
         lambda _id: _template(**_DECLARED_VERSION),
     )

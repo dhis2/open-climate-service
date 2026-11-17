@@ -15,11 +15,11 @@ import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
 
-from open_climate_service.data_accessor.services.accessor import open_icechunk_dataset
-from open_climate_service.data_manager.services import downloader
-from open_climate_service.data_registry.services import datasets as registry
-from open_climate_service.openeo.execution import _load_collection_impl
-from open_climate_service.streaming import BaseDatasetPlugin
+from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset
+from open_geo_service.data_manager.services import downloader
+from open_geo_service.data_registry.services import datasets as registry
+from open_geo_service.openeo.execution import _load_collection_impl
+from open_geo_service.streaming import BaseDatasetPlugin
 
 _BBOX = [30.0, -2.0, 30.4, -1.6]
 _FETCHES: list[float] = []
@@ -198,7 +198,7 @@ def test_the_ingest_form_asks_for_no_dates(client: TestClient, static_sources: s
 def test_an_overwrite_whose_rebuild_fails_keeps_the_stored_data(
     client: TestClient, static_sources: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from open_climate_service.ingestions import services
+    from open_geo_service.ingestions import services
 
     dataset_id = f"{static_sources}_elevation"
     assert _ingest(client, dataset_id).status_code in (200, 201)
@@ -240,8 +240,8 @@ def test_an_integer_no_data_code_is_kept(client: TestClient, static_sources: str
 
 
 def test_a_cancelled_ingest_writes_nothing(static_sources: str) -> None:
-    from open_climate_service.ingestions import services
-    from open_climate_service.jobs.models import JobCancelledError
+    from open_geo_service.ingestions import services
+    from open_geo_service.jobs.models import JobCancelledError
 
     dataset_id = f"{static_sources}_elevation"
     with pytest.raises(JobCancelledError):
@@ -263,8 +263,8 @@ def test_a_workflow_result_keeps_its_recorded_cadence() -> None:
     """A static template without a period_type, whose result has a time axis and a recorded cadence."""
     from types import SimpleNamespace
 
-    from open_climate_service.ingestions import services
-    from open_climate_service.ingestions.schemas import ArtifactFormat
+    from open_geo_service.ingestions import services
+    from open_geo_service.ingestions.schemas import ArtifactFormat
 
     latest = SimpleNamespace(format=ArtifactFormat.ICECHUNK, period_type="daily")
     template = {"id": "derived", "sync": {"kind": "static"}}
@@ -274,8 +274,8 @@ def test_a_workflow_result_keeps_its_recorded_cadence() -> None:
 
 def test_a_rebuilt_store_renames_any_time_axis_alias(tmp_path: Path) -> None:
     """The rewrite after ingest finds the axis under every name publication accepts, not only t/time."""
-    from open_climate_service.ingestions import services
-    from open_climate_service.streaming.store import open_or_create_repo
+    from open_geo_service.ingestions import services
+    from open_geo_service.streaming.store import open_or_create_repo
 
     store_path = tmp_path / "aliased.icechunk"
     ds = ElevationPlugin().fetch(_BBOX).expand_dims({"date": [np.datetime64("2024-01-01")]})

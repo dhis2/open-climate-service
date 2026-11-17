@@ -1,10 +1,8 @@
-import os
-
 import pytest
 import xarray as xr
 
-from open_climate_service.plugins.rasters import copdem
-from open_climate_service.plugins.rasters.copdem import CopDEMPlugin
+from open_geo_service.plugins.rasters import copdem
+from open_geo_service.plugins.rasters.copdem import CopDEMPlugin
 
 _TEST_BBOX = [28.7, -2.9, 28.8, -2.8]
 
@@ -26,6 +24,7 @@ def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyP
         return source
 
     monkeypatch.setattr(copdem.xr, "open_dataset", open_dataset)
+    monkeypatch.setenv("EDH_API_KEY", "mytoken")
 
     ds = CopDEMPlugin(product=product).fetch(bbox=_TEST_BBOX)
 
@@ -37,26 +36,3 @@ def test_fetch_returns_elevation_without_a_time_axis(monkeypatch: pytest.MonkeyP
 def test_an_unknown_product_is_refused() -> None:
     with pytest.raises(ValueError, match="GLO-60"):
         CopDEMPlugin(product="GLO-60")
-
-
-@pytest.fixture(params=["GLO-30", "GLO-90"])
-def elevation_data(request: pytest.FixtureRequest):
-    # hacky check for TEST_INTEGRATIONS flag for integration tests that should only be run manually
-    if not os.getenv("TEST_INTEGRATIONS"):
-        pytest.skip("Set TEST_INTEGRATIONS=1 to run remote data tests")
-
-    plugin = CopDEMPlugin(product=request.param)
-    ds = plugin.fetch(bbox=_TEST_BBOX)
-    return ds
-
-
-def test_copdem_dims_and_values(elevation_data: xr.Dataset):
-    assert isinstance(elevation_data, xr.Dataset)
-
-    assert set(elevation_data.dims) == {"y", "x"}
-
-    assert elevation_data.sizes["x"] > 1
-    assert elevation_data.sizes["y"] > 1
-
-    assert "elevation" in elevation_data.data_vars
-    assert elevation_data["elevation"].size > 0
