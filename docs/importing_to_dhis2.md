@@ -17,7 +17,7 @@ There are three ways to get the values into DHIS2:
 - The two clients, installed together through the `dhis2` extra:
 
   ```bash
-  pip install "open-geo-service[dhis2]>=0.1.1"
+  pip install "open-geo-service[dhis2]>=0.2.0"
   ```
 
   `open-geo-service` ships the `GeoService` client; the extra adds
