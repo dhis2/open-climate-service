@@ -165,6 +165,10 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     from open_geo_service.plugins_diagnostics import log_plugin_loading
     from open_geo_service.shared.compute import install_shared_dask_pool
 
+    # Before anything starts, so a refused configuration leaves no pool or thread behind.
+    tokens = configured_tokens()
+    if tokens:
+        logger.info("Authentication is on with %d named token(s)", len(tokens))
     log_plugin_loading()
     # Before any job is recovered, so no computation starts a dask pool of its own.
     install_shared_dask_pool()
@@ -172,9 +176,6 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     from open_geo_service.notifications import webhook
 
     webhook.webhook_url()  # a malformed notifications block refuses startup
-    tokens = configured_tokens()  # so does an unusable authentication block
-    if tokens:
-        logger.info("Authentication is on with %d named token(s)", len(tokens))
     # After plugins load, so a recipe is checked against the workflows it will run.
     derivations.validate_recipes()
     maintenance: asyncio.Task[None] | None = None
