@@ -94,13 +94,13 @@ ingestion:
 
 ## Planned work
 
-Tracked in Jira, project [CLIM](https://dhis2.atlassian.net/jira/software/c/projects/CLIM/issues), component "Climate Service", grouped under one epic per area (data ingestion, processing and workflows, openEO, catalogue and metadata, GeoZarr and Icechunk storage, vector data, DHIS2 integration, and so on). GitHub issues are not used.
+Tracked in Jira, project [CLIM](https://dhis2.atlassian.net/jira/software/c/projects/CLIM/issues), component "Geo Service", grouped under one epic per area (data ingestion, processing and workflows, openEO, catalogue and metadata, GeoZarr and Icechunk storage, vector data, DHIS2 integration, and so on). GitHub issues are not used.
 
 Before starting new code work or submitting new Jira tasks (e.g. a system change, a new data source, a fix), search CLIM for issues that cover it, open and closed. Confirm with the developer which issue the work belongs to, and name its key in the branch and PR title (see [Commit conventions](#commit-conventions)). If more than one issue covers the same work, or a related one is in progress or already done, tell the developer before starting rather than filing another. Without access to Jira, ask the developer for the issue key.
 
 When writing a Jira epic or issue, follow the [write-issue guide](https://github.com/dhis2-chap/claude-plugins/blob/main/plugins/write-issue/skills/write-issue/SKILL.md). Filing details for this repo:
 
-- Project `CLIM`, component `Climate Service`.
+- Project `CLIM`, component `Geo Service`.
 - Parent: the area epic, named "Open Geo Service: <area>" (for example CLIM-802 "Open Geo Service: Processing and workflows").
 - Label: `ch-obj-open-geo-service` on every issue, as a placeholder until the Open Geo Service objectives are in Jira.
 - Sprint: the current sprint for work being done now; no sprint for work filed for later.
