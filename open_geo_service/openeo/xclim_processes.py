@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 _cache: list[Any] | None = None
 
+# The xclim realms registered as processes. `convert` (unit and variable conversions) and
+# `generic` are left out.
+_REALMS = ("atmos", "land", "seaIce")
+
 
 def call_with_ogs_time_dim(func: Any, *args: Any, **kwargs: Any) -> Any:
     """Call an xclim function, mapping the OGS ``t`` dimension to/from ``time``.
@@ -71,11 +75,9 @@ def scan() -> list[Any]:
 
 
 def _collect() -> list[Any]:
-    import xclim.indicators.atmos as atmos
-    import xclim.indicators.land as land
-    import xclim.indicators.seaIce as seaice
+    import xclim.indicators  # noqa: F401  # pyright: ignore[reportUnusedImport]  # fills the registry
     from xclim.core import InputKind
-    from xclim.core.indicator import Indicator
+    from xclim.core.indicator import registry
 
     _SKIP_KINDS = {InputKind.DATASET, InputKind.KWARGS}
     _VARIABLE_KINDS = {InputKind.VARIABLE, InputKind.OPTIONAL_VARIABLE}
@@ -93,59 +95,53 @@ def _collect() -> list[Any]:
     }
 
     funcs: list[Any] = []
-    seen: set[str] = set()
 
-    for mod in (atmos, land, seaice):
-        for obj in vars(mod).values():
-            if not isinstance(obj, Indicator) or obj.identifier is None:
-                continue
-            indicator_id = obj.identifier
-            if indicator_id in seen:
-                continue
-            seen.add(indicator_id)
+    # Registry keys are lower-cased identifiers, used as process ids. Dotted keys are the anuclim,
+    # cf and icclim collections, which repeat the core indicators under their own names.
+    for indicator_id, obj in registry.items():
+        if "." in indicator_id or obj.realm not in _REALMS:
+            continue
 
-            # Every spec below declares a single datacube return, so an indicator producing
-            # several cubes cannot be honoured: a client composing a graph from GET /processes
-            # would feed a tuple into save_result or a reducer and get a confusing failure
-            # rather than "not supported". Five of xclim 1.0's registered indicators are
-            # multi-output — cffwis (6), rain_season (3), jetstream_metric_woollings (2),
-            # base_flow_index_seasonal_ratio and sen_slope — and no OGS workflow uses them, so
-            # we advertise only the processes we honour (CLIM-860). Registering one process per
-            # named output is the richer alternative, worth doing if someone asks for these.
-            outputs = len(obj.outputs)
-            if outputs > 1:
-                logger.debug("Skipping multi-output xclim indicator '%s' (%d outputs)", indicator_id, outputs)
-                continue
+        # Every spec below declares a single datacube return, so an indicator producing
+        # several cubes cannot be honoured: a client composing a graph from GET /processes
+        # would feed a tuple into save_result or a reducer and get a confusing failure
+        # rather than "not supported". Five of xclim 1.0's registered indicators are
+        # multi-output — cffwis (6), rain_season (3), jetstream_metric_woollings (2),
+        # base_flow_index_seasonal_ratio and sen_slope — and no OGS workflow uses them, so
+        # we advertise only the processes we honour (CLIM-860). Registering one process per
+        # named output is the richer alternative, worth doing if someone asks for these.
+        outputs = len(obj.outputs)
+        if outputs > 1:
+            logger.debug("Skipping multi-output xclim indicator '%s' (%d outputs)", indicator_id, outputs)
+            continue
 
-            params: list[dict[str, Any]] = []
-            for name, p in obj.parameters.items():
-                if p.kind in _SKIP_KINDS:
-                    continue
-                param_meta: dict[str, Any] = {"name": name, "schema": kind_schema.get(p.kind, {})}
-                if p.description:
-                    param_meta["description"] = p.description
-                # Only expose JSON-serializable scalar defaults.
-                # VARIABLE/OPTIONAL_VARIABLE defaults are dataset-mode variable name
-                # strings (e.g. "pr") — not meaningful as API defaults.
-                if p.kind not in _VARIABLE_KINDS:
-                    default = p.default
-                    if default is not inspect.Parameter.empty and isinstance(
-                        default, (str, int, float, bool, type(None))
-                    ):
-                        param_meta["optional"] = True
-                        param_meta["default"] = default
-                elif p.kind is InputKind.OPTIONAL_VARIABLE:
+        params: list[dict[str, Any]] = []
+        for name, p in obj.parameters.items():
+            if p.kind in _SKIP_KINDS:
+                continue
+            param_meta: dict[str, Any] = {"name": name, "schema": kind_schema.get(p.kind, {})}
+            if p.description:
+                param_meta["description"] = p.description
+            # Only expose JSON-serializable scalar defaults.
+            # VARIABLE/OPTIONAL_VARIABLE defaults are dataset-mode variable name
+            # strings (e.g. "pr") — not meaningful as API defaults.
+            if p.kind not in _VARIABLE_KINDS:
+                default = p.default
+                if default is not inspect.Parameter.empty and isinstance(default, (str, int, float, bool, type(None))):
                     param_meta["optional"] = True
-                params.append(param_meta)
+                    param_meta["default"] = default
+            elif p.kind is InputKind.OPTIONAL_VARIABLE:
+                param_meta["optional"] = True
+            params.append(param_meta)
 
-            meta: dict[str, Any] = {
-                "id": indicator_id,
-                "summary": obj.title,
-                "description": obj.abstract,
-                "parameters": params,
-                "returns": {"schema": {"type": "object", "subtype": "datacube"}},
-            }
-            funcs.append(_make_callable(obj, meta))
+        meta: dict[str, Any] = {
+            "id": indicator_id,
+            "summary": obj.title,
+            "description": obj.abstract,
+            "parameters": params,
+            "returns": {"schema": {"type": "object", "subtype": "datacube"}},
+        }
+        funcs.append(_make_callable(obj, meta))
 
     return funcs
 

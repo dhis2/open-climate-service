@@ -40,16 +40,10 @@ def _registered() -> dict[str, dict]:
 
 def test_every_registered_indicator_returns_exactly_one_cube() -> None:
     """The declared `returns` must match what the indicator actually produces."""
-    import xclim.indicators.atmos as atmos
-    import xclim.indicators.land as land
-    import xclim.indicators.seaIce as seaice
-    from xclim.core.indicator import Indicator
+    import xclim.indicators  # noqa: F401  # pyright: ignore[reportUnusedImport]  # fills the registry
+    from xclim.core.indicator import registry
 
-    by_id = {}
-    for mod in (atmos, land, seaice):
-        for obj in vars(mod).values():
-            if isinstance(obj, Indicator):
-                by_id.setdefault(obj.identifier, len(obj.outputs))
+    by_id = {name: len(obj.outputs) for name, obj in registry.items()}
 
     offenders = {name: by_id[name] for name in _registered() if by_id.get(name, 1) > 1}
     assert offenders == {}, f"registered indicators that return multiple cubes: {offenders}"
@@ -62,16 +56,10 @@ def test_known_multi_output_indicators_are_not_advertised(indicator_id: str) -> 
 
 def test_multi_output_counts_are_read_from_xclim() -> None:
     """The skip depends on reading each indicator's output count; a renamed attribute must fail here."""
-    import xclim.indicators.atmos as atmos
-    import xclim.indicators.land as land
-    import xclim.indicators.seaIce as seaice
+    import xclim.indicators  # noqa: F401  # pyright: ignore[reportUnusedImport]  # fills the registry
+    from xclim.core.indicator import registry
 
-    counts = {
-        obj.identifier: len(obj.outputs)
-        for mod in (atmos, land, seaice)
-        for obj in vars(mod).values()
-        if getattr(obj, "identifier", None) in _MULTI_OUTPUT_IN_XCLIM_1
-    }
+    counts = {name: len(registry[name].outputs) for name in _MULTI_OUTPUT_IN_XCLIM_1}
     assert counts == _MULTI_OUTPUT_IN_XCLIM_1
 
 

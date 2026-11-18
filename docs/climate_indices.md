@@ -1,6 +1,6 @@
 # Climate Indices
 
-The Open Geo Service exposes the full [xclim](https://xclim.readthedocs.io) indicator library — 182 peer-reviewed, CF-compliant climate extreme indices — as native openEO processes. Every indicator appears automatically in `GET /processes` and is callable by name from any openEO process graph or client, with no additional configuration.
+The Open Geo Service exposes the full [xclim](https://xclim.readthedocs.io) indicator library — 183 peer-reviewed, CF-compliant climate extreme indices — as native openEO processes. Every indicator appears automatically in `GET /processes` and is callable by name from any openEO process graph or client, with no additional configuration.
 
 ---
 
