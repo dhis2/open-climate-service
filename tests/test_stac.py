@@ -1382,8 +1382,10 @@ def test_providers_are_published(client: TestClient, monkeypatch: pytest.MonkeyP
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    *declared, host = payload["providers"]
+    *declared, processor, host = payload["providers"]
     assert declared == [{"name": "WorldPop", "url": "https://hub.worldpop.org/", "roles": ["licensor"]}]
+    # This instance processed the data (it clipped the source to its extent) but did not produce it.
+    assert processor["roles"] == ["processor"]
     # This instance, last and alone in the role, as a static catalog's checker expects.
     assert host["roles"] == ["host"] and host["url"] == "http://testserver/"
 
@@ -1403,7 +1405,7 @@ def test_malformed_providers_are_dropped_rather_than_published(
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
     # A provider declared without roles made the data, so it is published as the producer.
-    assert payload["providers"][:-1] == [{"name": "Real", "roles": ["producer"]}]
+    assert payload["providers"][:-2] == [{"name": "Real", "roles": ["producer"]}]
 
 
 def test_a_template_host_is_not_relabelled_as_producer(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1418,7 +1420,7 @@ def test_a_template_host_is_not_relabelled_as_producer(client: TestClient, monke
         },
     )
     payload = client.get("/stac/chirps3_precipitation_daily/collection.json").json()
-    assert payload["providers"][:-1] == [{"name": "Maker", "roles": ["producer"]}, {"name": "Mirror"}]
+    assert payload["providers"][:-2] == [{"name": "Maker", "roles": ["producer"]}, {"name": "Mirror"}]
     assert [p.get("roles") for p in payload["providers"]].count(["host"]) == 1
 
 
@@ -1532,3 +1534,39 @@ def test_both_cube_paths_agree_on_reference_system() -> None:
     expected = stac_services.reference_system_for("EPSG:32633")
     assert dims["x"]["reference_system"] == expected
     assert dims["y"]["reference_system"] == expected
+
+
+def test_a_workflow_output_links_the_sources_of_its_inputs(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Built-in normals and anomalies declare no `source_url`, so `via` comes from their inputs.
+
+    The instance processed the data and hosts it but did not produce it, which makes the
+    collection a Portolan mirror: it must link where the data originated. An anomaly reads the
+    observed series and a normal that is itself derived, and both lead to one source page.
+    """
+    source_page = "https://www.chc.ucsb.edu/data/chirps3"
+    templates: dict[str, dict] = {
+        "precip_monthly": {"period_type": "monthly", "source_url": source_page},
+        "precip_normal": {"period_type": "monthly", "source": "Derived (climate_normal workflow)"},
+        "precip_anomaly": {"period_type": "monthly", "source": "Derived (climate_anomaly workflow)"},
+    }
+    inputs = {"precip_normal": ["precip_monthly"], "precip_anomaly": ["precip_monthly", "precip_normal"]}
+    artifacts = {
+        dataset_id: _artifact(artifact_id=f"a-{dataset_id}", dataset_id=dataset_id, managed_dataset_id=dataset_id)
+        for dataset_id in templates
+    }
+    monkeypatch.setattr(ingestion_services, "list_artifacts", lambda: SimpleNamespace(items=list(artifacts.values())))
+    monkeypatch.setattr(ingestion_services, "stac_eligible_artifacts_by_dataset", lambda: artifacts)
+    monkeypatch.setattr(
+        ingestion_services,
+        "recorded_inputs",
+        lambda record: [{"collection_id": input_id} for input_id in inputs.get(record.dataset_id, [])],
+    )
+    monkeypatch.setattr(stac_services.registry_datasets, "get_dataset", lambda dataset_id: templates.get(dataset_id))
+    monkeypatch.setattr(stac_services, "_build_collection_with_xstac", lambda **_: _minimal_xstac_payload())
+    monkeypatch.setattr(stac_services, "_zarr_asset_metadata", lambda _: {})
+    monkeypatch.setattr(stac_services, "_zarr_open_kwargs", lambda _: {"consolidated": True})
+
+    payload = client.get("/stac/precip_anomaly/collection.json").json()
+
+    assert [link["href"] for link in payload["links"] if link["rel"] == "via"] == [source_page]
+    assert [provider["roles"] for provider in payload["providers"]][-2:] == [["processor"], ["host"]]

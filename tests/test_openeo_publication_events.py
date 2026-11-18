@@ -969,7 +969,7 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     # As a STAC checker reads it: this instance is the one host, last; every link on this host,
     # the relative README and AGENTS among them, answers HEAD; `proj:code` is declared at v2.0.0;
     # and the Portolan profile is declared.
-    assert [provider["roles"] for provider in collection["providers"]][-2:] == [["producer", "processor"], ["host"]]
+    assert [provider["roles"] for provider in collection["providers"]][-2:] == [["processor"], ["host"]]
     collection_url = f"http://testserver/stac/{_DATASET}/collection.json"
     for link in collection["links"]:
         href = urljoin(collection_url, link["href"])
@@ -978,11 +978,11 @@ def test_the_dataset_shows_its_provenance_and_names_an_input_synced_since(
     assert "https://stac-extensions.github.io/projection/v2.0.0/schema.json" in collection["stac_extensions"]
     assert not any("projection/v1" in extension for extension in collection["stac_extensions"])
     assert "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json" in collection["stac_extensions"]
-    # This instance produced the data and hosts it, so the collection is official rather than a
-    # mirror and needs no `via` link to an upstream copy. It still records when it was updated.
+    # The input's producer made the data and this instance hosts it, so the collection is a
+    # Portolan mirror, which records when it was last updated.
     assert collection["updated"].endswith("Z")
     readme = client.get(f"/stac/{_DATASET}/README.md").text
-    assert "(producer, processor)" in readme and "(host)" in readme
+    assert "(processor)" in readme and "(host)" in readme
     agents = client.get(f"/stac/{_DATASET}/AGENTS.md").text
     assert f'xr.open_zarr("http://testserver/zarr/{_DATASET}"' in agents
     assert client.get(f"/datasets/{source}").json()["provenance"] is None
