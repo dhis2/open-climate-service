@@ -60,6 +60,10 @@ def _configure(monkeypatch: pytest.MonkeyPatch, tokens: list[dict[str, Any]]) ->
 
 @pytest.fixture
 def auth_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    _turn_on(monkeypatch)
+
+
+def _turn_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GEOSERVICE_TEST_OPERATOR_TOKEN", OPERATOR_SECRET)
     monkeypatch.setenv("GEOSERVICE_TEST_CLIENT_TOKEN", CLIENT_SECRET)
     monkeypatch.setenv("GEOSERVICE_TEST_OTHER_TOKEN", OTHER_SECRET)
@@ -268,6 +272,25 @@ def test_a_stored_workflow_is_reached_only_by_its_owner_and_operators(auth_on: N
     built_in = "/process_graphs/aggregate_by_features"
     assert client.put(built_in, json=graph, headers=_bearer(CLIENT_SECRET)).status_code == 403
     assert client.delete("/process_graphs/mine", headers=_bearer(OPERATOR_SECRET)).status_code == 204
+
+
+def test_records_stored_with_authentication_off_are_operator_only(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    # Authentication off stores no owner: its principal shares the anonymous caller's id.
+    graph = {"process_graph": {"add": {"process_id": "add", "arguments": {"x": 1, "y": 2}, "result": True}}}
+    assert client.put("/process_graphs/before", json=graph).status_code == 200
+    job_id = client.post("/jobs", json={"process": graph}).json()["id"]
+    _turn_on(monkeypatch)
+
+    def listed(headers: dict[str, str]) -> bool:
+        return "before" in {item["id"] for item in client.get("/process_graphs", headers=headers).json()["processes"]}
+
+    assert not listed({}) and not listed(_bearer(CLIENT_SECRET)) and listed(_bearer(OPERATOR_SECRET))
+    assert client.get("/process_graphs/before").status_code == 404
+    assert client.get(f"/jobs/{job_id}", headers=_bearer(CLIENT_SECRET)).status_code == 404
+    assert client.get(f"/jobs/{job_id}", headers=_bearer(OPERATOR_SECRET)).status_code == 200
+    assert client.delete("/process_graphs/before", headers=_bearer(OPERATOR_SECRET)).status_code == 204
 
 
 # --- openEO -----------------------------------------------------------------------------

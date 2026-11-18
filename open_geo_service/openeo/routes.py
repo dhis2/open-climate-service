@@ -288,7 +288,7 @@ def list_jobs(request: Request) -> OpenEOJobListResponse:
 @jobs_router.post("", status_code=201)
 def create_job(body: OpenEOJobCreate, request: Request, response: Response) -> OpenEOJobRecord:
     """Create a new openEO job, owned by the caller."""
-    record = get_openeo_job_service().create_job(body, owner=principal_of(request).id)
+    record = get_openeo_job_service().create_job(body, owner=principal_of(request).owner_id)
     response.headers["Location"] = f"/jobs/{record.id}"
     response.headers["OpenEO-Identifier"] = record.id
     return record

@@ -182,8 +182,8 @@ and changing them is limited to the owner unless the caller has the operator tie
 running a stored process graph by id; another principal's records are answered `404`, as if they
 did not exist. A job's result files follow the same rule: they are the owner's, not anyone's
 with the link. Pipeline runs and derived datasets, which no client starts, can run every stored
-process graph. Records from before owners were recorded have none, and only operators reach
-them. `GET /me` reports the caller.
+process graph. Records from before owners were recorded, or stored while authentication was
+off, have none, and only operators reach them. `GET /me` reports the caller.
 
 Pipeline runs, delivery records and dataset updates are reached only with the operator tier, so
 ownership does not limit them. They will record the principal, how it authenticated and, where

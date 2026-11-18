@@ -42,6 +42,16 @@ class Principal:
     tier: Tier
     token: NamedToken | None = None
 
+    @property
+    def owner_id(self) -> str | None:
+        """The owner recorded on what this principal creates.
+
+        None while authentication is off: `OPEN` shares its id with `ANONYMOUS`, so a record it
+        owned would become readable without a token once authentication is turned on. An
+        ownerless record is reached only by operators.
+        """
+        return None if self is OPEN else self.id
+
     def may_access(self, owner: str | None) -> bool:
         """Whether this principal may read or change a record `owner` created.
 

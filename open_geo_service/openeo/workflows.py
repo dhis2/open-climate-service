@@ -122,7 +122,7 @@ def put_workflow(process_graph_id: str, body: dict[str, object], by: Principal) 
                     raise WorkflowAccessError(f"Process graph id '{process_graph_id}' is taken")
                 records[index] = {**payload, "owner": _stored_owner(existing)}
                 return record
-        records.append({**payload, "owner": by.id})
+        records.append({**payload, "owner": by.owner_id})
         return record
 
     return _mutate_records(_mutation)
