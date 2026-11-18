@@ -8,9 +8,9 @@ is insufficient.
 from typing import Any, cast
 
 import xarray as xr
+import xclim.compute
 import xclim.indicators.atmos as xclim_atmos
-import xclim.indices
-from xclim.core.indicator import InputKind
+from xclim.core import InputKind
 
 from open_geo_service.openeo.xclim_processes import call_with_ogs_time_dim
 from open_geo_service.process import process
@@ -65,24 +65,24 @@ def spi(
     # (L-moments) method. This is the standard SPI setup and, unlike xclim's default
     # maximum-likelihood fit, does not raise FitError on real precipitation that has a
     # pronounced dry season (e.g. near-zero winter months), where ML optimization
-    # diverges. DateStr is NewType(str) in xclim — cast to satisfy pyright.
+    # diverges.
     result = call_with_ogs_time_dim(
-        xclim.indices.standardized_precipitation_index,
+        xclim.compute.standardized_precipitation_index,
         pr,
         freq=freq,
         window=window,
         dist="gamma",
         method="APP",
         fitkwargs={"floc": 0},
-        cal_start=cast(Any, cal_start),
-        cal_end=cast(Any, cal_end),
+        cal_start=cal_start,
+        cal_end=cal_end,
     )
-    # xclim attaches gamma-fit diagnostics (prob_of_zero, number_of_zeros,
-    # number_of_notnull) as non-dimension coordinates. They are fit internals, not
-    # publishable layers — drop them so the store and STAC cube:variables expose only
-    # the SPI field (georeferencing coords like spatial_ref are dimension/known coords
-    # and are left untouched).
-    diagnostics = [c for c in ("prob_of_zero", "number_of_zeros", "number_of_notnull") if c in result.coords]
+    # xclim attaches gamma-fit diagnostics (number_of_zeros, number_of_notnull) as
+    # non-dimension coordinates. They are fit internals, not publishable layers — drop
+    # them so the store and STAC cube:variables expose only the SPI field
+    # (georeferencing coords like spatial_ref are dimension/known coords and are left
+    # untouched).
+    diagnostics = [c for c in ("number_of_zeros", "number_of_notnull") if c in result.coords]
     if diagnostics:
         result = result.drop_vars(diagnostics)
     # xclim returns float64; downcast to float32. SPI is a small standardized index

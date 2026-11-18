@@ -17,7 +17,7 @@ from open_geo_service.openeo import jobs
 from open_geo_service.openeo import workflows as workflow_store
 from open_geo_service.openeo.execution import (
     _augment_with_workflows,
-    _build_process_registry,
+    _new_process_registry,
 )
 
 
@@ -35,7 +35,8 @@ def _cube(celsius: float) -> xr.DataArray:
 
 
 def _overlay(cubes: dict[str, xr.DataArray]) -> Any:
-    reg = _build_process_registry()
+    # A registry of its own: the cached one is shared by every later test in this process.
+    reg = _new_process_registry()
     reg["load_collection"] = Process(spec={}, implementation=lambda id=None, temporal_extent=None, **k: cubes[str(id)])
     return _augment_with_workflows(reg)
 

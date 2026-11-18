@@ -1,7 +1,7 @@
 """What the auto-registered xclim indicator processes promise, and whether they can keep it.
 
 `_collect()` declares the same `returns` schema — a single datacube — for every indicator it
-registers. Three of xclim 0.61's indicators return a tuple of cubes instead, so advertising them
+registers. Five of xclim 1.0's indicators return several cubes instead, so advertising them
 published a contract the process could not honour: a client composing a graph from
 `GET /processes` would feed a tuple into save_result or a reducer and get a confusing failure
 rather than a clear "not supported" (CLIM-860).
@@ -19,7 +19,14 @@ from open_geo_service.process import get_process_metadata
 
 pytest.importorskip("xclim")
 
-_MULTI_OUTPUT_IN_XCLIM_061 = {"cffwis", "rain_season", "jetstream_metric_woollings"}
+# Output counts per xclim 1.0's `Indicator.outputs`.
+_MULTI_OUTPUT_IN_XCLIM_1 = {
+    "cffwis": 6,
+    "rain_season": 3,
+    "jetstream_metric_woollings": 2,
+    "base_flow_index_seasonal_ratio": 2,
+    "sen_slope": 2,
+}
 
 
 def _registered() -> dict[str, dict]:
@@ -33,23 +40,46 @@ def _registered() -> dict[str, dict]:
 
 def test_every_registered_indicator_returns_exactly_one_cube() -> None:
     """The declared `returns` must match what the indicator actually produces."""
-    import xclim.indicators.atmos as atmos
-    import xclim.indicators.land as land
-    import xclim.indicators.seaIce as seaice
+    import xclim.indicators  # noqa: F401  # pyright: ignore[reportUnusedImport]  # fills the registry
+    from xclim.core.indicator import registry
 
-    by_id = {}
-    for mod in (atmos, land, seaice):
-        for obj in vars(mod).values():
-            if hasattr(obj, "identifier") and hasattr(obj, "cf_attrs"):
-                by_id.setdefault(obj.identifier, len(obj.cf_attrs))
+    by_id = {name: len(obj.outputs) for name, obj in registry.items()}
 
     offenders = {name: by_id[name] for name in _registered() if by_id.get(name, 1) > 1}
     assert offenders == {}, f"registered indicators that return multiple cubes: {offenders}"
 
 
-@pytest.mark.parametrize("indicator_id", sorted(_MULTI_OUTPUT_IN_XCLIM_061))
+@pytest.mark.parametrize("indicator_id", sorted(_MULTI_OUTPUT_IN_XCLIM_1))
 def test_known_multi_output_indicators_are_not_advertised(indicator_id: str) -> None:
     assert indicator_id not in _registered()
+
+
+def test_multi_output_counts_are_read_from_xclim() -> None:
+    """The skip depends on reading each indicator's output count; a renamed attribute must fail here."""
+    import xclim.indicators  # noqa: F401  # pyright: ignore[reportUnusedImport]  # fills the registry
+    from xclim.core.indicator import registry
+
+    counts = {name: len(registry[name].outputs) for name in _MULTI_OUTPUT_IN_XCLIM_1}
+    assert counts == _MULTI_OUTPUT_IN_XCLIM_1
+
+
+def test_registered_indicator_returns_a_data_array() -> None:
+    """xclim 1.0 indicators return a Dataset by default; the process must hand back the cube."""
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    t = pd.date_range("2000-01-01", periods=731, freq="D")
+    tas = xr.DataArray(
+        290 + np.arange(731) % 7, coords={"t": t}, dims="t", attrs={"units": "K", "standard_name": "air_temperature"}
+    )
+    tx_max = next(f for f in xclim_processes.scan() if (get_process_metadata(f) or {}).get("id") == "tx_max")
+
+    result = tx_max(tasmax=tas)
+
+    assert isinstance(result, xr.DataArray)
+    assert result.dims == ("t",)
+    assert result.values.tolist() == [296.0, 296.0]
 
 
 def test_single_output_indicators_are_still_registered() -> None:
@@ -59,3 +89,89 @@ def test_single_output_indicators_are_still_registered() -> None:
     assert len(registered) >= 170
     assert "tx_max" in registered
     assert registered["tx_max"]["returns"]["schema"]["subtype"] == "datacube"
+
+
+def _daily_tasmax_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve a year of daily maximum temperature as the published collection `tasmax`."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    from open_geo_service.ingestions.schemas import ArtifactFormat
+
+    t = pd.date_range("2017-01-01", "2017-12-31", freq="D")
+    values = 25 + 10 * np.sin(np.arange(len(t)) / 20)[:, None, None] * np.ones((1, 2, 2))
+    ds = xr.Dataset(
+        {"tasmax": (("t", "y", "x"), values, {"units": "degC", "standard_name": "air_temperature"})},
+        coords={"t": t, "y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+    ds.attrs["proj:code"] = "EPSG:4326"
+    artifact = SimpleNamespace(format=ArtifactFormat.ICECHUNK)
+    monkeypatch.setattr("open_geo_service.openeo.execution._get_published_artifact", lambda _id: artifact)
+    monkeypatch.setattr("open_geo_service.openeo.execution._open_artifact", lambda _a: ds)
+
+
+def _tx_days_above_graph(**arguments: object) -> dict:
+    return {
+        "process_graph": {
+            "load": {"process_id": "load_collection", "arguments": {"id": "tasmax"}},
+            "days": {
+                "process_id": "tx_days_above",
+                "arguments": {"tasmax": {"from_node": "load"}, "thresh": "30 degC", "freq": "MS", **arguments},
+                "result": True,
+            },
+        }
+    }
+
+
+def test_graph_with_a_renamed_argument_is_refused_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """xclim 1.0 renamed `op` to `condition`; a 0.x graph gets a 400 naming both, not a select_time error."""
+    from fastapi import HTTPException
+
+    from open_geo_service.openeo.execution import run_process_graph
+
+    _daily_tasmax_collection(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        run_process_graph(_tx_days_above_graph(op=">"))
+
+    assert exc_info.value.status_code == 400
+    assert "tx_days_above has no parameter op" in exc_info.value.detail
+    assert "condition" in exc_info.value.detail
+
+
+def test_graph_with_time_selection_keywords_still_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check must not refuse the select_time keywords xclim takes through `indexer`."""
+    from open_geo_service.openeo.execution import run_process_graph
+
+    _daily_tasmax_collection(monkeypatch)
+
+    everything = run_process_graph(_tx_days_above_graph(condition=">"))
+    june_only = run_process_graph(_tx_days_above_graph(condition=">", month=[6]))
+
+    assert everything.sum() > june_only.sum() > 0
+
+
+def test_fire_model_options_are_passed_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`dc` takes options such as dc_start through `**params`, not `indexer`, so they must not be refused."""
+    seen: dict[str, object] = {}
+
+    def capture(_indicator: object, **kwargs: object) -> None:
+        seen.update(kwargs)
+
+    monkeypatch.setattr(xclim_processes, "call_with_ogs_time_dim", capture)
+    dc = next(f for f in xclim_processes.scan() if (get_process_metadata(f) or {}).get("id") == "dc")
+
+    dc(tas="tas", pr="pr", lat="lat", dc_start=20)
+
+    assert seen["dc_start"] == 20
+
+
+def test_dictionary_parameters_are_published_as_objects() -> None:
+    """`fitkwargs` takes a dict; without a schema a client can't tell what to send."""
+    spei = _registered()["spei"]
+
+    [fitkwargs] = [p for p in spei["parameters"] if p["name"] == "fitkwargs"]
+    assert fitkwargs["schema"] == {"type": "object"}

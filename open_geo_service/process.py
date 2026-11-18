@@ -127,7 +127,8 @@ def process(
         @process
         def consecutive_dry_days(pr: xr.DataArray, thresh: str = "1mm/day") -> xr.DataArray:
             '''Maximum consecutive dry days per period.'''
-            return xclim.atmos.maximum_consecutive_dry_days(pr, thresh=thresh)
+            # call_with_ogs_time_dim maps the OGS `t` dimension to the `time` xclim requires
+            return call_with_ogs_time_dim(xclim.compute.maximum_consecutive_dry_days, pr, thresh=thresh)
 
     Usage — explicit metadata::
 
