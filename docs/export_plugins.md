@@ -6,6 +6,14 @@ destination plugin compiles the destination settings into the mapping each time 
 validates. Named exports work with synchronous `POST /result` and batch jobs. Rendering does not
 contact DHIS2, resolve a credential, fetch organisation units, or run another aggregation.
 
+Rendering and delivery are separate. Any process graph can render through a pipeline's named
+export by passing the pipeline id to `save_result`; that borrows the validated destination mapping
+but does not run the pipeline's workflow or send anything to the external service. The graph's
+observed source must match the dataset declared by the pipeline. A client can import the rendered
+payload itself, while server-side delivery always goes through the pipeline's export endpoint.
+For a one-off payload without a pipeline, pass an ad-hoc mapping to `save_result`; OCS can render
+and return it, but cannot deliver it.
+
 ## Render one series for DHIS2
 
 A pipeline delivering to DHIS2 compiles a mapping like this one:
