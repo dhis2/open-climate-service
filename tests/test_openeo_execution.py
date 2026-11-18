@@ -392,7 +392,7 @@ def test_openeo_job_service_create_execute_and_get_results(
     monkeypatch.setattr(
         job_service,
         "_persist_result",
-        lambda job_id, result: f"/tmp/{job_id}/result.geojson",
+        lambda job_id, result, *_: f"/tmp/{job_id}/result.geojson",
     )
 
     record = job_service.create_job(

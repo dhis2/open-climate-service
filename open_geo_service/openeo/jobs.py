@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 from open_geo_service import __version__
 from open_geo_service import config as api_config
-from open_geo_service.auth.tokens import Principal, owner_principal
+from open_geo_service.auth.tokens import Principal, Tier, owner_principal
 from open_geo_service.exports.retention import result_lease
 from open_geo_service.exports.tabular import (
     _NON_VALUE_FIELDS as _NON_VALUE_FIELDS,
@@ -1034,10 +1034,11 @@ class OpenEOJobService:
                     lambda: _cancel_requested(job_id),
                     enter_publication=lambda: self._enter_publication(job_id),
                 ):
-                    result = run_process_graph(record.process, visible_to=owner_principal(record.owner))
+                    owner = owner_principal(record.owner)
+                    result = run_process_graph(record.process, visible_to=owner)
                     raise_if_cancelled(force=True)
                     saving = True
-                    output_path = self._persist_result(job_id, result)
+                    output_path = self._persist_result(job_id, result, owner)
             finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
         except ExecutionCancelled:
             logger.info("openEO job %s was cancelled while running; nothing was published", job_id)
@@ -1292,7 +1293,7 @@ class OpenEOJobService:
         except Exception:
             logger.exception("Finished-job listener failed for openEO job %s", record.id)
 
-    def _persist_result(self, job_id: str, result: Any) -> str | None:
+    def _persist_result(self, job_id: str, result: Any, owner: Principal | None = None) -> str | None:
         import xarray as xr
 
         from open_geo_service.openeo.execution import SaveResultEnvelope
@@ -1309,6 +1310,10 @@ class OpenEOJobService:
             options = result.options
             provenance = result.provenance
             result = result.data
+        # Writing to a managed dataset updates the public catalogue, which needs the operator tier.
+        # The route table cannot see this option inside the job body, so it is checked here.
+        if options.get("dataset_id") and owner is not None and owner.tier < Tier.OPERATOR:
+            raise HTTPException(403, "Publishing to a managed dataset ('dataset_id') needs an operator token")
 
         # Resolve a lazy dask_geopandas GeoDataFrame before any tabular path,
         # including named exports, so a lazy frame never reaches a renderer.

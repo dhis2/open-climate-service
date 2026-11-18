@@ -48,8 +48,12 @@ Every method and path belongs to exactly one tier, listed in one table in the co
 
 Built-in and plugin workflows stay visible to everyone. A workflow stored through the API belongs
 to its owner and is listed only to its owner and to operators. A stored workflow cannot take the id
-of a built-in or plugin workflow unless an operator stores it. Today such a workflow replaces the
-built-in for every caller, including the pipelines that run it.
+of a built-in or plugin workflow unless an operator stores it. Such a workflow then replaces the
+built-in for operators and for the pipelines that run it; other callers still reach the built-in.
+
+A batch job whose `save_result` names a `dataset_id` writes into a managed dataset and publishes it,
+so it needs an operator token like ingestion does. The route table cannot see an option inside the
+job body, so the managed write checks the job owner's tier.
 
 The table fails closed. A route the application serves that the table does not list, such as a
 new plugin route or form endpoint, gets the operator tier, and a test over every route the
@@ -176,7 +180,8 @@ When it is built:
 Batch jobs and stored process graphs record the principal that created them. Listing, reading
 and changing them is limited to the owner unless the caller has the operator tier, and so is
 running a stored process graph by id; another principal's records are answered `404`, as if they
-did not exist. Pipeline runs and derived datasets, which no client starts, can run every stored
+did not exist. A job's result files follow the same rule: they are the owner's, not anyone's
+with the link. Pipeline runs and derived datasets, which no client starts, can run every stored
 process graph. Records from before owners were recorded have none, and only operators reach
 them. `GET /me` reports the caller.
 

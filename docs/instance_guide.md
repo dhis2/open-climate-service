@@ -307,8 +307,8 @@ authentication:
 
 With no tokens listed, authentication is off and nothing changes. With at least one, reads stay
 public, `POST /result`, batch jobs and stored process graph writes need an `authenticated` or
-`operator` token, and ingestion, sync, schedules, pipelines and export delivery need an
-`operator` token. Open Geo Service refuses to start when a variable is unset, a secret is shorter than 32
+`operator` token, and ingestion, sync, schedules, pipelines, export delivery and a batch job
+that publishes to a dataset (`save_result` with a `dataset_id`) need an `operator` token. Open Geo Service refuses to start when a variable is unset, a secret is shorter than 32
 characters, or an id or secret repeats; `openssl rand -hex 32` makes a suitable secret. The
 block does not take `${...}` interpolation.
 

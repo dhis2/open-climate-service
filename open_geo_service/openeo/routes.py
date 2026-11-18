@@ -170,9 +170,12 @@ def credentials_basic(request: Request) -> dict[str, str]:
     """OpenEO HTTP Basic exchange: the token id and secret, checked by the access middleware, return the secret.
 
     No second token is minted and no session kept; the client then sends `Bearer basic//<secret>`.
+    Only a `Basic` credential gets the secret back, so a principal resolved some other way (a
+    future session cookie) cannot read it.
     """
     token = principal_of(request).token
-    if token is None:
+    scheme = request.headers.get("authorization", "").partition(" ")[0]
+    if token is None or scheme.lower() != "basic":
         raise HTTPException(
             status_code=401,
             detail="Send the token id as the username and the token secret as the password.",

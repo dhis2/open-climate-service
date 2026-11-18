@@ -136,9 +136,9 @@ def test_cancel_arriving_while_the_result_is_saved_wins(
     openeo = instance["openeo"]
     original = openeo._persist_result
 
-    def cancel_during_save(job_id: str, result: Any) -> Any:
+    def cancel_during_save(job_id: str, result: Any, *args: Any) -> Any:
         openeo_jobs.store_update_job(job_id, lambda r: r.model_copy(update={"cancel_requested": True}))
-        return original(job_id, result)
+        return original(job_id, result, *args)
 
     monkeypatch.setattr(openeo, "_persist_result", cancel_during_save)
 

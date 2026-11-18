@@ -26,17 +26,28 @@ OTHER_SECRET = "d" * 40
 DECLARED = {route: tier for tier, routes in ROUTE_TABLE.items() for route in routes}
 
 
-def _live_routes() -> set[str]:
-    """Every method and path the application serves, including routes left out of OpenAPI."""
+def _live_routes() -> tuple[set[str], set[str]]:
+    """Every method and path the application serves, including routes left out of OpenAPI, and
+    the paths of entries that serve any method below them, such as a `Mount`."""
     live: set[str] = set()
+    mounts: set[str] = set()
     # FastAPI 0.162 keeps an included router as one entry in `app.routes`; its routes, with the
     # prefix applied, come from `effective_route_contexts()`.
     for entry in app.routes:
         included = getattr(entry, "effective_route_contexts", None)
         for route in included() if included else [entry]:
-            for method in getattr(route, "methods", None) or set():
-                live.add(f"{'GET' if method == 'HEAD' else method} {getattr(route, 'path', '')}")
-    return live
+            path = getattr(route, "path", "")
+            methods = getattr(route, "methods", None)
+            if not methods:
+                mounts.add(path)
+            for method in methods or set():
+                live.add(f"{'GET' if method == 'HEAD' else method} {path}")
+    return live, mounts
+
+
+def _under(route: str, mount: str) -> bool:
+    path = route.split(" ", 1)[1]
+    return path == mount or path.startswith(f"{mount.rstrip('/')}/")
 
 
 def _concrete(path: str) -> str:
@@ -66,6 +77,16 @@ def _bearer(secret: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {secret}"}
 
 
+def _finished(client: TestClient, job_id: str, headers: dict[str, str]) -> str:
+    """Start a batch job and return the status it ends in."""
+    client.post(f"/jobs/{job_id}/results", headers=headers)
+    deadline = time.monotonic() + 30
+    while (status := client.get(f"/jobs/{job_id}", headers=headers).json()["status"]) not in ("error", "finished"):
+        assert time.monotonic() < deadline
+        time.sleep(0.1)
+    return str(status)
+
+
 def _basic(token_id: str, secret: str) -> dict[str, str]:
     return {"Authorization": "Basic " + base64.b64encode(f"{token_id}:{secret}".encode()).decode()}
 
@@ -75,9 +96,12 @@ def _basic(token_id: str, secret: str) -> dict[str, str]:
 
 def test_every_served_route_is_in_the_route_table() -> None:
     """A new route fails here until it is given a tier; until then it needs the operator tier."""
-    live = _live_routes()
+    live, mounts = _live_routes()
     assert sorted(live - DECLARED.keys()) == [], "add each route to ROUTE_TABLE in auth/route_table.py"
-    assert sorted(DECLARED.keys() - live) == [], "routes listed in ROUTE_TABLE that the app no longer serves"
+    # A mount (/mcp, say) is listed by the methods and paths it serves, e.g. "POST /mcp/{path:path}".
+    assert sorted(m for m in mounts if not any(_under(r, m) for r in DECLARED)) == [], "give each mount a tier"
+    mounted = {route for route in DECLARED if any(_under(route, m) for m in mounts)}
+    assert sorted(DECLARED.keys() - live - mounted) == [], "routes listed in ROUTE_TABLE that the app no longer serves"
     decided = {route: route_tier(route.split(" ")[0], _concrete(route.split(" ")[1])) for route in DECLARED}
     assert {route: tier for route, tier in decided.items() if tier != DECLARED[route]} == {}
     assert route_tier("GET", "/not-a-route") == Tier.OPERATOR
@@ -203,6 +227,20 @@ def test_a_job_is_reached_only_by_its_owner_and_operators(auth_on: None, client:
     assert client.get(f"/jobs/{job_id}", headers=_bearer(OPERATOR_SECRET)).status_code == 200
     assert client.delete(f"/jobs/{job_id}", headers=_bearer(CLIENT_SECRET)).status_code == 204
 
+    # The route table cannot see a `dataset_id` inside the job body: publishing is refused at the write.
+    publishes = {
+        "sum": {"process_id": "add", "arguments": {"x": 1, "y": 2}},
+        "save": {
+            "process_id": "save_result",
+            "arguments": {"data": {"from_node": "sum"}, "format": "ZARR", "options": {"dataset_id": "mine"}},
+            "result": True,
+        },
+    }
+    mine = _bearer(CLIENT_SECRET)
+    job_id = client.post("/jobs", json={"process": {"process_graph": publishes}}, headers=mine).json()["id"]
+    assert _finished(client, job_id, mine) == "error"
+    assert "needs an operator token" in (get_openeo_job_service().get_job_or_404(job_id).error_message or "")
+
 
 def test_a_stored_workflow_is_reached_only_by_its_owner_and_operators(auth_on: None, client: TestClient) -> None:
     graph = {"process_graph": {"add": {"process_id": "add", "arguments": {"x": 1, "y": 2}, "result": True}}}
@@ -224,11 +262,7 @@ def test_a_stored_workflow_is_reached_only_by_its_owner_and_operators(auth_on: N
     assert client.post("/result", json={"process": calls_mine}, headers=_bearer(CLIENT_SECRET)).json() == 3
     assert client.post("/result", json={"process": calls_mine}, headers=other).status_code == 400
     job_id = client.post("/jobs", json={"process": calls_mine}, headers=other).json()["id"]
-    client.post(f"/jobs/{job_id}/results", headers=other)
-    deadline = time.monotonic() + 30
-    while client.get(f"/jobs/{job_id}", headers=other).json()["status"] not in ("error", "finished"):
-        assert time.monotonic() < deadline
-        time.sleep(0.1)
+    assert _finished(client, job_id, other) == "error"
     assert "mine not found" in (get_openeo_job_service().get_job_or_404(job_id).error_message or "")
     # Taking a built-in id would replace it for every caller and pipeline.
     built_in = "/process_graphs/aggregate_by_features"
@@ -244,9 +278,10 @@ def test_openeo_basic_exchange_returns_the_secret(auth_on: None, client: TestCli
         "access_token": CLIENT_SECRET
     }
     assert client.get("/credentials/basic", headers=_basic("caps", CLIENT_SECRET)).status_code == 401
-    challenge = client.get("/credentials/basic")
-    assert challenge.status_code == 401
-    assert challenge.headers["WWW-Authenticate"].startswith("Basic")
+    for headers in ({}, _bearer(CLIENT_SECRET)):
+        challenge = client.get("/credentials/basic", headers=headers)
+        assert challenge.status_code == 401
+        assert challenge.headers["WWW-Authenticate"].startswith("Basic")
 
     endpoints = {endpoint["path"] for endpoint in client.get("/").json()["endpoints"]}
     assert "/credentials/basic" in endpoints
