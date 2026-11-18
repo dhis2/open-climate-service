@@ -167,3 +167,11 @@ def test_fire_model_options_are_passed_on(monkeypatch: pytest.MonkeyPatch) -> No
     dc(tas="tas", pr="pr", lat="lat", dc_start=20)
 
     assert seen["dc_start"] == 20
+
+
+def test_dictionary_parameters_are_published_as_objects() -> None:
+    """`fitkwargs` takes a dict; without a schema a client can't tell what to send."""
+    spei = _registered()["spei"]
+
+    [fitkwargs] = [p for p in spei["parameters"] if p["name"] == "fitkwargs"]
+    assert fitkwargs["schema"] == {"type": "object"}

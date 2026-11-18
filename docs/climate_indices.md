@@ -1,12 +1,14 @@
 # Climate Indices
 
-The Open Geo Service exposes the full [xclim](https://xclim.readthedocs.io) indicator library — 183 peer-reviewed, CF-compliant climate extreme indices — as native openEO processes. Every indicator appears automatically in `GET /processes` and is callable by name from any openEO process graph or client, with no additional configuration.
+The Open Geo Service exposes the [xclim](https://xclim.readthedocs.io) climate indicators — 183 peer-reviewed, CF-compliant indices — as native openEO processes. Each appears automatically in `GET /processes` and is callable by name from any openEO process graph or client, with no additional configuration.
+
+Indicators that return more than one output (such as `cffwis` and `rain_season`) are left out, since a process returns one datacube. So are xclim's unit and variable conversions, its generic indicators, and the anuclim, cf and icclim collections, which repeat the core indicators under other names.
 
 ---
 
 ## What is available
 
-All xclim indicator modules are covered:
+The indicators come from three xclim realms:
 
 | Module | Domain | Examples |
 |---|---|---|
@@ -194,14 +196,17 @@ The auto-registered xclim processes can be overridden per-instance by placing a 
 # plugins/processes/climate_indices.py
 import xarray as xr
 import xclim.compute
+from open_geo_service.openeo.xclim_processes import call_with_ogs_time_dim
 from open_geo_service.process import process
 
 
 @process(summary="Consecutive dry days (Rwanda threshold)")
 def cdd(pr: xr.DataArray, thresh: str = "0.5 mm/day", freq: str = "MS") -> xr.DataArray:
     """CDD with a lower threshold suited to Rwanda's dry season definition."""
-    return xclim.compute.maximum_consecutive_dry_days(pr, thresh=thresh, freq=freq)
+    return call_with_ogs_time_dim(xclim.compute.maximum_consecutive_dry_days, pr, thresh=thresh, freq=freq)
 ```
+
+Datacubes in Open Geo Service name their time dimension `t`, while xclim requires `time`. `call_with_ogs_time_dim` renames it on the way in and back on the result; calling xclim directly on a cube fails with `KeyError: 'time'`.
 
 See [Extensibility — Processes](extensibility.md#processes) for the full `@process` decorator reference.
 

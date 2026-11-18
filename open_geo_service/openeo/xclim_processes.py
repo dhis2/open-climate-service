@@ -93,6 +93,7 @@ def _collect() -> list[Any]:
         InputKind.DATE: {"type": "string"},
         InputKind.NUMBER_SEQUENCE: {"type": "array"},
         InputKind.BOOL: {"type": "boolean"},
+        InputKind.DICT: {"type": "object"},
     }
 
     # An `indexer` parameter passes extra keywords on to select_time (month, season, ...).
