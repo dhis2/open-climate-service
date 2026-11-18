@@ -71,6 +71,3 @@
       url: https://climate.esa.int/en/projects/land-cover/
     - name: Copernicus Climate Data Store
       url: https://cds.climate.copernicus.eu/
-  display:
-    colormap: viridis
-    range: [10, 220]

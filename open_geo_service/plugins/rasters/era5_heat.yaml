@@ -30,7 +30,6 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
-    range: [0, 50]
 
 - id: era5heat_utci_daily_max
   name: Universal Thermal Climate Index (ERA5-Heat, daily maximum)
@@ -64,7 +63,6 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
-    range: [0, 50]
 
 - id: era5heat_utci_daily_min
   name: Universal Thermal Climate Index (ERA5-Heat, daily minimum)
@@ -98,4 +96,3 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
-    range: [-50, 50]
