@@ -34,7 +34,7 @@
     midpoint: 0
 
 - id: era5land_precipitation_daily_normal_1991_2020
-  name: Total precipitation daily normal (ERA5-Land, 1991–2020)
+  name: Precipitation daily normal (ERA5-Land, 1991–2020)
   short_name: Precipitation daily normal
   description: >-
     Average ERA5-Land rainfall for each day of the year over 1991-2020, smoothed over a 31-day
@@ -54,7 +54,7 @@
       period: [1991, 2020]
       smoothing_window: 31
       unit_transform: metres_to_mm
-  units: mm
+  units: mm/d
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis (Earth Data Hub)
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/era5-land-daily
