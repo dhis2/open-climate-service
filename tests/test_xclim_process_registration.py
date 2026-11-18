@@ -152,3 +152,18 @@ def test_graph_with_time_selection_keywords_still_runs(monkeypatch: pytest.Monke
     june_only = run_process_graph(_tx_days_above_graph(condition=">", month=[6]))
 
     assert everything.sum() > june_only.sum() > 0
+
+
+def test_fire_model_options_are_passed_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`dc` takes options such as dc_start through `**params`, not `indexer`, so they must not be refused."""
+    seen: dict[str, object] = {}
+
+    def capture(_indicator: object, **kwargs: object) -> None:
+        seen.update(kwargs)
+
+    monkeypatch.setattr(xclim_processes, "call_with_ogs_time_dim", capture)
+    dc = next(f for f in xclim_processes.scan() if (get_process_metadata(f) or {}).get("id") == "dc")
+
+    dc(tas="tas", pr="pr", lat="lat", dc_start=20)
+
+    assert seen["dc_start"] == 20
