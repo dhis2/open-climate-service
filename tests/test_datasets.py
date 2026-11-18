@@ -148,6 +148,7 @@ def test_list_datasets_groups_artifacts_by_managed_dataset_id(monkeypatch: pytes
         "get_dataset",
         lambda _: {
             "id": "chirps3_precipitation_daily",
+            "name": "Precipitation rate (CHIRPS3)",
             "short_name": "CHIRPS3 precip",
             "period_type": "daily",
             "units": "mm",
@@ -163,6 +164,8 @@ def test_list_datasets_groups_artifacts_by_managed_dataset_id(monkeypatch: pytes
     dataset = result.items[0]
     assert dataset.dataset_id == "chirps3_precipitation_daily"
     assert dataset.source_dataset_id == "chirps3_precipitation_daily"
+    # The template's current name, not the one stored at ingest, so a rename needs no re-ingest.
+    assert dataset.dataset_name == "Precipitation rate (CHIRPS3)"
     assert dataset.period_type == "daily"
     assert dataset.units == "mm"
     assert dataset.extent.temporal.end == "2026-01-11"
