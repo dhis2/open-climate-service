@@ -251,7 +251,7 @@
 
 - id: chirps3_precipitation_monthly_relative_anomaly_1991_2020
   name: Precipitation monthly relative anomaly (CHIRPS3, vs 1991–2020 normal)
-  short_name: Precipitation anomaly (%)
+  short_name: Precipitation monthly anomaly (%)
   description: >-
     How far a month's CHIRPS rainfall sits from its 1991-2020 normal, as a percentage of that
     normal. Negative is drier than usual, positive wetter.

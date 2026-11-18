@@ -103,7 +103,7 @@
     midpoint: 0
 
 - id: era5land_precipitation_monthly_normal_1991_2020
-  name: Mean daily precipitation monthly normal (ERA5-Land, 1991–2020)
+  name: Precipitation monthly normal (ERA5-Land, 1991–2020)
   short_name: Precipitation monthly normal
   description: >-
     Average ERA5-Land rainfall for each calendar month over 1991-2020. The baseline a monthly
@@ -269,7 +269,7 @@
 
 - id: era5land_precipitation_monthly_relative_anomaly_1991_2020
   name: Precipitation monthly relative anomaly (ERA5-Land, vs 1991–2020 normal)
-  short_name: Precipitation anomaly (%)
+  short_name: Precipitation monthly anomaly (%)
   description: >-
     How far a month's ERA5-Land rainfall sits from its 1991-2020 normal, as a percentage of that
     normal. Negative is drier than usual, positive wetter.
