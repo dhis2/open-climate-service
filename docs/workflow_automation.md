@@ -72,8 +72,9 @@ derived dataset needs nothing special.
   each input with the snapshot the job read. An input is `changed` when what `load_collection`
   would read now is another artifact or another snapshot, so a dataset computed before its
   input's last sync says so; the dataset page shows the same. The STAC collection links each
-  input as `derived_from` and names this instance as its `processor` provider, which carries the
-  processing time and Open Geo Service version.
+  input as `derived_from` and names this instance as a `processor` provider, which carries the
+  processing time and Open Geo Service version. The inputs' producers made the data, so the
+  collection has a `via` link to each input's source page (its template's `source_url`).
 
 The job records its intent before writing, marks the publication `committing` at the
 cancellation gate just before the commit, and writes the outcome and event together after

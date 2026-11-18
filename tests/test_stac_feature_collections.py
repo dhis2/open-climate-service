@@ -272,6 +272,7 @@ def test_a_declared_licence_and_attribution_reach_the_collection(
     assert doc["description"] == "District boundaries from the national hierarchy."
     assert doc["providers"] == [
         {"name": "Ministry of Health", "url": "https://moh.example", "roles": ["producer", "licensor"]},
+        _processor(districts),
         HOST,
     ]
 
@@ -307,11 +308,22 @@ def test_an_undeclared_licence_is_not_invented(
     doc = client.get("/stac/districts/collection.json").json()
 
     assert doc["license"] == "other"
-    assert doc["providers"] == [HOST]
+    assert doc["providers"] == [_processor(districts), HOST]
     assert not [link for link in doc["links"] if link["rel"] == "license"]
 
 
 HOST = {"name": "Open Geo Service", "roles": ["host"], "url": "http://testserver/"}
+
+
+def _processor(artifact: ArtifactRecord) -> dict[str, object]:
+    """This instance as the processor: it clipped the source to its extent."""
+    stamped = artifact.created_at.isoformat().replace("+00:00", "Z")
+    return {
+        "name": "Open Geo Service",
+        "roles": ["processor"],
+        "url": "http://testserver/",
+        "processing:datetime": stamped,
+    }
 
 
 def test_this_instance_is_the_one_host_listed_last(
@@ -322,7 +334,7 @@ def test_this_instance_is_the_one_host_listed_last(
 
     doc = client.get("/stac/districts/collection.json").json()
 
-    assert doc["providers"] == [{"name": "Upstream", "roles": ["producer"]}, HOST]
+    assert doc["providers"] == [{"name": "Upstream", "roles": ["producer"]}, _processor(districts), HOST]
 
 
 def test_a_mirrored_collection_links_its_source_and_when_it_was_refreshed(
@@ -501,7 +513,7 @@ def test_a_feature_collections_data_files_carry_their_size_but_are_not_hashed(
     assert all("file:checksum" not in doc["assets"][key] for key in ("data", "tiles") if key in doc["assets"])
     assert hashed == []
     assert "https://stac-extensions.github.io/file/v2.1.0/schema.json" in doc["stac_extensions"]
-    assert "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json" in doc["stac_extensions"]
+    assert "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json" in doc["stac_extensions"]
 
 
 def test_a_collection_with_no_file_left_does_not_declare_the_file_extension(

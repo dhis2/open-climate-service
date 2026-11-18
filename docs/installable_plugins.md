@@ -38,14 +38,15 @@ osc_example_plugin/
     my_export.py         # exposes plugin = BaseExportPlugin subclass instance
   vectors/               # optional: vector templates and their providers
     __init__.py
-    example.yaml         # feature templates (id, name, id_property, optional provider + params)
+    example.yaml         # feature templates (id, name, id_property, optional provider + params + source_url)
     my_provider.py       # @feature_provider-decorated callables
 ```
 
 A feature template declares `id`, `name`, an optional `license`/`attribution`, and the
 `id_property` naming its identifier column. One with no `provider` is metadata only — it
 describes a collection an operator registers by hand, and nothing refreshes it. One with a
-`provider` names a registered `@feature_provider` callable and the `params` to call it with. A
+`provider` names a registered `@feature_provider` callable and the `params` to call it with, and
+must declare `source_url`, the source's landing page, published as the collection's `via` link. A
 registered collection is served under `GET /features` and can be loaded inside a process graph by
 id with the `load_features` process.
 

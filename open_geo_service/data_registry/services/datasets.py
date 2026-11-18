@@ -539,6 +539,18 @@ def _validate_dataset_template(dataset: object, *, source: str) -> None:
                 "ingestion.plugin; a dataset is either ingested or produced by a workflow"
             )
 
+    # A template that fetches data names the page it comes from: its STAC collection is a mirror,
+    # which Portolan requires to link the original source (`via`). Refused rather than warned
+    # about, unlike a missing licence, because the collection could not conform without it. A
+    # derived template (a normal, an anomaly) fetches nothing and links its inputs' sources.
+    if is_ingestable(dataset):
+        source_url = dataset.get("source_url")
+        if not isinstance(source_url, str) or not source_url.strip():
+            raise ValueError(
+                f"Dataset template '{dataset_id}' in {source} must define 'source_url', the page of the "
+                "source its data is fetched from"
+            )
+
     # Surface non-CF/udunits units so unit-aware processes (xclim indices) don't fail
     # cryptically later. Warn rather than reject — not every variable is a physical
     # quantity (e.g. population counts) (#280).

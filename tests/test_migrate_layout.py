@@ -34,6 +34,7 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (plugins / "datasets").mkdir(parents=True)
     (plugins / "datasets" / "chelsa.yaml").write_text(
         "- id: chelsa\n  name: CHELSA\n  variable: tas\n  period_type: monthly\n  sync:\n    kind: static\n"
+        "  source_url: https://example.org/source\n"
         "  ingestion:\n    plugin: datasets.chelsa.ChelsaPlugin\n    params: {}\n"
     )
     (plugins / "datasets" / "chelsa.py").write_text(
@@ -47,6 +48,7 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (plugins / "datasets" / "chirps_override.yaml").write_text(
         "- id: chirps_override\n  name: CHIRPS override\n  variable: precip\n  period_type: daily\n"
         "  sync:\n    kind: static\n"
+        "  source_url: https://example.org/source\n"
         "  ingestion:\n    plugin: open_geo_service.plugins.datasets.chirps3.CHIRPS3DailyPlugin\n"
     )
     (plugins / "features").mkdir()

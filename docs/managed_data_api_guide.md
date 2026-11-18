@@ -474,7 +474,8 @@ Two things worth knowing about a feature collection's document:
   release identifier such as `2026-08-19.0` is not an instant — turning one into a temporal
   extent would publish a range no feature was observed in.
 - **Its last provider is this instance**, with the `host` role and the instance URL. The
-  template's providers come first; a `producer` role there says who made the data.
+  template's providers come first; a `producer` role there says who made the data. This
+  instance is also listed as `processor`, since it clipped the source to its extent.
 - **A mirrored source is linked.** A template's `source_url` becomes a `via` link and its
   `source_stac` a `canonical` link to the source's own STAC collection, with `{version}` filled by
   the release the collection was read from. `updated` is when the collection was last refreshed.

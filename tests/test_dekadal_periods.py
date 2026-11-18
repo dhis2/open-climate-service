@@ -218,7 +218,12 @@ def test_sync_and_request_defaults_return_the_current_dekad() -> None:
 def test_template_validation_accepts_dekadal_and_rejects_an_unsupported_cadence() -> None:
     from open_geo_service.data_registry.services.datasets import _validate_dataset_template
 
-    base = {"id": "gpp", "sync": {"kind": "temporal"}, "ingestion": {"plugin": "pkg.Cls"}}
+    base = {
+        "id": "gpp",
+        "sync": {"kind": "temporal"},
+        "ingestion": {"plugin": "pkg.Cls"},
+        "source_url": "https://example.org/source",
+    }
     _validate_dataset_template({**base, "period_type": "dekadal"}, source="t.yaml")
 
     with pytest.raises(ValueError, match="unsupported period_type 'dekad'"):
@@ -337,7 +342,12 @@ def test_period_type_is_required_unless_the_dataset_is_static() -> None:
     an openEO save_result output legitimately has no cadence."""
     from open_geo_service.data_registry.services.datasets import _validate_dataset_template
 
-    temporal = {"id": "x", "sync": {"kind": "temporal"}, "ingestion": {"plugin": "p.C"}}
+    temporal = {
+        "id": "x",
+        "sync": {"kind": "temporal"},
+        "ingestion": {"plugin": "p.C"},
+        "source_url": "https://example.org/source",
+    }
     with pytest.raises(ValueError, match="must define period_type"):
         _validate_dataset_template(temporal, source="t.yaml")
     _validate_dataset_template({**temporal, "period_type": "dekadal"}, source="t.yaml")
@@ -351,7 +361,13 @@ def test_quarterly_template_is_rejected_at_registration() -> None:
 
     with pytest.raises(ValueError, match="unsupported period_type 'quarterly'"):
         _validate_dataset_template(
-            {"id": "q", "sync": {"kind": "temporal"}, "ingestion": {"plugin": "p.C"}, "period_type": "quarterly"},
+            {
+                "id": "q",
+                "sync": {"kind": "temporal"},
+                "ingestion": {"plugin": "p.C"},
+                "period_type": "quarterly",
+                "source_url": "https://example.org/source",
+            },
             source="t.yaml",
         )
 

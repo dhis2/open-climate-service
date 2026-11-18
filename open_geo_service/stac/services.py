@@ -111,7 +111,7 @@ WEB_MAP_LINKS_EXTENSION = "https://stac-extensions.github.io/web-map-links/v1.3.
 PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.2.0/schema.json"
 FILE_EXTENSION = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
 # The versioned profile URI is Portolan's only conformance signal; it defines no fields of its own.
-PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"
+PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json"
 DEFAULT_STAC_LICENSE = "various"
 _UNBOUNDED_TEMPORAL_EXTENT: list[list[datetime | None]] = [[None, None]]
 """How STAC says "no temporal extent", for a collection whose features have no time axis."""
@@ -306,10 +306,9 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             }
         )
     # As for a feature collection: the original source this collection mirrors, and when the copy
-    # was last synced from it.
-    source_url = source_dataset.get("source_url")
-    if isinstance(source_url, str) and source_url.strip():
-        template_links.append({"rel": "via", "href": source_url.strip(), "type": "text/html", "title": "Source"})
+    # was last synced from it. A workflow output names the sources of the data it was made from.
+    for source_url in _source_pages(artifact.dataset_id, source_dataset):
+        template_links.append({"rel": "via", "href": source_url, "type": "text/html", "title": "Source"})
     collection_payload["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
     # Relative, as for the catalog and feature collections, so they resolve beside the document.
     template_links.extend(_document_links())
@@ -365,12 +364,12 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             {*collection_payload.get("stac_extensions", []), STAC_CLASSIFICATION_EXTENSION}
         )
     collection_payload["license"] = template.license
-    processor = [_processor_provider(artifact, request)] if artifact.provenance is not None else []
-    if processor:
-        collection_payload["stac_extensions"] = sorted(
-            {*collection_payload.get("stac_extensions", []), PROCESSING_EXTENSION}
-        )
-    collection_payload["providers"] = _published_providers(source_dataset, request, processor)
+    collection_payload["stac_extensions"] = sorted(
+        {*collection_payload.get("stac_extensions", []), PROCESSING_EXTENSION}
+    )
+    collection_payload["providers"] = _published_providers(
+        source_dataset, request, [_processor_provider(artifact, request)]
+    )
     _remove_helper_variables(collection_payload)
     _add_band_statistics(collection_payload, artifact)
     _round_spatial_steps(collection_payload)
@@ -516,9 +515,11 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     # `transform_hrefs=False` because every href here is already absolute. With it on, pystac
     # resolves the root link to rewrite relative ones — which means *fetching* the catalogue
     # over HTTP while serving a request for one of its children.
+    collection.stac_extensions.append(PROCESSING_EXTENSION)
+
     payload = collection.to_dict(include_self_link=True, transform_hrefs=False)
     payload["stac_version"] = STAC_VERSION
-    payload["providers"] = _published_providers(source_dataset, request)
+    payload["providers"] = _published_providers(source_dataset, request, [_processor_provider(artifact, request)])
     return payload
 
 
@@ -698,8 +699,11 @@ def _collection_description(dataset_id: str, artifact: ArtifactRecord, source_da
 
 
 def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str, Any]:
-    """This instance as the `processor` of a workflow-produced collection.
+    """This instance as the `processor` of a collection it ingested or derived.
 
+    An ingest clips and often aggregates its source, and a workflow output is computed from its
+    inputs, so the instance processed both; it produced neither. The template's provider stays
+    the producer, which makes the collection a Portolan mirror with `via` links to the source.
     The processing extension accepts its fields on a Collection only under a producer or
     processor provider, an asset, or summaries; at the root they do not validate.
     """
@@ -712,6 +716,38 @@ def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str,
     if artifact.provenance is not None and artifact.provenance.ogs_version is not None:
         provider["processing:software"] = {"open-geo-service": artifact.provenance.ogs_version}
     return provider
+
+
+def _source_pages(dataset_id: str, template: dict[str, Any]) -> list[str]:
+    """The source pages a collection's data originated from, for its `via` links.
+
+    The template's `source_url` when it declares one. A workflow output whose template does not
+    (the built-in normals and anomalies) names the sources of the inputs it was made from,
+    following an input that is itself derived back to where its data came from.
+    """
+    published = ingestion_services.stac_eligible_artifacts_by_dataset()
+    pages: list[str] = []
+    seen: set[str] = set()
+
+    def visit(current_id: str, current_template: dict[str, Any]) -> None:
+        if current_id in seen:
+            return
+        seen.add(current_id)
+        source_url = current_template.get("source_url")
+        if isinstance(source_url, str) and source_url.strip():
+            if source_url.strip() not in pages:
+                pages.append(source_url.strip())
+            return
+        artifact = published.get(current_id)
+        for recorded in ingestion_services.recorded_inputs(artifact) if artifact is not None else []:
+            input_id = str(recorded["collection_id"])
+            input_template = (
+                registry_datasets.get_dataset(input_id) or feature_templates.get_feature_template(input_id) or {}
+            )
+            visit(input_id, input_template)
+
+    visit(dataset_id, template)
+    return pages
 
 
 def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:

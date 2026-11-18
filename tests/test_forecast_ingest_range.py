@@ -50,6 +50,7 @@ def test_accepts_a_future_template(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
   temporal_direction: future
   sync:
     kind: temporal
+  source_url: https://example.org/source
   ingestion:
     plugin: does.not.matter.ForTemplateValidation
 """,
@@ -108,6 +109,7 @@ def test_rejects_an_unsupported_direction(monkeypatch: pytest.MonkeyPatch, tmp_p
   temporal_direction: sideways
   sync:
     kind: temporal
+  source_url: https://example.org/source
   ingestion:
     plugin: a.b.C
 """,
@@ -263,6 +265,7 @@ def test_a_climatology_is_offered_no_dates_and_logs_no_error(
     template = {
         "id": "era5land_temperature_daily_normal_1991_2020",
         "period_type": "climatology",
+        "source_url": "https://example.org/source",
         "ingestion": {"plugin": "x", "params": {"period": [1991, 2020]}},
     }
 

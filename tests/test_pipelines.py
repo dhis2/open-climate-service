@@ -3583,6 +3583,7 @@ def test_end_to_end_an_anomaly_dataset_publishes_and_drives_a_pipeline_to_dhis2(
         "  license: CC-BY-4.0\n"
         "  sync:\n"
         "    kind: temporal\n"
+        "  source_url: https://example.org/source\n"
         "  ingestion:\n"
         "    plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin\n",
         encoding="utf-8",

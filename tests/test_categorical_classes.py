@@ -6,9 +6,12 @@ classes laid out in halves or quadrants, and boxes that cover whole cells.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
+import jsonschema
 import numpy as np
 import pytest
 import xarray as xr
@@ -106,6 +109,7 @@ def test_the_classes_reach_stac() -> None:
     assert entries[1] == {
         "value": 1,
         "name": "Caution_35-38_C",
+        "title": "Caution (35-38 °C)",
         "description": "Caution (35-38 °C)",
         "color_hint": "FECC5C",
     }
@@ -264,6 +268,16 @@ def test_a_published_collection_carries_its_classes_in_stac(
         classes = doc["assets"]["zarr"]["classification:classes"]
         assert [entry["value"] for entry in classes] == [0, 1, 2, 3]
         assert STAC_CLASSIFICATION_EXTENSION in doc["stac_extensions"]
+        # The collection declares Portolan v0.3.0, whose class rule requires a title on every class.
+        # The whole profile is not checked: raster collections can't meet it yet (Zarr is incubating).
+        portolan = json.loads((Path(__file__).parent / "data" / "portolan_v0.3.0.json").read_text())
+        class_list = {
+            "$schema": portolan["$schema"],
+            "$ref": "#/definitions/class_list",
+            "definitions": portolan["definitions"],
+        }
+        for asset in doc["assets"].values():
+            jsonschema.validate(asset["classification:classes"], class_list)
     else:
         assert "classification:classes" not in doc["assets"]["zarr"]
         assert STAC_CLASSIFICATION_EXTENSION not in doc["stac_extensions"]
@@ -299,6 +313,7 @@ def test_an_ingested_categorical_dataset_loads_with_its_classes(
         "variable": "level",
         "period_type": "daily",
         "sync": {"kind": "temporal"},
+        "source_url": "https://example.org/source",
         "ingestion": {"plugin": "tests.test_categorical_classes.HeatLevelsPlugin"},
         "display": {"colormap": "viridis", "range": [0, 3]},
     }
