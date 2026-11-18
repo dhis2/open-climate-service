@@ -35,6 +35,67 @@
 
         <div class="dataset-page">
           <div class="stack">
+            {% if dataset.kind == "table" %}
+            <section class="panel" aria-labelledby="values-title">
+              <h3 id="values-title">Values</h3>
+              {% if table %}
+              {% if published and table.features %}
+              <div class="field">
+                <label for="chart-feature">Feature</label>
+                <select id="chart-feature">
+                  {% for feature_id, feature_name in table.features %}
+                  <option value="{{ feature_id }}">{{ feature_name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="field" id="chart-series-field" hidden>
+                <label for="chart-series">Value</label>
+                <select id="chart-series"></select>
+              </div>
+              <figure
+                class="table-chart"
+                id="table-chart"
+                data-rows-url="{{ mount }}/tables/{{ dataset.id }}/rows"
+                data-unit="{{ table.unit }}"
+              >
+                <svg role="img" aria-labelledby="chart-caption"></svg>
+                <div class="chart-tooltip" hidden></div>
+                <figcaption class="note" id="chart-caption" aria-live="polite">Loading values…</figcaption>
+              </figure>
+              {% elif not published %}
+              <p class="note">Publish this dataset to chart a feature's values over time.</p>
+              {% endif %}
+              <h4>Latest period, {{ table.period }}</h4>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Feature</th>
+                      {% if table.has_series %}<th scope="col">Value of</th>{% endif %}
+                      <th scope="col">Value{% if table.unit %} ({{ table.unit }}){% endif %}</th>
+                      <th scope="col">Coverage</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in table.preview %}
+                    <tr>
+                      <td>{{ row.feature }} <span class="mono note">{{ row.feature_id }}</span></td>
+                      {% if table.has_series %}<td>{{ row.series }}</td>{% endif %}
+                      <td>{{ row.value or "No value" }}</td>
+                      <td>{{ row.coverage }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              <p class="note">
+                {% if table.more %}{{ table.more }} more rows for this period. {% endif %}{{ table.row_count }} rows in all{% if published %}, as <a href="{{ mount }}/tables/{{ dataset.id }}/rows?format=csv">CSV</a> or <a href="{{ mount }}/tables/{{ dataset.id }}/rows">JSON</a>{% endif %}.
+              </p>
+              {% else %}
+              <p class="note">This table has no rows yet.</p>
+              {% endif %}
+            </section>
+            {% else %}
             <div class="panel item">
               <div
                 class="thumb{% if dataset.has_thumbnail %} has-image{% endif %}"
@@ -50,6 +111,7 @@
                 {% endif %}
               </div>
             </div>
+            {% endif %}
 
             <section class="panel" aria-labelledby="description-title">
               <h3 id="description-title">Description</h3>
@@ -96,8 +158,10 @@
 
           <div class="stack">
             <section class="panel" aria-labelledby="sync-title">
-              <h3 id="sync-title">{% if vector %}Refresh{% else %}Sync{% endif %}</h3>
-              {% if refresh_href %}
+              <h3 id="sync-title">{% if vector %}Refresh{% elif dataset.kind == "table" %}Updates{% else %}Sync{% endif %}</h3>
+              {% if dataset.kind == "table" %}
+              <p class="note">The pipeline that computes this table writes its rows. A value written again replaces the one before, so the table holds current values only.</p>
+              {% elif refresh_href %}
               <p class="note">
                 This collection is refreshed from <a href="{{ mount }}{{ refresh_href }}">its data source</a>, which fetches it again from the provider.
               </p>
@@ -307,7 +371,7 @@
             <section class="panel" aria-labelledby="access-title">
               <h3 id="access-title">Access</h3>
               <div class="actions">
-                {% if published %}
+                {% if published and dataset.kind != "table" %}
                 <a class="button-link primary" href="{{ mount }}/map?dataset={{ dataset.id | urlencode }}">Open in map viewer</a>
                 {% if not read_only %}
                 <a class="button-link" href="{{ mount }}/pipelines/new?dataset={{ dataset.id | urlencode }}">Create pipeline</a>
@@ -326,7 +390,7 @@
             </section>
 
             <section class="panel" aria-labelledby="status-title">
-              <h3 id="status-title">{% if vector %}Status{% else %}Status and display{% endif %}</h3>
+              <h3 id="status-title">{% if vector or dataset.kind == "table" %}Status{% else %}Status and display{% endif %}</h3>
               <dl class="facts">
                 {% for label, value, href in status_facts %}
                 <dt>{{ label }}</dt>
@@ -335,7 +399,7 @@
               </dl>
               {% if classes %}
               {% include "_class_legend.html" %}
-              {% elif not vector %}
+              {% elif not vector and dataset.kind != "table" %}
               <span class="ramp-bar" style="--ramp: {{ dataset.ramp }}; margin-top: var(--spacers-dp8)" aria-hidden="true"></span>
               {% endif %}
             </section>
@@ -345,6 +409,11 @@
       </main>
     </div>
 
+    {% if table and published and table.features %}
+    <script>
+{% include "_table_chart_script.html" %}
+    </script>
+    {% endif %}
     {% if syncable and not read_only %}
     <script>
 {{ job_script | safe }}

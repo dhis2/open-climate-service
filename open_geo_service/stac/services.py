@@ -9,7 +9,7 @@ import math
 import os
 import threading
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -37,7 +37,7 @@ from open_geo_service.shared.classes import (
 from open_geo_service.shared.crs import canonical_crs_code, is_builtin_crs
 from open_geo_service.shared.display import display_range
 from open_geo_service.shared.geoparquet import PARQUET_MEDIA_TYPE
-from open_geo_service.shared.licences import DatasetLicence, parse_licence
+from open_geo_service.shared.licences import DatasetLicence, declared_providers, parse_licence
 from open_geo_service.shared.thumbnails import colormap_stops, thumbnail_path
 from open_geo_service.shared.time import (
     Cadence,
@@ -49,7 +49,10 @@ from open_geo_service.shared.time import (
 from open_geo_service.shared.urls import absolute_url, path_segment, self_url
 from open_geo_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
-CATALOG_DESCRIPTION = "Published datasets: rasters as GeoZarr stores and vector datasets as GeoParquet"
+CATALOG_DESCRIPTION = (
+    "Published datasets: rasters as GeoZarr stores, vector datasets as GeoParquet, and tables of "
+    "values per feature and period as Parquet"
+)
 STAC_VERSION = "1.1.0"
 MARKDOWN_MEDIA_TYPE = "text/markdown"
 CATALOG_PATH = "/stac/catalog.json"
@@ -236,6 +239,8 @@ def build_collection_for_artifact(dataset_id: str, artifact: ArtifactRecord, req
     """
     if artifact.format == ArtifactFormat.GEOPARQUET:
         return _build_feature_collection(dataset_id, artifact, request)
+    if artifact.format == ArtifactFormat.PARQUET:
+        return _build_table_collection(dataset_id, artifact, request)
     return _build_raster_collection(dataset_id, artifact, request)
 
 
@@ -523,6 +528,145 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
     return payload
 
 
+def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
+    """Build the STAC collection for a table dataset: values per feature and period in one Parquet file.
+
+    A table document, as for a feature collection, with no geometry: `table:columns` from the
+    file's schema, each with its description and the value with its unit, and the file itself as
+    the `data` asset. The spatial extent is the bounds of the feature collections the values are
+    reported on, the temporal one the first and last `period_start`. A computed table has no
+    template, so its licence and providers are its sources' (`tables.sources`); `derived_from`
+    links name those sources and `via` links the pages their data came from.
+    """
+    from open_geo_service.tables import store as table_store
+    from open_geo_service.tables.sources import table_sources
+
+    sources = table_sources(artifact)
+    summary = table_store.summarize(artifact)
+    spatial = artifact.coverage.spatial_wgs84 or artifact.coverage.spatial
+    collection = pystac.Collection(
+        id=dataset_id,
+        description=_table_description(artifact, summary.collection_ids),
+        extent=pystac.Extent(
+            spatial=pystac.SpatialExtent([[spatial.xmin, spatial.ymin, spatial.xmax, spatial.ymax]]),
+            temporal=pystac.TemporalExtent([[_start_of_day(summary.first_period), _start_of_day(summary.last_period)]]),
+        ),
+        title=artifact.dataset_name,
+        license=sources.stac_license,
+    )
+    collection.extra_fields["keywords"] = [artifact.dataset_id, "table", "parquet", "stac"]
+    # When a value last changed: the record is replaced on every write that changes one.
+    collection.extra_fields["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
+    collection.stac_extensions.append(PORTOLAN_SCHEMA)
+    table = TableExtension.ext(collection, add_if_missing=True)
+    table.row_count = summary.row_count
+    columns = _table_dataset_columns(artifact)
+    if columns:
+        collection.extra_fields["table:columns"] = columns
+
+    catalog_href = absolute_url(request, CATALOG_PATH)
+    collection.clear_links()
+    collection.set_self_href(absolute_url(request, collection_path(dataset_id)))
+    collection.add_link(pystac.Link(rel="root", target=catalog_href, media_type="application/json"))
+    collection.add_link(pystac.Link(rel="parent", target=catalog_href, media_type="application/json"))
+    collection.add_link(
+        pystac.Link(
+            rel="alternate",
+            target=absolute_url(request, f"/datasets/{path_segment(dataset_id)}"),
+            media_type="application/json",
+            title="Dataset detail",
+        )
+    )
+    # One link per licence with a page: values computed from several sources are bound by each.
+    for licence in sources.licences:
+        if licence.url:
+            collection.add_link(
+                pystac.Link(
+                    rel="license",
+                    target=licence.url,
+                    media_type="text/html",
+                    title=licence.name or licence.identifier or "Licence",
+                )
+            )
+    for recorded in ingestion_services.recorded_inputs(artifact):
+        input_id = str(recorded["collection_id"])
+        collection.add_link(
+            pystac.Link(
+                rel="derived_from",
+                target=absolute_url(request, collection_path(input_id)),
+                media_type="application/json",
+                title=input_id,
+            )
+        )
+    for source_url in _source_pages(dataset_id, {}):
+        collection.add_link(pystac.Link(rel="via", target=source_url, media_type="text/html", title="Source"))
+    for link in _document_links():
+        collection.add_link(
+            pystac.Link(rel=link["rel"], target=link["href"], media_type=link["type"], title=link["title"])
+        )
+
+    data_path = Path(artifact.asset_paths[0]) if artifact.asset_paths else None
+    collection.add_asset(
+        "data",
+        pystac.Asset(
+            href=absolute_url(request, f"/tables/{path_segment(dataset_id)}/data.parquet"),
+            media_type=PARQUET_MEDIA_TYPE,
+            title="Table (Parquet)",
+            roles=["data"],
+            # Size and checksum, as Portolan asks of a single-file asset: a table is small, and
+            # the checksum is computed once per file version.
+            extra_fields=file_fields(data_path) if data_path is not None and data_path.is_file() else None,
+        ),
+    )
+    if data_path is not None and data_path.is_file():
+        collection.stac_extensions.append(FILE_EXTENSION)
+    collection.stac_extensions.append(PROCESSING_EXTENSION)
+
+    payload = collection.to_dict(include_self_link=True, transform_hrefs=False)
+    payload["stac_version"] = STAC_VERSION
+    payload["providers"] = _published_providers(sources.template(), request, [_processor_provider(artifact, request)])
+    return payload
+
+
+def _table_description(artifact: ArtifactRecord, collection_ids: list[str]) -> str:
+    """What a table dataset holds, in one sentence: there is no template to take prose from."""
+    period = f"{artifact.period_type} period" if artifact.period_type else "period"
+    features = f" of {', '.join(collection_ids)}" if collection_ids else ""
+    return f"{artifact.dataset_name}: one value per feature{features} and {period}."
+
+
+def _table_dataset_columns(artifact: ArtifactRecord) -> list[dict[str, str]]:
+    """`table:columns` for a table dataset's file: name and type from its schema, with descriptions and the unit.
+
+    An unreadable file leaves the collection without `table:columns`, as for a feature collection.
+    """
+    import pyarrow.parquet as pq
+
+    from open_geo_service.tables.store import COLUMN_DESCRIPTIONS
+
+    if not artifact.asset_paths:
+        return []
+    try:
+        schema = pq.read_schema(artifact.asset_paths[0])
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read the parquet schema of '%s': %s", artifact.asset_paths[0], exc)
+        return []
+    columns: list[dict[str, str]] = []
+    for field in schema:
+        column = {"name": field.name, "type": str(field.type)}
+        if field.name in COLUMN_DESCRIPTIONS:
+            column["description"] = COLUMN_DESCRIPTIONS[field.name]
+        # The table extension defines no unit field, and its column schema admits further ones.
+        if field.name == "value" and artifact.units:
+            column["unit"] = artifact.units
+        columns.append(column)
+    return columns
+
+
+def _start_of_day(day: date | None) -> datetime | None:
+    return datetime(day.year, day.month, day.day, tzinfo=UTC) if day is not None else None
+
+
 def _published_providers(
     source_dataset: dict[str, Any], request: Request, processors: list[dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
@@ -538,7 +682,7 @@ def _published_providers(
     from open_geo_service import config as api_config
 
     providers = []
-    for provider in _build_providers(source_dataset):
+    for provider in declared_providers(source_dataset):
         entry = {key: value for key, value in provider.items() if key != "roles"}
         declared = provider.get("roles") or []
         roles = [role for role in declared if role != "host"] if declared else ["producer"]
@@ -750,51 +894,11 @@ def _source_pages(dataset_id: str, template: dict[str, Any]) -> list[str]:
     return pages
 
 
-def _build_providers(source_dataset: dict[str, Any]) -> list[dict[str, Any]]:
-    """STAC `providers` from the template, for carrying attribution (CLIM-946).
-
-    Attribution is a licence condition under CC-BY and CC-BY-NC, not a courtesy, and OGS had
-    nowhere to record it at collection level. Entries are passed through with only their shape
-    checked — STAC defines `name`, `description`, `roles` and `url`, and inventing validation
-    beyond that would reject legitimate metadata.
-    """
-    declared = source_dataset.get("providers")
-    if not isinstance(declared, list):
-        return []
-    providers: list[dict[str, Any]] = []
-    for entry in declared:
-        if not isinstance(entry, dict):
-            continue
-        name = entry.get("name")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        provider: dict[str, Any] = {"name": name.strip()}
-        for key in ("description", "url"):
-            value = entry.get(key)
-            if isinstance(value, str) and value.strip():
-                provider[key] = value.strip()
-        roles = entry.get("roles")
-        if isinstance(roles, list):
-            cleaned = [str(r) for r in roles if isinstance(r, str) and r.strip()]
-            if cleaned:
-                provider["roles"] = cleaned
-        providers.append(provider)
-    return providers
-
-
 def _eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
-    """Return the artifacts this builder may describe: published rasters, and only those.
+    """Return the artifacts the catalogue describes: published rasters, feature collections and tables.
 
-    This module's answer for `ArtifactFormat.GEOPARQUET` is that it never arrives. Everything
-    below is raster — xstac opens the store as an xarray dataset to derive `cube:dimensions`
-    and `cube:variables`, and the assets, media types and render hints are all Zarr's — so a
-    feature collection needs the STAC table extension (`table:row_count`,
-    `table:primary_geometry`, `table:columns`) and no datacube fields at all. That is a second
-    builder, not a branch through this one.
-
-    CLIM-1069 adds it, and widens the gate in the same change so the catalogue never advertises
-    a child it cannot serve. Until then a GeoParquet record is absent from this set and its
-    collection URL is a plain 404, which is true rather than merely unimplemented.
+    Each format has its own builder (`build_collection_for_artifact`), and the gate admits only
+    formats one exists for, so the catalogue never advertises a child it cannot serve.
     """
     return ingestion_services.stac_eligible_artifacts_by_dataset()
 

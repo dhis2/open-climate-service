@@ -29,7 +29,7 @@ from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 import pyarrow as pa
@@ -77,6 +77,26 @@ SCHEMA = pa.schema(
 land cover class), NULL for a value that has none. Classes of one computation stay in one
 dataset, so their rows share a reducer, weights and unit and can be summed back to a total.
 """
+
+COLUMN_DESCRIPTIONS = {
+    "collection_id": "Id of the feature collection the value is reported on; joins to its GeoParquet.",
+    "feature_id": "Id of the feature, its collection's identifier property; joins to the feature collection.",
+    "feature_name": "Name of the feature when the value was written.",
+    "dataset_id": "Id of this table dataset.",
+    "period_start": "First day of the period the value is for.",
+    "class": "Category a per-class value belongs to, empty for a value without one.",
+    "reducer": "How the values within the feature were combined, e.g. mean or sum.",
+    "weights": "Dataset the values were weighted by, e.g. population, empty for unweighted ones.",
+    "value": "The value, empty when the feature has no valid data for the period.",
+    "coverage": "Fraction of the feature, from 0 to 1, with valid data behind the value.",
+    "unit": "Unit of the value.",
+    "reference_time": "When the forecast the value comes from was issued.",
+    "lead_time": "Time from the forecast's reference time to the period, in seconds.",
+    "member": "Ensemble member of the forecast the value comes from.",
+    "collection_version": "Version of the feature collection the value was computed for.",
+    "written_at": "When the value last changed.",
+}
+"""What each `SCHEMA` column holds, for the table's STAC `table:columns` and its README."""
 
 KEY = (
     "collection_id",
@@ -138,7 +158,7 @@ def write_rows(
         table = check_rows(
             dataset_id=dataset_id, collection_id=collection_id, rows=rows, period_type=period_type, written_at=stamp
         )
-        existing = _existing_record(dataset_id)
+        existing = latest_record(dataset_id)
         period_type = period_type or (existing.period_type if existing else None)
         merged = _merged(_read_file(existing), table, collection_id, period_type)
         written = _write_file(_dataset_root(dataset_id), merged, stamp)
@@ -204,7 +224,7 @@ def check_rows(
     _require_id(collection_id, "feature collection")
     require_table_id(dataset_id)
     period_type = _dataset_period_type(dataset_id, period_type)
-    existing = _existing_record(dataset_id)
+    existing = latest_record(dataset_id)
     unit = existing.units if existing else None
     feature_ids = _collection_feature_ids(collection_id)
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
@@ -240,6 +260,7 @@ def read_rows(
     record: ArtifactRecord,
     *,
     collection_id: str | None = None,
+    feature_id: str | None = None,
     start: date | None = None,
     end: date | None = None,
     reducer: str | None = None,
@@ -254,6 +275,8 @@ def read_rows(
     conditions = []
     if collection_id is not None:
         conditions.append(pc.field("collection_id") == collection_id)
+    if feature_id is not None:
+        conditions.append(pc.field("feature_id") == feature_id)
     if start is not None:
         conditions.append(pc.field("period_start") >= start)
     if end is not None:
@@ -266,6 +289,33 @@ def read_rows(
     for condition in conditions:
         flt = condition if flt is None else flt & condition
     return pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table(filter=flt).sort_by(_ORDER)
+
+
+class FileSummary(NamedTuple):
+    """What a table dataset's file holds, for its STAC collection and README."""
+
+    row_count: int
+    collection_ids: list[str]
+    first_period: date | None
+    last_period: date | None
+
+
+def summarize(record: ArtifactRecord) -> FileSummary:
+    """Count the dataset's rows and find the collections and periods they cover, reading two columns."""
+    if not record.asset_paths:
+        return FileSummary(0, [], None, None)
+    table = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table(
+        columns=["collection_id", "period_start"]
+    )
+    if table.num_rows == 0:
+        return FileSummary(0, [], None, None)
+    periods = table.column("period_start").unique().to_pylist()
+    return FileSummary(
+        row_count=table.num_rows,
+        collection_ids=sorted(set(table.column("collection_id").to_pylist())),
+        first_period=min(periods),
+        last_period=max(periods),
+    )
 
 
 _ORDER = [("collection_id", "ascending"), ("feature_id", "ascending"), ("period_start", "ascending")]
@@ -356,7 +406,8 @@ def _remove_records(dataset_id: str) -> None:
     ingestion_services._mutate_records(remove)
 
 
-def _existing_record(dataset_id: str) -> ArtifactRecord | None:
+def latest_record(dataset_id: str) -> ArtifactRecord | None:
+    """The table dataset's newest record, published or not, or None for a dataset never written."""
     from open_geo_service.ingestions import services as ingestion_services
 
     records = [
@@ -540,7 +591,7 @@ def _utc(value: object, name: str) -> datetime:
 
 def _dataset_period_type(dataset_id: str, period_type: str | None) -> str | None:
     """The period type a write uses: the dataset's own, which *period_type* must not contradict."""
-    existing = _existing_record(dataset_id)
+    existing = latest_record(dataset_id)
     current = existing.period_type if existing else None
     if existing is not None and current is None and period_type is not None:
         # Its stored periods were never normalized to a period's start, so typed rows would not

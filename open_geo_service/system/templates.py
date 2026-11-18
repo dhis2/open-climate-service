@@ -419,18 +419,15 @@ def _dataset_page_context(
     display = _mapping(template.get("display"))
     sync = _mapping(template.get("sync"))
     sync_kind = str(sync.get("kind") or "")
-    providers = ", ".join(
-        str(provider["name"])
-        for provider in template.get("providers") or []
-        if isinstance(provider, dict) and provider.get("name")
-    )
+    # From the record, which also holds the providers a computed table takes from its sources.
+    providers = ", ".join(provider.name for provider in record.providers)
     version = sync.get("version")
     version_label = (
         f"{version.get('authority')}:{version.get('value')}"
         if isinstance(version, dict) and version.get("value")
         else (str(version) if version else "")
     )
-    range_label = "" if vector else _range_label(display)
+    range_label = "" if vector or summary["kind"] == "table" else _range_label(display)
     classes = _class_legend(template)
 
     if template and vector:
@@ -525,7 +522,59 @@ def _dataset_page_context(
         # Only where the data source page offers a fetch: a provider this instance has.
         "refresh_href": f"/data-sources/{template['id']}" if vector and template and refreshable else None,
         "refresh_blocked": refresh_blocked,
+        "table": _table_view(record.dataset_id) if summary["kind"] == "table" else None,
     }
+
+
+TABLE_PREVIEW_ROWS = 20
+"""Rows of the latest period a table dataset's page shows; the rows API serves all of them."""
+
+
+def _table_view(dataset_id: str) -> dict[str, Any] | None:
+    """A table dataset's latest period of rows, and its features to chart, for its page."""
+    from open_geo_service.tables import store
+
+    record = store.latest_record(dataset_id)
+    if record is None:
+        return None
+    summary = store.summarize(record)
+    if summary.last_period is None:
+        return None
+    latest = store.read_rows(record, start=summary.last_period).to_pylist()
+    features = store.read_rows(record).select(["collection_id", "feature_id", "feature_name"]).to_pylist()
+    names: dict[str, str] = {}
+    for row in features:
+        names.setdefault(row["feature_id"], row["feature_name"] or row["feature_id"])
+    return {
+        "period": store.period_label(summary.last_period, record.period_type),
+        "row_count": summary.row_count,
+        "preview": [
+            {
+                "feature": row["feature_name"] or row["feature_id"],
+                "feature_id": row["feature_id"],
+                "series": _series_label(row),
+                "value": "" if row["value"] is None else f"{row['value']:.6g}",
+                "coverage": "" if row["coverage"] is None else f"{row['coverage']:.0%}",
+            }
+            for row in latest[:TABLE_PREVIEW_ROWS]
+        ],
+        "more": max(len(latest) - TABLE_PREVIEW_ROWS, 0),
+        "has_series": any(_series_label(row) for row in latest),
+        "features": sorted(names.items(), key=lambda item: item[1].lower()),
+        "unit": record.units or "",
+    }
+
+
+def _series_label(row: dict[str, Any]) -> str:
+    """What tells one of a feature's values for a period from another: class, reducer, weights, forecast."""
+    parts = [str(row[name]) for name in ("class", "reducer") if row.get(name) is not None]
+    if row.get("weights") is not None:
+        parts.append(f"weighted by {row['weights']}")
+    if row.get("member") is not None:
+        parts.append(f"member {row['member']}")
+    if row.get("reference_time") is not None:
+        parts.append(f"issued {row['reference_time']:%Y-%m-%d %H:%M}")
+    return ", ".join(parts)
 
 
 def _feature_refresh_blocked(collection_id: str, template: dict[str, Any] | None) -> str:
@@ -565,7 +614,13 @@ def render_dataset_page(
     refreshable = False
     refresh_blocked = ""
     try:
-        if record.item_type == "feature":
+        if record.item_type == "table":
+            from open_geo_service.tables import store
+            from open_geo_service.tables.sources import table_sources
+
+            latest = store.latest_record(record.dataset_id)
+            template = table_sources(latest).template() if latest is not None else None
+        elif record.item_type == "feature":
             from open_geo_service.features.templates import get_feature_template
 
             source_id = record.source_dataset_id or record.dataset_id
@@ -587,7 +642,7 @@ def render_dataset_page(
     stored_schedule: dict[str, Any] | None = None
     scheduler_status: dict[str, Any] = {}
     scheduler_reload_error: str | None = None
-    if record.item_type != "feature":
+    if record.item_type not in ("feature", "table"):
         try:
             from open_geo_service.scheduler.service import get_scheduler_service
 

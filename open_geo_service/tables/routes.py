@@ -3,14 +3,16 @@
 import csv
 import io
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from open_geo_service.ingestions import services as ingestion_services
 from open_geo_service.ingestions.schemas import ArtifactRecord
+from open_geo_service.shared.geoparquet import PARQUET_MEDIA_TYPE
 from open_geo_service.tables import store
 
 router = APIRouter()
@@ -20,6 +22,7 @@ router = APIRouter()
 def get_table_rows(
     dataset_id: str,
     collection: str | None = Query(default=None, description="Feature collection id, e.g. districts."),
+    feature: str | None = Query(default=None, description="Only the rows of this feature id."),
     start: date | None = Query(default=None, description="Earliest period_start to return, inclusive."),
     end: date | None = Query(default=None, description="Latest period_start to return, inclusive."),
     reducer: str | None = Query(default=None, description="Only rows computed with this reducer, e.g. mean."),
@@ -37,6 +40,7 @@ def get_table_rows(
     table = store.read_rows(
         record,
         collection_id=collection,
+        feature_id=feature,
         start=start,
         end=end,
         reducer=reducer,
@@ -50,6 +54,24 @@ def get_table_rows(
             headers={"Content-Disposition": f'attachment; filename="{dataset_id}.csv"'},
         )
     return JSONResponse(jsonable_encoder({"dataset_id": dataset_id, "items": rows}))
+
+
+@router.get("/{dataset_id}/data.parquet", response_class=FileResponse)
+# HEAD as well, for a client that sizes the file before reading ranges of it. Kept out of the
+# OpenAPI schema so the operation is listed once.
+@router.head("/{dataset_id}/data.parquet", response_class=FileResponse, include_in_schema=False)
+def download_table(dataset_id: str) -> FileResponse:
+    """Serve the Parquet file holding a published table dataset's current values.
+
+    The `data` asset of its STAC collection: the one file the store keeps, as the record names it.
+    """
+    record = _published_table_or_404(dataset_id)
+    path = Path(record.asset_paths[0]) if record.asset_paths else None
+    if path is None or not path.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"Table dataset '{dataset_id}' is registered but its file is missing"
+        )
+    return FileResponse(path, media_type=PARQUET_MEDIA_TYPE, filename=f"{dataset_id}.parquet")
 
 
 def _published_table_or_404(dataset_id: str) -> ArtifactRecord:

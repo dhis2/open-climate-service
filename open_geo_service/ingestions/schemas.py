@@ -663,6 +663,17 @@ class DatasetAccessLink(BaseModel):
     title: str = Field(description="Human-readable label for the link target.")
 
 
+class DatasetProvider(BaseModel):
+    """An organisation that made or published a dataset's data, as its template declares it."""
+
+    name: str = Field(description="Name of the organisation.")
+    description: str | None = Field(default=None, description="What the organisation did for this data.")
+    roles: list[str] = Field(
+        default_factory=list, description="STAC provider roles, such as producer or licensor, when declared."
+    )
+    url: str | None = Field(default=None, description="The organisation's home page.")
+
+
 class DatasetPublication(BaseModel):
     """Public publication summary for a managed dataset."""
 
@@ -718,11 +729,20 @@ class DatasetRecord(BaseModel):
         default=STAC_LICENSE_OTHER,
         description=(
             "SPDX identifier for the dataset's licence, or 'other' when the licence has no "
-            "SPDX identifier. Never absent: an undeclared licence reports 'other' rather than "
+            "SPDX identifier. A table computed from several sources is bound by each, so it reports "
+            "an SPDX expression such as 'CC-BY-4.0 AND ODbL-1.0'. Never absent: an undeclared "
+            "licence reports 'other' rather than "
             "something that reads as permissive."
         ),
     )
     license_url: str | None = Field(default=None, description="URL of the licence text, when known.")
+    providers: list[DatasetProvider] = Field(
+        default_factory=list,
+        description=(
+            "Organisations that made the data, from its template; for a computed table, from the "
+            "datasets it was computed from."
+        ),
+    )
     extent: ArtifactCoverage = Field(description="Current covered spatial and temporal extent of the dataset.")
     last_updated: datetime = Field(
         description="Timestamp when Open Geo Service last materialized or updated the dataset."
