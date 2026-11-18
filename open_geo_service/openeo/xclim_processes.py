@@ -74,7 +74,7 @@ def _collect() -> list[Any]:
     import xclim.indicators.atmos as atmos
     import xclim.indicators.land as land
     import xclim.indicators.seaIce as seaice
-    from xclim.core.indicator import InputKind
+    from xclim.core import InputKind
 
     _SKIP_KINDS = {InputKind.DATASET, InputKind.KWARGS}
     _VARIABLE_KINDS = {InputKind.VARIABLE, InputKind.OPTIONAL_VARIABLE}
@@ -106,12 +106,12 @@ def _collect() -> list[Any]:
             # Every spec below declares a single datacube return, so an indicator producing
             # several cubes cannot be honoured: a client composing a graph from GET /processes
             # would feed a tuple into save_result or a reducer and get a confusing failure
-            # rather than "not supported". Three of xclim 0.61's registered indicators are
-            # multi-output — cffwis (6), rain_season (3), jetstream_metric_woollings (2) — and
-            # no OGS workflow uses them, so advertising 176 processes we honour beats 179 where
-            # three lie (CLIM-860). Registering one process per named output is the richer
-            # alternative, worth doing if someone asks for these specifically.
-            outputs = _declared_output_count(obj)
+            # rather than "not supported". Five of xclim 1.0's registered indicators are
+            # multi-output — cffwis (6), rain_season (3), jetstream_metric_woollings (2),
+            # base_flow_index_seasonal_ratio and sen_slope — and no OGS workflow uses them, so
+            # we advertise only the processes we honour (CLIM-860). Registering one process per
+            # named output is the richer alternative, worth doing if someone asks for these.
+            outputs = len(obj.outputs)
             if outputs > 1:
                 logger.debug("Skipping multi-output xclim indicator '%s' (%d outputs)", indicator_id, outputs)
                 continue
@@ -149,25 +149,26 @@ def _collect() -> list[Any]:
     return funcs
 
 
-def _declared_output_count(indicator: Any) -> int:
-    """How many cubes an xclim indicator returns, per its own CF metadata.
-
-    ``cf_attrs`` carries one entry per output, so its length is the indicator's arity.
-    Anything unreadable counts as one: a wrong guess here would silently drop a
-    single-output indicator, and losing a process is worse than the mismatch this guards.
-    """
-    try:
-        return len(indicator.cf_attrs)
-    except Exception:  # noqa: BLE001 — metadata shape is xclim's business, not ours
-        logger.debug("Could not read cf_attrs for %r; assuming single output", indicator, exc_info=True)
-        return 1
-
-
 def _make_callable(indicator: Any, meta: dict[str, Any]) -> Any:
     """Wrap an xclim indicator as a bare callable with process metadata attached."""
 
     def _call(**kwargs: Any) -> Any:
-        return call_with_ogs_time_dim(indicator, **kwargs)
+        return _single_output(call_with_ogs_time_dim(indicator, **kwargs))
 
     setattr(_call, _GEOSERVICE_PROCESS_ATTR, meta)
     return _call
+
+
+def _single_output(result: Any) -> Any:
+    """Return the one cube of a single-output indicator.
+
+    xclim 1.0 indicators return a Dataset by default. Its ``as_dataset`` option is a process-wide
+    global with no per-call override, and jobs run in threads, so we unwrap the result here
+    rather than switch the option off around the call (CLIM-1767).
+    """
+    import xarray as xr
+
+    if isinstance(result, xr.Dataset):
+        (name,) = result.data_vars
+        return result[name]
+    return result

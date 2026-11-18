@@ -8,9 +8,9 @@ is insufficient.
 from typing import Any, cast
 
 import xarray as xr
+import xclim.compute
 import xclim.indicators.atmos as xclim_atmos
-import xclim.indices
-from xclim.core.indicator import InputKind
+from xclim.core import InputKind
 
 from open_geo_service.openeo.xclim_processes import call_with_ogs_time_dim
 from open_geo_service.process import process
@@ -67,7 +67,7 @@ def spi(
     # pronounced dry season (e.g. near-zero winter months), where ML optimization
     # diverges. DateStr is NewType(str) in xclim — cast to satisfy pyright.
     result = call_with_ogs_time_dim(
-        xclim.indices.standardized_precipitation_index,
+        xclim.compute.standardized_precipitation_index,
         pr,
         freq=freq,
         window=window,

@@ -180,8 +180,7 @@ def _align_units(normal: xr.DataArray, observed: xr.DataArray) -> xr.DataArray:
             "different quantity; an anomaly between them is not defined. Pair the observed dataset with a "
             "normal computed from it."
         )
-    # `convert_units_to` is typed as accepting/returning scalars too; ours is always a cube.
-    converted = cast(xr.DataArray, convert_units_to(normal, observed_units))
+    converted: xr.DataArray = convert_units_to(normal, observed_units)
     converted.attrs = {**normal.attrs, "units": observed_units}
     return converted
 
