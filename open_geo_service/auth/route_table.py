@@ -38,6 +38,10 @@ ROUTE_TABLE: dict[Tier, frozenset[str]] = {
             "GET /info",
             "GET /me",
             "GET /service_types",
+            # Web interface sign-in; the middleware checks the posts come from this instance's pages
+            "GET /sign-in",
+            "POST /sign-in",
+            "POST /sign-out",
             # Catalogue and data reads
             "GET /collections",
             "GET /collections/{collection_id}",

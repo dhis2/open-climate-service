@@ -15,6 +15,7 @@
         {{ logo }}
         <h1>{{ name }}</h1>
       </a>
+      {{ account(mount) }}
     </header>
 
     <div class="layout">
@@ -117,6 +118,8 @@
                 This dataset is not fetched from a provider{% if produced_by %}; it is produced by the
                 <a href="{{ mount }}/workflows/{{ produced_by }}">{{ produced_by }}</a> workflow{% endif %}.
               </p>
+              {% elif sign_in %}
+              <p class="note"><a href="{{ mount }}/sign-in">Sign in</a> with an operator token to ingest data here.</p>
               {% elif read_only %}
               <p class="note">This instance is read-only, so data cannot be ingested here.</p>
               {% elif not has_extent %}
