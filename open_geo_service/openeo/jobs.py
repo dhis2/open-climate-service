@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 from open_geo_service import __version__
 from open_geo_service import config as api_config
-from open_geo_service.auth.tokens import Principal
+from open_geo_service.auth.tokens import Principal, owner_principal
 from open_geo_service.exports.retention import result_lease
 from open_geo_service.exports.tabular import (
     _NON_VALUE_FIELDS as _NON_VALUE_FIELDS,
@@ -1034,7 +1034,7 @@ class OpenEOJobService:
                     lambda: _cancel_requested(job_id),
                     enter_publication=lambda: self._enter_publication(job_id),
                 ):
-                    result = run_process_graph(record.process)
+                    result = run_process_graph(record.process, visible_to=owner_principal(record.owner))
                     raise_if_cancelled(force=True)
                     saving = True
                     output_path = self._persist_result(job_id, result)

@@ -24,7 +24,7 @@ from open_geo_service.auth.tokens import Tier
 
 MESSAGE = (
     "This instance is read-only: {method} {path} is not available. "
-    "Data can be browsed via /collections, /stac, /zarr and /datasets, and process graphs "
+    "Data can be browsed via /collections, /stac/catalog.json, /zarr and /datasets, and process graphs "
     "can be executed synchronously via POST /result."
 )
 

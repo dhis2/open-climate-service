@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import time
 from typing import Any
 
 import pytest
@@ -15,6 +16,7 @@ from open_geo_service import config as api_config
 from open_geo_service.auth.route_table import ROUTE_TABLE, route_tier
 from open_geo_service.auth.tokens import Tier, configured_tokens
 from open_geo_service.main import app
+from open_geo_service.openeo.jobs import get_openeo_job_service
 
 from .conftest import MountedClientFactory
 
@@ -217,6 +219,17 @@ def test_a_stored_workflow_is_reached_only_by_its_owner_and_operators(auth_on: N
     assert client.get("/workflows/mine").status_code == 404
     assert client.put("/process_graphs/mine", json=graph, headers=other).status_code == 403
     assert client.delete("/process_graphs/mine", headers=other).status_code == 404
+    # Nor can it be run by id, synchronously or in a batch job.
+    calls_mine = {"process_graph": {"m": {"process_id": "mine", "arguments": {}, "result": True}}}
+    assert client.post("/result", json={"process": calls_mine}, headers=_bearer(CLIENT_SECRET)).json() == 3
+    assert client.post("/result", json={"process": calls_mine}, headers=other).status_code == 400
+    job_id = client.post("/jobs", json={"process": calls_mine}, headers=other).json()["id"]
+    client.post(f"/jobs/{job_id}/results", headers=other)
+    deadline = time.monotonic() + 30
+    while client.get(f"/jobs/{job_id}", headers=other).json()["status"] not in ("error", "finished"):
+        assert time.monotonic() < deadline
+        time.sleep(0.1)
+    assert "mine not found" in (get_openeo_job_service().get_job_or_404(job_id).error_message or "")
     # Taking a built-in id would replace it for every caller and pipeline.
     built_in = "/process_graphs/aggregate_by_features"
     assert client.put(built_in, json=graph, headers=_bearer(CLIENT_SECRET)).status_code == 403

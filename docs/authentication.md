@@ -174,9 +174,11 @@ When it is built:
 ## Ownership and audit
 
 Batch jobs and stored process graphs record the principal that created them. Listing, reading
-and changing them is limited to the owner unless the caller has the operator tier; another
-principal's job is answered `404`, as if it did not exist. Records from before owners were
-recorded have none, and only operators reach them. `GET /me` reports the caller.
+and changing them is limited to the owner unless the caller has the operator tier, and so is
+running a stored process graph by id; another principal's records are answered `404`, as if they
+did not exist. Pipeline runs and derived datasets, which no client starts, can run every stored
+process graph. Records from before owners were recorded have none, and only operators reach
+them. `GET /me` reports the caller.
 
 Pipeline runs, delivery records and dataset updates are reached only with the operator tier, so
 ownership does not limit them. They will record the principal, how it authenticated and, where

@@ -482,7 +482,7 @@ def execute_synchronous(
         raise HTTPException(status_code=422, detail="Body must contain a 'process' object or 'process_graph' directly")
     if not isinstance(process, dict):
         raise HTTPException(status_code=422, detail="Body must contain a 'process' object")
-    result = run_process_graph(process, request)
+    result = run_process_graph(process, request, visible_to=principal_of(request))
 
     import tempfile
 

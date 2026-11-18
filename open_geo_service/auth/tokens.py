@@ -102,6 +102,22 @@ def configured_tokens() -> tuple[NamedToken, ...]:
     return tuple(tokens)
 
 
+def owner_principal(owner: str | None) -> Principal | None:
+    """The principal a recorded owner runs as when no request carries it, as a batch job does.
+
+    None, which limits nothing, for work no client started (a pipeline run, a derived dataset
+    refresh) and while authentication is off. An owner whose token is no longer configured keeps
+    its id and the public tier, so it still reaches only its own records.
+    """
+    tokens = configured_tokens()
+    if owner is None or not tokens:
+        return None
+    for token in tokens:
+        if owner == f"token:{token.id}":
+            return Principal(id=owner, tier=token.tier, token=token)
+    return Principal(id=owner, tier=Tier.PUBLIC)
+
+
 def authenticate(authorization: str | None, tokens: tuple[NamedToken, ...]) -> Principal | None:
     """The principal an ``Authorization`` header names: anonymous without one, None when invalid.
 
