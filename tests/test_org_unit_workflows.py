@@ -15,7 +15,7 @@ from open_geo_service.openeo import jobs
 from open_geo_service.openeo import workflows as workflow_store
 from open_geo_service.openeo.execution import (
     _augment_with_workflows,
-    _build_process_registry,
+    _new_process_registry,
     _resolve_workflow_parameters,
 )
 
@@ -59,7 +59,8 @@ def _overlay_with_mock_dataset() -> Any:
             "x": [1.0, 2.0, 3.0, 4.0, 5.0],
         },
     )
-    reg = _build_process_registry()
+    # A registry of its own: the cached one is shared by every later test in this process.
+    reg = _new_process_registry()
     reg["load_collection"] = Process(spec={}, implementation=lambda id=None, temporal_extent=None, **k: ds["tp"])
     return _augment_with_workflows(reg)
 
