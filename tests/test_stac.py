@@ -448,6 +448,7 @@ def test_collection_uses_root_href_for_icechunk_store(
         lambda _: {
             "period_type": "daily",
             "source": "CHIRPS v3",
+            "source_url": "https://example.org/source",
             "ingestion": {},
             "display": {"colormap": "blues", "nodata": -9999.0},
         },
@@ -518,6 +519,7 @@ def test_an_ingested_collection_publishes_measured_band_statistics(
         "variable": "precip",
         "period_type": "daily",
         "sync": {"kind": "temporal"},
+        "source_url": "https://example.org/source",
         "ingestion": {"plugin": "tests.test_stac.DryDaysPlugin"},
         # As ERA5-Land precipitation does, to draw dry cells transparent.
         "display": {"colormap": "blues", "nodata": 0.0},

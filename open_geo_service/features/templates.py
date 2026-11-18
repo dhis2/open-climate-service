@@ -272,6 +272,14 @@ def _validate_feature_template(template: object, *, source: str) -> None:
                 f"Feature template '{template_id}' in {source} declares provider {provider!r} with "
                 "leading or trailing whitespace; declare it without padding"
             )
+        # As for a raster template that fetches data: the collection is a mirror, which Portolan
+        # requires to link the original source (`via`).
+        source_url = template.get("source_url")
+        if not isinstance(source_url, str) or not source_url.strip():
+            raise ValueError(
+                f"Feature template '{template_id}' in {source} must define 'source_url', the page of the "
+                "source its features are fetched from"
+            )
         # Not resolved against the provider registry here. A provider module can be installed
         # after templates load (or not at all, for a template that is metadata-only until one
         # is), so an unknown name is a fact for `load_features`/refresh time to raise on, not a

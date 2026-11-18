@@ -181,7 +181,7 @@ from the dimension's metadata, so there's nothing extra to configure.
 | `short_name` | No       | Short label used in compact displays                                           |
 | `variable`   | Yes      | Name of the data variable in the Zarr store (e.g. `precip`, `t2m`, `rainfall`) |
 | `source`     | No       | Name of the upstream data source                                               |
-| `source_url` | No       | URL to the upstream dataset documentation or landing page                      |
+| `source_url` | Yes, with an `ingestion` plugin | The upstream dataset's landing page. Published as the STAC collection's `via` link, which Portolan requires of a collection this instance hosts but did not produce. A derived template (one with `produced_by`) may leave it out: its collection links its inputs' sources |
 | `license`    | No       | The data's licence: an SPDX identifier (`CC-BY-4.0`), or `name` and `url` where none exists (`Licence to Use Copernicus Products`). Published on the STAC collection; without it the collection is published as `other`. Take it from the licence the source names, not from how its page describes the data |
 | `description` | No      | What the dataset holds, in a sentence or two. Published in `GET /data-sources`, `/datasets/{id}` and the STAC collection, so write it for whoever uses the data |
 | `produced_by` | No      | The workflow that produces a non-ingestable template, or its recipe. See [Derived datasets](#derived-datasets) |

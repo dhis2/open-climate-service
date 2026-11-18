@@ -101,6 +101,7 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  license: CC-BY-4.0\n"
         "  sync:\n"
         "    kind: temporal\n"
+        "  source_url: https://example.org/source\n"
         "  ingestion:\n"
         "    plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin\n",
         encoding="utf-8",

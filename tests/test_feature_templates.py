@@ -59,6 +59,8 @@ def test_a_valid_template_loads() -> None:
         pytest.param({"provider": " dhis2"}, "leading or trailing whitespace", id="padded_provider"),
         pytest.param({"params": "not-a-mapping"}, "not a mapping", id="params_not_a_dict"),
         pytest.param({"params": {"level": 2}}, "declares 'params' but no 'provider'", id="params_without_provider"),
+        pytest.param({"provider": "dhis2"}, "must define 'source_url'", id="provider_without_source_url"),
+        pytest.param({"provider": "dhis2", "source_url": "  "}, "must define 'source_url'", id="blank_source_url"),
     ],
 )
 def test_an_invalid_template_is_refused(overrides: dict[str, Any], expected: str) -> None:
@@ -68,7 +70,12 @@ def test_an_invalid_template_is_refused(overrides: dict[str, Any], expected: str
 
 
 def test_a_template_may_declare_a_provider_with_params() -> None:
-    template = {**VALID_TEMPLATE, "provider": "dhis2", "params": {"connection": "national-hmis", "level": 2}}
+    template = {
+        **VALID_TEMPLATE,
+        "provider": "dhis2",
+        "source_url": "https://example.org/source",
+        "params": {"connection": "national-hmis", "level": 2},
+    }
     feature_templates._validate_feature_template(template, source="test.yaml")  # does not raise
 
 
@@ -80,7 +87,7 @@ def test_a_template_with_no_provider_is_metadata_only() -> None:
 def test_an_unregistered_provider_name_does_not_fail_template_validation() -> None:
     """The provider registry is populated independently; an unresolved name is a load-time fact,
     not a reason to fail every other template in the same file."""
-    template = {**VALID_TEMPLATE, "provider": "not-yet-installed"}
+    template = {**VALID_TEMPLATE, "provider": "not-yet-installed", "source_url": "https://example.org/source"}
     feature_templates._validate_feature_template(template, source="test.yaml")  # does not raise
 
 

@@ -28,6 +28,7 @@ TEMPLATES = """
   license: ODbL-1.0
   attribution: © Demo contributors
   id_property: code
+  source_url: https://example.org/source
   provider: fake
   params:
     release: 2026-09-23.0
@@ -36,6 +37,7 @@ TEMPLATES = """
 - id: orphan_regions
   name: Orphan regions
   id_property: code
+  source_url: https://example.org/source
   provider: missing
 """
 
@@ -197,7 +199,9 @@ def test_an_id_declared_in_both_registries_is_listed_once_and_cannot_be_fetched_
 ) -> None:
     raster_id = next(t["id"] for t in client.get("/data-sources").json() if t["itemType"] == "coverage")
     (tmp_path / "feature_templates" / "clash.yaml").write_text(
-        f"- id: {raster_id}\n  name: Clash\n  id_property: code\n  provider: fake\n", encoding="utf-8"
+        f"- id: {raster_id}\n  name: Clash\n  id_property: code\n  provider: fake\n"
+        "  source_url: https://example.org/source\n",
+        encoding="utf-8",
     )
     feature_templates.reset_feature_template_caches()
 

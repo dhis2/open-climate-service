@@ -313,6 +313,7 @@ def test_an_ingested_categorical_dataset_loads_with_its_classes(
         "variable": "level",
         "period_type": "daily",
         "sync": {"kind": "temporal"},
+        "source_url": "https://example.org/source",
         "ingestion": {"plugin": "tests.test_categorical_classes.HeatLevelsPlugin"},
         "display": {"colormap": "viridis", "range": [0, 3]},
     }

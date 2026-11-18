@@ -224,6 +224,7 @@ def test_dataset_registry_accepts_supported_sync_kind(
   period_type: daily
   sync:
     kind: temporal
+  source_url: https://example.org/source
   ingestion:
     plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
@@ -247,6 +248,7 @@ def test_dataset_registry_accepts_ingestion_plugin_without_function(
   period_type: daily
   sync:
     kind: temporal
+  source_url: https://example.org/source
   ingestion:
     plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
@@ -318,6 +320,7 @@ def test_dataset_registry_accepts_supported_sync_execution(
   sync:
     kind: temporal
     execution: append
+  source_url: https://example.org/source
   ingestion:
     plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
 """,
@@ -453,6 +456,7 @@ def test_entry_point_plugin_dataset_is_discovered(monkeypatch: pytest.MonkeyPatc
                 {
                     "id": "senorge_temperature_daily",
                     "sync": {"kind": "temporal"},
+                    "source_url": "https://example.org/source",
                     "ingestion": {"plugin": "pkg.senorge.SeNorgePlugin"},
                 },
             )
