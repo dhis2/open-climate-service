@@ -77,6 +77,7 @@ def scan() -> list[Any]:
 def _collect() -> list[Any]:
     import xclim.indicators  # noqa: F401  # pyright: ignore[reportUnusedImport]  # fills the registry
     from xclim.core import InputKind
+    from xclim.core.calendar import select_time
     from xclim.core.indicator import registry
 
     _SKIP_KINDS = {InputKind.DATASET, InputKind.KWARGS}
@@ -93,6 +94,9 @@ def _collect() -> list[Any]:
         InputKind.NUMBER_SEQUENCE: {"type": "array"},
         InputKind.BOOL: {"type": "boolean"},
     }
+
+    # Indicators with an `indexer` parameter pass extra keywords on to select_time (month, season, ...).
+    time_selection = set(inspect.signature(select_time).parameters) - {"da"}
 
     funcs: list[Any] = []
 
@@ -141,15 +145,27 @@ def _collect() -> list[Any]:
             "parameters": params,
             "returns": {"schema": {"type": "object", "subtype": "datacube"}},
         }
-        funcs.append(_make_callable(obj, meta))
+        accepted = {name for name, p in obj.parameters.items() if p.kind is not InputKind.KWARGS}
+        if any(p.kind is InputKind.KWARGS for p in obj.parameters.values()):
+            accepted |= time_selection
+        funcs.append(_make_callable(obj, meta, accepted))
 
     return funcs
 
 
-def _make_callable(indicator: Any, meta: dict[str, Any]) -> Any:
-    """Wrap an xclim indicator as a bare callable with process metadata attached."""
+def _make_callable(indicator: Any, meta: dict[str, Any], accepted: set[str]) -> Any:
+    """Wrap an xclim indicator as a bare callable with process metadata attached.
+
+    An unknown argument is refused by name. xclim would pass it on to select_time and fail with
+    "unexpected keyword argument", which reads as an internal error; xclim 1.0 renamed `op` to
+    `condition` in most indicators, so graphs written for 0.x hit this (CLIM-1767).
+    """
 
     def _call(**kwargs: Any) -> Any:
+        unknown = sorted(set(kwargs) - accepted)
+        if unknown:
+            known = ", ".join(p["name"] for p in meta["parameters"])
+            raise TypeError(f"{meta['id']} has no parameter {', '.join(unknown)}; its parameters are {known}")
         return _single_output(call_with_ogs_time_dim(indicator, **kwargs))
 
     setattr(_call, _GEOSERVICE_PROCESS_ATTR, meta)

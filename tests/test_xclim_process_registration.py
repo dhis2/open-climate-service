@@ -89,3 +89,66 @@ def test_single_output_indicators_are_still_registered() -> None:
     assert len(registered) >= 170
     assert "tx_max" in registered
     assert registered["tx_max"]["returns"]["schema"]["subtype"] == "datacube"
+
+
+def _daily_tasmax_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve a year of daily maximum temperature as the published collection `tasmax`."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    from open_geo_service.ingestions.schemas import ArtifactFormat
+
+    t = pd.date_range("2017-01-01", "2017-12-31", freq="D")
+    values = 25 + 10 * np.sin(np.arange(len(t)) / 20)[:, None, None] * np.ones((1, 2, 2))
+    ds = xr.Dataset(
+        {"tasmax": (("t", "y", "x"), values, {"units": "degC", "standard_name": "air_temperature"})},
+        coords={"t": t, "y": [1.0, 0.0], "x": [0.0, 1.0]},
+    )
+    ds.attrs["proj:code"] = "EPSG:4326"
+    artifact = SimpleNamespace(format=ArtifactFormat.ICECHUNK)
+    monkeypatch.setattr("open_geo_service.openeo.execution._get_published_artifact", lambda _id: artifact)
+    monkeypatch.setattr("open_geo_service.openeo.execution._open_artifact", lambda _a: ds)
+
+
+def _tx_days_above_graph(**arguments: object) -> dict:
+    return {
+        "process_graph": {
+            "load": {"process_id": "load_collection", "arguments": {"id": "tasmax"}},
+            "days": {
+                "process_id": "tx_days_above",
+                "arguments": {"tasmax": {"from_node": "load"}, "thresh": "30 degC", "freq": "MS", **arguments},
+                "result": True,
+            },
+        }
+    }
+
+
+def test_graph_with_a_renamed_argument_is_refused_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """xclim 1.0 renamed `op` to `condition`; a 0.x graph gets a 400 naming both, not a select_time error."""
+    from fastapi import HTTPException
+
+    from open_geo_service.openeo.execution import run_process_graph
+
+    _daily_tasmax_collection(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        run_process_graph(_tx_days_above_graph(op=">"))
+
+    assert exc_info.value.status_code == 400
+    assert "tx_days_above has no parameter op" in exc_info.value.detail
+    assert "condition" in exc_info.value.detail
+
+
+def test_graph_with_time_selection_keywords_still_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check must not refuse the select_time keywords xclim takes through `indexer`."""
+    from open_geo_service.openeo.execution import run_process_graph
+
+    _daily_tasmax_collection(monkeypatch)
+
+    everything = run_process_graph(_tx_days_above_graph(condition=">"))
+    june_only = run_process_graph(_tx_days_above_graph(condition=">", month=[6]))
+
+    assert everything.sum() > june_only.sum() > 0
