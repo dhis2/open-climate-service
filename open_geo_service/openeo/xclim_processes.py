@@ -75,6 +75,7 @@ def _collect() -> list[Any]:
     import xclim.indicators.land as land
     import xclim.indicators.seaIce as seaice
     from xclim.core import InputKind
+    from xclim.core.indicator import Indicator
 
     _SKIP_KINDS = {InputKind.DATASET, InputKind.KWARGS}
     _VARIABLE_KINDS = {InputKind.VARIABLE, InputKind.OPTIONAL_VARIABLE}
@@ -96,9 +97,9 @@ def _collect() -> list[Any]:
 
     for mod in (atmos, land, seaice):
         for obj in vars(mod).values():
-            if not (hasattr(obj, "identifier") and hasattr(obj, "parameters") and hasattr(obj, "title")):
+            if not isinstance(obj, Indicator) or obj.identifier is None:
                 continue
-            indicator_id: str = obj.identifier
+            indicator_id = obj.identifier
             if indicator_id in seen:
                 continue
             seen.add(indicator_id)

@@ -43,11 +43,12 @@ def test_every_registered_indicator_returns_exactly_one_cube() -> None:
     import xclim.indicators.atmos as atmos
     import xclim.indicators.land as land
     import xclim.indicators.seaIce as seaice
+    from xclim.core.indicator import Indicator
 
     by_id = {}
     for mod in (atmos, land, seaice):
         for obj in vars(mod).values():
-            if hasattr(obj, "identifier") and hasattr(obj, "outputs"):
+            if isinstance(obj, Indicator):
                 by_id.setdefault(obj.identifier, len(obj.outputs))
 
     offenders = {name: by_id[name] for name in _registered() if by_id.get(name, 1) > 1}
