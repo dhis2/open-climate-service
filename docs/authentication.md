@@ -1,10 +1,9 @@
 # Authentication and authorization
 
-This note records how Open Geo Service will authenticate callers and decide what they may do. It is a design,
-not a description of current behaviour: **Open Geo Service has no authentication today.** Every route is open
-to anyone who can reach the instance, including ingestion, pipelines and delivery to DHIS2. Until
-the first step below ships, deploy an instance privately or behind reverse-proxy authentication,
-or run it read-only (see [Read-only instances](instance_guide.md#read-only-instances)).
+This note records how Open Geo Service authenticates callers and decides what they may do. The first step
+of the [order of delivery](#order-of-delivery) is in place: named tokens, tiers and the route
+table, configured as described in [Authentication](instance_guide.md#authentication). The rest is
+design. Until web sign-in ships, operators act through the API on an instance with tokens on.
 
 ## The principle
 
@@ -52,10 +51,10 @@ to its owner and is listed only to its owner and to operators. A stored workflow
 of a built-in or plugin workflow unless an operator stores it. Today such a workflow replaces the
 built-in for every caller, including the pipelines that run it.
 
-The table fails closed. A route it does not list, such as a new plugin route or form endpoint,
-gets the operator tier, and a test over every route the application serves fails until it is
-listed. The test covers routes left out of the OpenAPI document, such as the pipeline form's
-lookups.
+The table fails closed. A route the application serves that the table does not list, such as a
+new plugin route or form endpoint, gets the operator tier, and a test over every route the
+application serves fails until it is listed. The test covers routes left out of the OpenAPI
+document, such as the pipeline form's lookups. A path no route serves is answered `404`.
 
 Read-only mode is a separate check over the same table. It refuses every route above public,
 except `POST /result`, which it lets through because computing a result changes nothing. It never
@@ -174,10 +173,14 @@ When it is built:
 
 ## Ownership and audit
 
-Jobs, stored process graphs, pipeline runs, delivery records and dataset updates record the
-principal that created them, how it authenticated, and, where there is one, the acting person.
-Listing and changing them is limited to the owner unless the caller has the operator tier.
-`GET /me` reports the caller.
+Batch jobs and stored process graphs record the principal that created them. Listing, reading
+and changing them is limited to the owner unless the caller has the operator tier; another
+principal's job is answered `404`, as if it did not exist. Records from before owners were
+recorded have none, and only operators reach them. `GET /me` reports the caller.
+
+Pipeline runs, delivery records and dataset updates are reached only with the operator tier, so
+ownership does not limit them. They will record the principal, how it authenticated and, where
+there is one, the acting person, for audit.
 
 The scheduler and the pipeline runner act as service principals, so an unattended delivery is as
 attributable as one started by hand. The credentials Open Geo Service uses for upstream sources and DHIS2
@@ -202,7 +205,7 @@ apply per IP address to anonymous callers and per principal once identity exists
 Each step ships on its own and is useful alone; no later step redoes an earlier one.
 
 1. Principals and tiers, the route table, the middleware, named tokens, the openEO basic exchange,
-   and principals on records.
+   and owners on jobs and stored process graphs.
 2. Web interface sign-in with a session cookie and CSRF.
 3. Optional gating of reads, advertised in STAC.
 4. OIDC and per-person ownership.

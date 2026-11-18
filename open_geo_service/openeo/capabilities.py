@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib.metadata import version as _pkg_version
 
 from open_geo_service import config as api_config
+from open_geo_service.auth.tokens import configured_tokens
 from open_geo_service.openeo.schemas import OpenEOCapabilities, OpenEOEndpoint
 
 API_VERSION = "1.2.0"
@@ -49,6 +50,9 @@ def build_capabilities(base_url: str) -> OpenEOCapabilities:
         OpenEOEndpoint(path="/result", methods=["POST"]),
         OpenEOEndpoint(path="/health", methods=["GET"]),
     ]
+
+    if configured_tokens():
+        endpoints.insert(1, OpenEOEndpoint(path="/credentials/basic", methods=["GET"]))
 
     # A read-only instance must not advertise what it will refuse: openEO clients build
     # their capability set from this list, so leaving the write endpoints in would have
