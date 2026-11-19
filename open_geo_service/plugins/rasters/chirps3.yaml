@@ -3,7 +3,7 @@
   short_name: Precipitation
   description: >-
     Daily rainfall over land at 5 km, from satellite estimates calibrated against station
-    observations. Covers 50 degrees south to 50 degrees north from 1981 onwards.
+    observations. Covers 60 degrees south to 60 degrees north from 1981 onwards.
   standard_name: lwe_precipitation_rate
   variable: precip
   period_type: daily
@@ -12,24 +12,26 @@
     execution: append
   extents:
     spatial:
-      bbox: [-180, -50, 180, 50]
+      bbox: [-180, -60, 180, 60]
     temporal:
       begin: "1981-01-01"
       resolution: P1D
   ingestion:
     plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
-  # Daily precipitation as a rate (mm/day): a daily total in mm equals the mean daily
-  # rate (the cell is one day), so this is a relabel, not a value change. Storing precip
-  # as a flux is what xclim drought indices (SPI/SPEI) consume directly.
+  # Daily precipitation as a rate (mm/day), which is what xclim drought indices (SPI/SPEI)
+  # consume directly. The source rate is in kg m-2 s-1 (mm/s); the plugin converts it.
   units: mm/d
   cell_methods: "time: mean"
   resolution: 5 km x 5 km
-  source: CHIRPS v3
+  source: CHIRPS v3, via dynamical.org
+  # Where the data originates, which a STAC `via` link must name; dynamical.org is listed as a provider.
   source_url: https://www.chc.ucsb.edu/data/chirps3
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
+    - name: dynamical.org
+      url: https://dynamical.org
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -54,7 +56,7 @@
     execution: append
   extents:
     spatial:
-      bbox: [-180, -50, 180, 50]
+      bbox: [-180, -60, 180, 60]
     temporal:
       begin: "2025-01-01"
       resolution: P1D
@@ -62,16 +64,17 @@
     plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3DailyPlugin
     params:
       stage: prelim
-      flavor: sat
   units: mm/d
   cell_methods: "time: mean"
   resolution: 5 km x 5 km
-  source: CHIRPS v3 preliminary
+  source: CHIRPS v3 preliminary, via dynamical.org
   source_url: https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/prelim/
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
+    - name: dynamical.org
+      url: https://dynamical.org
   display:
     colormap: blues
     range: [0.0, 20.0]
@@ -95,27 +98,27 @@
     execution: append
   extents:
     spatial:
-      bbox: [-180, -50, 180, 50]
+      bbox: [-180, -60, 180, 60]
     temporal:
       begin: "1981-01-01"
       resolution: P1M
   ingestion:
     plugin: open_geo_service.plugins.rasters.chirps3.CHIRPS3MonthlyPlugin
-  # The source raster is a monthly *total* in mm — confirmed against the sum of the same
-  # month's dailies, which matches exactly — so the plugin divides by the number of days to
-  # store a mean daily rate. Unlike the daily dataset this is a real conversion, not a
-  # relabel. mm/d is what every other monthly precipitation dataset here uses, including
-  # chirps3_precipitation_monthly_normal_1991_2020 below: storing the raw total under the
+  # The mean of the month's final daily values, a mean daily rate. mm/d is what every other
+  # monthly precipitation dataset here uses, including
+  # chirps3_precipitation_monthly_normal_1991_2020 below: storing the monthly total under the
   # same units would make a monthly anomaly against that normal wrong by a factor of ~30.
   units: mm/d
   cell_methods: "time: mean"
   resolution: 5 km x 5 km
-  source: CHIRPS v3 (monthly)
+  source: CHIRPS v3 (monthly mean of the daily product), via dynamical.org
   source_url: https://www.chc.ucsb.edu/data/chirps3
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
+    - name: dynamical.org
+      url: https://dynamical.org
   display:
     colormap: blues
     range: [0.0, 20.0]
