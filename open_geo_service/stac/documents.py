@@ -28,7 +28,7 @@ def catalog_readme(request: Request) -> str:
         f"# {_instance_name()}",
         "",
         f"The published datasets of this instance, at {absolute_url(request, '/')}: rasters as "
-        "GeoZarr stores, vector datasets as GeoParquet, and tables of values per feature and period as Parquet.",
+        "GeoZarr stores, vector datasets as GeoParquet, and tables as Parquet.",
         "",
         "Each collection declares its own licence in its STAC document, and its providers where they are known.",
         "",
@@ -56,8 +56,8 @@ def catalog_agents(request: Request) -> str:
             'multiscale store: `xr.open_zarr(asset["href"], **asset["xarray:open_kwargs"])`.',
             "- A **vector** collection has a `data` asset: one GeoParquet 1.1 file with a `bbox` covering "
             "column, readable with DuckDB, GeoPandas or any Parquet reader. Its `AGENTS.md` link says how.",
-            "- A **table** collection has a `data` asset: one Parquet file with a value per feature and period, "
-            "which joins to a vector collection on `collection_id` and `feature_id`. Its `README.md` link shows how.",
+            "- A **table** collection has a `data` asset: one Parquet file, whose columns `table:columns` "
+            "describes. Its `README.md` link says how to read it and what it joins to.",
             "",
             "Every asset is served with range requests, so a reader fetches only what it needs.",
             "",

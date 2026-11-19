@@ -9,7 +9,7 @@ The current public story is:
 - discover managed datasets with `/datasets`
 - discover vector feature collections with `/features`
 - read values per feature and period with `/tables/{dataset_id}/rows`
-- discover published datasets, rasters, vector datasets and table datasets, with `/stac/catalog.json`
+- discover published datasets, rasters, vector datasets and tables, with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
 - preview a dataset with `/datasets/{dataset_id}/thumbnail.png` (also a STAC collection asset)

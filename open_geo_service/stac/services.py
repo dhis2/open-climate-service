@@ -50,8 +50,7 @@ from open_geo_service.shared.urls import absolute_url, path_segment, self_url
 from open_geo_service.stac.media_types import ZARR_V3_MEDIA_TYPE, data_group_open_kwargs, zarr_media_type
 
 CATALOG_DESCRIPTION = (
-    "Published datasets: rasters as GeoZarr stores, vector datasets as GeoParquet, and tables of "
-    "values per feature and period as Parquet"
+    "Published datasets: rasters as GeoZarr stores, vector datasets as GeoParquet, and tables as Parquet"
 )
 STAC_VERSION = "1.1.0"
 MARKDOWN_MEDIA_TYPE = "text/markdown"
