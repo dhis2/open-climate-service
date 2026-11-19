@@ -541,11 +541,11 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
     summary = store.summarize(record)
     if summary.last_period is None:
         return None
-    latest = store.read_rows(record, start=summary.last_period).to_pylist()
-    features = store.read_rows(record).select(["collection_id", "feature_id", "feature_name"]).to_pylist()
-    names: dict[str, str] = {}
-    for row in features:
-        names.setdefault(row["feature_id"], row["feature_name"] or row["feature_id"])
+    latest = store.read_rows(record, start=summary.last_period)
+    preview = latest.slice(0, TABLE_PREVIEW_ROWS).to_pylist()
+    features = store.features(record)
+    # A feature id is unique within its collection only, so a table over several names both.
+    several = len({collection_id for collection_id, _feature_id, _name in features}) > 1
     return {
         "period": store.period_label(summary.last_period, record.period_type),
         "row_count": summary.row_count,
@@ -557,11 +557,21 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
                 "value": "" if row["value"] is None else f"{row['value']:.6g}",
                 "coverage": "" if row["coverage"] is None else f"{row['coverage']:.0%}",
             }
-            for row in latest[:TABLE_PREVIEW_ROWS]
+            for row in preview
         ],
-        "more": max(len(latest) - TABLE_PREVIEW_ROWS, 0),
-        "has_series": any(_series_label(row) for row in latest),
-        "features": sorted(names.items(), key=lambda item: item[1].lower()),
+        "more": max(latest.num_rows - TABLE_PREVIEW_ROWS, 0),
+        "has_series": any(_series_label(row) for row in preview),
+        "features": sorted(
+            (
+                {
+                    "collection_id": collection_id,
+                    "feature_id": feature_id,
+                    "label": f"{name} ({collection_id})" if several else name,
+                }
+                for collection_id, feature_id, name in features
+            ),
+            key=lambda feature: feature["label"].lower(),
+        ),
         "unit": record.units or "",
     }
 

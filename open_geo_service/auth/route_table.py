@@ -60,6 +60,7 @@ ROUTE_TABLE: dict[Tier, frozenset[str]] = {
             "GET /stac/{dataset_id}/AGENTS.md",
             "GET /stac/{dataset_id}/README.md",
             "GET /stac/{dataset_id}/collection.json",
+            "GET /tables/{dataset_id}/data.parquet",
             "GET /tables/{dataset_id}/rows",
             "GET /zarr/{dataset_id}/{relative_path:path}",
             "GET /processes",

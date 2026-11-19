@@ -12,6 +12,8 @@
         var SVG = "http://www.w3.org/2000/svg";
         var series = {};
         var points = [];
+        // Each request's number, so a response to a superseded selection is dropped.
+        var request = 0;
 
         function seriesLabel(row) {
           var parts = [];
@@ -157,12 +159,18 @@
 
         function load() {
           caption.textContent = "Loading values…";
-          var url = figure.getAttribute("data-rows-url") + "?feature=" + encodeURIComponent(featureSelect.value);
+          var current = ++request;
+          var option = featureSelect.options[featureSelect.selectedIndex];
+          var url =
+            figure.getAttribute("data-rows-url") +
+            "?collection=" + encodeURIComponent(option.getAttribute("data-collection")) +
+            "&feature=" + encodeURIComponent(featureSelect.value);
           fetch(url, { headers: { Accept: "application/json" } })
             .then(function (response) {
               return response.ok ? response.json() : Promise.reject(response.status);
             })
             .then(function (body) {
+              if (current !== request) return;
               series = {};
               body.items.forEach(function (row) {
                 var key = seriesLabel(row);
@@ -186,6 +194,7 @@
               show();
             })
             .catch(function () {
+              if (current !== request) return;
               series = {};
               points = [];
               svg.innerHTML = "";

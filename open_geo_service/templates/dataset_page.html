@@ -43,8 +43,8 @@
               <div class="field">
                 <label for="chart-feature">Feature</label>
                 <select id="chart-feature">
-                  {% for feature_id, feature_name in table.features %}
-                  <option value="{{ feature_id }}">{{ feature_name }}</option>
+                  {% for feature in table.features %}
+                  <option value="{{ feature.feature_id }}" data-collection="{{ feature.collection_id }}">{{ feature.label }}</option>
                   {% endfor %}
                 </select>
               </div>

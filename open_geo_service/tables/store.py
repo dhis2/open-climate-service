@@ -159,6 +159,7 @@ def write_rows(
             dataset_id=dataset_id, collection_id=collection_id, rows=rows, period_type=period_type, written_at=stamp
         )
         existing = latest_record(dataset_id)
+        _require_same_sources(dataset_id, existing, provenance)
         period_type = period_type or (existing.period_type if existing else None)
         merged = _merged(_read_file(existing), table, collection_id, period_type)
         written = _write_file(_dataset_root(dataset_id), merged, stamp)
@@ -195,6 +196,31 @@ def write_rows(
             raise
         _prune_superseded(_dataset_root(dataset_id), keep=written)
         return registered
+
+
+def _require_same_sources(
+    dataset_id: str, existing: ArtifactRecord | None, provenance: ArtifactProvenance | None
+) -> None:
+    """Refuse rows computed from other datasets than the table's stored rows were.
+
+    A write keeps the stored rows it does not replace, while the record keeps only the latest
+    write's provenance, from which the table's licence and providers are derived
+    (`tables.sources`). Rows from other sources would leave the stored ones attributed to, and
+    licensed as, datasets they were not computed from.
+    """
+    from open_geo_service.ingestions import services as ingestion_services
+
+    if existing is None or existing.provenance is None or provenance is None:
+        return
+    before = {str(source["collection_id"]) for source in ingestion_services.recorded_inputs(existing)}
+    written = existing.model_copy(update={"provenance": provenance})
+    after = {str(source["collection_id"]) for source in ingestion_services.recorded_inputs(written)}
+    if before and after != before:
+        raise ValueError(
+            f"table dataset '{dataset_id}' was computed from {sorted(before)}, not {sorted(after)}; "
+            "its licence and providers come from the datasets it was computed from. "
+            "Write them to another table dataset"
+        )
 
 
 def check_rows(
@@ -316,6 +342,21 @@ def summarize(record: ArtifactRecord) -> FileSummary:
         first_period=min(periods),
         last_period=max(periods),
     )
+
+
+def features(record: ArtifactRecord) -> list[tuple[str, str, str]]:
+    """Each feature the dataset has values for, once: its collection, id and latest name, reading three columns."""
+    if not record.asset_paths:
+        return []
+    table = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table(
+        columns=["collection_id", "feature_id", "feature_name"]
+    )
+    # Unthreaded, so `last` is the name of the feature's last row in the stored order.
+    grouped = table.group_by(["collection_id", "feature_id"], use_threads=False).aggregate([("feature_name", "last")])
+    return [
+        (row["collection_id"], row["feature_id"], row["feature_name_last"] or row["feature_id"])
+        for row in grouped.to_pylist()
+    ]
 
 
 _ORDER = [("collection_id", "ascending"), ("feature_id", "ascending"), ("period_start", "ascending")]

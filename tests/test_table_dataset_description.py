@@ -216,7 +216,7 @@ def test_the_dataset_page_shows_the_latest_rows_and_charts_a_feature(client: Tes
     assert "Latest period, 2026-02" in page
     assert "District D1" in page and "12" in page
     assert 'id="table-chart"' in page and 'data-rows-url="/tables/precip_districts/rows"' in page
-    assert '<option value="D2">District D2</option>' in page
+    assert '<option value="D2" data-collection="districts">District D2</option>' in page
     assert "Open in map viewer" not in page
     assert "UCSB Climate Hazards Center, Overture Maps" in page
 
@@ -226,3 +226,41 @@ def test_the_dataset_page_shows_the_latest_rows_and_charts_a_feature(client: Tes
         ("D2", "2026-01", 20.0),
         ("D2", "2026-02", 22.0),
     ]
+
+
+def test_rows_computed_from_other_datasets_are_refused() -> None:
+    """The record keeps the latest write's sources only, so the stored rows would lose theirs."""
+    _computed("precip", "districts")
+    with pytest.raises(ValueError, match=r"was computed from \['districts', 'precip'\]"):
+        _computed("temperature", "districts")
+    _computed("precip", "districts")
+
+
+def test_a_feature_id_in_two_collections_is_two_features_on_the_page(client: TestClient) -> None:
+    from open_geo_service.features import store as feature_store
+    from open_geo_service.ingestions import services as ingestion_services
+    from tests.test_table_datasets import _box
+
+    regions = {"type": "FeatureCollection", "features": [_box("D1", 30, -2)]}
+    path, _count, geometry = feature_store.write_feature_collection(
+        dataset_id="regions", features=regions, id_property="orgUnitCode"
+    )
+    ingestion_services.create_feature_artifact(
+        template={"id": "regions", "name": "Regions", "id_property": "orgUnitCode"},
+        features=regions,
+        store_path=path,
+        crs=feature_store.WGS84,
+        primary_geometry=geometry,
+    )
+    _computed("precip", "districts")
+    store.write_rows(
+        dataset_id="precip_districts",
+        collection_id="regions",
+        rows=[_row("D1", 5.0, period_start="2026-02-01", unit="mm", feature_name="Region D1")],
+    )
+
+    page = client.get("/datasets/precip_districts", params={"f": "html"}).text
+    assert '<option value="D1" data-collection="districts">District D1 (districts)</option>' in page
+    assert '<option value="D1" data-collection="regions">Region D1 (regions)</option>' in page
+    rows = client.get("/tables/precip_districts/rows", params={"collection": "regions", "feature": "D1"}).json()
+    assert [row["value"] for row in rows["items"]] == [5.0]
