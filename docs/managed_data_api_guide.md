@@ -654,7 +654,7 @@ from the first to the last `period_start`, and the Parquet file as its `data` as
 `file:size` and `file:checksum`. It links each dataset it was computed from as `derived_from`, and
 their source pages as `via`. Its `README.md` lists the columns and gives a DuckDB query joining the
 table to its feature collection's GeoParquet on `collection_id` and `feature_id`. The dataset page
-shows the rows of the latest period and charts one feature's values over time.
+shows the latest value of each feature, up to 20.
 
 ## 13. `/sync`
 

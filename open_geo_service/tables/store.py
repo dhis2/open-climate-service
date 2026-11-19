@@ -344,19 +344,20 @@ def summarize(record: ArtifactRecord) -> FileSummary:
     )
 
 
-def features(record: ArtifactRecord) -> list[tuple[str, str, str]]:
-    """Each feature the dataset has values for, once: its collection, id and latest name, reading three columns."""
+def latest_values(record: ArtifactRecord) -> pa.Table:
+    """Each feature's rows for the latest period it has a row for, ordered by feature name.
+
+    Per feature, not the dataset's last period: a feature whose newest value is older still has one.
+    A feature with several values per period (per class, reducer or forecast) keeps them all.
+    """
     if not record.asset_paths:
-        return []
-    table = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table(
-        columns=["collection_id", "feature_id", "feature_name"]
-    )
-    # Unthreaded, so `last` is the name of the feature's last row in the stored order.
-    grouped = table.group_by(["collection_id", "feature_id"], use_threads=False).aggregate([("feature_name", "last")])
-    return [
-        (row["collection_id"], row["feature_id"], row["feature_name_last"] or row["feature_id"])
-        for row in grouped.to_pylist()
-    ]
+        return SCHEMA.empty_table()
+    table = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table()
+    keys = ["collection_id", "feature_id"]
+    newest = table.group_by(keys).aggregate([("period_start", "max")])
+    joined = table.join(newest, keys=keys)
+    latest = joined.filter(pc.field("period_start") == pc.field("period_start_max")).drop_columns(["period_start_max"])
+    return latest.sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
 
 
 _ORDER = [("collection_id", "ascending"), ("feature_id", "ascending"), ("period_start", "ascending")]

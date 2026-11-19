@@ -611,51 +611,6 @@ button:disabled {
   background: var(--colors-white);
 }
 
-/* A table dataset's values over time, on its page. */
-.table-chart {
-  position: relative;
-  margin: var(--spacers-dp12) 0 var(--spacers-dp16);
-}
-.table-chart svg {
-  display: block;
-  max-width: 100%;
-  height: auto;
-}
-.table-chart .grid {
-  stroke: var(--colors-grey300);
-  stroke-width: 1;
-}
-.table-chart .axis {
-  fill: var(--colors-grey700);
-  font-size: 11px;
-}
-.table-chart .line {
-  fill: none;
-  stroke: var(--colors-blue700);
-  stroke-width: 2;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-.table-chart .marker {
-  fill: var(--colors-blue700);
-  stroke: var(--colors-white);
-  stroke-width: 2;
-}
-.table-chart .crosshair {
-  stroke: var(--colors-grey500);
-  stroke-width: 1;
-}
-.table-chart .chart-tooltip {
-  position: absolute;
-  top: 0;
-  padding: var(--spacers-dp4) var(--spacers-dp8);
-  background: var(--colors-grey900);
-  color: var(--colors-white);
-  border-radius: var(--radius);
-  font-size: 13px;
-  pointer-events: none;
-  white-space: nowrap;
-}
 .no-preview {
   position: absolute;
   left: var(--spacers-dp8);

@@ -528,11 +528,11 @@ def _dataset_page_context(
 
 
 TABLE_PREVIEW_ROWS = 20
-"""Rows of the latest period a table dataset's page shows; the rows API serves all of them."""
+"""Latest values a table dataset's page shows; the rows API serves all of them."""
 
 
 def _table_view(dataset_id: str) -> dict[str, Any] | None:
-    """A table dataset's latest period of rows, and its features to chart, for its page."""
+    """Each feature's latest value, by feature name, for a table dataset's page."""
     from open_geo_service.tables import store
 
     record = store.latest_record(dataset_id)
@@ -541,21 +541,17 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
     summary = store.summarize(record)
     if summary.last_period is None:
         return None
-    latest = store.read_rows(record, start=summary.last_period)
-    # By name, as a reader looks a feature up; ids such as Overture's UUIDs say nothing to them.
-    by_name = latest.sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
-    preview = by_name.slice(0, TABLE_PREVIEW_ROWS).to_pylist()
+    latest = store.latest_values(record)
+    preview = latest.slice(0, TABLE_PREVIEW_ROWS).to_pylist()
     series = {_series_label(row) for row in preview}
-    features = store.features(record)
-    # A feature id is unique within its collection only, so a table over several names both.
-    several = len({collection_id for collection_id, _feature_id, _name in features}) > 1
+    periods = {row["period_start"] for row in preview}
     return {
-        "period": store.period_label(summary.last_period, record.period_type),
         "row_count": summary.row_count,
         "preview": [
             {
                 "feature": row["feature_name"] or row["feature_id"],
                 "feature_id": row["feature_id"],
+                "period": store.period_label(row["period_start"], record.period_type),
                 "series": _series_label(row),
                 "value": "" if row["value"] is None else f"{row['value']:.6g}",
                 "coverage": "" if row["coverage"] is None else f"{row['coverage']:.0%}",
@@ -563,22 +559,13 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
             for row in preview
         ],
         "more": max(latest.num_rows - TABLE_PREVIEW_ROWS, 0),
-        # A column only where it tells the rows apart, or says something: one reducer for every
-        # row goes in the heading, and a pipeline's rows have no coverage.
+        # A column only where it tells the rows apart, or says something: one period or one
+        # reducer for every row goes in the heading, and a pipeline's rows have no coverage.
+        "has_period": len(periods) > 1,
+        "common_period": store.period_label(next(iter(periods)), record.period_type) if len(periods) == 1 else "",
         "has_series": len(series) > 1,
         "common_series": next(iter(series)) if len(series) == 1 else "",
         "has_coverage": any(row["coverage"] is not None for row in preview),
-        "features": sorted(
-            (
-                {
-                    "collection_id": collection_id,
-                    "feature_id": feature_id,
-                    "label": f"{name} ({collection_id})" if several else name,
-                }
-                for collection_id, feature_id, name in features
-            ),
-            key=lambda feature: feature["label"].lower(),
-        ),
         "unit": record.units or "",
     }
 
