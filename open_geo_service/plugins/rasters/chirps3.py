@@ -117,7 +117,9 @@ class CHIRPS3DailyPlugin(BaseDatasetPlugin):
             import icechunk
 
             repo = icechunk.Repository.open(icechunk.http_storage(self._zarr.url))
-            self._source = xr.open_zarr(repo.readonly_session("main").store, chunks=None)
+            # Typed Any because the open_zarr stub allows only a string (as in data_accessor).
+            no_dask: Any = None
+            self._source = xr.open_zarr(repo.readonly_session("main").store, chunks=no_dask)
         return self._source
 
 
@@ -133,8 +135,8 @@ class CHIRPS3MonthlyPlugin(CHIRPS3DailyPlugin):
 
     commit_batch_size = 12
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**{**kwargs, "stage": "final"})
+    def __init__(self, store_url: str | None = None, max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES, **_: Any) -> None:
+        super().__init__(stage="final", store_url=store_url, max_cache_bytes=max_cache_bytes)
 
     async def periods(self, start: str, end: str) -> list[str]:
         """Return ordered ``YYYY-MM`` periods, up to the newest complete month in the store."""
