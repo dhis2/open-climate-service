@@ -8,7 +8,7 @@ The current public story is:
 - discover the configured extent with `/extent`
 - discover managed datasets with `/datasets`
 - discover vector feature collections with `/features`
-- read values per feature and period with `/tables/{dataset_id}/rows`
+- read the rows of table datasets with `/tables/{dataset_id}/rows`
 - discover published datasets, rasters, vector datasets and tables, with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
@@ -286,7 +286,7 @@ What this means:
 
 - `/datasets` is the public native catalog of managed datasets
 - `itemType` says what the dataset holds: `coverage` for a raster, `feature` for a feature
-  collection such as a boundary set, `table` for values per feature and period. It is the field to filter a listing on, because `format`
+  collection such as a boundary set, `table` for a table of rows, such as values per feature and period. It is the field to filter a listing on, because `format`
   sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
   name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
   the collection object; `coverage` is convention rather than conformance, since OGC API -
@@ -573,8 +573,8 @@ tiles.
 
 ## 12. Read table datasets
 
-A table dataset holds values per feature and period, such as monthly precipitation per district.
-It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
+A table dataset holds rows in one Parquet file. A computed table holds values per feature and
+period, such as monthly precipitation per district. It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
 `GET /tables/{dataset_id}/rows`, as JSON or with `format=csv`:
 
 ```bash

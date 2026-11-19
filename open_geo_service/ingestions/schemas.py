@@ -701,8 +701,8 @@ class DatasetRecord(BaseModel):
         serialization_alias="itemType",
         description=(
             "What this dataset holds: 'feature' for a feature collection, 'coverage' for a "
-            "raster, 'table' for values per feature and period. The one field that lets a client "
-            "filter a listing without a request per row — `format` sits on the nested version "
+            "raster, 'table' for a table of rows, such as values per feature and period. The one "
+            "field that lets a client filter a listing without a request per row — `format` sits on the nested version "
             "record, which only the detail endpoint returns. Spelled in OGC API - Features' "
             "camelCase because the name is borrowed from that specification rather than invented here."
         ),

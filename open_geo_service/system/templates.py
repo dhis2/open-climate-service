@@ -1570,7 +1570,7 @@ _API_GROUP_NOTES = {
     "Ingestions": "Ingest from a data source into this instance, and follow the job it starts.",
     "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
     "Features": "Feature collections as GeoParquet, and refreshing one from its data source.",
-    "Tables": "Current values per feature and period, as JSON or CSV.",
+    "Tables": "Table datasets: their rows as JSON or CSV, and their Parquet files.",
     "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
     "Icechunk": "The same stores for the Icechunk SDK, with version history.",
     "STAC": "Catalogue metadata for discovery, one collection per published dataset.",
