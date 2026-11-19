@@ -570,7 +570,8 @@ button:disabled {
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: var(--colors-white);
+  /* Tinted, so the picture stands apart from the white card text around it. */
+  background: var(--colors-blue050);
 }
 .table-thumbnail .row {
   flex: 1;
@@ -578,15 +579,12 @@ button:disabled {
   grid-template-columns: 2fr 1fr 1fr;
   border-bottom: 1px solid var(--colors-grey300);
 }
-.table-thumbnail .row:last-child {
-  border-bottom: 0;
-}
 .table-thumbnail .heading {
   background: var(--colors-blue700);
   border-bottom: 0;
 }
 .table-thumbnail .stripe {
-  background: var(--colors-grey100);
+  background: var(--colors-blue100);
 }
 .table-thumbnail .cell {
   display: flex;
