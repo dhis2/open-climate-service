@@ -288,3 +288,11 @@ def test_the_listing_filters_tables_and_draws_no_map_placeholder_for_one(client:
     assert '<option value="table">Table</option>' in listing
     tile = listing.split('data-kind="table"', 1)[1].split("</article>", 1)[0]
     assert "thumb-table" in tile and "No preview yet" not in tile
+
+
+def test_every_tile_names_its_kind(client: TestClient) -> None:
+    _computed("precip", "districts")
+    listing = client.get("/datasets", params={"f": "html"}).text
+    for kind in ("table", "vector"):
+        tile = listing.split(f'data-kind="{kind}"', 1)[1].split("</article>", 1)[0]
+        assert f'<span class="chip">{kind}</span>' in tile
