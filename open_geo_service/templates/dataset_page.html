@@ -35,43 +35,7 @@
 
         <div class="dataset-page">
           <div class="stack">
-            {% if dataset.kind == "table" %}
-            <section class="panel" aria-labelledby="values-title">
-              <h3 id="values-title">Values</h3>
-              {% if table %}
-              <h4>Latest value of each feature{% if table.common_period %}, {{ table.common_period }}{% endif %}{% if table.common_series %} ({{ table.common_series }}){% endif %}</h4>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">Feature</th>
-                      {% if table.has_period %}<th scope="col">Period</th>{% endif %}
-                      {% if table.has_series %}<th scope="col">Value of</th>{% endif %}
-                      <th scope="col">Value{% if table.unit %} ({{ table.unit }}){% endif %}</th>
-                      {% if table.has_coverage %}<th scope="col">Coverage</th>{% endif %}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for row in table.preview %}
-                    <tr>
-                      <td title="{{ row.feature_id }}">{{ row.feature }}</td>
-                      {% if table.has_period %}<td>{{ row.period }}</td>{% endif %}
-                      {% if table.has_series %}<td>{{ row.series }}</td>{% endif %}
-                      <td>{{ row.value or "No value" }}</td>
-                      {% if table.has_coverage %}<td>{{ row.coverage }}</td>{% endif %}
-                    </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-              <p class="note">
-                {% if table.more %}{{ table.more }} more latest values. {% endif %}{{ table.row_count }} rows in all{% if published %}, as <a href="{{ mount }}/tables/{{ dataset.id }}/rows?format=csv">CSV</a> or <a href="{{ mount }}/tables/{{ dataset.id }}/rows">JSON</a>{% endif %}.
-              </p>
-              {% else %}
-              <p class="note">This table has no rows yet.</p>
-              {% endif %}
-            </section>
-            {% else %}
+            {% if dataset.kind != "table" %}
             <div class="panel item">
               <div
                 class="thumb{% if dataset.has_thumbnail %} has-image{% endif %}"
@@ -113,6 +77,44 @@
                 {% endfor %}
               </dl>
             </section>
+
+            {% if dataset.kind == "table" %}
+            <section class="panel" aria-labelledby="values-title">
+              <h3 id="values-title">Values</h3>
+              {% if table %}
+              <h4>Latest value of each feature{% if table.common_period %}, {{ table.common_period }}{% endif %}{% if table.common_series %} ({{ table.common_series }}){% endif %}</h4>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Feature</th>
+                      {% if table.has_period %}<th scope="col">Period</th>{% endif %}
+                      {% if table.has_series %}<th scope="col">Value of</th>{% endif %}
+                      <th scope="col" class="numeric">Value{% if table.unit %} ({{ table.unit }}){% endif %}</th>
+                      {% if table.has_coverage %}<th scope="col" class="numeric">Coverage</th>{% endif %}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in table.preview %}
+                    <tr>
+                      <td title="{{ row.feature_id }}">{{ row.feature }}</td>
+                      {% if table.has_period %}<td>{{ row.period }}</td>{% endif %}
+                      {% if table.has_series %}<td>{{ row.series }}</td>{% endif %}
+                      <td class="numeric">{{ row.value or "No value" }}</td>
+                      {% if table.has_coverage %}<td class="numeric">{{ row.coverage }}</td>{% endif %}
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              <p class="note">
+                {% if table.more %}{{ table.more }} more latest values. {% endif %}{{ table.row_count }} rows in all{% if published %}, as <a href="{{ mount }}/tables/{{ dataset.id }}/rows?format=csv">CSV</a> or <a href="{{ mount }}/tables/{{ dataset.id }}/rows">JSON</a>{% endif %}.
+              </p>
+              {% else %}
+              <p class="note">This table has no rows yet.</p>
+              {% endif %}
+            </section>
+            {% endif %}
 
             {% if provenance_facts %}
             <section class="panel" aria-labelledby="provenance-title">

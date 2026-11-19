@@ -215,9 +215,18 @@ def test_the_dataset_page_shows_each_features_latest_value(client: TestClient) -
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
     # One period and one reducer for every row are said once, in the heading, not in a column.
     assert "Latest value of each feature, 2026-02 (mean)</h4>" in page
-    assert ">Period</th>" not in page and "Value of" not in page and ">Coverage</th>" in page
-    assert '<td title="D1">District D1</td>' in page and "<td>12</td>" in page and "<td>22</td>" in page
-    assert "<td>10</td>" not in page
+    assert (
+        ">Period</th>" not in page
+        and "Value of" not in page
+        and ">Coverage</th>" in page
+        and '<th scope="col" class="numeric">Value (mm)</th>' in page
+    )
+    assert (
+        '<td title="D1">District D1</td>' in page
+        and '<td class="numeric">12</td>' in page
+        and '<td class="numeric">22</td>' in page
+    )
+    assert '<td class="numeric">10</td>' not in page
     assert "Open in map viewer" not in page
     assert "UCSB Climate Hazards Center, Overture Maps" in page
 
