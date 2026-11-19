@@ -289,6 +289,41 @@ follows the amount of concurrent reading, so `DASK_NUM_WORKERS` is what bounds t
 `TOKIO_WORKER_THREADS` is read once, when the process starts: set it in `.env` or the
 environment, not at runtime.
 
+### Authentication
+
+An instance reachable by anyone other than its operator needs tokens. List one per machine
+client, with its secret in an environment variable:
+
+```yaml
+authentication:
+  tokens:
+    - id: caps
+      token_env: GEOSERVICE_CAPS_TOKEN
+      tier: operator
+    - id: analyst-notebook
+      token_env: GEOSERVICE_NOTEBOOK_TOKEN
+      tier: authenticated
+```
+
+With no tokens listed, authentication is off and nothing changes. With at least one, reads stay
+public, `POST /result`, batch jobs and stored process graph writes need an `authenticated` or
+`operator` token, and ingestion, sync, schedules, pipelines, export delivery and a batch job
+that publishes to a dataset (`save_result` with a `dataset_id`) need an `operator` token. Open Geo Service refuses to start when a variable is unset, a secret is shorter than 32
+characters, or an id or secret repeats; `openssl rand -hex 32` makes a suitable secret. The
+block does not take `${...}` interpolation.
+
+A client sends the secret as `Authorization: Bearer <secret>`. An openEO client signs in with
+the token id as the username and the secret as the password:
+
+```python
+connection = openeo.connect("https://geoservice.example.org").authenticate_basic("analyst-notebook", secret)
+```
+
+`GET /me` reports the token a request ran as. Each token sees and changes only the batch jobs
+and stored process graphs it created; an `operator` token reaches all of them. The web interface has no sign-in yet, so with
+authentication on its forms are refused; operators act through the API until it does. The
+design and the later steps are in [Authentication and authorization](authentication.md).
+
 ### Read-only instances
 
 For an instance that should be browsable but not changeable — a public demo, a shared
@@ -305,8 +340,9 @@ Still available: the catalogue and metadata (`/collections`, `/stac`, `/datasets
 `/processes`, `/process_graphs`, `/extent`), the data (`/zarr/…`, `/icechunk/…`, downloads),
 the landing page and `/map`, and `POST /result` for synchronous openEO process graphs.
 
-Refused: ingestion and sync (the pages leave their forms out), stored process graph writes,
-and batch jobs.
+Refused: every route above the public tier (see [Authentication](#authentication)), which is
+ingestion and sync (the pages leave their forms out), stored process graph writes, batch jobs,
+schedules, pipelines and export delivery. No token lifts read-only mode.
 
 Read-only applies to HTTP only, so ingestion becomes an operator task on the host. Until a
 CLI command exists, run it inside the container or virtualenv:

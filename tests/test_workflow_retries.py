@@ -510,7 +510,7 @@ def test_executor_distinguishes_invalid_graphs_from_runtime_value_errors(
         graph.to_callable.return_value.side_effect = failure
     monkeypatch.setattr("openeo_pg_parser_networkx.OpenEOProcessGraph", graph_factory)
     monkeypatch.setattr(execution, "_build_process_registry", lambda: {})
-    monkeypatch.setattr(workflows, "list_workflows", lambda: MagicMock(processes=[]))
+    monkeypatch.setattr(workflows, "list_workflows", lambda **_: MagicMock(processes=[]))
 
     with pytest.raises(HTTPException) as raised:
         execution.run_process_graph({"process_graph": {}})

@@ -17,6 +17,7 @@ from fastapi import Request
 from markupsafe import Markup, escape
 
 from open_geo_service import config as api_config
+from open_geo_service.auth.tokens import Principal
 from open_geo_service.data_registry.recipes import producing_workflow
 from open_geo_service.data_registry.services import datasets as registry_datasets
 from open_geo_service.extents.services import get_extent
@@ -1133,11 +1134,11 @@ def render_data_sources_page(mount: str) -> str:
     )
 
 
-def _load_workflows() -> list[Any]:
+def _load_workflows(viewer: Principal | None) -> list[Any]:
     try:
         from open_geo_service.openeo.workflows import list_workflows
 
-        return sorted(list_workflows().processes, key=lambda workflow: workflow.id)
+        return sorted(list_workflows(visible_to=viewer).processes, key=lambda workflow: workflow.id)
     except Exception:
         _log.exception("Unexpected error loading workflows")
         return []
@@ -1550,7 +1551,7 @@ def _process_page_context(process: dict[str, Any], origin_label: str, workflows:
     }
 
 
-def render_process_page(process: dict[str, Any], mount: str) -> str:
+def render_process_page(process: dict[str, Any], mount: str, viewer: Principal | None = None) -> str:
     """Render the page for one process: what it does, its parameters and where it is used."""
     origins = {view["id"]: view["origin_label"] for view in _load_processes()}
     return get_template("process_page.html").render(
@@ -1560,7 +1561,7 @@ def render_process_page(process: dict[str, Any], mount: str) -> str:
         logo=LOGO,
         styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "processes"),
-        **_process_page_context(process, origins.get(process["id"], ""), _load_workflows()),
+        **_process_page_context(process, origins.get(process["id"], ""), _load_workflows(viewer)),
     )
 
 
@@ -1929,12 +1930,12 @@ def _landing_catalogue(
     }
 
 
-def render_workflows_page(mount: str) -> str:
+def render_workflows_page(mount: str, viewer: Principal | None = None) -> str:
     """Render the list of workflows, with the datasets each one produces.
 
     HTML only: the machine-readable list stays at `GET /process_graphs`.
     """
-    catalogue = _landing_catalogue(_load_templates(), _load_workflows())
+    catalogue = _landing_catalogue(_load_templates(), _load_workflows(viewer))
     return get_template("workflows_page.html").render(
         version=app_version,
         mount=mount,
@@ -2028,7 +2029,7 @@ def _load_datasets() -> list[Any]:
         return []
 
 
-def render_landing(version: str, mount: str) -> str:
+def render_landing(version: str, mount: str, viewer: Principal | None = None) -> str:
     """Render the root overview: what this instance holds, and how much of it.
 
     The lists it used to carry are pages of their own now, so this counts them and links to
@@ -2037,7 +2038,7 @@ def render_landing(version: str, mount: str) -> str:
     """
     extent = _load_extent()
     templates = _load_templates()
-    catalogue = _landing_catalogue(templates, _load_workflows(), _load_feature_templates())
+    catalogue = _landing_catalogue(templates, _load_workflows(viewer), _load_feature_templates())
     return get_template("landing_page.html").render(
         version=version,
         mount=mount,

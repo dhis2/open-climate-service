@@ -18,6 +18,7 @@ import numpy as np
 import xarray as xr
 from fastapi import HTTPException, Request
 
+from open_geo_service.auth.tokens import Principal
 from open_geo_service.data_accessor.services.accessor import open_icechunk_dataset, open_zarr_dataset
 from open_geo_service.data_manager.services.utils import get_time_dim
 from open_geo_service.ingestions import services as ingestion_services
@@ -1020,8 +1021,13 @@ def run_process_graph(
     process: dict[str, Any],
     request: Request | None = None,
     result_dir: str | None = None,
+    visible_to: Principal | None = None,
 ) -> Any:
-    """Execute an openEO process graph and return the result value."""
+    """Execute an openEO process graph and return the result value.
+
+    Stored workflows resolve as `visible_to` would see them listed, so a client cannot run
+    another client's workflow by id; None resolves every workflow, for work no client started.
+    """
     from openeo_pg_parser_networkx import OpenEOProcessGraph
 
     process_graph = process.get("process_graph")
@@ -1030,7 +1036,7 @@ def run_process_graph(
 
     from open_geo_service.openeo import workflows as workflow_store
 
-    workflow_records = workflow_store.list_workflows().processes
+    workflow_records = workflow_store.list_workflows(visible_to=visible_to).processes
     registry = _augment_with_workflows(_build_process_registry(), workflow_records)
     workflow_graphs = {wf.id: dict(wf.process_graph) for wf in workflow_records if wf.process_graph}
     try:

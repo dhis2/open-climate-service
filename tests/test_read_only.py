@@ -14,9 +14,8 @@ from open_geo_service.read_only import is_blocked
 
 from .conftest import MountedClientFactory
 
-# The full mutating surface, written with the app's own path templates so
-# test_every_mutating_route_is_covered_by_the_policy can compare exactly rather than
-# approximately. Anything mutating that is intended to stay open goes in _OPEN_WRITES.
+# The mutating surface, written with the app's own path templates. Every route the app serves
+# is in the route table (tests/test_authentication.py); these are requested over HTTP below.
 _MUTATING_ROUTES = [
     ("POST", "/ingestions"),
     ("DELETE", "/ingestions/jobs/{job_id}"),
@@ -78,7 +77,7 @@ _PUBLIC_READS = [
     "/file_formats",
     "/extent",
     "/datasets",
-    "/stac",
+    "/stac/catalog.json",
     "/map",
     "/openeo",
     "/.well-known/openeo",
@@ -160,40 +159,6 @@ def test_policy_never_blocks_cors_preflight() -> None:
     assert not is_blocked("OPTIONS", "/jobs")
 
 
-def _live_mutating_routes() -> set[tuple[str, str]]:
-    write_methods = {"POST", "PUT", "PATCH", "DELETE"}
-    live: set[tuple[str, str]] = set()
-    # FastAPI 0.162 keeps an included router as one entry in `app.routes`; its routes, with the
-    # prefix applied, come from `effective_route_contexts()`.
-    for entry in app.routes:
-        included = getattr(entry, "effective_route_contexts", None)
-        for route in included() if included else [entry]:
-            methods: set[str] = getattr(route, "methods", None) or set()
-            for method in methods & write_methods:
-                live.add((method, getattr(route, "path", "")))
-    return live
-
-
-def test_every_mutating_route_is_covered_by_the_policy() -> None:
-    """Guard against a new mutating route slipping in undecided.
-
-    Enumerates the live app and compares **exactly** against the declared lists, so adding
-    a write endpoint forces a deliberate choice: block it (add to _MUTATING_ROUTES, which
-    also gives it an HTTP-level test) or leave it open (add to _OPEN_WRITES).
-    """
-    live = _live_mutating_routes()
-    declared = set(_MUTATING_ROUTES) | _OPEN_WRITES
-
-    undeclared = sorted(f"{m} {p}" for m, p in live - declared)
-    assert not undeclared, (
-        f"mutating routes not accounted for by the read-only policy: {undeclared}. "
-        "Add each to _MUTATING_ROUTES (blocked) or _OPEN_WRITES (deliberately open)."
-    )
-
-    stale = sorted(f"{m} {p}" for m, p in declared - live)
-    assert not stale, f"declared routes that no longer exist in the app: {stale}"
-
-
 def test_declared_expectations_match_the_policy() -> None:
     """Every route declared blocked is blocked, and every route declared open is open."""
     assert [(m, p) for m, p in _MUTATING_ROUTES if not is_blocked(m, p)] == []
@@ -212,10 +177,6 @@ def test_mutating_routes_are_refused_with_403(ro_client: TestClient, method: str
     assert "read-only" in body["message"]
     # The message should name what the caller can do instead.
     assert "/result" in body["message"]
-
-
-def test_admin_console_is_refused(ro_client: TestClient) -> None:
-    assert ro_client.get("/manage").status_code == 403
 
 
 @pytest.mark.parametrize("path", ["/health", "/info", "/collections", "/processes"])
@@ -347,7 +308,7 @@ def test_read_only_still_refuses_manage_under_a_mount_prefix(
     """
     mounted = mounted_client_factory(root_path)
 
-    assert mounted.get("/manage").status_code == 403
+    assert mounted.post("/manage/sync").status_code == 403
     assert mounted.get("/jobs").status_code == 403
     assert mounted.get("/stac/catalog.json").status_code == 200
 
@@ -362,4 +323,4 @@ def test_a_configured_base_url_path_cannot_bypass_read_only(read_only: None, mon
     client = TestClient(app)
 
     assert client.get("/jobs").status_code == 403
-    assert client.get("/manage").status_code == 403
+    assert client.post("/manage/sync").status_code == 403
