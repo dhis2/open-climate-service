@@ -564,38 +564,53 @@ button:disabled {
   height: 100%;
   object-fit: cover;
 }
-/* A table dataset's tile: one picture of a table, where other datasets show a map. */
-.thumb.thumb-table {
-  background: var(--colors-blue050);
-}
+/* A table dataset's tile: one picture of a table, filling the box as other datasets' maps do. */
 .table-thumbnail {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--colors-white);
 }
-.table-thumbnail .sheet {
-  fill: var(--colors-white);
-  stroke: var(--colors-grey400);
+.table-thumbnail .row {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  border-bottom: 1px solid var(--colors-grey300);
 }
-.table-thumbnail .header {
-  fill: var(--colors-blue700);
+.table-thumbnail .row:last-child {
+  border-bottom: 0;
 }
 .table-thumbnail .heading {
-  fill: var(--colors-blue100);
+  background: var(--colors-blue700);
+  border-bottom: 0;
 }
 .table-thumbnail .stripe {
-  fill: var(--colors-grey200);
-}
-.table-thumbnail .rule {
-  stroke: var(--colors-grey300);
-  stroke-width: 1;
+  background: var(--colors-grey100);
 }
 .table-thumbnail .cell {
-  fill: var(--colors-grey600);
+  display: flex;
+  align-items: center;
+  padding: 0 12%;
 }
-.table-thumbnail .value {
-  fill: var(--colors-blue600);
+.table-thumbnail .cell + .cell {
+  justify-content: flex-end;
+  border-left: 1px solid var(--colors-grey300);
+}
+.table-thumbnail .heading .cell + .cell {
+  border-left-color: transparent;
+}
+.table-thumbnail span {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--colors-blue600);
+}
+.table-thumbnail .cell:first-child span {
+  background: var(--colors-grey600);
+}
+.table-thumbnail .heading .cell span {
+  background: var(--colors-blue100);
 }
 
 /* A table dataset's values over time, on its page. */
