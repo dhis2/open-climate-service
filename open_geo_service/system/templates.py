@@ -252,6 +252,9 @@ def _actions() -> dict[str, bool]:
     return {"read_only": closed is not None, "sign_in": closed == "sign-in"}
 
 
+SIGN_IN_NEEDS_HTTPS = "Sign-in needs HTTPS, so the token is not sent in clear. Open this instance over https://."
+
+
 def render_sign_in_page(mount: str, *, next_path: str, error: str | None = None, form: bool = True) -> str:
     """Render the form that exchanges a token for a session; without *form*, only *error*."""
     return get_template("sign_in_page.html").render(
@@ -263,6 +266,7 @@ def render_sign_in_page(mount: str, *, next_path: str, error: str | None = None,
         next_path=next_path,
         error=error,
         form=form,
+        needs_https=SIGN_IN_NEEDS_HTTPS,
     )
 
 

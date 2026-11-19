@@ -34,7 +34,7 @@ _SAFE_METHODS = frozenset({"GET", "HEAD"})
 # Posted by a browser before it holds a session, so checked for origin like a cookie's writes.
 _SIGN_IN_FORMS = frozenset({"/sign-in", "/sign-out"})
 
-_viewer: ContextVar[Principal] = ContextVar("viewer", default=OPEN)
+_viewer: ContextVar[Principal | None] = ContextVar("viewer", default=None)
 
 
 def principal_of(request: Request) -> Principal:
@@ -47,9 +47,13 @@ def principal_of(request: Request) -> Principal:
 def current_viewer() -> Principal:
     """The principal of the request being handled, for page parts every page renders.
 
-    Outside a request, as when a test renders a page directly, it is `OPEN`.
+    Outside a request, as when a test renders a page directly, it is `ANONYMOUS` with
+    authentication on, so such a page shows no operator forms, and `OPEN` with it off.
     """
-    return _viewer.get()
+    viewer = _viewer.get()
+    if viewer is not None:
+        return viewer
+    return ANONYMOUS if configured_tokens() else OPEN
 
 
 def session_cookie_path(request: Request) -> str:
@@ -100,7 +104,7 @@ class AccessMiddleware:
             else:
                 resolved = authenticate(authorization, tokens)
                 if resolved is None:
-                    _log_failure()
+                    log_rejected_credential()
                     message = "The credential is not valid for this instance."
                     await _refuse(401, "authentication", "TokenInvalid", message)(scope, receive, send)
                     return
@@ -193,7 +197,7 @@ def _refuse(status: int, error_id: str, code: str, message: str) -> JSONResponse
     return JSONResponse(status_code=status, content=content, headers=headers)
 
 
-def _log_failure() -> None:
+def log_rejected_credential() -> None:
     """Log rejected credentials at most once a minute, so a client retrying a bad token cannot flood the log."""
     global _failures_since_log, _last_failure_log
     _failures_since_log += 1

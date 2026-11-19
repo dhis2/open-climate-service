@@ -24,7 +24,10 @@
           <p>Sign in with an API token from this instance's configuration. Reading needs no sign-in; ingesting, syncing and pipelines need an operator token.</p>
           {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
           {% if form %}
-          <form method="post" action="{{ mount }}/sign-in" class="form-grid">
+          {# Shown only in a secure context (HTTPS or this machine), the rule browsers apply to the
+             Secure cookie. A proxy can make plain HTTP look local to the server, never to the browser. #}
+          <div class="notice error" role="alert" id="needs-https" hidden>{{ needs_https }}</div>
+          <form method="post" action="{{ mount }}/sign-in" class="form-grid" id="sign-in" hidden>
             <input type="hidden" name="next" value="{{ next_path }}" />
             <div class="field">
               <label for="token">Token</label>
@@ -34,6 +37,9 @@
               <button type="submit" class="primary">Sign in</button>
             </div>
           </form>
+          <script>
+            document.getElementById(window.isSecureContext ? "sign-in" : "needs-https").hidden = false;
+          </script>
           {% endif %}
         </div>
       </main>

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from open_geo_service.auth import sessions
-from open_geo_service.auth.middleware import page_origins, session_cookie_path
+from open_geo_service.auth.middleware import log_rejected_credential, page_origins, session_cookie_path
 from open_geo_service.auth.tokens import authenticate, configured_tokens
 from open_geo_service.shared.urls import mount_prefix
 
@@ -26,11 +26,13 @@ _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _secure_page(request: Request) -> bool:
-    """Whether the browser reached this page over HTTPS or on this machine.
+    """Whether the browser reached this page over HTTPS or on this machine, as far as the server can tell.
 
     Elsewhere the form would send the token in clear, and the browser would not keep the
     `Secure` cookie anyway. The origin is the one the request addressed, or
-    `GEOSERVICE_BASE_URL`'s when it names the same host, as behind a TLS proxy.
+    `GEOSERVICE_BASE_URL`'s when it names the same host, as behind a TLS proxy. A proxy that
+    rewrites `Host` to a loopback address passes this check, so the page also shows the form
+    only in a secure context, which only the browser can see.
     """
     host = request.headers.get("host", "")
     for origin in page_origins(request.scope):
@@ -39,9 +41,6 @@ def _secure_page(request: Request) -> bool:
         if split.netloc == host and (split.scheme == "https" or name in _LOOPBACK or name.endswith(".localhost")):
             return True
     return False
-
-
-_INSECURE = "Sign-in needs HTTPS, so the token is not sent in clear. Open this instance over https://."
 
 
 def _local_path(candidate: str | None, mount: str) -> str:
@@ -60,7 +59,7 @@ def _local_path(candidate: str | None, mount: str) -> str:
 def sign_in_page(request: Request) -> HTMLResponse:
     """The form that takes a token; it returns to the page the visitor came from."""
     _require_authentication()
-    from open_geo_service.system.templates import render_sign_in_page
+    from open_geo_service.system.templates import SIGN_IN_NEEDS_HTTPS, render_sign_in_page
 
     mount = mount_prefix(request)
     referer = urllib.parse.urlsplit(request.headers.get("referer", ""))
@@ -68,7 +67,7 @@ def sign_in_page(request: Request) -> HTMLResponse:
     same_host = referer.netloc == request.headers.get("host")
     next_path = _local_path(came_from if same_host else None, mount)
     if not _secure_page(request):
-        return HTMLResponse(render_sign_in_page(mount, next_path=next_path, error=_INSECURE, form=False))
+        return HTMLResponse(render_sign_in_page(mount, next_path=next_path, error=SIGN_IN_NEEDS_HTTPS, form=False))
     return HTMLResponse(render_sign_in_page(mount, next_path=next_path))
 
 
@@ -76,14 +75,15 @@ def sign_in_page(request: Request) -> HTMLResponse:
 def sign_in(request: Request, token: Annotated[str, Form()], next: Annotated[str, Form()] = "") -> Response:
     """Exchange a token for a session cookie, then return to *next*."""
     _require_authentication()
-    from open_geo_service.system.templates import render_sign_in_page
+    from open_geo_service.system.templates import SIGN_IN_NEEDS_HTTPS, render_sign_in_page
 
     mount = mount_prefix(request)
     if not _secure_page(request):
-        page = render_sign_in_page(mount, next_path=_local_path(next, mount), error=_INSECURE, form=False)
+        page = render_sign_in_page(mount, next_path=_local_path(next, mount), error=SIGN_IN_NEEDS_HTTPS, form=False)
         return HTMLResponse(page, status_code=403)
     principal = authenticate(f"Bearer {token.strip()}", configured_tokens())
     if principal is None or principal.token is None:
+        log_rejected_credential()
         page = render_sign_in_page(mount, next_path=_local_path(next, mount), error="That token is not valid here.")
         return HTMLResponse(page, status_code=401)
     response = RedirectResponse(_local_path(next, mount), status_code=303)

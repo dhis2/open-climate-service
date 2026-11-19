@@ -15,11 +15,12 @@ from fastapi.testclient import TestClient
 from starlette.types import Message
 
 from open_geo_service import config as api_config
-from open_geo_service.auth import sessions
+from open_geo_service.auth import middleware, sessions
 from open_geo_service.auth.route_table import ROUTE_TABLE, route_tier
 from open_geo_service.auth.tokens import Tier, configured_tokens
 from open_geo_service.main import app
 from open_geo_service.openeo.jobs import get_openeo_job_service
+from open_geo_service.system.templates import actions_closed
 
 from .conftest import MountedClientFactory
 
@@ -345,17 +346,23 @@ def _session(client: TestClient, secret: str) -> dict[str, str]:
     return {"Cookie": set_cookie.split(";")[0]}
 
 
-def test_web_sign_in_opens_the_forms_its_tier_allows(auth_on: None, browser: TestClient) -> None:
+def test_web_sign_in_opens_the_forms_its_tier_allows(
+    auth_on: None, browser: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     client = browser
     pause = "/schedules/sync/nothing/pause"
+    # A page rendered outside a request shows no operator forms.
+    assert actions_closed() == "sign-in"
     signed_out = client.get("/data-sources", headers=HTML).text
     assert 'href="/sign-in">Sign in</a>' in signed_out and "Sign out" not in signed_out
     assert client.post(pause, headers=SAME_ORIGIN).status_code == 401
 
     came_from = client.get("/sign-in", headers={"Referer": "https://testserver/data-sources?q=1"})
     assert 'name="next" value="/data-sources?q=1"' in came_from.text
+    monkeypatch.setattr(middleware, "_last_failure_log", float("-inf"))
     wrong = client.post("/sign-in", data={"token": "x" * 40}, headers=SAME_ORIGIN)
     assert wrong.status_code == 401 and "not valid" in wrong.text
+    assert "invalid credential" in caplog.text
     other_site = {"Origin": "https://elsewhere.example"}
     assert client.post("/sign-in", data={"token": OPERATOR_SECRET}, headers=other_site).status_code == 403
     # Only a path on this instance is returned to.
@@ -418,7 +425,10 @@ def test_sign_in_is_offered_only_over_https_or_on_this_machine(auth_on: None, cl
     refused = client.post("/sign-in", data={"token": OPERATOR_SECRET}, headers={"Origin": "http://testserver"})
     assert refused.status_code == 403 and "set-cookie" not in refused.headers
     client.base_url = httpx.URL("http://localhost:8000")
-    assert 'name="token"' in client.get("/sign-in").text
+    # The server offers the form; the browser shows it only in a secure context, which a proxy
+    # rewriting Host to a loopback address cannot fake.
+    local = client.get("/sign-in").text
+    assert 'name="token"' in local and 'id="sign-in" hidden' in local and "window.isSecureContext" in local
 
 
 def test_without_tokens_there_is_no_sign_in(client: TestClient) -> None:
