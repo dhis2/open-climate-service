@@ -66,23 +66,10 @@
               {% endif %}
             </section>
 
-            <section class="panel" aria-labelledby="about-title">
-              <h3 id="about-title">About</h3>
-              <dl class="facts">
-                {% for label, value, href in data %}
-                <dt>{{ label }}</dt>
-                <dd>
-                  {% if href %}<a href="{{ href if href.startswith('http') else mount ~ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}
-                </dd>
-                {% endfor %}
-              </dl>
-            </section>
-
             {% if dataset.kind == "table" %}
             <section class="panel" aria-labelledby="values-title">
-              <h3 id="values-title">Values</h3>
               {% if table %}
-              <h4>Latest value of each feature{% if table.common_period %}, {{ table.common_period }}{% endif %}{% if table.common_series %} ({{ table.common_series }}){% endif %}</h4>
+              <h3 id="values-title">Latest value of each feature{% if table.common_period %}, {{ table.common_period }}{% endif %}{% if table.common_series %} ({{ table.common_series }}){% endif %}</h3>
               <div class="table-wrap">
                 <table>
                   <thead>
@@ -111,10 +98,23 @@
                 {% if table.more %}{{ table.more }} more latest values. {% endif %}{{ table.row_count }} rows in all{% if published %}, as <a href="{{ mount }}/tables/{{ dataset.id }}/rows?format=csv">CSV</a> or <a href="{{ mount }}/tables/{{ dataset.id }}/rows">JSON</a>{% endif %}.
               </p>
               {% else %}
+              <h3 id="values-title">Values</h3>
               <p class="note">This table has no rows yet.</p>
               {% endif %}
             </section>
             {% endif %}
+
+            <section class="panel" aria-labelledby="about-title">
+              <h3 id="about-title">About</h3>
+              <dl class="facts">
+                {% for label, value, href in data %}
+                <dt>{{ label }}</dt>
+                <dd>
+                  {% if href %}<a href="{{ href if href.startswith('http') else mount ~ href }}">{{ value }}</a>{% else %}{{ value }}{% endif %}
+                </dd>
+                {% endfor %}
+              </dl>
+            </section>
 
             {% if provenance_facts %}
             <section class="panel" aria-labelledby="provenance-title">

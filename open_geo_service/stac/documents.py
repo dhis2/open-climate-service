@@ -207,7 +207,7 @@ def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str,
 
     sources = table_sources(artifact)
     summary = summarize(artifact)
-    lines = [f"# {artifact.dataset_name}", "", services._table_description(artifact, summary.collection_ids)]
+    lines = [f"# {artifact.dataset_name}", "", sources.description(artifact)]
     lines += ["", "## Licence", ""]
     licences = [licence for licence in sources.licences if licence.identifier or licence.name]
     if not licences:

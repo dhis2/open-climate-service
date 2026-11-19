@@ -3026,7 +3026,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         # A computed table has no template; its metadata comes from the datasets it was computed
         # from. Tables from external systems get templates of their own with CLIM-1556.
         sources = table_sources(latest)
-        source_dataset = sources.template()
+        source_dataset = {**sources.template(), "description": sources.description(latest)}
         licence_id, licence_url = sources.stac_license, sources.license_url
     else:
         if latest.format == ArtifactFormat.GEOPARQUET:

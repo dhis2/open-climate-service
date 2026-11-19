@@ -545,7 +545,7 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
     spatial = artifact.coverage.spatial_wgs84 or artifact.coverage.spatial
     collection = pystac.Collection(
         id=dataset_id,
-        description=_table_description(artifact, summary.collection_ids),
+        description=sources.description(artifact),
         extent=pystac.Extent(
             spatial=pystac.SpatialExtent([[spatial.xmin, spatial.ymin, spatial.xmax, spatial.ymax]]),
             temporal=pystac.TemporalExtent([[_start_of_day(summary.first_period), _start_of_day(summary.last_period)]]),
@@ -625,13 +625,6 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
     payload["stac_version"] = STAC_VERSION
     payload["providers"] = _published_providers(sources.template(), request, [_processor_provider(artifact, request)])
     return payload
-
-
-def _table_description(artifact: ArtifactRecord, collection_ids: list[str]) -> str:
-    """What a table dataset holds, in one sentence: there is no template to take prose from."""
-    period = f"{artifact.period_type} period" if artifact.period_type else "period"
-    features = f" of {', '.join(collection_ids)}" if collection_ids else ""
-    return f"{artifact.dataset_name}: one value per feature{features} and {period}."
 
 
 def _table_dataset_columns(artifact: ArtifactRecord) -> list[dict[str, str]]:

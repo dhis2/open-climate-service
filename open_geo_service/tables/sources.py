@@ -88,6 +88,16 @@ class TableSources:
                 names.append(name)
         return ", ".join(names) or None
 
+    def description(self, record: ArtifactRecord) -> str:
+        """What the table holds and what it was computed from, for a table without a template's own prose."""
+        period = f"{record.period_type} period" if record.period_type else "period"
+        names = [str(template.get("name") or template["id"]) for template in self.templates if template.get("id")]
+        computed = ""
+        if names:
+            joined = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+            computed = f", computed from {joined}"
+        return f"{record.dataset_name}: one value per feature and {period}{computed}."
+
     def template(self) -> dict[str, Any]:
         """The table's metadata in a template's shape, for the pages that read one.
 

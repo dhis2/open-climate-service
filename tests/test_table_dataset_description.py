@@ -214,7 +214,7 @@ def test_the_dataset_page_shows_each_features_latest_value(client: TestClient) -
 
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
     # One period and one reducer for every row are said once, in the heading, not in a column.
-    assert "Latest value of each feature, 2026-02 (mean)</h4>" in page
+    assert "Latest value of each feature, 2026-02 (mean)</h3>" in page
     assert (
         ">Period</th>" not in page
         and "Value of" not in page
@@ -229,6 +229,13 @@ def test_the_dataset_page_shows_each_features_latest_value(client: TestClient) -
     assert '<td class="numeric">10</td>' not in page
     assert "Open in map viewer" not in page
     assert "UCSB Climate Hazards Center, Overture Maps" in page
+    # No template to take prose from: what it holds and what it was computed from, as in STAC.
+    description = (
+        "Precipitation by district: one value per feature and monthly period, "
+        "computed from Precipitation and Districts."
+    )
+    assert description in page
+    assert client.get("/stac/precip_districts/collection.json").json()["description"] == description
 
     rows = client.get("/tables/precip_districts/rows", params={"feature": "D2"}).json()["items"]
     assert [(row["feature_id"], row["period"], row["value"]) for row in rows] == [
@@ -246,7 +253,7 @@ def test_a_feature_whose_newest_value_is_older_still_shows_it(client: TestClient
         period_type="monthly",
     )
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
-    assert "Latest value of each feature (mean)</h4>" in page
+    assert "Latest value of each feature (mean)</h3>" in page
     assert ">Period</th>" in page and "<td>2026-01</td>" in page and "<td>2026-02</td>" in page
 
 
@@ -279,7 +286,7 @@ def test_the_preview_shows_a_column_only_where_it_tells_rows_apart(client: TestC
         period_type="monthly",
     )
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
-    assert "Latest value of each feature, 2026-01</h4>" in page
+    assert "Latest value of each feature, 2026-01</h3>" in page
     assert ">Value of</th>" in page and ">Coverage</th>" not in page
 
 
