@@ -33,7 +33,7 @@ CHC's server was the source before. It limits concurrent requests, and reading a
 | **Spatial coverage**   | Global land, 60°S–60°N                             |
 | **Spatial resolution** | ~5 km                                              |
 | **Record start**       | 1981-01-01                                         |
-| **Source**             | [CHIRPS v3](https://www.chc.ucsb.edu/data/chirps3) |
+| **Source**             | [CHIRPS v3, via dynamical.org](https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/) |
 
 CHIRPS (Climate Hazards Group InfraRed Precipitation with Station data) v3 is a quasi-global daily precipitation dataset merging satellite thermal infrared imagery with station observations. It is widely used for drought monitoring, food security analysis, and WASH planning in low- and middle-income countries.
 
@@ -54,7 +54,7 @@ CHIRPS (Climate Hazards Group InfraRed Precipitation with Station data) v3 is a 
 | **Spatial coverage**   | Global land, 60°S–60°N                                                             |
 | **Spatial resolution** | ~5 km                                                                              |
 | **Record start**       | 2025-01-01                                                                         |
-| **Source**             | [CHIRPS v3 preliminary](https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/prelim/) |
+| **Source**             | [CHIRPS v3 preliminary, via dynamical.org](https://dynamical.org/catalog/ucsb-chc-chirps-analysis-preliminary/) |
 
 Daily rainfall a few days after it falls, including the current month, for in-season monitoring. It is satellite-only, without the station blending of the final product, and **provisional**: the final daily dataset replaces these values a month or so later.
 
@@ -82,7 +82,7 @@ DHIS2 then holds the best value available for each day. It does not show which v
 | **Spatial coverage**   | Global land, 60°S–60°N                             |
 | **Spatial resolution** | ~5 km                                              |
 | **Record start**       | 1981-01                                            |
-| **Source**             | [CHIRPS v3](https://www.chc.ucsb.edu/data/chirps3) |
+| **Source**             | [CHIRPS v3, via dynamical.org](https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/) |
 
 Monthly CHIRPS precipitation, computed from the final daily product. Prefer it over the daily dataset when you only need monthly values: the stored dataset is roughly 30× smaller, and drought indices such as SPI and SPEI are conventionally computed monthly.
 

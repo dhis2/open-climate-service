@@ -24,8 +24,9 @@
   cell_methods: "time: mean"
   resolution: 5 km x 5 km
   source: CHIRPS v3, via dynamical.org
-  # Where the data originates, which a STAC `via` link must name; dynamical.org is listed as a provider.
-  source_url: https://www.chc.ucsb.edu/data/chirps3
+  # The page of the mirror the data is read from, as for the other mirrored datasets; CHC, where
+  # it originates, is the producer below. Separating the origin from the host is CLIM-1948.
+  source_url: https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -75,7 +76,7 @@
   cell_methods: "time: mean"
   resolution: 5 km x 5 km
   source: CHIRPS v3 preliminary, via dynamical.org
-  source_url: https://data.chc.ucsb.edu/products/CHIRPS/v3.0/daily/prelim/
+  source_url: https://dynamical.org/catalog/ucsb-chc-chirps-analysis-preliminary/
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -124,7 +125,7 @@
   cell_methods: "time: mean"
   resolution: 5 km x 5 km
   source: CHIRPS v3 (monthly mean of the daily product), via dynamical.org
-  source_url: https://www.chc.ucsb.edu/data/chirps3
+  source_url: https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
