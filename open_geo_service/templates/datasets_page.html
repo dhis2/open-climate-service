@@ -69,7 +69,8 @@
                 {% if ds.has_thumbnail %}
                 <img src="{{ mount }}/datasets/{{ ds.id }}/thumbnail.png" alt="" loading="lazy" />
                 {% elif ds.kind == "table" %}
-                {# A table has no map to preview; the ruled box says what it is instead of promising one. #}
+                {# A table has no map to preview; one picture of a table says what it is instead. #}
+                {% include "_table_thumbnail.html" %}
                 {% else %}
                 <span class="no-preview">No preview yet</span>
                 {% endif %}
