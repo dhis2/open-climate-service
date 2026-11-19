@@ -313,3 +313,21 @@ def test_every_tile_names_its_kind(client: TestClient) -> None:
     for kind in ("table", "vector"):
         tile = listing.split(f'data-kind="{kind}"', 1)[1].split("</article>", 1)[0]
         assert f'<span class="chip">{kind}</span>' in tile
+
+
+def test_a_dry_run_refuses_rows_computed_from_other_datasets() -> None:
+    """The dry run gives the delivery's verdict, so it refuses the source change the write would."""
+    from types import SimpleNamespace
+
+    from open_geo_service.exports.table import plugin
+    from tests.test_table_datasets import _MAPPING, _cube
+
+    _computed("precip", "districts")
+    rendered = plugin.render(_cube([1.0, 2.0]), plugin.validate_mapping(dict(_MAPPING)))
+    context = SimpleNamespace(
+        source_job_id="job-2",
+        source_provenance={"sources": [{"collection_id": "temperature"}, {"collection_id": "districts"}]},
+    )
+    report = plugin.send(rendered.content, "tables", dry_run=True, context=context)  # type: ignore[arg-type]
+    assert report.outcome == "rejected" and report.ignored == 2
+    assert report.message is not None and "was computed from ['districts', 'precip']" in report.message

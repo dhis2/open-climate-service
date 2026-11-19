@@ -156,10 +156,14 @@ def write_rows(
     # Checked under the lock, so two first writes cannot give one dataset two period types or units.
     with _dataset_lock(dataset_id):
         table = check_rows(
-            dataset_id=dataset_id, collection_id=collection_id, rows=rows, period_type=period_type, written_at=stamp
+            dataset_id=dataset_id,
+            collection_id=collection_id,
+            rows=rows,
+            period_type=period_type,
+            written_at=stamp,
+            provenance=provenance,
         )
         existing = latest_record(dataset_id)
-        _require_same_sources(dataset_id, existing, provenance)
         period_type = period_type or (existing.period_type if existing else None)
         merged = _merged(_read_file(existing), table, collection_id, period_type)
         written = _write_file(_dataset_root(dataset_id), merged, stamp)
@@ -230,6 +234,7 @@ def check_rows(
     rows: Iterable[Mapping[str, Any]],
     period_type: str | None = None,
     written_at: datetime | None = None,
+    provenance: ArtifactProvenance | None = None,
 ) -> pa.Table:
     """Return *rows* as the table `write_rows` would merge in, or raise ValueError; nothing is written.
 
@@ -244,13 +249,16 @@ def check_rows(
     A dataset has one period type, the first one written. A *period_type* that differs from it is
     refused; None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`), and each
     `period_start` is stored as the first day of the period that contains it (`start_of_period`).
-    It has one unit too, the first one written: rows in another unit are refused.
+    It has one unit too, the first one written: rows in another unit are refused. Rows computed
+    from other datasets than the stored ones, as *provenance* names them, are refused
+    (`_require_same_sources`).
     """
     _require_id(dataset_id, "table dataset")
     _require_id(collection_id, "feature collection")
     require_table_id(dataset_id)
     period_type = _dataset_period_type(dataset_id, period_type)
     existing = latest_record(dataset_id)
+    _require_same_sources(dataset_id, existing, provenance)
     unit = existing.units if existing else None
     feature_ids = _collection_feature_ids(collection_id)
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
