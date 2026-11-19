@@ -610,7 +610,7 @@ button:disabled {
   background: var(--colors-grey600);
 }
 .table-thumbnail .heading .cell span {
-  background: var(--colors-blue100);
+  background: var(--colors-white);
 }
 
 /* A table dataset's values over time, on its page. */
