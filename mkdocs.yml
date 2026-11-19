@@ -1,5 +1,5 @@
 site_name: Open Geo Service
-site_description: Climate data tailored for your country, ready for climate-smart decisions
+site_description: Climate, earth observation and socioeconomic data for your country, served through open standards
 site_url: https://dhis2.github.io/open-geo-service/
 repo_url: https://github.com/dhis2/open-geo-service
 repo_name: dhis2/open-geo-service
@@ -70,7 +70,7 @@ nav:
       - Zarr and GeoZarr: zarr_and_geozarr.md
       - Raster conventions: conventions.md
       - Project overview: project_description.md
-      - Authentication (design): authentication.md
+      - Authentication: authentication.md
   - Guides:
       - Instance guide: instance_guide.md
       - Using the web interface: web_interface.md

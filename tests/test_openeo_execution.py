@@ -223,7 +223,7 @@ def test_load_collection_overlapping_temporal_extent_returns_data(monkeypatch: p
 def test_augment_with_workflows_returns_base_when_no_udps(monkeypatch: pytest.MonkeyPatch) -> None:
     import open_geo_service.openeo.workflows as workflow_module
 
-    monkeypatch.setattr(workflow_module, "list_workflows", lambda: MagicMock(processes=[]))
+    monkeypatch.setattr(workflow_module, "list_workflows", lambda **_: MagicMock(processes=[]))
     base = object()
     result = _augment_with_workflows(base)
     assert result is base
@@ -237,7 +237,7 @@ def test_augment_with_workflows_registers_udp(monkeypatch: pytest.MonkeyPatch) -
     udp.process_graph = {
         "result": {"process_id": "save_result", "arguments": {"data": 42, "format": "Zarr"}, "result": True}
     }
-    monkeypatch.setattr(workflow_module, "list_workflows", lambda: MagicMock(processes=[udp]))
+    monkeypatch.setattr(workflow_module, "list_workflows", lambda **_: MagicMock(processes=[udp]))
 
     from openeo_pg_parser_networkx.process_registry import Process, ProcessRegistry
 
@@ -387,12 +387,12 @@ def test_openeo_job_service_create_execute_and_get_results(
 ) -> None:
     monkeypatch.setattr(
         "open_geo_service.openeo.execution.run_process_graph",
-        lambda process: {"ignored": True},
+        lambda process, **_: {"ignored": True},
     )
     monkeypatch.setattr(
         job_service,
         "_persist_result",
-        lambda job_id, result: f"/tmp/{job_id}/result.geojson",
+        lambda job_id, result, *_: f"/tmp/{job_id}/result.geojson",
     )
 
     record = job_service.create_job(
@@ -629,7 +629,7 @@ def test_run_process_graph_keeps_runtime_failures_as_500(monkeypatch: pytest.Mon
 def test_result_route_rejects_synchronous_zarr_datacube(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "open_geo_service.openeo.execution.run_process_graph",
-        lambda process, request=None: xr.Dataset(
+        lambda process, request=None, **_: xr.Dataset(
             {"temperature": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}
         ),
     )
@@ -664,7 +664,7 @@ def test_result_route_rejects_formats_a_raster_cube_cannot_produce(
     """
     monkeypatch.setattr(
         "open_geo_service.openeo.execution.run_process_graph",
-        lambda process, request=None: SaveResultEnvelope(
+        lambda process, request=None, **_: SaveResultEnvelope(
             xr.Dataset({"temperature": xr.DataArray(np.ones((2, 2), dtype=np.float32), dims=["y", "x"])}),
             fmt,
         ),
@@ -692,7 +692,7 @@ def test_result_route_still_serves_raster_formats(
     )
     monkeypatch.setattr(
         "open_geo_service.openeo.execution.run_process_graph",
-        lambda process, request=None: SaveResultEnvelope(ds, fmt),
+        lambda process, request=None, **_: SaveResultEnvelope(ds, fmt),
     )
 
     response = client.post(
@@ -2293,7 +2293,7 @@ def test_result_route_serves_netcdf_after_reduce_dimension(client: TestClient, m
     """The reported symptom: a graph ending in reduce_dimension, exported as NETCDF, 500d."""
     monkeypatch.setattr(
         "open_geo_service.openeo.execution.run_process_graph",
-        lambda process, request=None: SaveResultEnvelope(_reduced_dataset(), "NETCDF"),
+        lambda process, request=None, **_: SaveResultEnvelope(_reduced_dataset(), "NETCDF"),
     )
 
     response = client.post(
@@ -2320,7 +2320,7 @@ def test_batch_job_with_unwritable_format_errors_without_a_result_asset(
     )
     monkeypatch.setattr(
         "open_geo_service.openeo.execution.run_process_graph",
-        lambda process: SaveResultEnvelope(ds, "GEOJSON"),
+        lambda process, **_: SaveResultEnvelope(ds, "GEOJSON"),
     )
 
     record = job_service.create_job(

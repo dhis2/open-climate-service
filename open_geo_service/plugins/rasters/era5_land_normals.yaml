@@ -225,7 +225,14 @@
     kind: static
   units: degC
   source: Derived (climate_anomaly workflow)
-  produced_by: climate_anomaly
+  # Refreshed after each update of era5land_temperature_monthly, once the anomaly was created.
+  produced_by:
+    workflow: climate_anomaly
+    arguments:
+      observed_dataset_id: era5land_temperature_monthly
+      normal_dataset_id: era5land_temperature_monthly_normal_1991_2020
+      variable: t2m
+    refresh_on: observed_dataset_id
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/
@@ -280,7 +287,15 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
-  produced_by: climate_anomaly
+  # Refreshed after each update of era5land_precipitation_monthly, once the anomaly was created.
+  produced_by:
+    workflow: climate_anomaly
+    arguments:
+      observed_dataset_id: era5land_precipitation_monthly
+      normal_dataset_id: era5land_precipitation_monthly_normal_1991_2020
+      variable: tp
+      method: relative
+    refresh_on: observed_dataset_id
   license:
     name: Licence to Use Copernicus Products
     url: https://apps.ecmwf.int/datasets/licences/copernicus/

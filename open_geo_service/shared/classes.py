@@ -120,6 +120,7 @@ def stac_classes(classification: Classification) -> list[dict[str, Any]]:
         entry: dict[str, Any] = {
             "value": item.value,
             "name": re.sub(r"[^0-9A-Za-z_-]+", "_", item.label).strip("_") or f"class_{item.value}",
+            "title": item.label,  # Portolan v0.3.0 requires a non-empty title on every class
             "description": item.label,
         }
         if item.color:

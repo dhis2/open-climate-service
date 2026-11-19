@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.responses import RedirectResponse, StreamingResponse
 
 from open_geo_service import config as api_config
+from open_geo_service.auth.middleware import principal_of
 from open_geo_service.shared.time import has_calendar_periods
 from open_geo_service.shared.urls import absolute_base, mount_prefix
 
@@ -76,7 +77,7 @@ def read_index(request: Request) -> Response:
         # already on the right origin, so it uses relative paths instead.
         caps = build_capabilities(absolute_base(request))
         return JSONResponse(caps.model_dump())
-    return HTMLResponse(render_landing(app_version, mount_prefix(request)))
+    return HTMLResponse(render_landing(app_version, mount_prefix(request), viewer=principal_of(request)))
 
 
 # These pages are single-file apps: the behaviour lives in inline JS that changes with every
@@ -101,7 +102,7 @@ def api_page(request: Request) -> HTMLResponse:
 @router.get("/workflows", response_class=HTMLResponse, include_in_schema=False)
 def workflows_page(request: Request) -> HTMLResponse:
     """Return the list of workflows. The machine-readable form is `GET /process_graphs`."""
-    return HTMLResponse(render_workflows_page(mount_prefix(request)))
+    return HTMLResponse(render_workflows_page(mount_prefix(request), viewer=principal_of(request)))
 
 
 @router.get("/workflows/{workflow_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -111,7 +112,7 @@ def workflow_page(request: Request, workflow_id: str) -> HTMLResponse:
 
     from open_geo_service.openeo.workflows import get_workflow
 
-    record = get_workflow(workflow_id)
+    record = get_workflow(workflow_id, visible_to=principal_of(request))
     if record is None:
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
     return HTMLResponse(render_workflow_page(record, mount_prefix(request)))

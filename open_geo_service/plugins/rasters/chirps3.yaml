@@ -237,7 +237,14 @@
     kind: static
   units: mm/d
   source: Derived (climate_anomaly workflow)
-  produced_by: climate_anomaly
+  # Refreshed after each update of chirps3_precipitation_monthly, once the anomaly was created.
+  produced_by:
+    workflow: climate_anomaly
+    arguments:
+      observed_dataset_id: chirps3_precipitation_monthly
+      normal_dataset_id: chirps3_precipitation_monthly_normal_1991_2020
+      variable: precip
+    refresh_on: observed_dataset_id
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
@@ -263,7 +270,15 @@
     kind: static
   units: "%"
   source: Derived (climate_anomaly workflow, method=relative)
-  produced_by: climate_anomaly
+  # Refreshed after each update of chirps3_precipitation_monthly, once the anomaly was created.
+  produced_by:
+    workflow: climate_anomaly
+    arguments:
+      observed_dataset_id: chirps3_precipitation_monthly
+      normal_dataset_id: chirps3_precipitation_monthly_normal_1991_2020
+      variable: precip
+      method: relative
+    refresh_on: observed_dataset_id
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center

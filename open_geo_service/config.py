@@ -64,8 +64,9 @@ def _load_config() -> dict[str, Any]:
     # inside that block before substitution, so a secret that happens to contain YAML syntax can
     # never break parsing or be cached, while interpolation elsewhere (for example
     # bbox: [${MINX}, ${MINY}]) keeps working.
-    if _block_uses_interpolation(text, "dhis2_connections"):
-        raise ValueError("dhis2_connections does not support environment interpolation; use literal values")
+    for key in ("dhis2_connections", "authentication"):
+        if _block_uses_interpolation(text, key):
+            raise ValueError(f"{key} does not support environment interpolation; use literal values")
     loaded = yaml.safe_load(_substitute_env_vars(text))
     if loaded is not None and not isinstance(loaded, dict):
         raise ValueError(f"GEOSERVICE_CONFIG must be a YAML mapping at the top level: {path}")
@@ -86,7 +87,7 @@ def _load_config() -> dict[str, Any]:
 def _block_uses_interpolation(text: str, key: str) -> bool:
     """Return True when the top-level ``key`` block contains ``${...}`` tokens.
 
-    Interpolation is disallowed inside ``dhis2_connections`` because its
+    Interpolation is disallowed inside ``dhis2_connections`` and ``authentication`` because their
     definitions are validated as literals and a substituted secret must never be
     cached. The scan stops at the next top-level key, so
     interpolation in other blocks remains supported.

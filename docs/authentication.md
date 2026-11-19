@@ -1,10 +1,9 @@
 # Authentication and authorization
 
-This note records how Open Geo Service will authenticate callers and decide what they may do. It is a design,
-not a description of current behaviour: **Open Geo Service has no authentication today.** Every route is open
-to anyone who can reach the instance, including ingestion, pipelines and delivery to DHIS2. Until
-the first step below ships, deploy an instance privately or behind reverse-proxy authentication,
-or run it read-only (see [Read-only instances](instance_guide.md#read-only-instances)).
+This note records how Open Geo Service authenticates callers and decides what they may do. The first step
+of the [order of delivery](#order-of-delivery) is in place: named tokens, tiers and the route
+table, configured as described in [Authentication](instance_guide.md#authentication). The rest is
+design. Until web sign-in ships, operators act through the API on an instance with tokens on.
 
 ## The principle
 
@@ -49,13 +48,17 @@ Every method and path belongs to exactly one tier, listed in one table in the co
 
 Built-in and plugin workflows stay visible to everyone. A workflow stored through the API belongs
 to its owner and is listed only to its owner and to operators. A stored workflow cannot take the id
-of a built-in or plugin workflow unless an operator stores it. Today such a workflow replaces the
-built-in for every caller, including the pipelines that run it.
+of a built-in or plugin workflow unless an operator stores it. Such a workflow then replaces the
+built-in for operators and for the pipelines that run it; other callers still reach the built-in.
 
-The table fails closed. A route it does not list, such as a new plugin route or form endpoint,
-gets the operator tier, and a test over every route the application serves fails until it is
-listed. The test covers routes left out of the OpenAPI document, such as the pipeline form's
-lookups.
+A batch job whose `save_result` names a `dataset_id` writes into a managed dataset and publishes it,
+so it needs an operator token like ingestion does. The route table cannot see an option inside the
+job body, so the managed write checks the job owner's tier.
+
+The table fails closed. A route the application serves that the table does not list, such as a
+new plugin route or form endpoint, gets the operator tier, and a test over every route the
+application serves fails until it is listed. The test covers routes left out of the OpenAPI
+document, such as the pipeline form's lookups. A path no route serves is answered `404`.
 
 Read-only mode is a separate check over the same table. It refuses every route above public,
 except `POST /result`, which it lets through because computing a result changes nothing. It never
@@ -174,10 +177,17 @@ When it is built:
 
 ## Ownership and audit
 
-Jobs, stored process graphs, pipeline runs, delivery records and dataset updates record the
-principal that created them, how it authenticated, and, where there is one, the acting person.
-Listing and changing them is limited to the owner unless the caller has the operator tier.
-`GET /me` reports the caller.
+Batch jobs and stored process graphs record the principal that created them. Listing, reading
+and changing them is limited to the owner unless the caller has the operator tier, and so is
+running a stored process graph by id; another principal's records are answered `404`, as if they
+did not exist. A job's result files follow the same rule: they are the owner's, not anyone's
+with the link. Pipeline runs and derived datasets, which no client starts, can run every stored
+process graph. Records from before owners were recorded, or stored while authentication was
+off, have none, and only operators reach them. `GET /me` reports the caller.
+
+Pipeline runs, delivery records and dataset updates are reached only with the operator tier, so
+ownership does not limit them. They will record the principal, how it authenticated and, where
+there is one, the acting person, for audit.
 
 The scheduler and the pipeline runner act as service principals, so an unattended delivery is as
 attributable as one started by hand. The credentials Open Geo Service uses for upstream sources and DHIS2
@@ -202,7 +212,7 @@ apply per IP address to anonymous callers and per principal once identity exists
 Each step ships on its own and is useful alone; no later step redoes an earlier one.
 
 1. Principals and tiers, the route table, the middleware, named tokens, the openEO basic exchange,
-   and principals on records.
+   and owners on jobs and stored process graphs.
 2. Web interface sign-in with a session cookie and CSRF.
 3. Optional gating of reads, advertised in STAC.
 4. OIDC and per-person ownership.

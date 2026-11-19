@@ -17,7 +17,7 @@ from open_geo_service.openeo import jobs
 from open_geo_service.openeo import workflows as workflow_store
 from open_geo_service.openeo.execution import (
     _augment_with_workflows,
-    _build_process_registry,
+    _new_process_registry,
 )
 
 
@@ -35,7 +35,8 @@ def _cube(celsius: float) -> xr.DataArray:
 
 
 def _overlay(cubes: dict[str, xr.DataArray]) -> Any:
-    reg = _build_process_registry()
+    # A registry of its own: the cached one is shared by every later test in this process.
+    reg = _new_process_registry()
     reg["load_collection"] = Process(spec={}, implementation=lambda id=None, temporal_extent=None, **k: cubes[str(id)])
     return _augment_with_workflows(reg)
 
@@ -101,6 +102,7 @@ def managed_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "  license: CC-BY-4.0\n"
         "  sync:\n"
         "    kind: temporal\n"
+        "  source_url: https://example.org/source\n"
         "  ingestion:\n"
         "    plugin: open_geo_service.plugins.rasters.era5_land_cds.ERA5LandCDSDailyFromHourlyPlugin\n",
         encoding="utf-8",

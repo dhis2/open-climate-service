@@ -242,6 +242,7 @@ def test_plugins_dir_adds_root_to_sys_path_and_makes_modules_importable(
   period_type: daily
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: myplugin.source.Plugin
 """,
@@ -276,6 +277,7 @@ def test_plugins_dir_in_config_adds_to_bundled(monkeypatch: pytest.MonkeyPatch, 
   period_type: daily
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: mypackage.sources.Plugin
 """,
@@ -309,6 +311,7 @@ def test_plugins_dir_resolved_relative_to_config_file(monkeypatch: pytest.Monkey
   period_type: daily
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: mypackage.sources.Plugin
 """,
@@ -335,6 +338,7 @@ def test_plugins_dir_in_config_overrides_bundled_by_id(monkeypatch: pytest.Monke
   period_type: daily
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: mypackage.sources.Plugin
 """,

@@ -225,3 +225,20 @@ def test_every_built_in_template_has_a_description() -> None:
     missing = [t["id"] for t in registry._load_builtin_datasets() if not str(t.get("description") or "").strip()]
 
     assert missing == []
+
+
+def test_a_template_that_fetches_data_must_name_its_source_page() -> None:
+    """Its STAC collection is a Portolan mirror, which must link the original source (`via`)."""
+    template = _template(sync={"kind": "temporal"}, ingestion={"plugin": "some.Plugin"}, license="CC-BY-4.0")
+
+    with pytest.raises(ValueError, match="must define 'source_url'"):
+        registry._validate_dataset_template(template, source="fetched.yaml")
+
+    registry._validate_dataset_template({**template, "source_url": "https://example.org"}, source="fetched.yaml")
+
+
+def test_a_derived_template_needs_no_source_page() -> None:
+    """A normal or anomaly fetches nothing; its collection links its inputs' sources instead."""
+    template = _template(sync={"kind": "static"}, produced_by="climate_normal", license="CC-BY-4.0")
+
+    registry._validate_dataset_template(template, source="derived.yaml")  # does not raise

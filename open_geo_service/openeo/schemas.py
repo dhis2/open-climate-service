@@ -105,6 +105,8 @@ class OpenEOJobRecord(BaseModel):
     # Persisted internal state (underscore prefix excluded from openEO output)
     error_message: str | None = Field(default=None, exclude=True)
     cancel_requested: bool = Field(default=False, exclude=True)
+    # The principal that created the job through the API (docs/authentication.md).
+    owner: str | None = Field(default=None, exclude=True)
     # Set on jobs a pipeline run or a derived dataset refresh creates: who owns the job, and the
     # event it answers, from which its id is derived.
     trigger_id: str | None = Field(default=None, exclude=True)

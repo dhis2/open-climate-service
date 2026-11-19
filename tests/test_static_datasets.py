@@ -80,6 +80,7 @@ _TEMPLATES = """
   extents:
     spatial:
       bbox: [-180, -90, 180, 90]
+  source_url: https://example.org/source
   ingestion:
     plugin: tests.test_static_datasets.ElevationPlugin
   units: m
@@ -91,6 +92,7 @@ _TEMPLATES = """
   variable: elevation
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: tests.test_static_datasets.SeriesInDisguisePlugin
 - id: {prefix}_leftover_time
@@ -98,6 +100,7 @@ _TEMPLATES = """
   variable: elevation
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: tests.test_static_datasets.LeftoverTimePlugin
 - id: {prefix}_standalone
@@ -105,6 +108,7 @@ _TEMPLATES = """
   variable: elevation
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: tests.test_static_datasets.StandaloneElevationPlugin
 - id: {prefix}_classes
@@ -112,6 +116,7 @@ _TEMPLATES = """
   variable: elevation
   sync:
     kind: static
+  source_url: https://example.org/source
   ingestion:
     plugin: tests.test_static_datasets.LandCoverPlugin
 """

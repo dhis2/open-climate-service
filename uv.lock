@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -872,6 +872,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5d/6e/987a0ba36c9985c378352593be6eee268a883e1146211a4b20d532bb4e2a/dhis2_client-0.3.2.tar.gz", hash = "sha256:3693b628b4d90d1cce15de132dc19a9e92654f00da135e8f23993d47c74cb07f", size = 39023, upload-time = "2026-10-05T11:52:57.659Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8d/51/ee9fedf22f5db1de4f7aa5bbc19f81c4cc227b87ffcb12b9a36b1fa9ebce/dhis2_client-0.3.2-py3-none-any.whl", hash = "sha256:f556f7275d86b24de2dd48502d170be008ed004bc4c1c9a80c52a34844ce50bb", size = 31834, upload-time = "2026-10-05T11:52:56.418Z" },
+]
+
+[[package]]
+name = "docstring-parser"
+version = "0.18.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/4d/f332313098c1de1b2d2ff91cf2674415cc7cddab2ca1b01ae29774bd5fdf/docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015", size = 29341, upload-time = "2026-04-14T04:09:19.867Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b", size = 22484, upload-time = "2026-04-14T04:09:18.638Z" },
 ]
 
 [[package]]
@@ -2639,7 +2648,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.41.0" },
     { name = "xarray", marker = "extra == 'server'", specifier = ">=2025.12.0" },
     { name = "xarray", marker = "extra == 'xarray'", specifier = ">=2025.12.0" },
-    { name = "xclim", marker = "extra == 'server'", specifier = ">=0.61.1" },
+    { name = "xclim", marker = "extra == 'server'", specifier = ">=1.0.0" },
     { name = "xstac", marker = "extra == 'server'", specifier = ">=1.0,<2" },
     { name = "xvec", marker = "extra == 'server'", specifier = ">=0.3" },
     { name = "zarr", marker = "extra == 'server'", specifier = ">=3.1.6,<4" },
@@ -2783,7 +2792,7 @@ name = "oschmod"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywin32" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/54/ef/ad77c29305872e0084361e5159e3a2765c5ef2f2469454f2ccaf9e31253c/oschmod-0.7.0.tar.gz", hash = "sha256:e3af9400b9c29b37199290d8d9b944b5c2fc7b887c65b63aba082f2d24e0c90e", size = 52074, upload-time = "2026-10-29T20:28:11.652Z" }
 wheels = [
@@ -4132,11 +4141,11 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pyproj" },
-    { name = "rasterio" },
-    { name = "xarray" },
+    { name = "numpy", marker = "python_full_version < '3.13'" },
+    { name = "packaging", marker = "python_full_version < '3.13'" },
+    { name = "pyproj", marker = "python_full_version < '3.13'" },
+    { name = "rasterio", marker = "python_full_version < '3.13'" },
+    { name = "xarray", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c9/8d/9e5ab7525d2e81f9963a9192637ba8808e214f1c93a5ed000048447d626f/rioxarray-0.23.0.tar.gz", hash = "sha256:800fc3ae2405ff535edf657f3f0a6bda5a70e72282883ce18c7daecd8e0bfc58", size = 61638, upload-time = "2026-07-27T19:33:29.281Z" }
 wheels = [
@@ -4152,11 +4161,11 @@ resolution-markers = [
     "python_full_version >= '3.13' and python_full_version < '3.15'",
 ]
 dependencies = [
-    { name = "affine" },
-    { name = "numpy" },
-    { name = "pyproj" },
-    { name = "rasterio" },
-    { name = "xarray" },
+    { name = "affine", marker = "python_full_version >= '3.13'" },
+    { name = "numpy", marker = "python_full_version >= '3.13'" },
+    { name = "pyproj", marker = "python_full_version >= '3.13'" },
+    { name = "rasterio", marker = "python_full_version >= '3.13'" },
+    { name = "xarray", marker = "python_full_version >= '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/54/b5d316ffc92347da8d9a208f8c37aebbb2adf87336eabee44516c540909e/rioxarray-0.24.0.tar.gz", hash = "sha256:b5ea51c4218e079c68e302f9cdb9ae4981a9ee6927f22d32a1abd9bb1eab929c", size = 61665, upload-time = "2026-10-29T15:49:39.427Z" }
 wheels = [
@@ -4854,7 +4863,7 @@ wheels = [
 
 [[package]]
 name = "xclim"
-version = "0.62.0"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boltons" },
@@ -4863,6 +4872,7 @@ dependencies = [
     { name = "cftime" },
     { name = "click" },
     { name = "dask" },
+    { name = "docstring-parser" },
     { name = "filelock" },
     { name = "numba" },
     { name = "numpy" },
@@ -4876,9 +4886,9 @@ dependencies = [
     { name = "xarray" },
     { name = "yamale" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/36/156c7f3784e70b10a16f4a1345c8f153962c37cd6d335bf23f1b730e855f/xclim-0.62.0.tar.gz", hash = "sha256:78404c1136a4d59a6a69425be11ac4eb969d368101ac14bdebc52f6c458a3430", size = 886476, upload-time = "2026-08-17T20:56:07.829Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/aa/6cb4aba6455ada42b33cc85f6fa232f43762bba5c39fe885c461bf4982fa/xclim-1.0.0.tar.gz", hash = "sha256:e06477defa0ce9bb599e426ff129c3f729bceae856c38cccdd1b69aeccf1c3d6", size = 640957, upload-time = "2026-11-05T15:22:47.98Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/85/96e5501dc9c16787b38b3762cb596302a3db84854bc104ad991077d35d54/xclim-0.62.0-py3-none-any.whl", hash = "sha256:8c0277f7060aebd3f2f8b92e59c2b8016b2c8d4a3cdac2e6f7ae0141210f899f", size = 386850, upload-time = "2026-08-17T20:56:06.104Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/b2/1eb0d666eb5fe81a7d6f2b6b22453dd4b21888ccbdd84aa71f07e186d0aa/xclim-1.0.0-py3-none-any.whl", hash = "sha256:000869ca673cd1a6627ab3986fab306011f02b5c4767f4ae388abb0a9703d197", size = 411931, upload-time = "2026-11-05T15:22:45.922Z" },
 ]
 
 [[package]]
