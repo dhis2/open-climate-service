@@ -527,7 +527,7 @@ def _dataset_page_context(
     }
 
 
-TABLE_PREVIEW_ROWS = 20
+TABLE_PREVIEW_ROWS = 10
 """Latest values a table dataset's page shows; the rows API serves all of them."""
 
 

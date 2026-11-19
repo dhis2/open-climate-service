@@ -241,7 +241,7 @@ def test_a_feature_whose_newest_value_is_older_still_shows_it(client: TestClient
     assert ">Period</th>" in page and "<td>2026-01</td>" in page and "<td>2026-02</td>" in page
 
 
-def test_the_page_shows_at_most_twenty_latest_values(client: TestClient) -> None:
+def test_the_page_shows_at_most_ten_latest_values(client: TestClient) -> None:
     store.write_rows(
         dataset_id="precip_districts",
         collection_id="districts",
@@ -249,8 +249,8 @@ def test_the_page_shows_at_most_twenty_latest_values(client: TestClient) -> None
         period_type="monthly",
     )
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
-    assert page.count('<td title="D') == 20
-    assert "4 more latest values." in page
+    assert page.count('<td title="D') == 10
+    assert "14 more latest values." in page
 
 
 def test_rows_computed_from_other_datasets_are_refused() -> None:
