@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 from open_geo_service import __version__
 from open_geo_service import config as api_config
+from open_geo_service.auth.tokens import Principal, Tier, owner_principal
 from open_geo_service.exports.retention import result_lease
 from open_geo_service.exports.tabular import (
     _NON_VALUE_FIELDS as _NON_VALUE_FIELDS,
@@ -213,6 +214,7 @@ def _serialize(record: OpenEOJobRecord) -> dict[str, object]:
     data: dict[str, object] = record.model_dump(mode="json", exclude_none=False)
     data["error_message"] = record.error_message
     data["cancel_requested"] = record.cancel_requested
+    data["owner"] = record.owner
     data["trigger_id"] = record.trigger_id
     data["source_event_id"] = record.source_event_id
     data["attempt"] = record.attempt
@@ -571,14 +573,18 @@ class OpenEOJobService:
     # HTTP-layer helpers
     # ------------------------------------------------------------------
 
-    def list_jobs(self) -> OpenEOJobListResponse:
-        records = sorted(store_list_jobs(), key=lambda r: r.created, reverse=True)
+    def list_jobs(self, visible_to: Principal) -> OpenEOJobListResponse:
+        records = sorted(
+            (record for record in store_list_jobs() if visible_to.may_access(record.owner)),
+            key=lambda r: r.created,
+            reverse=True,
+        )
         return OpenEOJobListResponse(
             jobs=records,
             links=[{"rel": "self", "href": "/jobs", "type": "application/json"}],
         )
 
-    def create_job(self, body: OpenEOJobCreate) -> OpenEOJobRecord:
+    def create_job(self, body: OpenEOJobCreate, owner: str | None = None) -> OpenEOJobRecord:
         if not isinstance(body.process.get("process_graph"), dict):
             raise HTTPException(
                 status_code=422,
@@ -594,6 +600,7 @@ class OpenEOJobService:
             status=OpenEOJobStatus.CREATED,
             created=now,
             updated=now,
+            owner=owner,
             plan=body.plan,
             budget=body.budget,
             links=[
@@ -680,9 +687,13 @@ class OpenEOJobService:
             self._enqueue(job_id)
         return claimed
 
-    def get_job_or_404(self, job_id: str) -> OpenEOJobRecord:
+    def get_job_or_404(self, job_id: str, visible_to: Principal | None = None) -> OpenEOJobRecord:
+        """The job, or 404 when it does not exist or belongs to a principal other than `visible_to`.
+
+        Another principal's job is answered as missing, so job ids cannot be probed.
+        """
         record = store_get_job(job_id)
-        if record is None:
+        if record is None or (visible_to is not None and not visible_to.may_access(record.owner)):
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
         return record
 
@@ -1023,10 +1034,11 @@ class OpenEOJobService:
                     lambda: _cancel_requested(job_id),
                     enter_publication=lambda: self._enter_publication(job_id),
                 ):
-                    result = run_process_graph(record.process)
+                    owner = owner_principal(record.owner)
+                    result = run_process_graph(record.process, visible_to=owner)
                     raise_if_cancelled(force=True)
                     saving = True
-                    output_path = self._persist_result(job_id, result)
+                    output_path = self._persist_result(job_id, result, owner)
             finished = store_update_job(job_id, lambda r: self._finish(r, output_path))
         except ExecutionCancelled:
             logger.info("openEO job %s was cancelled while running; nothing was published", job_id)
@@ -1281,7 +1293,7 @@ class OpenEOJobService:
         except Exception:
             logger.exception("Finished-job listener failed for openEO job %s", record.id)
 
-    def _persist_result(self, job_id: str, result: Any) -> str | None:
+    def _persist_result(self, job_id: str, result: Any, owner: Principal | None = None) -> str | None:
         import xarray as xr
 
         from open_geo_service.openeo.execution import SaveResultEnvelope
@@ -1298,6 +1310,10 @@ class OpenEOJobService:
             options = result.options
             provenance = result.provenance
             result = result.data
+        # Writing to a managed dataset updates the public catalogue, which needs the operator tier.
+        # The route table cannot see this option inside the job body, so it is checked here.
+        if options.get("dataset_id") and owner is not None and owner.tier < Tier.OPERATOR:
+            raise HTTPException(403, "Publishing to a managed dataset ('dataset_id') needs an operator token")
 
         # Resolve a lazy dask_geopandas GeoDataFrame before any tabular path,
         # including named exports, so a lazy frame never reaches a renderer.

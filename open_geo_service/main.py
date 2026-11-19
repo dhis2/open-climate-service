@@ -13,6 +13,8 @@ from starlette.responses import Response
 
 import open_geo_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from open_geo_service import config as api_config
+from open_geo_service.auth.middleware import AccessMiddleware
+from open_geo_service.auth.tokens import configured_tokens
 from open_geo_service.automation import routes as automation_routes
 from open_geo_service.data_registry import routes as data_source_routes
 from open_geo_service.exports import routes as exports_routes
@@ -23,7 +25,6 @@ from open_geo_service.jobs.service import get_job_service
 from open_geo_service.openeo import routes as openeo_routes
 from open_geo_service.openeo.jobs import get_openeo_job_service
 from open_geo_service.pipelines import routes as pipeline_routes
-from open_geo_service.read_only import read_only_middleware
 from open_geo_service.scheduler import routes as scheduler_routes
 from open_geo_service.scheduler.service import get_scheduler_service
 from open_geo_service.shared import urls
@@ -164,6 +165,10 @@ async def _lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     from open_geo_service.plugins_diagnostics import log_plugin_loading
     from open_geo_service.shared.compute import install_shared_dask_pool
 
+    # Before anything starts, so a refused configuration leaves no pool or thread behind.
+    tokens = configured_tokens()
+    if tokens:
+        logger.info("Authentication is on with %d named token(s)", len(tokens))
     log_plugin_loading()
     # Before any job is recovered, so no computation starts a dask pool of its own.
     install_shared_dask_pool()
@@ -291,10 +296,9 @@ def create_app() -> FastAPI:
     urls.configured_base()
 
     # Registered *before* CORS so it ends up innermost: Starlette applies the most recently
-    # added middleware outermost, so CORS wraps this and a 403 still carries the headers a
-    # browser needs in order to read it, rather than surfacing as an opaque network error.
-    # The config is read per request, so the flag can be flipped without rebuilding the app.
-    _app.middleware("http")(read_only_middleware)
+    # added middleware outermost, so CORS wraps this and a 401 or 403 still carries the headers
+    # a browser needs in order to read it, rather than surfacing as an opaque network error.
+    _app.add_middleware(AccessMiddleware)
 
     _app.add_middleware(
         CORSMiddleware,
