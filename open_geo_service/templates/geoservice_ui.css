@@ -564,6 +564,14 @@ button:disabled {
   height: 100%;
   object-fit: cover;
 }
+/* A table dataset's tile: rows and a header rule, where other datasets show a map. */
+.thumb.thumb-table {
+  background:
+    linear-gradient(var(--colors-grey400), var(--colors-grey400)) 0 24px / 100% 2px no-repeat,
+    repeating-linear-gradient(var(--colors-grey100) 0 22px, var(--colors-grey300) 22px 23px),
+    var(--colors-grey100);
+}
+
 /* A table dataset's values over time, on its page. */
 .table-chart {
   position: relative;

@@ -38,6 +38,7 @@
                 <option value="">All</option>
                 <option value="raster">Raster</option>
                 <option value="vector">Vector</option>
+                {% if "table" in kinds %}<option value="table">Table</option>{% endif %}
               </select>
             </label>
             {% endif %}
@@ -64,9 +65,11 @@
               data-kind="{{ ds.kind }}"
               data-search="{{ [ds.name, ds.id, ds.source, ds.variable, ds.period_type] | join(' ') | lower }}"
             >
-              <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}"{% if ds.kind == "raster" %} style="--ramp: {{ ds.ramp }}"{% endif %}>
+              <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}{% if ds.kind == "table" %} thumb-table{% endif %}"{% if ds.kind == "raster" %} style="--ramp: {{ ds.ramp }}"{% endif %}>
                 {% if ds.has_thumbnail %}
                 <img src="{{ mount }}/datasets/{{ ds.id }}/thumbnail.png" alt="" loading="lazy" />
+                {% elif ds.kind == "table" %}
+                {# A table has no map to preview; the ruled box says what it is instead of promising one. #}
                 {% else %}
                 <span class="no-preview">No preview yet</span>
                 {% endif %}

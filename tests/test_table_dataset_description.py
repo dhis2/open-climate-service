@@ -280,3 +280,11 @@ def test_the_preview_shows_a_column_only_where_it_tells_rows_apart(client: TestC
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
     assert "Latest period, 2026-01</h4>" in page
     assert ">Value of</th>" in page and ">Coverage</th>" not in page
+
+
+def test_the_listing_filters_tables_and_draws_no_map_placeholder_for_one(client: TestClient) -> None:
+    _computed("precip", "districts")
+    listing = client.get("/datasets", params={"f": "html"}).text
+    assert '<option value="table">Table</option>' in listing
+    tile = listing.split('data-kind="table"', 1)[1].split("</article>", 1)[0]
+    assert "thumb-table" in tile and "No preview yet" not in tile
