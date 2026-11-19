@@ -213,7 +213,10 @@ def test_the_dataset_page_shows_the_latest_rows_and_charts_a_feature(client: Tes
     _computed("precip", "districts")
 
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
-    assert "Latest period, 2026-02" in page
+    # One reducer for every row is said once, in the heading, not in a column.
+    assert "Latest period, 2026-02 (mean)" in page
+    assert "Value of" not in page and ">Coverage</th>" in page
+    assert '<td title="D1">District D1</td>' in page
     assert "District D1" in page and "12" in page
     assert 'id="table-chart"' in page and 'data-rows-url="/tables/precip_districts/rows"' in page
     assert '<option value="D2" data-collection="districts">District D2</option>' in page
@@ -264,3 +267,16 @@ def test_a_feature_id_in_two_collections_is_two_features_on_the_page(client: Tes
     assert '<option value="D1" data-collection="regions">Region D1 (regions)</option>' in page
     rows = client.get("/tables/precip_districts/rows", params={"collection": "regions", "feature": "D1"}).json()
     assert [row["value"] for row in rows["items"]] == [5.0]
+
+
+def test_the_preview_shows_a_column_only_where_it_tells_rows_apart(client: TestClient) -> None:
+    """Pipeline rows record no coverage, and two reducers per feature need naming per row."""
+    store.write_rows(
+        dataset_id="precip_districts",
+        collection_id="districts",
+        rows=[_row("D1", 1.0), _row("D1", 3.0, reducer="max")],
+        period_type="monthly",
+    )
+    page = client.get("/datasets/precip_districts", params={"f": "html"}).text
+    assert "Latest period, 2026-01</h4>" in page
+    assert ">Value of</th>" in page and ">Coverage</th>" not in page

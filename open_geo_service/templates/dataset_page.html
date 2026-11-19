@@ -65,7 +65,7 @@
               {% elif not published %}
               <p class="note">Publish this dataset to chart a feature's values over time.</p>
               {% endif %}
-              <h4>Latest period, {{ table.period }}</h4>
+              <h4>Latest period, {{ table.period }}{% if table.common_series %} ({{ table.common_series }}){% endif %}</h4>
               <div class="table-wrap">
                 <table>
                   <thead>
@@ -73,16 +73,16 @@
                       <th scope="col">Feature</th>
                       {% if table.has_series %}<th scope="col">Value of</th>{% endif %}
                       <th scope="col">Value{% if table.unit %} ({{ table.unit }}){% endif %}</th>
-                      <th scope="col">Coverage</th>
+                      {% if table.has_coverage %}<th scope="col">Coverage</th>{% endif %}
                     </tr>
                   </thead>
                   <tbody>
                     {% for row in table.preview %}
                     <tr>
-                      <td>{{ row.feature }} <span class="mono note">{{ row.feature_id }}</span></td>
+                      <td title="{{ row.feature_id }}">{{ row.feature }}</td>
                       {% if table.has_series %}<td>{{ row.series }}</td>{% endif %}
                       <td>{{ row.value or "No value" }}</td>
-                      <td>{{ row.coverage }}</td>
+                      {% if table.has_coverage %}<td>{{ row.coverage }}</td>{% endif %}
                     </tr>
                     {% endfor %}
                   </tbody>

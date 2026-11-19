@@ -542,7 +542,10 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
     if summary.last_period is None:
         return None
     latest = store.read_rows(record, start=summary.last_period)
-    preview = latest.slice(0, TABLE_PREVIEW_ROWS).to_pylist()
+    # By name, as a reader looks a feature up; ids such as Overture's UUIDs say nothing to them.
+    by_name = latest.sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
+    preview = by_name.slice(0, TABLE_PREVIEW_ROWS).to_pylist()
+    series = {_series_label(row) for row in preview}
     features = store.features(record)
     # A feature id is unique within its collection only, so a table over several names both.
     several = len({collection_id for collection_id, _feature_id, _name in features}) > 1
@@ -560,7 +563,11 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
             for row in preview
         ],
         "more": max(latest.num_rows - TABLE_PREVIEW_ROWS, 0),
-        "has_series": any(_series_label(row) for row in preview),
+        # A column only where it tells the rows apart, or says something: one reducer for every
+        # row goes in the heading, and a pipeline's rows have no coverage.
+        "has_series": len(series) > 1,
+        "common_series": next(iter(series)) if len(series) == 1 else "",
+        "has_coverage": any(row["coverage"] is not None for row in preview),
         "features": sorted(
             (
                 {
