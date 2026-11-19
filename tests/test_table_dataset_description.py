@@ -106,7 +106,10 @@ def test_a_source_licence_without_an_spdx_identifier_makes_the_table_other_and_l
     assert _listed(client)["license"] == "other"
     collection = client.get("/stac/precip_districts/collection.json").json()
     assert collection["license"] == "other"
-    assert [link["href"] for link in collection["links"] if link["rel"] == "license"] == [COPERNICUS_LICENCE]
+    assert [link["href"] for link in collection["links"] if link["rel"] == "license"] == [
+        COPERNICUS_LICENCE,
+        "https://spdx.org/licenses/ODbL-1.0.html",
+    ]
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
     assert "Licence to Use Copernicus Products, ODbL-1.0" in page
 
@@ -146,7 +149,12 @@ def test_the_stac_collection_describes_the_table_and_meets_the_portolan_schema(c
     )["links"]
 
     collection = client.get("/stac/precip_districts/collection.json").json()
-    assert collection["license"] == "CC-BY-4.0 AND ODbL-1.0"
+    # STAC and Portolan take an SPDX identifier or `other`, not an expression: `other`, and a link to each.
+    assert collection["license"] == "other"
+    assert [(link["href"], link["title"]) for link in collection["links"] if link["rel"] == "license"] == [
+        ("https://spdx.org/licenses/CC-BY-4.0.html", "CC-BY-4.0"),
+        ("https://spdx.org/licenses/ODbL-1.0.html", "ODbL-1.0"),
+    ]
     assert collection["extent"]["spatial"]["bbox"] == [[30.0, -2.0, 32.0, 0.0]]
     assert collection["extent"]["temporal"]["interval"] == [["2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"]]
     assert collection["table:row_count"] == 4
@@ -159,6 +167,7 @@ def test_the_stac_collection_describes_the_table_and_meets_the_portolan_schema(c
     data = collection["assets"]["data"]
     assert data["href"] == "http://testserver/tables/precip_districts/data.parquet"
     assert data["roles"] == ["data"]
+    assert data["description"]
     path = Path(record.asset_paths[0])
     assert data["file:size"] == path.stat().st_size
     assert data["file:checksum"].startswith("1220")

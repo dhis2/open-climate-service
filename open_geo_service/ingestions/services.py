@@ -3027,7 +3027,7 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         # from. Tables from external systems get templates of their own with CLIM-1556.
         sources = table_sources(latest)
         source_dataset = {**sources.template(), "description": sources.description(latest)}
-        licence_id, licence_url = sources.stac_license, sources.license_url
+        licence_id, licence_url = sources.license, sources.license_url
     else:
         if latest.format == ArtifactFormat.GEOPARQUET:
             source_dataset = feature_templates.get_feature_template(latest.dataset_id) or {}

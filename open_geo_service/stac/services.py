@@ -576,17 +576,9 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
             title="Dataset detail",
         )
     )
-    # One link per licence with a page: values computed from several sources are bound by each.
-    for licence in sources.licences:
-        if licence.url:
-            collection.add_link(
-                pystac.Link(
-                    rel="license",
-                    target=licence.url,
-                    media_type="text/html",
-                    title=licence.name or licence.identifier or "Licence",
-                )
-            )
+    # One link per licence: values computed from several sources are bound by each.
+    for href, title in sources.license_links():
+        collection.add_link(pystac.Link(rel="license", target=href, media_type="text/html", title=title))
     for recorded in ingestion_services.recorded_inputs(artifact):
         input_id = str(recorded["collection_id"])
         collection.add_link(
@@ -611,6 +603,7 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
             href=absolute_url(request, f"/tables/{path_segment(dataset_id)}/data.parquet"),
             media_type=PARQUET_MEDIA_TYPE,
             title="Table (Parquet)",
+            description="The dataset's current rows, one per feature, period and value; table:columns describes them.",
             roles=["data"],
             # Size and checksum, as Portolan asks of a single-file asset: a table is small, and
             # the checksum is computed once per file version.

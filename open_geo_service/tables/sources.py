@@ -37,18 +37,42 @@ class TableSources:
         return licences
 
     @property
-    def stac_license(self) -> str:
-        """One SPDX identifier, an SPDX expression joining several with AND, or `other`.
+    def license(self) -> str:
+        """One SPDX identifier, an SPDX expression joining several with AND, or `other`, for `/datasets`.
 
         Values computed from several sources are bound by every source's licence, which an SPDX
-        expression says and STAC 1.1 accepts. A source whose licence has no SPDX identifier, or
-        declares none, makes it `other`; the licence links name each licence that has a page.
+        expression says. A source whose licence has no SPDX identifier, or declares none, makes it
+        `other`.
         """
         licences = self.licences
         identifiers = [licence.identifier for licence in licences]
         if not identifiers or None in identifiers:
             return STAC_LICENSE_OTHER
         return " AND ".join(str(identifier) for identifier in identifiers)
+
+    @property
+    def stac_license(self) -> str:
+        """The STAC `license`: the one licence's, or `other` for several, with a link to each.
+
+        STAC's schema and Portolan accept an SPDX identifier or `other`, not an expression.
+        """
+        licences = self.licences
+        return licences[0].stac_license if len(licences) == 1 else STAC_LICENSE_OTHER
+
+    def license_links(self) -> list[tuple[str, str]]:
+        """Each licence's page and title, for the STAC `license` links: its own URL, or its SPDX page.
+
+        With several licences, `license` says only `other`, so an SPDX licence links its page too.
+        """
+        several = len(self.licences) > 1
+        links: list[tuple[str, str]] = []
+        for licence in self.licences:
+            page = licence.url or (
+                f"https://spdx.org/licenses/{licence.identifier}.html" if several and licence.identifier else None
+            )
+            if page:
+                links.append((page, licence.name or licence.identifier or "Licence"))
+        return links
 
     @property
     def license_url(self) -> str | None:
@@ -62,8 +86,8 @@ class TableSources:
         licences = self.licences
         if all(not licence.identifier and not licence.name for licence in licences):
             return ""
-        if self.stac_license != STAC_LICENSE_OTHER:
-            return self.stac_license
+        if self.license != STAC_LICENSE_OTHER:
+            return self.license
         return ", ".join(licence.label for licence in licences)
 
     @property

@@ -645,7 +645,9 @@ A computed table has no template, so its `source`, `license` and `providers` com
 it was computed from, the feature collection among them: each row names a feature, so the
 boundaries' licence binds the table as much as the raster's. One licence shared by every source is
 the table's; several with SPDX identifiers make an SPDX expression, such as `CC-BY-4.0 AND
-ODbL-1.0`; any source whose licence has no SPDX identifier, or none declared, makes it `other`. A
+ODbL-1.0`; any source whose licence has no SPDX identifier, or none declared, makes it `other`.
+Its STAC collection, whose `license` takes an SPDX identifier or `other` only, says `other` for
+several licences and links each one: its own page, or its SPDX page. A
 source that declares no licence and was itself computed is followed back to its own sources.
 
 A published table dataset is a STAC collection too, with `table:columns` naming, typing and
