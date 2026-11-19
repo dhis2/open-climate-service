@@ -85,16 +85,6 @@ class CHIRPS3DailyPlugin(BaseDatasetPlugin):
                 f"CHIRPS3 {self.stage} has {ds.sizes[_SOURCE_TIME_DIM]} of the {expected} days from "
                 f"{np.datetime_as_string(start, unit='D')}"
             )
-        # CHIRPS has a value for every land cell, so a day without any is one dynamical.org has added
-        # to the time axis but not written yet: its update first extends the axis, then fills it.
-        # Storing that day would keep NaN for good, as a sync only appends after its last day.
-        empty = ds[_VARIABLE].isnull().all(["y", "x"])
-        if bool(empty.any()):
-            days = np.datetime_as_string(ds[_SOURCE_TIME_DIM].values[empty.values], unit="D")
-            raise RuntimeError(
-                f"CHIRPS3 {self.stage} has no values over the extent for {', '.join(days)}; "
-                "dynamical.org is probably part-way through an update, so retry later"
-            )
 
         precip = ds[_VARIABLE] * _SECONDS_PER_DAY
         # The source attributes describe the rate in kg m-2 s-1, so they are replaced, not kept.
@@ -153,5 +143,5 @@ class CHIRPS3MonthlyPlugin(CHIRPS3DailyPlugin):
             raise ValueError(f"Invalid CHIRPS3 monthly period id {period_id!r}: expected YYYY-MM") from exc
         start = month.astype("datetime64[ns]")
         days = self._read_days(start, (month + np.timedelta64(1, "M")).astype("datetime64[ns]"), bbox)
-        # Every day is present and has values (checked by _read_days), so no day is skipped.
+        # Every day is present (checked by _read_days), so no day is skipped.
         return days.mean("t", skipna=False, keep_attrs=True).expand_dims(t=[start])

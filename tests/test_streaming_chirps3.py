@@ -86,18 +86,6 @@ def test_rejects_an_unknown_stage() -> None:
         CHIRPS3DailyPlugin(stage="bad")
 
 
-def test_a_day_dynamical_has_not_written_yet_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """dynamical.org extends the time axis before it fills it; that window must not be stored as NaN."""
-    rain = np.ones(31, dtype="float32")
-    rain[-2:] = np.nan
-    _serve(monkeypatch, _store("2025-01-31", rain))
-    plugin = CHIRPS3DailyPlugin()
-
-    assert float(plugin.fetch_period("2025-01-29", _BBOX).precip.mean()) == pytest.approx(1.0)
-    with pytest.raises(RuntimeError, match="no values over the extent for 2025-01-30"):
-        plugin.fetch_period("2025-01-30", _BBOX)
-
-
 def test_a_day_outside_the_store_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     _serve(monkeypatch, _store("2025-01-31"))
 

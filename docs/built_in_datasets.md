@@ -20,8 +20,6 @@ All three CHIRPS3 datasets are read from [dynamical.org](https://dynamical.org/c
 
 CHC's server was the source before. It limits concurrent requests, and reading a day from its GeoTIFFs takes dozens of requests, so ingestions failed part-way through and risked an IP ban. From dynamical.org, a year of an extent is read in one request per 3° tile.
 
-dynamical.org updates a store in two steps: it first extends the time axis, then writes the new days. A sync that runs between the two finds days without values, and fails rather than store them; the next sync picks them up.
-
 ---
 
 ## CHIRPS v3 — daily precipitation
