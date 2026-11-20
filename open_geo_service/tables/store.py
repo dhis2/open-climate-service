@@ -217,10 +217,10 @@ def check_rows(
     declared = _dataset_schema(dataset_id, existing, schema)
     _require_same_sources(dataset_id, existing, provenance)
     fixed: dict[str, str] = {}
-    if dataset_column := declared.represented_by("dataset"):
+    if dataset_column := declared.represented_by("dataset_id"):
         fixed[dataset_column] = dataset_id
     feature_ids: set[str] | None = None
-    if collection_column := declared.represented_by("collection"):
+    if collection_column := declared.represented_by("collection_id"):
         if collection_id is None:
             raise ValueError(f"table schema '{declared.id}' reports on features; name their feature collection")
         _require_id(collection_id, "feature collection")
@@ -228,12 +228,12 @@ def check_rows(
         feature_ids = _collection_feature_ids(collection_id)
     elif collection_id is not None:
         raise ValueError(f"table schema '{declared.id}' has no feature column, so rows report on no collection")
-    period_column = declared.represented_by("period")
+    period_column = declared.represented_by("period_start")
     if period_column:
         period_type = _dataset_period_type(dataset_id, period_type)
     elif period_type is not None:
         raise ValueError(f"table schema '{declared.id}' has no period column, so it has no period type")
-    feature_column, unit_column = declared.represented_by("feature"), declared.represented_by("unit")
+    feature_column, unit_column = declared.represented_by("feature_id"), declared.represented_by("unit")
     unit = existing.units if existing else None
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
     columns: dict[str, list[Any]] = {name: [] for name in declared.names}
@@ -290,13 +290,13 @@ def read_rows(
     """
     declared = schema_of(record)
     conditions = []
-    for meaning, value in (("collection", collection_id), ("feature", feature_id)):
+    for meaning, value in (("collection_id", collection_id), ("feature_id", feature_id)):
         if value is not None:
             conditions.append(pc.field(_column_representing(declared, meaning)) == value)
     if start is not None:
-        conditions.append(pc.field(_column_representing(declared, "period")) >= start)
+        conditions.append(pc.field(_column_representing(declared, "period_start")) >= start)
     if end is not None:
-        conditions.append(pc.field(_column_representing(declared, "period")) <= end)
+        conditions.append(pc.field(_column_representing(declared, "period_start")) <= end)
     for name, value in (equals or {}).items():
         if declared.column(name) is None:
             raise ValueError(f"table schema '{declared.id}' has no column '{name}'")
@@ -313,7 +313,7 @@ def read_rows(
 def _column_representing(declared: TableSchema, meaning: str) -> str:
     column = declared.represented_by(meaning)
     if column is None:
-        raise ValueError(f"table schema '{declared.id}' has no {meaning} column")
+        raise ValueError(f"table schema '{declared.id}' has no column representing {meaning}")
     return column
 
 
@@ -335,7 +335,7 @@ def summarize(record: ArtifactRecord) -> FileSummary:
     import pyarrow.parquet as pq
 
     declared = schema_of(record)
-    period_column, collection_column = declared.represented_by("period"), declared.represented_by("collection")
+    period_column, collection_column = declared.represented_by("period_start"), declared.represented_by("collection_id")
     row_count = 0
     collection_ids: set[str] = set()
     periods: list[date] = []
@@ -378,7 +378,9 @@ def latest_values(record: ArtifactRecord, limit: int) -> LatestValues | None:
     read for the first *limit* only; the latest periods are found from a few columns.
     """
     declared = schema_of(record)
-    collection, feature, period = (declared.represented_by(meaning) for meaning in ("collection", "feature", "period"))
+    collection, feature, period = (
+        declared.represented_by(meaning) for meaning in ("collection_id", "feature_id", "period_start")
+    )
     if collection is None or feature is None or period is None:
         return None
     if not record.asset_paths:
@@ -414,7 +416,9 @@ def _order(declared: TableSchema) -> list[tuple[str, str]]:
     columns orders by its key.
     """
     located = [
-        column for meaning in ("collection", "feature", "period") if (column := declared.represented_by(meaning))
+        column
+        for meaning in ("collection_id", "feature_id", "period_start")
+        if (column := declared.represented_by(meaning))
     ]
     return [(name, "ascending") for name in located or declared.key]
 
@@ -439,7 +443,7 @@ def _merged(
     stored = existing.to_pylist() if existing is not None else []
     version_column, collection_column = (
         declared.represented_by("collection_version"),
-        declared.represented_by("collection"),
+        declared.represented_by("collection_id"),
     )
     if version_column and collection_column:
         versions = set(new.column(version_column).to_pylist())
@@ -536,13 +540,13 @@ def _coverage(table: pa.Table, declared: TableSchema, period_type: str | None) -
     from open_geo_service.features.services import registered_collections
 
     temporal = CoverageTemporal()
-    if period_column := declared.represented_by("period"):
+    if period_column := declared.represented_by("period_start"):
         dates = table.column(period_column).unique().to_pylist()
         temporal = CoverageTemporal(
             start=period_label(min(dates), period_type), end=period_label(max(dates), period_type)
         )
     spatial = _WHOLE_WORLD
-    if collection_column := declared.represented_by("collection"):
+    if collection_column := declared.represented_by("collection_id"):
         collections = registered_collections()
         boxes = [
             (record.coverage.spatial_wgs84 or record.coverage.spatial)
@@ -597,7 +601,7 @@ def _validated_row(row: object, *, index: int, schema: TableSchema, fixed: Mappi
         if value is None and not column.nullable:
             raise ValueError(f"row {index}: {column.name} must have a value")
         clean[column.name] = value
-    feature = schema.represented_by("feature")
+    feature = schema.represented_by("feature_id")
     if feature and not clean[feature]:
         raise ValueError(f"row {index}: {feature} must be a non-empty string")
     if coverage_column := schema.represented_by("coverage"):

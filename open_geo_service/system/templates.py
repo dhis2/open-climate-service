@@ -543,7 +543,7 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
     if record is None:
         return None
     declared = store.schema_of(record)
-    feature, period = declared.represented_by("feature"), declared.represented_by("period")
+    feature, period = declared.represented_by("feature_id"), declared.represented_by("period_start")
     latest = store.latest_values(record, TABLE_PREVIEW_ROWS)
     if latest is None or feature is None or period is None or not declared.values or latest.row_count == 0:
         return None
@@ -555,7 +555,7 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
     # What tells a feature's values for one period apart: the key columns other than its feature and period.
     located = {
         declared.represented_by(meaning)
-        for meaning in ("dataset", "collection", "collection_version", "feature", "period")
+        for meaning in ("dataset_id", "collection_id", "collection_version", "feature_id", "period_start")
     }
     series_columns = [column for column in declared.key if column not in located]
     preview = latest.rows.to_pylist()

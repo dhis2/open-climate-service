@@ -752,11 +752,14 @@ def test_a_period_ends_on_its_last_day(period_type: str | None, start: date, end
 @pytest.mark.parametrize(
     ("column", "message"),
     [
-        ({"name": "day", "type": "string", "represents": "period"}, "'day' represents period, so it must be a date"),
+        (
+            {"name": "day", "type": "string", "represents": "period_start"},
+            "'day' represents period_start, so it must be a date",
+        ),
         ({"name": "day", "type": "date", "represents": "day"}, "'day' represents unknown 'day'"),
         (
-            {"name": "site", "type": "string", "represents": "feature"},
-            "representing feature needs one representing collection",
+            {"name": "feature_id", "type": "string"},
+            "representing feature_id needs one representing collection_id",
         ),
         ({"name": "written_at", "type": "timestamp"}, "declares 'written_at'"),
     ],

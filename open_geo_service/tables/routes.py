@@ -47,7 +47,7 @@ def get_table_rows(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
-    period_column = store.schema_of(record).represented_by("period")
+    period_column = store.schema_of(record).represented_by("period_start")
     rows = _labelled(table.to_pylist(), period_column, record.period_type)
     if output_format == "csv":
         return Response(

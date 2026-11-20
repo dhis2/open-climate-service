@@ -676,7 +676,7 @@ its metadata as `ogs:table_schema`.
   name: Daily station observations
   columns:
     - {name: station, type: string, required: true, nullable: false, description: Id of the station.}
-    - {name: day, type: date, required: true, nullable: false, represents: period, description: Day of the observation.}
+    - {name: day, type: date, required: true, nullable: false, represents: period_start, description: Day of the observation.}
     - {name: rainfall, type: double, unit: mm, represents: value, description: Rainfall over the day.}
   key: [station, day]
 ```
@@ -686,24 +686,26 @@ A column has a `type` (`string`, `double`, `int32`, `int64`, `bool`, `date`, `ti
 and a column with `nullable: false` must hold a value. The store adds `written_at` to every table.
 
 A column's `represents` tells the store and its readers what it holds, which adds what they do
-with it. At most one column represents each, except `value`:
+with it. The names are the aggregation schema's columns, and a column with one of those names
+represents it without saying so; mark only a column named otherwise. At most one column
+represents each, except `value`:
 
 | `represents` | Column type | What it adds |
 | --- | --- | --- |
-| `dataset` | string | Filled with the dataset id; a row naming another is refused |
-| `collection` | string | Filled with the feature collection a write reports on; goes with `feature` |
-| `feature` | string | Checked against the collection's features; `feature` filter; join example in the README; latest values on the page |
+| `dataset_id` | string | Filled with the dataset id; a row naming another is refused |
+| `collection_id` | string | Filled with the feature collection a write reports on; goes with `feature_id` |
+| `feature_id` | string | Checked against the collection's features; `feature` filter; join example in the README; latest values on the page |
 | `feature_name` | string | Shown and sorted by on the page |
-| `period` | date | Stored as its period's first day; one period type per dataset; `start` and `end` filters; `period` and `period_end` in the rows API; temporal extent |
+| `period_start` | date | Stored as its period's first day; one period type per dataset; `start` and `end` filters; `period` and `period_end` in the rows API; temporal extent |
 | `value` | number | A measured value: its unit in STAC; the first is shown on the page |
 | `unit` | string | One unit per dataset, given to the value columns in STAC |
 | `coverage` | double | From 0 to 1; a value with coverage 0 is refused |
 | `collection_version` | string | A write for one version replaces the collection's rows of other versions |
 
-A table without one of these skips what it adds: without a `feature` column, no collection is
-checked and the README has no join example; without a `period` column, there is no temporal
-extent and no latest values. A table without a `collection` column reports the whole world as its
-spatial extent.
+A table without one of these skips what it adds: without a `feature_id` column, no collection is
+checked and the README has no join example; without a `period_start` column, there is no temporal
+extent and no latest values. A table without a `collection_id` column reports the whole world as
+its spatial extent.
 
 ## 13. `/sync`
 

@@ -343,7 +343,7 @@ STATION_SCHEMA = """
   name: Daily station observations
   columns:
     - {name: station, type: string, required: true, nullable: false, description: Id of the station.}
-    - {name: day, type: date, required: true, nullable: false, represents: period, description: Day observed.}
+    - {name: day, type: date, required: true, nullable: false, represents: period_start, description: Day observed.}
     - {name: rainfall, type: double, unit: mm, represents: value, description: Rainfall over the day.}
   key: [station, day]
 """

@@ -250,7 +250,7 @@ def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str,
 
     join = _join_example(data, summary.collection_ids, declared, request)
     if join:
-        collection, feature = declared.represented_by("collection"), declared.represented_by("feature")
+        collection, feature = declared.represented_by("collection_id"), declared.represented_by("feature_id")
         lines += [
             "",
             "## Joining to the features",
@@ -272,7 +272,7 @@ def _join_example(data: str, collection_ids: list[str], declared: TableSchema, r
     """
     from open_geo_service.features.services import registered_collections
 
-    collection, feature = declared.represented_by("collection"), declared.represented_by("feature")
+    collection, feature = declared.represented_by("collection_id"), declared.represented_by("feature_id")
     if collection is None or feature is None:
         return []
     shown = [
@@ -280,12 +280,14 @@ def _join_example(data: str, collection_ids: list[str], declared: TableSchema, r
         for name in (
             feature,
             declared.represented_by("feature_name"),
-            declared.represented_by("period"),
+            declared.represented_by("period_start"),
             *declared.values,
         )
         if name
     ]
-    order = ", ".join(f"t.{_sql_identifier(name)}" for name in (feature, declared.represented_by("period")) if name)
+    order = ", ".join(
+        f"t.{_sql_identifier(name)}" for name in (feature, declared.represented_by("period_start")) if name
+    )
     published = services._eligible_artifacts_by_dataset()
     collections = registered_collections()
     for collection_id in collection_ids:
@@ -318,7 +320,7 @@ def _table_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -
     about = [f"- The rows are {declared.holds(artifact.period_type)}, one per key: {key}."]
     if declared.values:
         about.append(f"- The values are in {', '.join(f'`{name}`' for name in declared.values)}.")
-    if (collection := declared.represented_by("collection")) and (feature := declared.represented_by("feature")):
+    if (collection := declared.represented_by("collection_id")) and (feature := declared.represented_by("feature_id")):
         about.append(
             f"- Join it to the feature collection's GeoParquet on `{collection}` and `{feature}`; the README "
             "shows a DuckDB query."
@@ -339,7 +341,7 @@ def _table_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -
             "```",
             "",
             f"Or as JSON or CSV, filtered by feature, collection or period: {rows}?feature=<feature_id>"
-            if declared.represented_by("feature")
+            if declared.represented_by("feature_id")
             else f"Or as JSON or CSV: {rows}",
             "",
             f"The licence, providers and columns are in the STAC collection: "

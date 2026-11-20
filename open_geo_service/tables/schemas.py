@@ -50,16 +50,19 @@ TYPES: dict[str, pa.DataType] = {
 """The column types a schema can declare, and how each is stored."""
 
 _REPRESENTED_ONCE = {
-    "dataset": ("string",),
-    "collection": ("string",),
+    "dataset_id": ("string",),
+    "collection_id": ("string",),
     "collection_version": ("string",),
-    "feature": ("string",),
+    "feature_id": ("string",),
     "feature_name": ("string",),
-    "period": ("date",),
+    "period_start": ("date",),
     "unit": ("string",),
     "coverage": ("double",),
 }
-"""What at most one column represents, with the types that column may have. Any number represent a value."""
+"""What at most one column represents, with the types that column may have. Any number represent a value.
+
+A column named like one of these, or `value`, represents it without saying so: the names are the
+aggregation schema's columns, so a schema only marks a column whose name differs."""
 
 _NUMBER_TYPES = ("double", "int32", "int64")
 
@@ -77,7 +80,9 @@ class Column:
     nullable: bool = True
     """The column may hold no value."""
     represents: str | None = None
-    """What the column holds, for the rules and readers that need it: `feature`, `period`, `value`, …"""
+    """What the column holds, for the rules and readers that need it: `feature_id`, `period_start`, `value`, …
+
+    Its own name when that is one of them and nothing else is declared."""
 
 
 @dataclass(frozen=True)
@@ -114,11 +119,11 @@ class TableSchema:
     def holds(self, period_type: str | None) -> str:
         """What a row holds, from its feature and period columns: 'values per feature and monthly period'."""
         period = f"{period_type} period" if period_type else "period"
-        if self.represented_by("feature") and self.represented_by("period"):
+        if self.represented_by("feature_id") and self.represented_by("period_start"):
             return f"values per feature and {period}"
-        if self.represented_by("feature"):
+        if self.represented_by("feature_id"):
             return "values per feature"
-        if self.represented_by("period"):
+        if self.represented_by("period_start"):
             return f"values per {period}"
         return "rows of values"
 
@@ -222,10 +227,10 @@ def parse_schema(declared: object, *, source: str) -> TableSchema:
             raise ValueError(f"{where}: columns '{represented[meaning]}' and '{column.name}' both represent {meaning}")
         represented[meaning] = column.name
     # A feature is checked against its collection, and a collection version is one of a collection's.
-    if ("feature" in represented) != ("collection" in represented):
-        raise ValueError(f"{where}: a column representing feature needs one representing collection, and back")
-    if "collection_version" in represented and "collection" not in represented:
-        raise ValueError(f"{where}: a column representing collection_version needs one representing collection")
+    if ("feature_id" in represented) != ("collection_id" in represented):
+        raise ValueError(f"{where}: a column representing feature_id needs one representing collection_id, and back")
+    if "collection_version" in represented and "collection_id" not in represented:
+        raise ValueError(f"{where}: a column representing collection_version needs one representing collection_id")
     if ("coverage" in represented or "unit" in represented) and not values:
         raise ValueError(f"{where}: coverage and unit describe values; mark the value columns 'represents: value'")
 
@@ -254,6 +259,9 @@ def _column(declared: object, where: str) -> Column:
     unknown = sorted(set(declared) - {"name", "type", "description", "unit", "required", "nullable", "represents"})
     if unknown:
         raise ValueError(f"{where}: column '{name}' has unknown fields {unknown}")
+    represents = declared.get("represents")
+    if represents is None and (name in _REPRESENTED_ONCE or name == "value"):
+        represents = name
     return Column(
         name=name,
         type=kind,
@@ -261,5 +269,5 @@ def _column(declared: object, where: str) -> Column:
         unit=declared.get("unit"),
         required=bool(declared.get("required", False)),
         nullable=bool(declared.get("nullable", True)),
-        represents=str(declared["represents"]) if declared.get("represents") is not None else None,
+        represents=str(represents) if represents is not None else None,
     )
