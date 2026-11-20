@@ -279,7 +279,7 @@ class TableExportPlugin(BaseExportPlugin):
         message: str | None = None
         try:
             if dry_run:
-                store.check_rows(**arguments, period_type=period_type)
+                store.check_rows(**arguments, period_type=period_type, provenance=_provenance(context))
             else:
                 store.write_rows(
                     **arguments, dataset_name=name, period_type=period_type, provenance=_provenance(context)

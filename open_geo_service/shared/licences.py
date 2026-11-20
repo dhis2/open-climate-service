@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from typing import Any
@@ -464,3 +465,35 @@ def parse_licence(declared: Any) -> DatasetLicence:
         return DatasetLicence(identifier=identifier, name=name, url=url, obligations=obligations, known=known)
 
     return UNDECLARED
+
+
+def declared_providers(source_dataset: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """STAC `providers` from the template, for carrying attribution (CLIM-946).
+
+    Attribution is a licence condition under CC-BY and CC-BY-NC, not a courtesy, and OGS had
+    nowhere to record it at collection level. Entries are passed through with only their shape
+    checked — STAC defines `name`, `description`, `roles` and `url`, and inventing validation
+    beyond that would reject legitimate metadata.
+    """
+    declared = source_dataset.get("providers")
+    if not isinstance(declared, list):
+        return []
+    providers: list[dict[str, Any]] = []
+    for entry in declared:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        provider: dict[str, Any] = {"name": name.strip()}
+        for key in ("description", "url"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                provider[key] = value.strip()
+        roles = entry.get("roles")
+        if isinstance(roles, list):
+            cleaned = [str(r) for r in roles if isinstance(r, str) and r.strip()]
+            if cleaned:
+                provider["roles"] = cleaned
+        providers.append(provider)
+    return providers

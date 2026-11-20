@@ -47,6 +47,7 @@ from open_geo_service.ingestions.schemas import (
     DatasetItemType,
     DatasetListResponse,
     DatasetProvenance,
+    DatasetProvider,
     DatasetPublication,
     DatasetRecord,
     DatasetVersionRecord,
@@ -65,7 +66,7 @@ from open_geo_service.ingestions.sync_engine import SyncConfigurationError, plan
 from open_geo_service.publications.services import managed_dataset_id_for, publish_artifact
 from open_geo_service.shared.compute import get_job_slots
 from open_geo_service.shared.crs import transform_bbox
-from open_geo_service.shared.licences import DatasetLicence
+from open_geo_service.shared.licences import DatasetLicence, declared_providers
 from open_geo_service.shared.persistence import atomic_text, index_lock
 from open_geo_service.shared.raster_contract import TIME_ALIASES
 from open_geo_service.shared.statistics import measure_statistics
@@ -307,24 +308,26 @@ def latest_published_raster_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     }
 
 
-CATALOGUED_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET}
+CATALOGUED_FORMATS = LOADABLE_RASTER_FORMATS | {ArtifactFormat.GEOPARQUET, ArtifactFormat.PARQUET}
 """Stored formats the STAC catalogue and openEO `/collections` describe.
 
 Wider than `LOADABLE_RASTER_FORMATS`, which is what can be opened as a raster datacube. A
 feature collection is a STAC collection (licence, attribution, extent, table schema) and,
 since CLIM-1326, an openEO collection too: `load_collection` loads it as a vector cube, the
-same thing `load_features` returns.
+same thing `load_features` returns. A table dataset is a STAC collection with its Parquet file
+as the data asset (CLIM-1555), and not an openEO collection.
 """
 
 
 def stac_eligible_artifacts_by_dataset() -> dict[str, ArtifactRecord]:
     """Return the artifacts the STAC catalogue advertises.
 
-    Every published raster, plus every published feature collection. Publication and recency are
+    Every published raster, feature collection and table dataset. Publication and recency are
     answered once, format-neutrally, by `_latest_published_artifacts_by_dataset`; this only
     decides which formats the catalogue has a representation for. `stac/services.py` has one per
-    format — a datacube document for a raster, a table document for a collection — so admitting
-    GEOPARQUET here never advertises a child the catalogue cannot serve.
+    format — a datacube document for a raster, a table document for a collection or a table
+    dataset — so admitting GEOPARQUET and PARQUET here never advertises a child the catalogue
+    cannot serve.
 
     Deliberately not an alias for the raster gate, and the raster gate is deliberately not
     widened: the Zarr and Icechunk routes and the raster branch of `load_collection` still
@@ -3017,13 +3020,21 @@ def _temporal_coverage_matches_streaming_request_scope(
 
 def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> DatasetRecord:
     latest = max(artifacts, key=lambda artifact: artifact.created_at)
-    if latest.format == ArtifactFormat.GEOPARQUET:
-        source_dataset = feature_templates.get_feature_template(latest.dataset_id) or {}
-    elif latest.format == ArtifactFormat.PARQUET:
-        # Table templates come with CLIM-1556; until then a table has only its record.
-        source_dataset = {}
+    if latest.format == ArtifactFormat.PARQUET:
+        from open_geo_service.tables.sources import table_sources
+
+        # A computed table has no template; its metadata comes from the datasets it was computed
+        # from. Tables from external systems get templates of their own with CLIM-1556.
+        sources = table_sources(latest)
+        source_dataset = {**sources.template(), "description": sources.description(latest)}
+        licence_id, licence_url = sources.license, sources.license_url
     else:
-        source_dataset = registry_datasets.get_dataset(latest.dataset_id) or {}
+        if latest.format == ArtifactFormat.GEOPARQUET:
+            source_dataset = feature_templates.get_feature_template(latest.dataset_id) or {}
+        else:
+            source_dataset = registry_datasets.get_dataset(latest.dataset_id) or {}
+        licence = _licence_for(source_dataset)
+        licence_id, licence_url = licence.stac_license, licence.url
     return DatasetRecord(
         dataset_id=dataset_id,
         source_dataset_id=latest.source_dataset_id or latest.dataset_id,
@@ -3039,8 +3050,9 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
         resolution=_as_optional_str(source_dataset.get("resolution")),
         source=_template_source(source_dataset),
         source_url=_as_optional_str(source_dataset.get("source_url")),
-        license=_licence_for(source_dataset).stac_license,
-        license_url=_licence_for(source_dataset).url,
+        license=licence_id,
+        license_url=licence_url,
+        providers=[DatasetProvider(**provider) for provider in declared_providers(source_dataset)],
         extent=latest.coverage,
         last_updated=latest.created_at,
         links=_dataset_links(dataset_id, latest, published=_latest_published(artifacts)),

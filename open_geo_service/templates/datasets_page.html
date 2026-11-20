@@ -38,6 +38,7 @@
                 <option value="">All</option>
                 <option value="raster">Raster</option>
                 <option value="vector">Vector</option>
+                {% if "table" in kinds %}<option value="table">Table</option>{% endif %}
               </select>
             </label>
             {% endif %}
@@ -64,9 +65,12 @@
               data-kind="{{ ds.kind }}"
               data-search="{{ [ds.name, ds.id, ds.source, ds.variable, ds.period_type] | join(' ') | lower }}"
             >
-              <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}"{% if ds.kind == "raster" %} style="--ramp: {{ ds.ramp }}"{% endif %}>
+              <div class="thumb{% if ds.has_thumbnail %} has-image{% endif %}{% if ds.kind == "table" %} thumb-table{% endif %}"{% if ds.kind == "raster" %} style="--ramp: {{ ds.ramp }}"{% endif %}>
                 {% if ds.has_thumbnail %}
                 <img src="{{ mount }}/datasets/{{ ds.id }}/thumbnail.png" alt="" loading="lazy" />
+                {% elif ds.kind == "table" %}
+                {# A table has no map to preview; one picture of a table says what it is instead. #}
+                {% include "_table_thumbnail.html" %}
                 {% else %}
                 <span class="no-preview">No preview yet</span>
                 {% endif %}
@@ -77,8 +81,7 @@
                 {% if ds.description %}<p class="description clamp">{{ ds.description }}</p>{% endif %}
                 <div class="meta">
                   <span class="chip chip-{{ ds.status }}">{{ ds.status }}</span>
-                  {% if ds.kind == "vector" %}<span class="chip">Vector</span>{% endif %}
-                  {% if ds.kind == "table" %}<span class="chip">Table</span>{% endif %}
+                  <span class="chip">{{ ds.kind }}</span>
                   {% if ds.period_type %}<span class="chip">{{ ds.period_type }}</span>{% endif %}
                   {% if ds.coverage %}<span class="chip">{{ ds.coverage }}</span>{% endif %}
                   {% if ds.units %}<span class="chip">{{ ds.units }}</span>{% endif %}

@@ -1,4 +1,4 @@
-"""README.md and AGENTS.md for the STAC catalog and each collection, raster or feature.
+"""README.md and AGENTS.md for the STAC catalog and each collection: raster, feature or table.
 
 Linked from the STAC documents as `describedby` and `agents`, so a person or an agent can find
 out what the data is and how to read it without knowing the API. Generated from the records and
@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request
 from open_geo_service.data_registry.services import datasets as registry_datasets
 from open_geo_service.features import store
 from open_geo_service.features import templates as feature_templates
+from open_geo_service.ingestions import services as ingestion_services
 from open_geo_service.ingestions.schemas import ArtifactFormat, ArtifactRecord
 from open_geo_service.shared.licences import parse_licence
 from open_geo_service.shared.urls import absolute_url, path_segment
@@ -27,7 +28,7 @@ def catalog_readme(request: Request) -> str:
         f"# {_instance_name()}",
         "",
         f"The published datasets of this instance, at {absolute_url(request, '/')}: rasters as "
-        "GeoZarr stores and vector datasets as GeoParquet.",
+        "GeoZarr stores, vector datasets as GeoParquet, and tables as Parquet.",
         "",
         "Each collection declares its own licence in its STAC document, and its providers where they are known.",
         "",
@@ -36,7 +37,7 @@ def catalog_readme(request: Request) -> str:
     ]
     for dataset_id, artifact in services._eligible_artifacts_by_dataset().items():
         href = absolute_url(request, services.collection_path(dataset_id))
-        kind = "vector" if artifact.format == ArtifactFormat.GEOPARQUET else "raster"
+        kind = _KINDS.get(artifact.format, "raster")
         lines.append(f"- [{artifact.dataset_name}]({href}) ({kind})")
     return "\n".join(lines) + "\n"
 
@@ -55,6 +56,8 @@ def catalog_agents(request: Request) -> str:
             'multiscale store: `xr.open_zarr(asset["href"], **asset["xarray:open_kwargs"])`.',
             "- A **vector** collection has a `data` asset: one GeoParquet 1.1 file with a `bbox` covering "
             "column, readable with DuckDB, GeoPandas or any Parquet reader. Its `AGENTS.md` link says how.",
+            "- A **table** collection has a `data` asset: one Parquet file, whose columns `table:columns` "
+            "describes. Its `README.md` link says how to read it and what it joins to.",
             "",
             "Every asset is served with range requests, so a reader fetches only what it needs.",
             "",
@@ -65,6 +68,8 @@ def catalog_agents(request: Request) -> str:
 def collection_readme(dataset_id: str, request: Request) -> str:
     """Title, description, licence, provenance and shape of one collection."""
     artifact, template = _published_collection(dataset_id)
+    if artifact.format == ArtifactFormat.PARQUET:
+        return _table_readme(dataset_id, artifact, template, request)
     raster = artifact.format != ArtifactFormat.GEOPARQUET
     licence = parse_licence(template.get("license"))
     licence_text = licence.name or licence.identifier or licence.stac_license
@@ -117,6 +122,8 @@ def collection_readme(dataset_id: str, request: Request) -> str:
 def collection_agents(dataset_id: str, request: Request) -> str:
     """How an agent reads one collection's data."""
     artifact, _template = _published_collection(dataset_id)
+    if artifact.format == ArtifactFormat.PARQUET:
+        return _table_agents(dataset_id, artifact, request)
     if artifact.format != ArtifactFormat.GEOPARQUET:
         return _raster_agents(dataset_id, artifact, request)
     return _feature_agents(dataset_id, artifact, request)
@@ -193,6 +200,125 @@ def _feature_agents(dataset_id: str, artifact: ArtifactRecord, request: Request)
     )
 
 
+def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str, Any], request: Request) -> str:
+    """A table's README: what it holds, its sources' licences and providers, its columns, and how to join it."""
+    from open_geo_service.tables.sources import table_sources
+    from open_geo_service.tables.store import COLUMN_DESCRIPTIONS, period_label, summarize
+
+    sources = table_sources(artifact)
+    summary = summarize(artifact)
+    lines = [f"# {artifact.dataset_name}", "", sources.description(artifact)]
+    lines += ["", "## Licence", ""]
+    licences = [licence for licence in sources.licences if licence.identifier or licence.name]
+    if not licences:
+        lines.append("Not declared by the datasets it was computed from.")
+    else:
+        if len(sources.licences) > 1:
+            lines += ["Computed from several datasets, so the licence of each applies:", ""]
+        for licence in sources.licences:
+            text = licence.name or licence.identifier or "Not declared"
+            lines.append(f"- [{text}]({licence.url})" if licence.url else f"- {text}")
+    lines += ["", "## Provenance", ""]
+    for provider in services._published_providers(template, request, [services._processor_provider(artifact, request)]):
+        name = f"[{provider['name']}]({provider['url']})" if provider.get("url") else provider["name"]
+        roles = f" ({', '.join(provider['roles'])})" if provider.get("roles") else ""
+        lines.append(f"- {name}{roles}")
+    for recorded in ingestion_services.recorded_inputs(artifact):
+        input_id = str(recorded["collection_id"])
+        lines.append(f"- Computed from: [{input_id}]({absolute_url(request, services.collection_path(input_id))})")
+    for source_url in services._source_pages(dataset_id, {}):
+        lines.append(f"- Source: {source_url}")
+    lines.append(f"- Last updated: {artifact.created_at.isoformat()}")
+
+    data = absolute_url(request, f"/tables/{path_segment(dataset_id)}/data.parquet")
+    lines += ["", "## Data", "", f"One Parquet file, {data}, with one row per feature, period and value."]
+    lines.append("")
+    if summary.first_period is not None and summary.last_period is not None:
+        period = f"{artifact.period_type.capitalize()} periods" if artifact.period_type else "Periods"
+        first = period_label(summary.first_period, artifact.period_type)
+        last = period_label(summary.last_period, artifact.period_type)
+        lines.append(f"- {summary.row_count} rows. {period} from {first} to {last}.")
+    if artifact.units:
+        lines.append(f"- Values in {artifact.units}.")
+    lines += ["", "| Column | Type | Description |", "| --- | --- | --- |"]
+    for column in services._table_dataset_columns(artifact):
+        description = COLUMN_DESCRIPTIONS.get(column["name"], "")
+        lines.append(f"| `{column['name']}` | {column['type']} | {description} |")
+
+    join = _join_example(data, summary.collection_ids, request)
+    if join:
+        lines += [
+            "",
+            "## Joining to the features",
+            "",
+            "`collection_id` names the feature collection a row reports on, and `feature_id` the feature, "
+            "by the collection's identifier property. With DuckDB, the values with their features' geometry:",
+            "",
+            "```sql",
+            *join,
+            "```",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def _join_example(data: str, collection_ids: list[str], request: Request) -> list[str]:
+    """A DuckDB query joining the table to the first published feature collection it reports on."""
+    from open_geo_service.features.services import registered_collections
+
+    published = services._eligible_artifacts_by_dataset()
+    collections = registered_collections()
+    for collection_id in collection_ids:
+        record = collections.get(collection_id)
+        if collection_id not in published or record is None or record.features is None:
+            continue
+        features = absolute_url(request, f"/features/{path_segment(collection_id)}/data.parquet")
+        id_column = _sql_identifier(record.features.id_property)
+        geometry = _sql_identifier(record.features.primary_geometry)
+        return [
+            "INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;",
+            "SELECT t.feature_id, t.feature_name, t.period_start, t.value, ST_AsText(f." + geometry + ") AS geometry",
+            "FROM '" + data.replace("'", "''") + "' AS t",
+            "JOIN '" + features.replace("'", "''") + "' AS f",
+            "  ON t.collection_id = '" + collection_id.replace("'", "''") + "'",
+            "  AND CAST(f." + id_column + " AS VARCHAR) = t.feature_id",
+            "ORDER BY t.feature_id, t.period_start;",
+        ]
+    return []
+
+
+def _table_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -> str:
+    """How an agent reads one table dataset: the file, its key columns, and the rows API."""
+    data = absolute_url(request, f"/tables/{path_segment(dataset_id)}/data.parquet")
+    rows = absolute_url(request, f"/tables/{path_segment(dataset_id)}/rows")
+    return "\n".join(
+        [
+            f"# Reading {artifact.dataset_name}",
+            "",
+            f"The data is one Parquet file: {data}",
+            "",
+            "- One row per feature, period and value: `feature_id` in the feature collection `collection_id`, "
+            "and the period starting on `period_start`. `value` is the value; the other columns say how it was "
+            "computed, and `class`, `reducer`, `weights` and forecast columns tell apart several values per "
+            "feature and period.",
+            "- Join it to the feature collection's GeoParquet on `collection_id` and `feature_id`; the README "
+            "shows a DuckDB query.",
+            "",
+            "With pandas:",
+            "",
+            "```python",
+            "import pandas as pd",
+            f'rows = pd.read_parquet("{data}")',
+            "```",
+            "",
+            f"Or as JSON or CSV, filtered by feature, collection or period: {rows}?feature=<feature_id>",
+            "",
+            f"The licence, providers and columns are in the STAC collection: "
+            f"{absolute_url(request, services.collection_path(dataset_id))}",
+            "",
+        ]
+    )
+
+
 def _published_collection(dataset_id: str) -> tuple[ArtifactRecord, dict[str, Any]]:
     """The published collection's record and template, or 404 as the STAC route does."""
     artifact = services._eligible_artifacts_by_dataset().get(dataset_id)
@@ -200,7 +326,15 @@ def _published_collection(dataset_id: str) -> tuple[ArtifactRecord, dict[str, An
         raise HTTPException(status_code=404, detail=f"No published collection '{dataset_id}'")
     if artifact.format == ArtifactFormat.GEOPARQUET:
         return artifact, feature_templates.get_feature_template(artifact.dataset_id) or {}
+    if artifact.format == ArtifactFormat.PARQUET:
+        from open_geo_service.tables.sources import table_sources
+
+        return artifact, table_sources(artifact).template()
     return artifact, registry_datasets.get_dataset(artifact.dataset_id) or {}
+
+
+_KINDS = {ArtifactFormat.GEOPARQUET: "vector", ArtifactFormat.PARQUET: "table"}
+"""How the catalog README names each collection's kind; any other format is a raster."""
 
 
 def _sql_identifier(name: str) -> str:

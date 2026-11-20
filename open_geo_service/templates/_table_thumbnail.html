@@ -1,0 +1,8 @@
+{# The tile picture of every table dataset: a header row, a key column and striped rows, filling the box. #}
+<div class="table-thumbnail" aria-hidden="true">
+  {% for widths in [(45, 60, 55), (70, 50, 60), (50, 35, 40), (80, 65, 75), (60, 45, 50), (75, 55, 65)] %}
+  <div class="row{% if loop.first %} heading{% elif loop.index is odd %} stripe{% endif %}">
+    {% for width in widths %}<div class="cell"><span style="width: {{ width }}%"></span></div>{% endfor %}
+  </div>
+  {% endfor %}
+</div>

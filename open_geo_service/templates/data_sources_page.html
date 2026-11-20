@@ -73,7 +73,7 @@
                 <span class="provider clamp" title="{{ s.provider }}">{{ s.provider or "Unknown provider" }}</span>
                 {% if s.description %}<p class="description clamp">{{ s.description }}</p>{% endif %}
                 <div class="meta">
-                  {% if s.kind == "vector" %}<span class="chip">Vector</span>{% endif %}
+                  <span class="chip">{{ s.kind }}</span>
                   {% if s.level %}<span class="chip">{{ s.level }}</span>{% endif %}
                   {% if s.period_type %}<span class="chip">{{ s.period_type }}</span>{% endif %}
                   {% if s.units %}<span class="chip">{{ s.units }}</span>{% endif %}

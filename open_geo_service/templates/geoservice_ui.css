@@ -564,6 +564,60 @@ button:disabled {
   height: 100%;
   object-fit: cover;
 }
+/* Numbers in a table: right-aligned with digits of one width, so their magnitudes line up. */
+th.numeric,
+td.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A table dataset's tile: one picture of a table, filling the box as other datasets' maps do. */
+.table-thumbnail {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* Tinted, so the picture stands apart from the white card text around it. */
+  background: var(--colors-blue050);
+}
+.table-thumbnail .row {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  border-bottom: 1px solid var(--colors-grey300);
+}
+.table-thumbnail .heading {
+  background: var(--colors-blue700);
+  border-bottom: 0;
+}
+.table-thumbnail .stripe {
+  background: var(--colors-blue100);
+}
+.table-thumbnail .cell {
+  display: flex;
+  align-items: center;
+  padding: 0 12%;
+}
+.table-thumbnail .cell + .cell {
+  justify-content: flex-end;
+  border-left: 1px solid var(--colors-grey300);
+}
+.table-thumbnail .heading .cell + .cell {
+  border-left-color: transparent;
+}
+.table-thumbnail span {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--colors-blue600);
+}
+.table-thumbnail .cell:first-child span {
+  background: var(--colors-grey600);
+}
+.table-thumbnail .heading .cell span {
+  background: var(--colors-white);
+}
+
 .no-preview {
   position: absolute;
   left: var(--spacers-dp8);

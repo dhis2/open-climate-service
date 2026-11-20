@@ -420,18 +420,15 @@ def _dataset_page_context(
     display = _mapping(template.get("display"))
     sync = _mapping(template.get("sync"))
     sync_kind = str(sync.get("kind") or "")
-    providers = ", ".join(
-        str(provider["name"])
-        for provider in template.get("providers") or []
-        if isinstance(provider, dict) and provider.get("name")
-    )
+    # From the record, which also holds the providers a computed table takes from its sources.
+    providers = ", ".join(provider.name for provider in record.providers)
     version = sync.get("version")
     version_label = (
         f"{version.get('authority')}:{version.get('value')}"
         if isinstance(version, dict) and version.get("value")
         else (str(version) if version else "")
     )
-    range_label = "" if vector else _range_label(display)
+    range_label = "" if vector or summary["kind"] == "table" else _range_label(display)
     classes = _class_legend(template)
 
     if template and vector:
@@ -526,7 +523,64 @@ def _dataset_page_context(
         # Only where the data source page offers a fetch: a provider this instance has.
         "refresh_href": f"/data-sources/{template['id']}" if vector and template and refreshable else None,
         "refresh_blocked": refresh_blocked,
+        "table": _table_view(record.dataset_id) if summary["kind"] == "table" else None,
     }
+
+
+TABLE_PREVIEW_ROWS = 10
+"""Latest values a table dataset's page shows; the rows API serves all of them."""
+
+
+def _table_view(dataset_id: str) -> dict[str, Any] | None:
+    """Each feature's latest value, by feature name, for a table dataset's page."""
+    from open_geo_service.tables import store
+
+    record = store.latest_record(dataset_id)
+    if record is None:
+        return None
+    summary = store.summarize(record)
+    if summary.last_period is None:
+        return None
+    latest = store.latest_values(record, TABLE_PREVIEW_ROWS)
+    preview = latest.rows.to_pylist()
+    series = {_series_label(row) for row in preview}
+    # Every feature's, not only the rows shown: the heading names a period all features share.
+    periods = latest.periods
+    return {
+        "row_count": summary.row_count,
+        "preview": [
+            {
+                "feature": row["feature_name"] or row["feature_id"],
+                "feature_id": row["feature_id"],
+                "period": store.period_label(row["period_start"], record.period_type),
+                "series": _series_label(row),
+                "value": "" if row["value"] is None else f"{row['value']:.6g}",
+                "coverage": "" if row["coverage"] is None else f"{row['coverage']:.0%}",
+            }
+            for row in preview
+        ],
+        "more": max(latest.row_count - TABLE_PREVIEW_ROWS, 0),
+        # A column only where it tells the rows apart, or says something: one period or one
+        # reducer for every row goes in the heading, and a pipeline's rows have no coverage.
+        "has_period": len(periods) > 1,
+        "common_period": store.period_label(periods[0], record.period_type) if len(periods) == 1 else "",
+        "has_series": len(series) > 1,
+        "common_series": next(iter(series)) if len(series) == 1 else "",
+        "has_coverage": any(row["coverage"] is not None for row in preview),
+        "unit": record.units or "",
+    }
+
+
+def _series_label(row: dict[str, Any]) -> str:
+    """What tells one of a feature's values for a period from another: class, reducer, weights, forecast."""
+    parts = [str(row[name]) for name in ("class", "reducer") if row.get(name) is not None]
+    if row.get("weights") is not None:
+        parts.append(f"weighted by {row['weights']}")
+    if row.get("member") is not None:
+        parts.append(f"member {row['member']}")
+    if row.get("reference_time") is not None:
+        parts.append(f"issued {row['reference_time']:%Y-%m-%d %H:%M}")
+    return ", ".join(parts)
 
 
 def _feature_refresh_blocked(collection_id: str, template: dict[str, Any] | None) -> str:
@@ -566,7 +620,13 @@ def render_dataset_page(
     refreshable = False
     refresh_blocked = ""
     try:
-        if record.item_type == "feature":
+        if record.item_type == "table":
+            from open_geo_service.tables import store
+            from open_geo_service.tables.sources import table_sources
+
+            latest = store.latest_record(record.dataset_id)
+            template = table_sources(latest).template() if latest is not None else None
+        elif record.item_type == "feature":
             from open_geo_service.features.templates import get_feature_template
 
             source_id = record.source_dataset_id or record.dataset_id
@@ -588,7 +648,7 @@ def render_dataset_page(
     stored_schedule: dict[str, Any] | None = None
     scheduler_status: dict[str, Any] = {}
     scheduler_reload_error: str | None = None
-    if record.item_type != "feature":
+    if record.item_type not in ("feature", "table"):
         try:
             from open_geo_service.scheduler.service import get_scheduler_service
 
@@ -1516,7 +1576,7 @@ _API_GROUP_NOTES = {
     "Ingestions": "Ingest from a data source into this instance, and follow the job it starts.",
     "Sync": "Bring an ingested dataset up to date, or ask what a sync would do.",
     "Features": "Feature collections as GeoParquet, and refreshing one from its data source.",
-    "Tables": "Current values per feature and period, as JSON or CSV.",
+    "Tables": "Table datasets: their rows as JSON or CSV, and their Parquet files.",
     "Zarr": "The datasets themselves, as Zarr over HTTP for any Zarr-aware client.",
     "Icechunk": "The same stores for the Icechunk SDK, with version history.",
     "STAC": "Catalogue metadata for discovery, one collection per published dataset.",

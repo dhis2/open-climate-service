@@ -8,8 +8,8 @@ The current public story is:
 - discover the configured extent with `/extent`
 - discover managed datasets with `/datasets`
 - discover vector feature collections with `/features`
-- read values per feature and period with `/tables/{dataset_id}/rows`
-- discover published datasets, rasters and vector datasets, with `/stac/catalog.json`
+- read the rows of table datasets with `/tables/{dataset_id}/rows`
+- discover published datasets, rasters, vector datasets and tables, with `/stac/catalog.json`
 - access raw Zarr data with `/zarr/{dataset_id}` (vanilla zarr clients, web maps)
 - access the native Icechunk store with `/icechunk/{dataset_id}` (Icechunk SDK)
 - preview a dataset with `/datasets/{dataset_id}/thumbnail.png` (also a STAC collection asset)
@@ -37,6 +37,7 @@ Operational note:
 - `GET /features/{collection_id}/data.pmtiles`
 - `GET /features/{collection_id}/styles/default.json`
 - `GET /tables/{dataset_id}/rows`
+- `GET /tables/{dataset_id}/data.parquet`
 - `GET /stac/catalog.json`
 - `GET /stac/{dataset_id}/collection.json`
 - `GET /stac/README.md`
@@ -285,7 +286,7 @@ What this means:
 
 - `/datasets` is the public native catalog of managed datasets
 - `itemType` says what the dataset holds: `coverage` for a raster, `feature` for a feature
-  collection such as a boundary set, `table` for values per feature and period. It is the field to filter a listing on, because `format`
+  collection such as a boundary set, `table` for a table of rows, such as values per feature and period. It is the field to filter a listing on, because `format`
   sits on the nested version record and only `GET /datasets/{dataset_id}` returns those. The
   name and the `feature` value come from OGC API - Features Part 1, which defines `itemType` on
   the collection object; `coverage` is convention rather than conformance, since OGC API -
@@ -451,7 +452,8 @@ What this means:
 
 ### Raster and feature collections are described differently
 
-One catalogue, two representations. STAC has no `itemType` — a Collection's `type` is always
+One catalogue, two representations, and a table dataset described like a feature collection
+without geometry (see [Read table datasets](#12-read-table-datasets)). STAC has no `itemType` — a Collection's `type` is always
 `"Collection"` — so a client tells them apart by the extensions and asset media types they
 declare:
 
@@ -571,8 +573,8 @@ tiles.
 
 ## 12. Read table datasets
 
-A table dataset holds values per feature and period, such as monthly precipitation per district.
-It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
+A table dataset holds rows in one Parquet file. A computed table holds values per feature and
+period, such as monthly precipitation per district. It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
 `GET /tables/{dataset_id}/rows`, as JSON or with `format=csv`:
 
 ```bash
@@ -604,8 +606,9 @@ in one Parquet file. A revised value replaces the previous one, and its `written
 last changed; the same value written again keeps its row. Rows written for a new version of a
 feature collection replace that collection's rows of other versions. No history is kept.
 
-Filters: `collection`, `start` and `end` (inclusive bounds on `period_start`), `reducer` and `weights`. Only
-published table datasets are served.
+Filters: `collection`, `feature`, `start` and `end` (inclusive bounds on `period_start`), `reducer` and
+`weights`. Only published table datasets are served. `GET /tables/{dataset_id}/data.parquet` serves the
+dataset's Parquet file as it is stored.
 
 A pipeline with the `table` destination keeps its workflow's value per feature and period as a
 table dataset, created on its first delivery. With `policy: on_update`, a revised source period
@@ -637,6 +640,23 @@ table dataset one pipeline; two pipelines writing the same one replace each othe
 `/datasets/{dataset_id}` shows the table's `units` and, under `provenance`, the job that computed
 its latest rows, that job's process graph digest and the datasets it read, as for any dataset a
 workflow produced.
+
+A computed table has no template, so its `source`, `license` and `providers` come from the datasets
+it was computed from, the feature collection among them: each row names a feature, so the
+boundaries' licence binds the table as much as the raster's. One licence shared by every source is
+the table's; several with SPDX identifiers make an SPDX expression, such as `CC-BY-4.0 AND
+ODbL-1.0`; any source whose licence has no SPDX identifier, or none declared, makes it `other`.
+Its STAC collection, whose `license` takes an SPDX identifier or `other` only, says `other` for
+several licences and links each one: its own page, or its SPDX page. A
+source that declares no licence and was itself computed is followed back to its own sources.
+
+A published table dataset is a STAC collection too, with `table:columns` naming, typing and
+describing every column (the `value` column with its `unit`), `table:row_count`, a temporal extent
+from the first to the last `period_start`, and the Parquet file as its `data` asset with
+`file:size` and `file:checksum`. It links each dataset it was computed from as `derived_from`, and
+their source pages as `via`. Its `README.md` lists the columns and gives a DuckDB query joining the
+table to its feature collection's GeoParquet on `collection_id` and `feature_id`. The dataset page
+shows the latest value of each feature, up to 10.
 
 ## 13. `/sync`
 
