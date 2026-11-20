@@ -77,7 +77,7 @@
             {% if read_only %}
             <p class="note">This instance is read-only: data can be browsed and processed, but not ingested.</p>
             {% elif sign_in %}
-            <p class="note"><a href="{{ mount }}/sign-in">Sign in</a> with an operator token to ingest data, sync datasets and run pipelines.</p>
+            <p class="note">{{ sign_in_note(mount, "ingest data, sync datasets and run pipelines") }}</p>
             {% endif %}
               </div>
               {% if globe %}

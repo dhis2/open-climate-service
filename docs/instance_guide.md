@@ -328,7 +328,7 @@ until **Sign out**, or until the instance restarts. Signed out, or signed in wit
 Sign-in is offered only over HTTPS or on `localhost`, so a token is never sent in clear; over
 plain HTTP from another machine the page says so instead of showing the form. Behind a proxy that
 terminates TLS or rewrites the `Host` header, set `GEOSERVICE_BASE_URL` to the public origin, so
-the pages' origin is recognised.
+the pages' origin is recognised; without it, sign-in is refused as coming from another site.
 
 The design and the later steps are in [Authentication and authorization](authentication.md).
 

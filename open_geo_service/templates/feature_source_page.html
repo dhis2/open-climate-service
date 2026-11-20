@@ -76,7 +76,7 @@
               {% elif not refreshable %}
               <p class="note">This data source names no provider this instance has, so it cannot be fetched here.</p>
               {% elif sign_in %}
-              <p class="note"><a href="{{ mount }}/sign-in">Sign in</a> with an operator token to fetch collections here.</p>
+              <p class="note">{{ sign_in_note(mount, "fetch collections here") }}</p>
               {% elif read_only %}
               <p class="note">This instance is read-only, so collections cannot be fetched here.</p>
               {% endif %}

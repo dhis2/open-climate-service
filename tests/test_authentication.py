@@ -355,6 +355,7 @@ def test_web_sign_in_opens_the_forms_its_tier_allows(
     assert actions_closed() == "sign-in"
     signed_out = client.get("/data-sources", headers=HTML).text
     assert 'href="/sign-in">Sign in</a>' in signed_out and "Sign out" not in signed_out
+    assert "Sign in</a> with an operator token to" in client.get("/", headers=HTML).text
     assert client.post(pause, headers=SAME_ORIGIN).status_code == 401
 
     came_from = client.get("/sign-in", headers={"Referer": "https://testserver/data-sources?q=1"})
@@ -364,7 +365,8 @@ def test_web_sign_in_opens_the_forms_its_tier_allows(
     assert wrong.status_code == 401 and "not valid" in wrong.text
     assert "invalid credential" in caplog.text
     other_site = {"Origin": "https://elsewhere.example"}
-    assert client.post("/sign-in", data={"token": OPERATOR_SECRET}, headers=other_site).status_code == 403
+    refused = client.post("/sign-in", data={"token": OPERATOR_SECRET}, headers=other_site)
+    assert refused.status_code == 403 and "GEOSERVICE_BASE_URL" in refused.json()["message"]
     # Only a path on this instance is returned to.
     off_site = client.post(
         "/sign-in", data={"token": CLIENT_SECRET, "next": "//elsewhere.example/"}, headers=SAME_ORIGIN
@@ -374,7 +376,7 @@ def test_web_sign_in_opens_the_forms_its_tier_allows(
     # An authenticated token signs in, but the pages' forms need an operator.
     client_cookie = _session(client, CLIENT_SECRET)
     page = client.get("/", headers={**client_cookie, **HTML}).text
-    assert "notebook" in page and "Sign out" in page and "with an operator token to" in page
+    assert "Sign out" in page and "You are signed in as notebook, which is not an operator token" in page
     assert client.post(pause, headers={**client_cookie, **SAME_ORIGIN}).status_code == 403
 
     cookie = _session(client, OPERATOR_SECRET)

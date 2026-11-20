@@ -113,6 +113,10 @@ class AccessMiddleware:
             browser_form = by_cookie or (path in _SIGN_IN_FORMS and authorization is None)
             if method not in _SAFE_METHODS and browser_form and not _same_origin(scope, headers):
                 message = f"{method} {path} from a page on another site is refused."
+                if path in _SIGN_IN_FORMS:
+                    # A cookie's own writes are rarely misdirected; a refused sign-in usually means
+                    # a proxy hides the address the browser used.
+                    message += " If this instance runs behind a proxy, set GEOSERVICE_BASE_URL to its public address."
                 await _refuse(403, "authentication", "PermissionsInsufficient", message)(scope, receive, send)
                 return
             needed = Tier.OPERATOR if required is None else required

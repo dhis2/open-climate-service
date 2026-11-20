@@ -225,8 +225,23 @@ def account(mount: str) -> Markup:
     ).format(mount, viewer.token.id)
 
 
+def sign_in_note(mount: str, action: str) -> Markup:
+    """Why a page's forms are hidden: a prompt to sign in, or that the signed-in token is not an operator's.
+
+    `action` completes "to ...", for example "ingest data here".
+    """
+    link = Markup('<a href="{}/sign-in">Sign in</a>').format(mount)
+    viewer = current_viewer()
+    if viewer.token is None:
+        return Markup("{} with an operator token to {}.").format(link, action)
+    return Markup("You are signed in as {}, which is not an operator token. {} with one to {}.").format(
+        viewer.token.id, link, action
+    )
+
+
 # Jinja types its globals as its own defaults, so a function of ours needs the cast.
 cast(dict[str, Any], _env.globals)["account"] = account
+cast(dict[str, Any], _env.globals)["sign_in_note"] = sign_in_note
 
 
 def actions_closed() -> str | None:

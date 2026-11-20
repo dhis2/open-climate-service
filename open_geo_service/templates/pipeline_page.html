@@ -27,7 +27,7 @@
           <h2 tabindex="-1">{{ title }}</h2>
           {% if not read_only %}<a class="button-link primary pipeline-edit-action" href="{{ mount }}/pipelines/{{ spec.id }}/edit">Edit pipeline</a>{% endif %}
         </div>
-        {% if sign_in %}<p class="note"><a href="{{ mount }}/sign-in">Sign in</a> with an operator token to edit, check, run or deliver this pipeline.</p>{% endif %}
+        {% if sign_in %}<p class="note">{{ sign_in_note(mount, "edit, check, run or deliver this pipeline") }}</p>{% endif %}
 
         {% if diagram %}
         {% include "_automation_graph.html" %}

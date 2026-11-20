@@ -111,7 +111,8 @@ def _block_uses_interpolation(text: str, key: str) -> bool:
             # Stop only at the next ordinary top-level mapping key.
             if re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:", candidate):
                 break
-            if "${" in candidate:
+            # A commented-out line is never interpolated into the YAML that is parsed.
+            if "${" in candidate and not candidate.lstrip().startswith("#"):
                 return True
             index += 1
         break

@@ -166,6 +166,14 @@ def test_protected_config_block_rejects_interpolation_after_column_zero_comment(
     with pytest.raises(ValueError, match="dhis2_connections does not support environment interpolation"):
         config.get_config()
 
+    # A commented-out interpolation, as in geoservice.yaml.example, is not a use of one.
+    monkeypatch.setattr(config, "_cache", None)
+    connection_file.write_text(
+        "authentication:\n  tokens: []\n  # token: ${URL}\n# webhook_url: ${URL}\nname: Test\n",
+        encoding="utf-8",
+    )
+    assert config.get_config()["name"] == "Test"
+
 
 @pytest.mark.parametrize("indicator", ["*connections", "&connections"])
 def test_protected_config_block_rejects_aliases_and_anchors(connection_file: Path, indicator: str) -> None:

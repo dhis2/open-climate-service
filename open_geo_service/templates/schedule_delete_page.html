@@ -24,7 +24,7 @@
         <div class="panel">
           <p>The schedule for <strong class="mono">{{ dataset_id }}</strong> will be removed. Existing data and sync jobs remain available.</p>
           {% if sign_in %}
-          <p class="note"><a href="{{ mount }}/sign-in">Sign in</a> with an operator token to delete this schedule.</p>
+          <p class="note">{{ sign_in_note(mount, "delete this schedule") }}</p>
           {% elif read_only %}
           <p class="note">This instance is read-only, so schedules cannot be deleted here.</p>
           {% else %}

@@ -227,7 +227,9 @@ Each step ships on its own and is useful alone; no later step redoes an earlier 
    and owners on jobs and stored process graphs.
 2. Web interface sign-in with a session cookie and an origin check on its writes.
 3. Optional gating of reads, advertised in STAC.
-4. OIDC and per-person ownership.
+4. OIDC and per-person ownership. Signing in through the provider and validating its tokens
+   use an established library, such as Authlib, rather than code of our own; the session
+   handling from step 2 is reconsidered then, to keep one mechanism.
 5. Role mapping and quotas.
 6. Per-dataset access with signed links.
 7. DHIS2 routes, for the operations the first DHIS2 app names.

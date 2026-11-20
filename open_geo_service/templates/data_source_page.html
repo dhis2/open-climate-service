@@ -50,9 +50,11 @@
                 Already ingested{% if ingested.coverage %} for {{ ingested.coverage }}{% endif %}.
                 <a href="{{ mount }}/datasets/{{ ingested.id }}">View the dataset</a>.
               </p>
+              {% if can_ingest %}
               <p class="note">
                 Ingesting again adds to it, or replaces it when <em>Overwrite</em> is checked.
               </p>
+              {% endif %}
               {% endif %}
               {% if can_ingest %}
               <form
@@ -119,7 +121,7 @@
                 <a href="{{ mount }}/workflows/{{ produced_by }}">{{ produced_by }}</a> workflow{% endif %}.
               </p>
               {% elif sign_in %}
-              <p class="note"><a href="{{ mount }}/sign-in">Sign in</a> with an operator token to ingest data here.</p>
+              <p class="note">{{ sign_in_note(mount, "ingest data here") }}</p>
               {% elif read_only %}
               <p class="note">This instance is read-only, so data cannot be ingested here.</p>
               {% elif not has_extent %}
