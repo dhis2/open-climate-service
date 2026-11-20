@@ -532,54 +532,74 @@ TABLE_PREVIEW_ROWS = 10
 
 
 def _table_view(dataset_id: str) -> dict[str, Any] | None:
-    """Each feature's latest value, by feature name, for a table dataset's page."""
+    """Each feature's latest value, by feature name, for a table dataset's page.
+
+    None for a table without columns representing the feature, the period and a value: it has no latest value
+    per feature. A table with several value columns shows its first.
+    """
     from open_geo_service.tables import store
 
     record = store.latest_record(dataset_id)
     if record is None:
         return None
-    summary = store.summarize(record)
-    if summary.last_period is None:
-        return None
+    declared = store.schema_of(record)
+    feature, period = declared.represented_by("feature_id"), declared.represented_by("period_start")
     latest = store.latest_values(record, TABLE_PREVIEW_ROWS)
+    if latest is None or feature is None or period is None or not declared.values or latest.row_count == 0:
+        return None
+    value, name, coverage = (
+        declared.values[0],
+        declared.represented_by("feature_name"),
+        declared.represented_by("coverage"),
+    )
+    # What tells a feature's values for one period apart: the key columns other than its feature and period.
+    located = {
+        declared.represented_by(meaning)
+        for meaning in ("dataset_id", "collection_id", "collection_version", "feature_id", "period_start")
+    }
+    series_columns = [column for column in declared.key if column not in located]
     preview = latest.rows.to_pylist()
-    series = {_series_label(row) for row in preview}
+    series = {_series_label(row, series_columns) for row in preview}
     # Every feature's, not only the rows shown: the heading names a period all features share.
     periods = latest.periods
     return {
-        "row_count": summary.row_count,
+        "row_count": store.summarize(record).row_count,
         "preview": [
             {
-                "feature": row["feature_name"] or row["feature_id"],
-                "feature_id": row["feature_id"],
-                "period": store.period_label(row["period_start"], record.period_type),
-                "series": _series_label(row),
-                "value": "" if row["value"] is None else f"{row['value']:.6g}",
-                "coverage": "" if row["coverage"] is None else f"{row['coverage']:.0%}",
+                "feature": (row[name] if name else None) or row[feature],
+                "feature_id": row[feature],
+                "period": store.period_label(row[period], record.period_type),
+                "series": _series_label(row, series_columns),
+                "value": "" if row[value] is None else f"{row[value]:.6g}",
+                "coverage": "" if not coverage or row[coverage] is None else f"{row[coverage]:.0%}",
             }
             for row in preview
         ],
         "more": max(latest.row_count - TABLE_PREVIEW_ROWS, 0),
         # A column only where it tells the rows apart, or says something: one period or one
-        # reducer for every row goes in the heading, and a pipeline's rows have no coverage.
+        # series for every row goes in the heading, and a pipeline's rows have no coverage.
         "has_period": len(periods) > 1,
         "common_period": store.period_label(periods[0], record.period_type) if len(periods) == 1 else "",
         "has_series": len(series) > 1,
         "common_series": next(iter(series)) if len(series) == 1 else "",
-        "has_coverage": any(row["coverage"] is not None for row in preview),
+        "has_coverage": bool(coverage) and any(row[coverage] is not None for row in preview),
         "unit": record.units or "",
     }
 
 
-def _series_label(row: dict[str, Any]) -> str:
-    """What tells one of a feature's values for a period from another: class, reducer, weights, forecast."""
-    parts = [str(row[name]) for name in ("class", "reducer") if row.get(name) is not None]
-    if row.get("weights") is not None:
-        parts.append(f"weighted by {row['weights']}")
-    if row.get("member") is not None:
-        parts.append(f"member {row['member']}")
-    if row.get("reference_time") is not None:
-        parts.append(f"issued {row['reference_time']:%Y-%m-%d %H:%M}")
+def _series_label(row: dict[str, Any], columns: list[str]) -> str:
+    """The values of *columns* in *row* that are set: text as it is, anything else after its column's name."""
+    parts: list[str] = []
+    for column in columns:
+        value = row.get(column)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, datetime):
+            parts.append(f"{column} {value:%Y-%m-%d %H:%M}")
+        else:
+            parts.append(f"{column} {value}")
     return ", ".join(parts)
 
 

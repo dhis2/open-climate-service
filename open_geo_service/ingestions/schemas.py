@@ -549,6 +549,10 @@ class ArtifactRecord(BaseModel):
             "collection, whose units come from its template."
         ),
     )
+    table_schema: str | None = Field(
+        default=None,
+        description="Id of a table dataset's schema (`tables.schemas`). None for a raster or a feature collection.",
+    )
     request_scope: ArtifactRequestScope
     coverage: ArtifactCoverage
     created_at: datetime

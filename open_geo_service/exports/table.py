@@ -1,9 +1,10 @@
 """Table datasets as a pipeline destination: a workflow's value per feature and period, kept in OGS (CLIM-1554).
 
-The `table` destination renders a workflow's vector cube to the rows of a table dataset and
-delivers them through the one writer, `tables.store.write_rows`. The payload is those rows as a
-Parquet file, checked against the store when rendered, so a dry run reports what the writer
-would accept and a delivery merges exactly what was rendered into the table's current-value file.
+The `table` destination renders a workflow's vector cube to the rows of a table dataset, in the
+built-in aggregation schema (`tables.schemas`), and delivers them through the one writer,
+`tables.store.write_rows`. The payload is those rows as a Parquet file, checked against the store
+when rendered, so a dry run reports what the writer would accept and a delivery merges exactly
+what was rendered into the table's current-value file.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ _CLASS_LABEL_FIELD = "class_label"
 _MAPPING_FIELDS = ("dataset_id", "collection_id", "name", "period_type", "unit")
 # Dataset-level facts travel in the Parquet footer, so `send` needs nothing but the payload.
 _NAME_KEY = b"ogs:dataset_name"
+SCHEMA = "aggregation"
+"""The table schema the destination writes: values aggregated per feature and period (`tables.schemas`)."""
 
 
 class TableDestinationSettings(BaseModel):
@@ -234,6 +237,7 @@ class TableExportPlugin(BaseExportPlugin):
             dataset_id=mapping["dataset_id"],
             collection_id=mapping["collection_id"],
             rows=rows,
+            schema=SCHEMA,
             period_type=period_type,
             written_at=datetime.now(UTC),
         )
@@ -273,6 +277,7 @@ class TableExportPlugin(BaseExportPlugin):
             "dataset_id": table.column("dataset_id")[0].as_py(),
             "collection_id": table.column("collection_id")[0].as_py(),
             "rows": rows,
+            "schema": SCHEMA,
             "written_at": table.column("written_at")[0].as_py(),
         }
         outcome = ExportOutcome.DRY_RUN if dry_run else ExportOutcome.SUCCESS

@@ -1,10 +1,12 @@
-"""The table store: current values per feature and period, one Parquet file per dataset (CLIM-1553).
+"""The table store: a table dataset's current rows, one Parquet file per dataset (CLIM-1553).
+
+A table's rows follow its schema (`tables.schemas`, CLIM-1971): the columns it declares, the key
+that says which stored row a write replaces, and what columns represent, which adds rules: feature ids checked
+against their collection and periods stored as their first day. The dataset's record names its schema.
 
 One folder per table dataset under `config.get_tables_root`, holding the dataset's one file of
 current values. No history is kept: a revised value replaces its row, and a value written again
 unchanged keeps the row and its `written_at`, so `written_at` says when each value last changed.
-A write for a new version of a feature collection drops that collection's rows of other versions,
-so values for two boundary versions never mix.
 
 Every write produces a new file, written under a temporary name and renamed, holding the merged
 rows. The dataset's record names it in `asset_paths`, and readers read only that: the file
@@ -13,10 +15,10 @@ period, for a reader that resolved the previous record and has not opened its fi
 A reader sees the dataset before a write or after it, and a write whose record fails leaves the
 dataset as it was. The one file is what a static catalog serves as the dataset's data.
 
-`write_rows` is the one writer. It validates rows against the feature collection they report
-on, merges them, and registers the dataset's record, which is what lists it under `/datasets`
-as `itemType: table`. `check_rows` gives the same verdict without writing, for a dry run.
-`read_rows` reads them back with pyarrow.
+`write_rows` is the one writer. It validates rows against the dataset's schema, merges them, and
+registers the dataset's record, which is what lists it under `/datasets` as `itemType: table`.
+`check_rows` gives the same verdict without writing, for a dry run. `read_rows` reads them back
+with pyarrow.
 """
 
 from __future__ import annotations
@@ -48,77 +50,21 @@ from open_geo_service.ingestions.schemas import (
 )
 from open_geo_service.shared.persistence import index_lock
 from open_geo_service.shared.urls import is_segment_safe_id
+from open_geo_service.tables.schemas import DEFAULT_SCHEMA, WRITTEN_AT, TableSchema, get_schema
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = pa.schema(
-    [
-        pa.field("collection_id", pa.string(), nullable=False),
-        pa.field("feature_id", pa.string(), nullable=False),
-        pa.field("feature_name", pa.string()),
-        pa.field("dataset_id", pa.string(), nullable=False),
-        pa.field("period_start", pa.date32(), nullable=False),
-        pa.field("class", pa.string()),
-        pa.field("reducer", pa.string()),
-        pa.field("weights", pa.string()),
-        pa.field("value", pa.float64()),
-        pa.field("coverage", pa.float64()),
-        pa.field("unit", pa.string()),
-        pa.field("reference_time", pa.timestamp("us", tz="UTC")),
-        pa.field("lead_time", pa.duration("s")),
-        pa.field("member", pa.int32()),
-        pa.field("collection_version", pa.string()),
-        pa.field("written_at", pa.timestamp("us", tz="UTC"), nullable=False),
-    ]
-)
-"""One row per feature, period and variable: the CLIM-1551 data model.
-
-`class` is the category a per-class value belongs to (people per hazard class, statistics per
-land cover class), NULL for a value that has none. Classes of one computation stay in one
-dataset, so their rows share a reducer, weights and unit and can be summed back to a total.
-"""
-
-COLUMN_DESCRIPTIONS = {
-    "collection_id": "Id of the feature collection the value is reported on; joins to its GeoParquet.",
-    "feature_id": "Id of the feature, its collection's identifier property; joins to the feature collection.",
-    "feature_name": "Name of the feature when the value was written.",
-    "dataset_id": "Id of this table dataset.",
-    "period_start": "First day of the period the value is for.",
-    "class": "Category a per-class value belongs to, empty for a value without one.",
-    "reducer": "How the values within the feature were combined, e.g. mean or sum.",
-    "weights": "Dataset the values were weighted by, e.g. population, empty for unweighted ones.",
-    "value": "The value, empty when the feature has no valid data for the period.",
-    "coverage": "Fraction of the feature, from 0 to 1, with valid data behind the value.",
-    "unit": "Unit of the value.",
-    "reference_time": "When the forecast the value comes from was issued.",
-    "lead_time": "Time from the forecast's reference time to the period, in seconds.",
-    "member": "Ensemble member of the forecast the value comes from.",
-    "collection_version": "Version of the feature collection the value was computed for.",
-    "written_at": "When the value last changed.",
-}
-"""What each `SCHEMA` column holds, for the table's STAC `table:columns` and its README."""
-
-KEY = (
-    "collection_id",
-    "collection_version",
-    "feature_id",
-    "dataset_id",
-    "period_start",
-    "class",
-    "reducer",
-    "weights",
-    "reference_time",
-    "lead_time",
-    "member",
-)
-"""The columns that identify one value: a write with the same key replaces the stored row."""
-
 PERIOD_TYPE_KEY = b"ogs:period_type"
 """Parquet metadata key holding the dataset's period type, so a reader of the files alone knows
-whether `period_start` starts a day, a month or a year."""
+whether a period column holds the start of a day, a month or a year."""
 
-_WRITABLE = frozenset(SCHEMA.names) - {"written_at"}
-_REQUIRED = ("feature_id", "period_start", "value")
+SCHEMA_KEY = b"ogs:table_schema"
+"""Parquet metadata key holding the id of the dataset's schema (`tables.schemas`)."""
+
+
+def schema_of(record: ArtifactRecord | None) -> TableSchema:
+    """The schema a table dataset's rows follow: its record's, or the default for a dataset without one."""
+    return get_schema(record.table_schema if record is not None and record.table_schema else DEFAULT_SCHEMA)
 
 
 def _dataset_lock(dataset_id: str) -> AbstractContextManager[None]:
@@ -135,8 +81,9 @@ def _dataset_lock(dataset_id: str) -> AbstractContextManager[None]:
 def write_rows(
     *,
     dataset_id: str,
-    collection_id: str,
     rows: Iterable[Mapping[str, Any]],
+    collection_id: str | None = None,
+    schema: str | None = None,
     dataset_name: str | None = None,
     period_type: str | None = None,
     written_at: datetime | None = None,
@@ -153,22 +100,25 @@ def write_rows(
 
     from open_geo_service.ingestions import services as ingestion_services
 
-    # Checked under the lock, so two first writes cannot give one dataset two period types or units.
+    # Checked under the lock, so two first writes cannot give one dataset two schemas, period types or units.
     with _dataset_lock(dataset_id):
         table = check_rows(
             dataset_id=dataset_id,
             collection_id=collection_id,
             rows=rows,
+            schema=schema,
             period_type=period_type,
             written_at=stamp,
             provenance=provenance,
         )
         existing = latest_record(dataset_id)
+        declared = get_schema(table.schema.metadata[SCHEMA_KEY].decode())
         period_type = period_type or (existing.period_type if existing else None)
-        merged = _merged(_read_file(existing), table, collection_id, period_type)
+        merged = _merged(_read_file(existing, declared), table, declared, collection_id, period_type)
         written = _write_file(_dataset_root(dataset_id), merged, stamp)
         try:
-            units = table.column("unit").drop_null().unique().to_pylist()
+            unit_column = declared.represented_by("unit")
+            units = table.column(unit_column).drop_null().unique().to_pylist() if unit_column else []
             record = ArtifactRecord(
                 artifact_id=str(uuid4()),
                 dataset_id=dataset_id,
@@ -179,8 +129,9 @@ def write_rows(
                 asset_paths=[str(written)],
                 units=units[0] if units else (existing.units if existing else None),
                 size_bytes=written.stat().st_size,
+                table_schema=declared.id,
                 request_scope=ArtifactRequestScope(),
-                coverage=_coverage(merged, period_type),
+                coverage=_coverage(merged, declared, period_type),
                 created_at=datetime.now(UTC),
                 provenance=provenance or (existing.provenance if existing else None),
             )
@@ -230,64 +181,96 @@ def _require_same_sources(
 def check_rows(
     *,
     dataset_id: str,
-    collection_id: str,
     rows: Iterable[Mapping[str, Any]],
+    collection_id: str | None = None,
+    schema: str | None = None,
     period_type: str | None = None,
     written_at: datetime | None = None,
     provenance: ArtifactProvenance | None = None,
 ) -> pa.Table:
     """Return *rows* as the table `write_rows` would merge in, or raise ValueError; nothing is written.
 
-    For a dry run, which needs the writer's verdict without the write. Every row names a
-    `feature_id` of the registered collection, a `period_start` and a `value`; the other `SCHEMA`
-    columns are optional. `dataset_id` and `collection_id` come from the arguments, and a row
-    that names others is refused. A missing value is None (NaN is read as None); a value with
-    `coverage` 0 is refused, because a unit without valid cells has no value, and 0 would be
-    exported as a measurement. All rows share one `written_at`, now unless given. A dataset id
-    a raster or feature collection already holds is refused, so the two never share a listing.
+    For a dry run, which needs the writer's verdict without the write. Rows follow the dataset's
+    schema: *schema* names it for a new dataset, the default one when None, and a dataset keeps
+    the one it was first written with. A row names every `required` column, no undeclared one,
+    and a value of each column's type; a missing value is None (NaN is read as None). Every row
+    shares one `written_at`, now unless given. Rows that repeat a key are refused, and so is a
+    dataset id a raster or feature collection already holds, so the two never share a listing.
 
-    A dataset has one period type, the first one written. A *period_type* that differs from it is
-    refused; None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`), and each
-    `period_start` is stored as the first day of the period that contains it (`start_of_period`).
-    It has one unit too, the first one written: rows in another unit are refused. Rows computed
-    from other datasets than the stored ones, as *provenance* names them, are refused
-    (`_require_same_sources`).
+    What the schema's columns represent adds rules (docs/managed_data_api_guide.md, Table schemas):
+
+    - `dataset` and `collection` are filled from *dataset_id* and *collection_id*; a row naming others is refused.
+    - `feature` must be a feature of the registered *collection_id*, which a schema with a feature column requires.
+    - `period` is stored as the first day of the period that contains it (`start_of_period`). A
+      dataset has one period type, the first written; a *period_type* that differs is refused,
+      None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`).
+    - `unit`: a dataset has one, the first written; rows in another are refused.
+    - `coverage` is from 0 to 1, and a value with coverage 0 is refused: a feature without valid
+      data has no value, and 0 would be exported as a measurement.
+
+    Rows computed from other datasets than the stored ones, as *provenance* names them, are
+    refused (`_require_same_sources`).
     """
     _require_id(dataset_id, "table dataset")
-    _require_id(collection_id, "feature collection")
     require_table_id(dataset_id)
-    period_type = _dataset_period_type(dataset_id, period_type)
     existing = latest_record(dataset_id)
+    declared = _dataset_schema(dataset_id, existing, schema)
     _require_same_sources(dataset_id, existing, provenance)
+    fixed: dict[str, str] = {}
+    if dataset_column := declared.represented_by("dataset_id"):
+        fixed[dataset_column] = dataset_id
+    feature_ids: set[str] | None = None
+    if collection_column := declared.represented_by("collection_id"):
+        if collection_id is None:
+            raise ValueError(f"table schema '{declared.id}' reports on features; name their feature collection")
+        _require_id(collection_id, "feature collection")
+        fixed[collection_column] = collection_id
+        feature_ids = _collection_feature_ids(collection_id)
+    elif collection_id is not None:
+        raise ValueError(f"table schema '{declared.id}' has no feature column, so rows report on no collection")
+    period_column = declared.represented_by("period_start")
+    if period_column:
+        period_type = _dataset_period_type(dataset_id, period_type)
+    elif period_type is not None:
+        raise ValueError(f"table schema '{declared.id}' has no period column, so it has no period type")
+    feature_column, unit_column = declared.represented_by("feature_id"), declared.represented_by("unit")
     unit = existing.units if existing else None
-    feature_ids = _collection_feature_ids(collection_id)
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
-    columns: dict[str, list[Any]] = {name: [] for name in SCHEMA.names}
+    columns: dict[str, list[Any]] = {name: [] for name in declared.names}
     seen: set[tuple[Any, ...]] = set()
     for index, row in enumerate(rows):
-        clean = _validated_row(row, index=index, dataset_id=dataset_id, collection_id=collection_id)
-        if clean["feature_id"] not in feature_ids:
+        clean = _validated_row(row, index=index, schema=declared, fixed=fixed)
+        if feature_ids is not None and feature_column and clean[feature_column] not in feature_ids:
             raise ValueError(
-                f"row {index}: feature '{clean['feature_id']}' is not in feature collection '{collection_id}'"
+                f"row {index}: feature '{clean[feature_column]}' is not in feature collection '{collection_id}'"
             )
-        clean["period_start"] = start_of_period(clean["period_start"], period_type)
-        if clean.get("unit") is not None:
-            if unit is not None and clean["unit"] != unit:
+        if period_column:
+            clean[period_column] = start_of_period(clean[period_column], period_type)
+        if unit_column and clean.get(unit_column) is not None:
+            if unit is not None and clean[unit_column] != unit:
                 raise ValueError(
-                    f"row {index}: table dataset '{dataset_id}' is in {unit}; it cannot take rows in {clean['unit']}"
+                    f"row {index}: table dataset '{dataset_id}' is in {unit}; "
+                    f"it cannot take rows in {clean[unit_column]}"
                 )
-            unit = clean["unit"]
-        clean["written_at"] = stamp
-        key = tuple(clean.get(name) for name in KEY)
+            unit = clean[unit_column]
+        clean[WRITTEN_AT] = stamp
+        key = tuple(clean.get(name) for name in declared.key)
         if key in seen:
             raise ValueError(f"row {index}: another row in this write has the same key")
         seen.add(key)
-        for name in SCHEMA.names:
+        for name in declared.names:
             columns[name].append(clean.get(name))
     if not seen:
         raise ValueError(f"no rows to write to table dataset '{dataset_id}'")
-    table = pa.table(columns, schema=SCHEMA)
-    return table.replace_schema_metadata({PERIOD_TYPE_KEY: period_type.encode()}) if period_type else table
+    return pa.table(columns, schema=declared.arrow).replace_schema_metadata(_metadata(declared, period_type))
+
+
+def _metadata(declared: TableSchema, period_type: str | None) -> dict[bytes, bytes]:
+    """The Parquet metadata of a table's file: its schema id and, when it has one, its period type."""
+    metadata = {SCHEMA_KEY: declared.id.encode()}
+    if period_type:
+        metadata[PERIOD_TYPE_KEY] = period_type.encode()
+    return metadata
 
 
 def read_rows(
@@ -297,32 +280,41 @@ def read_rows(
     feature_id: str | None = None,
     start: date | None = None,
     end: date | None = None,
-    reducer: str | None = None,
-    weights: str | None = None,
+    equals: Mapping[str, str] | None = None,
 ) -> pa.Table:
-    """Return a table dataset's rows, filtered, ordered by collection, feature and period.
+    """Return a table dataset's rows, filtered, in the order the file keeps them (`_order`).
 
-    *start* and *end* bound `period_start`, inclusive.
+    *collection_id*, *feature_id*, *start* and *end* filter on the columns representing them;
+    *start* and *end* bound the period, inclusive. *equals* keeps rows whose named columns hold
+    the given values. A filter on a column the table's schema lacks raises ValueError.
     """
-    if not record.asset_paths:
-        return SCHEMA.empty_table()
+    declared = schema_of(record)
     conditions = []
-    if collection_id is not None:
-        conditions.append(pc.field("collection_id") == collection_id)
-    if feature_id is not None:
-        conditions.append(pc.field("feature_id") == feature_id)
+    for meaning, value in (("collection_id", collection_id), ("feature_id", feature_id)):
+        if value is not None:
+            conditions.append(pc.field(_column_representing(declared, meaning)) == value)
     if start is not None:
-        conditions.append(pc.field("period_start") >= start)
+        conditions.append(pc.field(_column_representing(declared, "period_start")) >= start)
     if end is not None:
-        conditions.append(pc.field("period_start") <= end)
-    if reducer is not None:
-        conditions.append(pc.field("reducer") == reducer)
-    if weights is not None:
-        conditions.append(pc.field("weights") == weights)
+        conditions.append(pc.field(_column_representing(declared, "period_start")) <= end)
+    for name, value in (equals or {}).items():
+        if declared.column(name) is None:
+            raise ValueError(f"table schema '{declared.id}' has no column '{name}'")
+        conditions.append(pc.field(name) == value)
+    if not record.asset_paths:
+        return declared.arrow.empty_table()
     flt = None
     for condition in conditions:
         flt = condition if flt is None else flt & condition
-    return pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table(filter=flt).sort_by(_ORDER)
+    dataset = pds.dataset(record.asset_paths, schema=declared.arrow, format="parquet")
+    return dataset.to_table(filter=flt).sort_by(_order(declared))
+
+
+def _column_representing(declared: TableSchema, meaning: str) -> str:
+    column = declared.represented_by(meaning)
+    if column is None:
+        raise ValueError(f"table schema '{declared.id}' has no column representing {meaning}")
+    return column
 
 
 class FileSummary(NamedTuple):
@@ -335,28 +327,34 @@ class FileSummary(NamedTuple):
 
 
 def summarize(record: ArtifactRecord) -> FileSummary:
-    """Count the dataset's rows and find the collections and periods they cover.
+    """Count the dataset's rows and find the collections and periods they cover, where it has those columns.
 
     The row count and period range come from the Parquet footer, so no values are read; the
     collection ids from the dictionary of their column, one small index per row.
     """
     import pyarrow.parquet as pq
 
+    declared = schema_of(record)
+    period_column, collection_column = declared.represented_by("period_start"), declared.represented_by("collection_id")
     row_count = 0
     collection_ids: set[str] = set()
     periods: list[date] = []
     for path in record.asset_paths:
         metadata = pq.ParquetFile(path).metadata
         row_count += metadata.num_rows
-        column = metadata.schema.names.index("period_start")
-        for group in range(metadata.num_row_groups):
-            statistics = metadata.row_group(group).column(column).statistics
-            if statistics is not None and statistics.has_min_max:
-                periods += [statistics.min, statistics.max]
-        ids = pq.read_table(path, columns=["collection_id"], read_dictionary=["collection_id"]).column("collection_id")
-        collection_ids.update(str(value) for chunk in ids.chunks for value in chunk.dictionary.to_pylist())
-    if row_count == 0:
-        return FileSummary(0, [], None, None)
+        if period_column:
+            column = metadata.schema.names.index(period_column)
+            for group in range(metadata.num_row_groups):
+                statistics = metadata.row_group(group).column(column).statistics
+                if statistics is not None and statistics.has_min_max:
+                    periods += [statistics.min, statistics.max]
+        if collection_column:
+            ids = pq.read_table(path, columns=[collection_column], read_dictionary=[collection_column])
+            collection_ids.update(
+                str(value) for chunk in ids.column(collection_column).chunks for value in chunk.dictionary.to_pylist()
+            )
+    if row_count == 0 or not periods:
+        return FileSummary(row_count, sorted(collection_ids), None, None)
     return FileSummary(row_count, sorted(collection_ids), min(periods), max(periods))
 
 
@@ -371,74 +369,97 @@ class LatestValues(NamedTuple):
     """Every feature's latest period, each once."""
 
 
-def latest_values(record: ArtifactRecord, limit: int) -> LatestValues:
+def latest_values(record: ArtifactRecord, limit: int) -> LatestValues | None:
     """Each feature's rows for the latest period it has a row for, ordered by feature name.
 
-    Per feature, not the dataset's last period: a feature whose newest value is older still has one.
-    A feature with several values per period (per class, reducer or forecast) keeps them all.
-    Whole rows are read for the first *limit* only; the latest periods are found from four columns.
+    None for a table without a feature or a period column. Per feature, not the
+    dataset's last period: a feature whose newest value is older still has one. A feature with
+    several values per period (per class, reducer or forecast) keeps them all. Whole rows are
+    read for the first *limit* only; the latest periods are found from a few columns.
     """
-    if not record.asset_paths:
-        return LatestValues(SCHEMA.empty_table(), 0, [])
-    dataset = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet")
-    keys = ["collection_id", "feature_id"]
-    narrow = dataset.to_table(columns=[*keys, "feature_name", "period_start"])
-    newest = narrow.group_by(keys).aggregate([("period_start", "max")])
-    latest = (
-        narrow.join(newest, keys=keys)
-        .filter(pc.field("period_start") == pc.field("period_start_max"))
-        .sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
+    declared = schema_of(record)
+    collection, feature, period = (
+        declared.represented_by(meaning) for meaning in ("collection_id", "feature_id", "period_start")
     )
-    shown_keys = [*keys, "period_start_max"]
+    if collection is None or feature is None or period is None:
+        return None
+    if not record.asset_paths:
+        return LatestValues(declared.arrow.empty_table(), 0, [])
+    name = declared.represented_by("feature_name")
+    by_name = [*([(name, "ascending")] if name else []), (feature, "ascending")]
+    dataset = pds.dataset(record.asset_paths, schema=declared.arrow, format="parquet")
+    keys = [collection, feature]
+    newest_column = f"{period}_max"
+    narrow = dataset.to_table(columns=[*keys, *([name] if name else []), period])
+    newest = narrow.group_by(keys).aggregate([(period, "max")])
+    latest = narrow.join(newest, keys=keys).filter(pc.field(period) == pc.field(newest_column)).sort_by(by_name)
+    shown_keys = [*keys, newest_column]
     shown = latest.slice(0, limit).select(shown_keys).group_by(shown_keys).aggregate([])
     candidates = dataset.to_table(
-        filter=pc.field("feature_id").isin(shown.column("feature_id"))
-        & pc.field("period_start").isin(shown.column("period_start_max"))
+        filter=pc.field(feature).isin(shown.column(feature)) & pc.field(period).isin(shown.column(newest_column))
     )
     # A feature's rows of another shown feature's period are not its latest.
     rows = (
         candidates.join(shown, keys=keys)
-        .filter(pc.field("period_start") == pc.field("period_start_max"))
-        .drop_columns(["period_start_max"])
-        .sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
+        .filter(pc.field(period) == pc.field(newest_column))
+        .drop_columns([newest_column])
+        .sort_by(by_name)
         .slice(0, limit)
     )
-    return LatestValues(rows, latest.num_rows, newest.column("period_start_max").unique().to_pylist())
+    return LatestValues(rows, latest.num_rows, newest.column(newest_column).unique().to_pylist())
 
 
-_ORDER = [("collection_id", "ascending"), ("feature_id", "ascending"), ("period_start", "ascending")]
-"""How rows are stored and returned, so a reader of the file finds a feature's periods together."""
+def _order(declared: TableSchema) -> list[tuple[str, str]]:
+    """How rows are stored and returned: by collection, feature and period, as the schema has them.
+
+    A reader of the file then finds a feature's periods together. A schema with none of those
+    columns orders by its key.
+    """
+    located = [
+        column
+        for meaning in ("collection_id", "feature_id", "period_start")
+        if (column := declared.represented_by(meaning))
+    ]
+    return [(name, "ascending") for name in located or declared.key]
 
 
-def _read_file(record: ArtifactRecord | None) -> pa.Table | None:
+def _read_file(record: ArtifactRecord | None, declared: TableSchema) -> pa.Table | None:
     """The rows the dataset's file holds now, or None for a new dataset."""
     if record is None or not record.asset_paths:
         return None
-    return pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table()
+    return pds.dataset(record.asset_paths, schema=declared.arrow, format="parquet").to_table()
 
 
-def _merged(existing: pa.Table | None, new: pa.Table, collection_id: str, period_type: str | None) -> pa.Table:
-    """The dataset's rows with *new* merged in: one row per `KEY`, the written one where they meet.
+def _merged(
+    existing: pa.Table | None, new: pa.Table, declared: TableSchema, collection_id: str | None, period_type: str | None
+) -> pa.Table:
+    """The dataset's rows with *new* merged in: one row per key, the written one where they meet.
 
     A written row equal to the stored one in everything but `written_at` keeps the stored row, so
-    sending the same values again changes nothing. When every written row names one version of
-    the collection, the collection's rows of any other version are dropped.
+    sending the same values again changes nothing. With a column representing `collection_version`, when every
+    written row names one version of the collection, the collection's rows of any other version
+    are dropped, so values for two boundary versions never mix.
     """
     stored = existing.to_pylist() if existing is not None else []
-    versions = set(new.column("collection_version").to_pylist())
-    if len(versions) == 1 and (version := next(iter(versions))) is not None:
-        stored = [
-            row for row in stored if row["collection_id"] != collection_id or row["collection_version"] == version
-        ]
-    rows = {tuple(row[name] for name in KEY): row for row in stored}
-    compared = [name for name in SCHEMA.names if name != "written_at"]
+    version_column, collection_column = (
+        declared.represented_by("collection_version"),
+        declared.represented_by("collection_id"),
+    )
+    if version_column and collection_column:
+        versions = set(new.column(version_column).to_pylist())
+        if len(versions) == 1 and (version := next(iter(versions))) is not None:
+            stored = [
+                row for row in stored if row[collection_column] != collection_id or row[version_column] == version
+            ]
+    rows = {tuple(row[name] for name in declared.key): row for row in stored}
+    compared = [name for name in declared.names if name != WRITTEN_AT]
     for row in new.to_pylist():
-        key = tuple(row[name] for name in KEY)
+        key = tuple(row[name] for name in declared.key)
         current = rows.get(key)
         if current is None or any(current[name] != row[name] for name in compared):
             rows[key] = row
-    table = pa.Table.from_pylist(list(rows.values()), schema=SCHEMA).sort_by(_ORDER)
-    return table.replace_schema_metadata({PERIOD_TYPE_KEY: period_type.encode()}) if period_type else table
+    table = pa.Table.from_pylist(list(rows.values()), schema=declared.arrow).sort_by(_order(declared))
+    return table.replace_schema_metadata(_metadata(declared, period_type))
 
 
 def _write_file(folder: Path, table: pa.Table, stamp: datetime) -> Path:
@@ -506,28 +527,39 @@ def latest_record(dataset_id: str) -> ArtifactRecord | None:
     return max(records, key=lambda record: record.created_at) if records else None
 
 
-def _coverage(table: pa.Table, period_type: str | None) -> ArtifactCoverage:
-    """The period range of *table*'s rows, as period labels, and the extent of the collections they report on."""
+_WHOLE_WORLD = CoverageSpatial(xmin=-180, ymin=-90, xmax=180, ymax=90)
+"""The extent of a table whose rows report on no feature collection: it says nothing narrower."""
+
+
+def _coverage(table: pa.Table, declared: TableSchema, period_type: str | None) -> ArtifactCoverage:
+    """The period range of *table*'s rows, as period labels, and the extent of the collections they report on.
+
+    Each from the column representing it: a table without a period column has no temporal extent,
+    and one without a collection column covers the whole world.
+    """
     from open_geo_service.features.services import registered_collections
 
-    dates = table.column("period_start").unique().to_pylist()
-    first, last = min(dates), max(dates)
-    collections = registered_collections()
-    boxes = [
-        (record.coverage.spatial_wgs84 or record.coverage.spatial)
-        for collection_id in sorted(set(table.column("collection_id").to_pylist()))
-        if (record := collections.get(collection_id)) is not None
-    ]
-    spatial = CoverageSpatial(
-        xmin=min(box.xmin for box in boxes),
-        ymin=min(box.ymin for box in boxes),
-        xmax=max(box.xmax for box in boxes),
-        ymax=max(box.ymax for box in boxes),
-    )
-    return ArtifactCoverage(
-        spatial=spatial,
-        temporal=CoverageTemporal(start=period_label(first, period_type), end=period_label(last, period_type)),
-    )
+    temporal = CoverageTemporal()
+    if period_column := declared.represented_by("period_start"):
+        dates = table.column(period_column).unique().to_pylist()
+        temporal = CoverageTemporal(
+            start=period_label(min(dates), period_type), end=period_label(max(dates), period_type)
+        )
+    spatial = _WHOLE_WORLD
+    if collection_column := declared.represented_by("collection_id"):
+        collections = registered_collections()
+        boxes = [
+            (record.coverage.spatial_wgs84 or record.coverage.spatial)
+            for collection_id in sorted(set(table.column(collection_column).to_pylist()))
+            if (record := collections.get(collection_id)) is not None
+        ]
+        spatial = CoverageSpatial(
+            xmin=min(box.xmin for box in boxes),
+            ymin=min(box.ymin for box in boxes),
+            xmax=max(box.xmax for box in boxes),
+            ymax=max(box.ymax for box in boxes),
+        )
+    return ArtifactCoverage(spatial=spatial, temporal=temporal)
 
 
 def _collection_feature_ids(collection_id: str) -> set[str]:
@@ -546,44 +578,65 @@ def _collection_feature_ids(collection_id: str) -> set[str]:
     }
 
 
-def _validated_row(row: object, *, index: int, dataset_id: str, collection_id: str) -> dict[str, Any]:
-    """Return one row checked and normalised to `SCHEMA`, or raise ValueError naming the row."""
+def _validated_row(row: object, *, index: int, schema: TableSchema, fixed: Mapping[str, str]) -> dict[str, Any]:
+    """Return one row checked against *schema* and normalised to its types, or raise ValueError naming the row.
+
+    *fixed* holds the columns the write fills itself, the dataset and collection ids: a row
+    may name them only with the same value.
+    """
     if not isinstance(row, Mapping):
         raise ValueError(f"row {index}: expected a mapping, got {type(row).__name__}")
-    unknown = sorted(set(row) - _WRITABLE)
+    unknown = sorted(set(row) - {column.name for column in schema.columns})
     if unknown:
         raise ValueError(f"row {index}: unknown columns {unknown}")
-    missing = [name for name in _REQUIRED if name not in row]
+    missing = [column.name for column in schema.columns if column.required and column.name not in row]
     if missing:
         raise ValueError(f"row {index}: missing required columns {missing}")
-    for name, expected in (("dataset_id", dataset_id), ("collection_id", collection_id)):
+    for name, expected in fixed.items():
         if row.get(name, expected) != expected:
             raise ValueError(f"row {index}: {name} '{row[name]}' does not match '{expected}' this write is for")
-    clean = dict(row)
-    clean["dataset_id"] = dataset_id
-    clean["collection_id"] = collection_id
-    feature_id = row["feature_id"]
-    if not isinstance(feature_id, str) or not feature_id:
-        raise ValueError(f"row {index}: feature_id must be a non-empty string")
-    clean["period_start"] = _period(row["period_start"], index=index)
-    clean["value"] = _number(row["value"], "value", index=index)
-    coverage = _number(row.get("coverage"), "coverage", index=index)
-    if coverage is not None and not 0 <= coverage <= 1:
-        raise ValueError(f"row {index}: coverage must be between 0 and 1, got {coverage}")
-    if coverage == 0 and clean["value"] is not None:
-        raise ValueError(
-            f"row {index}: value {clean['value']} has coverage 0; a unit with no valid cells has no value, "
-            "so store None rather than a number"
-        )
-    clean["coverage"] = coverage
-    if row.get("reference_time") is not None:
-        clean["reference_time"] = _utc(row["reference_time"], f"row {index}: reference_time")
-    if row.get("lead_time") is not None and not isinstance(row["lead_time"], timedelta):
-        raise ValueError(f"row {index}: lead_time must be a timedelta")
-    for name in ("feature_name", "class", "reducer", "weights", "unit", "collection_version"):
-        if row.get(name) is not None and not isinstance(row[name], str):
-            raise ValueError(f"row {index}: {name} must be a string")
+    clean: dict[str, Any] = {}
+    for column in schema.columns:
+        value = _typed(fixed.get(column.name, row.get(column.name)), column.name, column.type, index=index)
+        if value is None and not column.nullable:
+            raise ValueError(f"row {index}: {column.name} must have a value")
+        clean[column.name] = value
+    feature = schema.represented_by("feature_id")
+    if feature and not clean[feature]:
+        raise ValueError(f"row {index}: {feature} must be a non-empty string")
+    if coverage_column := schema.represented_by("coverage"):
+        coverage = clean[coverage_column]
+        if coverage is not None and not 0 <= coverage <= 1:
+            raise ValueError(f"row {index}: {coverage_column} must be between 0 and 1, got {coverage}")
+        for name in schema.values:
+            if coverage == 0 and clean[name] is not None:
+                raise ValueError(
+                    f"row {index}: {name} {clean[name]} has coverage 0; a feature with no valid data has no value, "
+                    "so store None rather than a number"
+                )
     return clean
+
+
+def _typed(value: object, name: str, kind: str, *, index: int) -> Any:
+    """*value* as a column of type *kind* stores it, None for a missing one, or ValueError naming the row."""
+    if value is None:
+        return None
+    if kind == "string" and isinstance(value, str):
+        return value
+    if kind == "double":
+        return _number(value, name, index=index)
+    if kind in ("int32", "int64") and isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if kind == "bool" and isinstance(value, bool):
+        return value
+    if kind == "date":
+        return _date(value, name, index=index)
+    if kind == "timestamp":
+        return _utc(value, f"row {index}: {name}")
+    if kind == "duration" and isinstance(value, timedelta):
+        return value
+    article = "an" if kind[0] in "aeiou" else "a"
+    raise ValueError(f"row {index}: {name} must be {article} {kind}, got {value!r}")
 
 
 def start_of_period(day: date, period_type: str | None) -> date:
@@ -643,10 +696,10 @@ def period_label(day: date, period_type: str | None) -> str:
     return day.isoformat()
 
 
-def _period(value: object, *, index: int) -> date:
-    """A period start as a date, from a date or an ISO date string. A datetime is refused: periods are days."""
+def _date(value: object, name: str, *, index: int) -> date:
+    """A date, from a date or an ISO date string. A datetime is refused: periods are days."""
     if isinstance(value, datetime):
-        raise ValueError(f"row {index}: period_start must be a date, not a datetime")
+        raise ValueError(f"row {index}: {name} must be a date, not a datetime")
     if isinstance(value, date):
         return value
     if isinstance(value, str):
@@ -654,7 +707,7 @@ def _period(value: object, *, index: int) -> date:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    raise ValueError(f"row {index}: period_start must be a date or an ISO date string, got {value!r}")
+    raise ValueError(f"row {index}: {name} must be a date or an ISO date string, got {value!r}")
 
 
 def _number(value: object, name: str, *, index: int) -> float | None:
@@ -691,6 +744,17 @@ def _dataset_period_type(dataset_id: str, period_type: str | None) -> str | None
             "Write them to another table dataset"
         )
     return period_type or current
+
+
+def _dataset_schema(dataset_id: str, existing: ArtifactRecord | None, schema: str | None) -> TableSchema:
+    """The schema a write uses: the dataset's own, which *schema* must not contradict, or *schema* for a new one."""
+    current = schema_of(existing).id if existing is not None else None
+    if schema is not None and current is not None and schema != current:
+        raise ValueError(
+            f"table dataset '{dataset_id}' has schema '{current}'; it cannot take rows of schema '{schema}'. "
+            "Write them to another table dataset"
+        )
+    return get_schema(schema or current or DEFAULT_SCHEMA)
 
 
 def require_table_id(dataset_id: str) -> None:
