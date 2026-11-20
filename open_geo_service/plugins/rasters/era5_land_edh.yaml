@@ -1,5 +1,5 @@
 - id: era5land_temperature_monthly
-  name: 2m temperature (ERA5-Land)
+  name: 2m temperature (ERA5-Land, monthly)
   short_name: 2m temperature
   description: >-
     Monthly mean air temperature 2 m above the ground at 9 km worldwide, aggregated from the
@@ -35,10 +35,10 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
-    range: [-30.0, 30.0]
+    midpoint: 0
 
 - id: era5land_precipitation_monthly
-  name: Precipitation rate (ERA5-Land)
+  name: Precipitation rate (ERA5-Land, monthly)
   short_name: Precipitation
   description: >-
     Monthly rainfall at 9 km worldwide, stored as a mean daily rate rather than a monthly total,
@@ -77,5 +77,5 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
-    range: [0.0, 20.0]
+    range: [0, p98]
     nodata: 0.0

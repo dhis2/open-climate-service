@@ -38,4 +38,3 @@
       url: https://dataspace.copernicus.eu/
   display:
     colormap: YlGn
-    range: [0.0, 0.8]

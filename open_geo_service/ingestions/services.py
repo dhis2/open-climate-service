@@ -3027,7 +3027,9 @@ def _build_dataset_record(dataset_id: str, artifacts: list[ArtifactRecord]) -> D
     return DatasetRecord(
         dataset_id=dataset_id,
         source_dataset_id=latest.source_dataset_id or latest.dataset_id,
-        dataset_name=latest.dataset_name,
+        # From the template like the fields below, so renaming one needs no re-ingest; a table
+        # has no template yet and keeps the name it was stored with.
+        dataset_name=_as_optional_str(source_dataset.get("name")) or latest.dataset_name,
         short_name=_as_optional_str(source_dataset.get("short_name")),
         description=_as_optional_text(source_dataset.get("description")),
         item_type=_item_type_for(latest),

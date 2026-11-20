@@ -35,7 +35,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
-    range: [-30.0, 30.0]
+    midpoint: 0
 
 - id: era5land_temperature_daily_min
   name: 2m temperature daily minimum (ERA5-Land)
@@ -74,7 +74,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
-    range: [-30.0, 30.0]
+    midpoint: 0
 
 - id: era5land_temperature_daily_max
   name: 2m temperature daily maximum (ERA5-Land)
@@ -113,7 +113,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
-    range: [-30.0, 30.0]
+    midpoint: 0
 
 - id: era5land_dewpoint_daily
   name: 2m dewpoint temperature (ERA5-Land)
@@ -152,7 +152,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
-    range: [-30.0, 30.0]
+    midpoint: 0
 
 - id: era5land_precipitation_daily
   name: Precipitation rate (ERA5-Land)
@@ -195,7 +195,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
-    range: [0.0, 20.0]
+    range: [0, p98]
     nodata: 0.0
 
 - id: era5land_relative_humidity_daily
@@ -235,7 +235,6 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: Purples
-    range: [0.0, 100.0]
 
 - id: era5land_relative_humidity_daily_min
   name: 2m relative humidity daily minimum (ERA5-Land)
@@ -274,7 +273,6 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: Purples
-    range: [0.0, 100.0]
 
 - id: era5land_relative_humidity_daily_max
   name: 2m relative humidity daily maximum (ERA5-Land)
@@ -313,4 +311,3 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: Purples
-    range: [0.0, 100.0]

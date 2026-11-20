@@ -31,10 +31,10 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
-    range: [-30.0, 30.0]
+    midpoint: 0
 
 - id: era5land_precipitation_daily_normal_1991_2020
-  name: Total precipitation daily normal (ERA5-Land, 1991–2020)
+  name: Precipitation daily normal (ERA5-Land, 1991–2020)
   short_name: Precipitation daily normal
   description: >-
     Average ERA5-Land rainfall for each day of the year over 1991-2020, smoothed over a 31-day
@@ -54,7 +54,7 @@
       period: [1991, 2020]
       smoothing_window: 31
       unit_transform: metres_to_mm
-  units: mm
+  units: mm/d
   resolution: 9 km x 9 km
   source: ERA5-Land Reanalysis (Earth Data Hub)
   source_url: https://earthdatahub.destine.eu/collections/era5/datasets/era5-land-daily
@@ -66,7 +66,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
-    range: [0.0, 20.0]
+    range: [0, p98]
 
 # ---------------------------------------------------------------------------
 # Monthly climate-normal output templates for the `climate_normal` openEO workflow
@@ -100,10 +100,10 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: rdbu_r
-    range: [-30.0, 30.0]
+    midpoint: 0
 
 - id: era5land_precipitation_monthly_normal_1991_2020
-  name: Mean daily precipitation monthly normal (ERA5-Land, 1991–2020)
+  name: Precipitation monthly normal (ERA5-Land, 1991–2020)
   short_name: Precipitation monthly normal
   description: >-
     Average ERA5-Land rainfall for each calendar month over 1991-2020. The baseline a monthly
@@ -125,7 +125,7 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: blues
-    range: [0.0, 20.0]
+    range: [0, p98]
 
 # ---------------------------------------------------------------------------
 # Anomaly output templates for the `climate_anomaly` openEO workflow
@@ -157,7 +157,6 @@
   display:
     colormap: rdbu_r
     midpoint: 0
-    range: [-15.0, 15.0]
 
 - id: era5land_precipitation_daily_relative_anomaly_1991_2020
   name: Precipitation daily relative anomaly (ERA5-Land, vs 1991–2020 normal)
@@ -181,6 +180,9 @@
   display:
     colormap: RdBu
     midpoint: 0
+    # Fixed, not measured: a relative anomaly cannot fall below -100% but has no upper bound,
+    # and where the normal is near zero one shower reads as +1000%. A measured range centred
+    # on 0 would follow that tail and leave a total drought near neutral.
     range: [-100.0, 100.0]
 
 - id: era5land_precipitation_daily_anomaly_1991_2020
@@ -205,7 +207,6 @@
   display:
     colormap: RdBu
     midpoint: 0
-    range: [-20.0, 20.0]
 
 # ---------------------------------------------------------------------------
 # Monthly anomaly output templates for the `climate_anomaly` workflow: pair a monthly
@@ -242,7 +243,6 @@
   display:
     colormap: rdbu_r
     midpoint: 0
-    range: [-3.0, 3.0]
 
 - id: era5land_precipitation_monthly_anomaly_1991_2020
   name: Precipitation monthly anomaly (ERA5-Land, vs 1991–2020 normal)
@@ -273,11 +273,10 @@
   display:
     colormap: RdBu
     midpoint: 0
-    range: [-10.0, 10.0]
 
 - id: era5land_precipitation_monthly_relative_anomaly_1991_2020
   name: Precipitation monthly relative anomaly (ERA5-Land, vs 1991–2020 normal)
-  short_name: Precipitation anomaly (%)
+  short_name: Precipitation monthly anomaly (%)
   description: >-
     How far a month's ERA5-Land rainfall sits from its 1991-2020 normal, as a percentage of that
     normal. Negative is drier than usual, positive wetter.
@@ -305,4 +304,5 @@
   display:
     colormap: RdBu
     midpoint: 0
+    # Fixed for the same reason as the daily relative anomaly.
     range: [-100.0, 100.0]

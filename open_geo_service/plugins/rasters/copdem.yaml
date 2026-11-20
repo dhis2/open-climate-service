@@ -26,7 +26,8 @@
       url: https://www.copernicus.eu/
   display:
     colormap: ["#1a7a3c", "#8fbf5a", "#f2e6a0", "#b08a5a", "#7a5a48", "#ffffff"]
-    range: [0, 4500]
+    # The full span: a DEM has no outliers to cut, and its highest peaks are what the top colour is for.
+    range: [min, max]
 
 - id: copdem90_elevation_static
   name: Elevation (Copernicus 90m DEM, static)
@@ -55,4 +56,4 @@
       url: https://www.copernicus.eu/
   display:
     colormap: ["#1a7a3c", "#8fbf5a", "#f2e6a0", "#b08a5a", "#7a5a48", "#ffffff"]
-    range: [0, 4500]
+    range: [min, max]

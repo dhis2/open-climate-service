@@ -1,8 +1,11 @@
 - id: era5heat_utci_daily
   name: Universal Thermal Climate Index (ERA5-Heat, daily average)
-  short_name: Heat Index
+  short_name: UTCI
   variable: utci
-  description: Universal Thermal Climate Index (UTCI) representing human thermal stress and discomfort in outdoor conditions. 
+  description: >-
+    Daily mean of the Universal Thermal Climate Index (UTCI): how hot or cold the outdoors feels
+    to the body, from air temperature, humidity, wind and radiation. At 0.25 degrees (about 28 km)
+    worldwide, aggregated from the hourly CDS ARCO archive. Days run in UTC.
   period_type: daily
   sync:
     kind: temporal
@@ -30,13 +33,15 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
-    range: [0, 50]
 
 - id: era5heat_utci_daily_max
   name: Universal Thermal Climate Index (ERA5-Heat, daily maximum)
-  short_name: Heat Index, Max
+  short_name: Maximum UTCI
   variable: utci
-  description: Universal Thermal Climate Index (UTCI) representing human thermal stress and discomfort in outdoor conditions. 
+  description: >-
+    Daily maximum of the Universal Thermal Climate Index (UTCI): how hot or cold the outdoors feels
+    to the body, from air temperature, humidity, wind and radiation. At 0.25 degrees (about 28 km)
+    worldwide, aggregated from the hourly CDS ARCO archive. Days run in UTC.
   period_type: daily
   sync:
     kind: temporal
@@ -64,13 +69,15 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
-    range: [0, 50]
 
 - id: era5heat_utci_daily_min
   name: Universal Thermal Climate Index (ERA5-Heat, daily minimum)
-  short_name: Heat Index, Min
+  short_name: Minimum UTCI
   variable: utci
-  description: Universal Thermal Climate Index (UTCI) representing human thermal stress and discomfort in outdoor conditions. 
+  description: >-
+    Daily minimum of the Universal Thermal Climate Index (UTCI): how hot or cold the outdoors feels
+    to the body, from air temperature, humidity, wind and radiation. At 0.25 degrees (about 28 km)
+    worldwide, aggregated from the hourly CDS ARCO archive. Days run in UTC.
   period_type: daily
   sync:
     kind: temporal
@@ -98,4 +105,3 @@
       url: https://climate.copernicus.eu/
   display:
     colormap: YlOrRd
-    range: [-50, 50]
