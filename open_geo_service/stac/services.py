@@ -528,12 +528,13 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
 
 
 def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: Request) -> dict[str, object]:
-    """Build the STAC collection for a table dataset: values per feature and period in one Parquet file.
+    """Build the STAC collection for a table dataset: its rows in one Parquet file.
 
     A table document, as for a feature collection, with no geometry: `table:columns` from the
-    file's schema, each with its description and the value with its unit, and the file itself as
-    the `data` asset. The spatial extent is the bounds of the feature collections the values are
-    reported on, the temporal one the first and last `period_start`. A computed table has no
+    table's schema, each with its description and the value columns with their unit, and the file
+    itself as the `data` asset. The spatial extent is the bounds of the feature collections the
+    values are reported on, and the temporal one the first and last period, as the schema's roles
+    provide them. A computed table has no
     template, so its licence and providers are its sources' (`tables.sources`); `derived_from`
     links name those sources and `via` links the pages their data came from.
     """
@@ -603,7 +604,7 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
             href=absolute_url(request, f"/tables/{path_segment(dataset_id)}/data.parquet"),
             media_type=PARQUET_MEDIA_TYPE,
             title="Table (Parquet)",
-            description="The dataset's current rows, one per feature, period and value; table:columns describes them.",
+            description="The dataset's current rows, one per key; table:columns describes them.",
             roles=["data"],
             # Size and checksum, as Portolan asks of a single-file asset: a table is small, and
             # the checksum is computed once per file version.
@@ -621,29 +622,29 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
 
 
 def _table_dataset_columns(artifact: ArtifactRecord) -> list[dict[str, str]]:
-    """`table:columns` for a table dataset's file: name and type from its schema, with descriptions and the unit.
+    """`table:columns` for a table dataset: each column its schema declares, with its type, description and unit.
 
-    An unreadable file leaves the collection without `table:columns`, as for a feature collection.
+    A value column's unit is the one its rows were written in, when the schema has a unit
+    column, else the one the schema declares for it.
     """
-    import pyarrow.parquet as pq
+    from open_geo_service.tables.schemas import WRITTEN_AT_DESCRIPTION
+    from open_geo_service.tables.store import schema_of
 
-    from open_geo_service.tables.store import COLUMN_DESCRIPTIONS
-
-    if not artifact.asset_paths:
-        return []
-    try:
-        schema = pq.read_schema(artifact.asset_paths[0])
-    except (OSError, ValueError) as exc:
-        logger.warning("Could not read the parquet schema of '%s': %s", artifact.asset_paths[0], exc)
-        return []
+    declared = schema_of(artifact)
     columns: list[dict[str, str]] = []
-    for field in schema:
+    for field in declared.arrow:
         column = {"name": field.name, "type": str(field.type)}
-        if field.name in COLUMN_DESCRIPTIONS:
-            column["description"] = COLUMN_DESCRIPTIONS[field.name]
+        described = declared.column(field.name)
+        # Only `written_at` is not declared: the store adds it to every table.
+        description = described.description if described is not None else WRITTEN_AT_DESCRIPTION
+        unit = described.unit if described is not None else None
+        if field.name in declared.values and declared.role("unit"):
+            unit = artifact.units
+        if description:
+            column["description"] = description
         # The table extension defines no unit field, and its column schema admits further ones.
-        if field.name == "value" and artifact.units:
-            column["unit"] = artifact.units
+        if unit:
+            column["unit"] = unit
         columns.append(column)
     return columns
 

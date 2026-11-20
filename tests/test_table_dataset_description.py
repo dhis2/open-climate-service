@@ -159,7 +159,7 @@ def test_the_stac_collection_describes_the_table_and_meets_the_portolan_schema(c
     assert collection["extent"]["temporal"]["interval"] == [["2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"]]
     assert collection["table:row_count"] == 4
     columns = {column["name"]: column for column in collection["table:columns"]}
-    assert list(columns) == store.SCHEMA.names
+    assert list(columns) == store.schema_of(record).names
     assert all(column["description"] and column["type"] for column in columns.values())
     assert columns["value"]["unit"] == "mm"
     assert columns["period_start"]["type"] == "date32[day]"
@@ -210,8 +210,8 @@ def test_the_readme_documents_the_columns_and_joins_the_table_to_its_features(cl
     assert "Monthly periods from 2026-01 to 2026-02." in readme
     assert "| `value` | double |" in readme
     assert "JOIN 'http://testserver/features/districts/data.parquet' AS f" in readme
-    assert "ON t.collection_id = 'districts'" in readme
-    assert 'CAST(f."orgUnitCode" AS VARCHAR) = t.feature_id' in readme
+    assert """ON t."collection_id" = 'districts'""" in readme
+    assert 'CAST(f."orgUnitCode" AS VARCHAR) = t."feature_id"' in readme
 
     agents = client.get("/stac/precip_districts/AGENTS.md").text
     assert "http://testserver/tables/precip_districts/data.parquet" in agents
@@ -336,3 +336,70 @@ def test_a_dry_run_refuses_rows_computed_from_other_datasets() -> None:
     report = plugin.send(rendered.content, "tables", dry_run=True, context=context)  # type: ignore[arg-type]
     assert report.outcome == "rejected" and report.ignored == 2
     assert report.message is not None and "was computed from ['districts', 'precip']" in report.message
+
+
+STATION_SCHEMA = """
+- id: station_daily
+  name: Daily station observations
+  columns:
+    - {name: station, type: string, required: true, nullable: false, description: Id of the station.}
+    - {name: day, type: date, required: true, nullable: false, description: Day of the observation.}
+    - {name: rainfall, type: double, unit: mm, description: Rainfall over the day.}
+  key: [station, day]
+  roles:
+    period: day
+    values: [rainfall]
+"""
+
+
+def test_a_table_follows_the_schema_it_declares_and_skips_what_its_roles_do_not_provide(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A schema in the instance's plugins_dir: a period and a value, but no feature, so no collection to join."""
+    from open_geo_service import config as api_config
+
+    folder = tmp_path / "plugins" / "tables" / "schemas"
+    folder.mkdir(parents=True)
+    (folder / "stations.yaml").write_text(STATION_SCHEMA, encoding="utf-8")
+    config = api_config.get_config()
+    monkeypatch.setattr(api_config, "get_config", lambda: {**config, "plugins_dir": str(tmp_path / "plugins")})
+
+    def write(rows: list[dict[str, Any]], **arguments: Any) -> Any:
+        return store.write_rows(dataset_id="stations", rows=rows, dataset_name="Station rainfall", **arguments)
+
+    record = write(
+        [{"station": "S1", "day": "2026-01-02", "rainfall": 4.0}, {"station": "S1", "day": "2026-01-01"}],
+        schema="station_daily",
+        period_type="daily",
+    )
+    assert record.table_schema == "station_daily"
+    with pytest.raises(ValueError, match=r"unknown columns \['feature_id', 'period_start', 'reducer', 'value'\]"):
+        write([_row("D1", 1.0)])
+    with pytest.raises(ValueError, match="has schema 'station_daily'; it cannot take rows of schema 'aggregation'"):
+        write([{"station": "S1", "day": "2026-01-03"}], schema="aggregation")
+    with pytest.raises(ValueError, match="has no feature column"):
+        write([{"station": "S1", "day": "2026-01-03"}], collection_id="districts")
+
+    rows = client.get("/tables/stations/rows").json()["items"]
+    assert [(row["station"], row["period"], row["day"], row["period_end"], row["rainfall"]) for row in rows] == [
+        ("S1", "2026-01-01", "2026-01-01", "2026-01-01", None),
+        ("S1", "2026-01-02", "2026-01-02", "2026-01-02", 4.0),
+    ]
+    header = client.get("/tables/stations/rows", params={"format": "csv"}).text.splitlines()[0]
+    assert header == "station,period,day,period_end,rainfall,written_at"
+    assert client.get("/tables/stations/rows", params={"feature": "S1"}).status_code == 400
+    assert client.get("/tables/stations/rows", params={"reducer": "mean"}).status_code == 400
+
+    collection = client.get("/stac/stations/collection.json").json()
+    assert collection["description"] == "Station rainfall: values per daily period."
+    assert [column["name"] for column in collection["table:columns"]] == ["station", "day", "rainfall", "written_at"]
+    assert collection["table:columns"][2]["unit"] == "mm"
+    assert collection["extent"]["temporal"]["interval"] == [["2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"]]
+    assert collection["extent"]["spatial"]["bbox"] == [[-180.0, -90.0, 180.0, 90.0]]
+
+    readme = client.get("/stac/stations/README.md").text
+    assert "Daily periods from 2026-01-01 to 2026-01-02." in readme and "Joining" not in readme
+    agents = client.get("/stac/stations/AGENTS.md").text
+    assert "one per key: `station`, `day`" in agents and "GeoParquet" not in agents
+    page = client.get("/datasets/stations", params={"f": "html"}).text
+    assert "Station rainfall" in page and "Latest value of each feature" not in page

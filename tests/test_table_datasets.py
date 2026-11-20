@@ -162,8 +162,8 @@ def test_rows_are_filtered_by_collection_period_reducer_and_weights() -> None:
     values = lambda **kwargs: sorted(store.read_rows(record, **kwargs).column("value").to_pylist())  # noqa: E731
     assert values(start=date(2026, 2, 1)) == [2.0]
     assert values(end=date(2026, 1, 31)) == [1.0, 3.0, 4.0]
-    assert values(reducer="max") == [3.0]
-    assert values(weights="population") == [4.0]
+    assert values(equals={"reducer": "max"}) == [3.0]
+    assert values(equals={"weights": "population"}) == [4.0]
     assert values(collection_id="districts") == [1.0, 2.0, 3.0, 4.0]
     assert values(collection_id="other") == []
 
@@ -326,9 +326,9 @@ def test_checking_rows_returns_the_table_a_write_would_append_and_writes_nothing
         rows=[_row("D1", 12.5, coverage=1.0)],
         written_at=FIRST,
     )
-    assert table.schema == store.SCHEMA
+    assert table.schema == store.schema_of(None).arrow
     assert table.to_pylist()[0] | {"written_at": None} == {
-        **dict.fromkeys(store.SCHEMA.names),
+        **dict.fromkeys(store.schema_of(None).names),
         "collection_id": "districts",
         "dataset_id": "precip_districts",
         "feature_id": "D1",
@@ -722,7 +722,9 @@ def test_an_empty_csv_still_names_every_column(client: TestClient) -> None:
     _write([_row("D1", 1.0)])
     response = client.get("/tables/precip_districts/rows", params={"format": "csv", "start": "2030-01-01"})
     header = response.text.splitlines()[0].split(",")
-    assert header[4:7] == ["period", "period_start", "period_end"] and len(header) == len(store.SCHEMA.names) + 2
+    assert (
+        header[4:7] == ["period", "period_start", "period_end"] and len(header) == len(store.schema_of(None).names) + 2
+    )
 
 
 def test_a_filter_that_matches_nothing_returns_no_rows(client: TestClient) -> None:
@@ -745,3 +747,20 @@ def test_a_filter_that_matches_nothing_returns_no_rows(client: TestClient) -> No
 )
 def test_a_period_ends_on_its_last_day(period_type: str | None, start: date, end: date | None) -> None:
     assert store.end_of_period(start, period_type) == end
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"roles": {"period": "day"}}, "role 'period' must name a declared date column"),
+        ({"roles": {"feature": "station"}}, "roles 'feature' and 'collection' go together"),
+        ({"key": ["station", "missing"]}, r"key columns it does not declare: \['missing'\]"),
+        ({"columns": [{"name": "written_at", "type": "timestamp"}]}, "declares 'written_at'"),
+    ],
+)
+def test_a_schema_that_cannot_hold_its_rules_is_refused_naming_its_file(change: dict[str, Any], message: str) -> None:
+    from open_geo_service.tables.schemas import parse_schema
+
+    declared = {"id": "stations", "columns": [{"name": "station", "type": "string"}], "key": ["station"], **change}
+    with pytest.raises(ValueError, match=f"table schema 'stations' in stations.yaml.*{message}"):
+        parse_schema(declared, source="stations.yaml")

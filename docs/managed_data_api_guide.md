@@ -573,8 +573,10 @@ tiles.
 
 ## 12. Read table datasets
 
-A table dataset holds rows in one Parquet file. A computed table holds values per feature and
-period, such as monthly precipitation per district. It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
+A table dataset holds rows in one Parquet file, with the columns its schema declares (see
+[Table schemas](#table-schemas)). A computed table has the built-in aggregation schema: values per
+feature and period, such as monthly precipitation per district, which the rest of this section
+describes. It is listed under `/datasets` with `itemType: "table"`, and its rows are served by
 `GET /tables/{dataset_id}/rows`, as JSON or with `format=csv`:
 
 ```bash
@@ -607,7 +609,7 @@ last changed; the same value written again keeps its row. Rows written for a new
 feature collection replace that collection's rows of other versions. No history is kept.
 
 Filters: `collection`, `feature`, `start` and `end` (inclusive bounds on `period_start`), `reducer` and
-`weights`. Only published table datasets are served. `GET /tables/{dataset_id}/data.parquet` serves the
+`weights`. A filter on a column the table does not have is refused with 400. Only published table datasets are served. `GET /tables/{dataset_id}/data.parquet` serves the
 dataset's Parquet file as it is stored.
 
 A pipeline with the `table` destination keeps its workflow's value per feature and period as a
@@ -657,6 +659,52 @@ from the first to the last `period_start`, and the Parquet file as its `data` as
 their source pages as `via`. Its `README.md` lists the columns and gives a DuckDB query joining the
 table to its feature collection's GeoParquet on `collection_id` and `feature_id`. The dataset page
 shows the latest value of each feature, up to 10.
+
+### Table schemas
+
+A table has no fixed schema. A schema file declares one: its columns, the key columns that say
+which stored row a write replaces, and optional roles. Schema files are YAML lists in a
+`tables/schemas/` folder, read from core, then installed plugin packages, then the instance
+`plugins_dir`; a later schema with the same id replaces an earlier one. The built-in
+`aggregation` schema, in `open_geo_service/plugins/tables/schemas/aggregation.yaml`, is the one
+described above. The `table` pipeline destination writes it, and a table dataset that names no
+schema gets it. A dataset keeps the schema of its first write, and its Parquet file names it in
+its metadata as `ogs:table_schema`.
+
+```yaml
+- id: station_daily
+  name: Daily station observations
+  columns:
+    - {name: station, type: string, required: true, nullable: false, description: Id of the station.}
+    - {name: day, type: date, required: true, nullable: false, description: Day of the observation.}
+    - {name: rainfall, type: double, unit: mm, description: Rainfall over the day.}
+  key: [station, day]
+  roles:
+    period: day
+    values: [rainfall]
+```
+
+A column has a `type` (`string`, `double`, `int32`, `int64`, `bool`, `date`, `timestamp`,
+`duration`), a `description`, and optionally a `unit`. A row must name each `required` column,
+and a column with `nullable: false` must hold a value. The store adds `written_at` to every table.
+
+Each role names the column that holds it and adds what the store and its readers do with it:
+
+| Role | Column type | What it adds |
+| --- | --- | --- |
+| `dataset` | string | Filled with the dataset id; a row naming another is refused |
+| `collection` | string | Filled with the feature collection a write reports on; goes with `feature` |
+| `feature` | string | Checked against the collection's features; `feature` filter; join example in the README; latest values on the page |
+| `feature_name` | string | Shown and sorted by on the page |
+| `period` | date | Stored as its period's first day; one period type per dataset; `start` and `end` filters; `period` and `period_end` in the rows API; temporal extent |
+| `values` | numbers | The value columns: their unit in STAC, the value shown on the page |
+| `unit` | string | One unit per dataset, given to the value columns in STAC |
+| `coverage` | double | From 0 to 1; a value with coverage 0 is refused |
+| `collection_version` | string | A write for one version replaces the collection's rows of other versions |
+
+A table without a role skips what it adds: without `feature`, no collection is checked and the
+README has no join example; without `period`, there is no temporal extent and no latest values.
+A table whose schema has no `collection` role reports the whole world as its spatial extent.
 
 ## 13. `/sync`
 

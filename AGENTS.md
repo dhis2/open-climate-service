@@ -30,6 +30,7 @@ open_geo_service/
   main.py           # FastAPI app, CORS middleware, route registration
 open_geo_service/plugins/rasters/   # built-in raster dataset templates (chirps3.yaml, worldpop.yaml, …)
 open_geo_service/plugins/vectors/   # built-in vector dataset templates and providers
+open_geo_service/plugins/tables/schemas/   # built-in table schemas (aggregation.yaml)
 tests/
 docs/
 ```

@@ -7,7 +7,7 @@ templates the catalogue is already built from, so they never say anything the ST
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
 
@@ -20,6 +20,9 @@ from open_geo_service.shared.licences import parse_licence
 from open_geo_service.shared.urls import absolute_url, path_segment
 from open_geo_service.stac import services
 from open_geo_service.stac.media_types import data_group_open_kwargs
+
+if TYPE_CHECKING:
+    from open_geo_service.tables.schemas import TableSchema
 
 
 def catalog_readme(request: Request) -> str:
@@ -203,10 +206,11 @@ def _feature_agents(dataset_id: str, artifact: ArtifactRecord, request: Request)
 def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str, Any], request: Request) -> str:
     """A table's README: what it holds, its sources' licences and providers, its columns, and how to join it."""
     from open_geo_service.tables.sources import table_sources
-    from open_geo_service.tables.store import COLUMN_DESCRIPTIONS, period_label, summarize
+    from open_geo_service.tables.store import period_label, schema_of, summarize
 
     sources = table_sources(artifact)
     summary = summarize(artifact)
+    declared = schema_of(artifact)
     lines = [f"# {artifact.dataset_name}", "", sources.description(artifact)]
     lines += ["", "## Licence", ""]
     licences = [licence for licence in sources.licences if licence.identifier or licence.name]
@@ -231,7 +235,7 @@ def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str,
     lines.append(f"- Last updated: {artifact.created_at.isoformat()}")
 
     data = absolute_url(request, f"/tables/{path_segment(dataset_id)}/data.parquet")
-    lines += ["", "## Data", "", f"One Parquet file, {data}, with one row per feature, period and value."]
+    lines += ["", "## Data", "", f"One Parquet file, {data}, of {declared.holds(artifact.period_type)}."]
     lines.append("")
     if summary.first_period is not None and summary.last_period is not None:
         period = f"{artifact.period_type.capitalize()} periods" if artifact.period_type else "Periods"
@@ -242,16 +246,16 @@ def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str,
         lines.append(f"- Values in {artifact.units}.")
     lines += ["", "| Column | Type | Description |", "| --- | --- | --- |"]
     for column in services._table_dataset_columns(artifact):
-        description = COLUMN_DESCRIPTIONS.get(column["name"], "")
-        lines.append(f"| `{column['name']}` | {column['type']} | {description} |")
+        lines.append(f"| `{column['name']}` | {column['type']} | {column.get('description', '')} |")
 
-    join = _join_example(data, summary.collection_ids, request)
+    join = _join_example(data, summary.collection_ids, declared, request)
     if join:
+        collection, feature = declared.role("collection"), declared.role("feature")
         lines += [
             "",
             "## Joining to the features",
             "",
-            "`collection_id` names the feature collection a row reports on, and `feature_id` the feature, "
+            f"`{collection}` names the feature collection a row reports on, and `{feature}` the feature, "
             "by the collection's identifier property. With DuckDB, the values with their features' geometry:",
             "",
             "```sql",
@@ -261,10 +265,22 @@ def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str,
     return "\n".join(lines) + "\n"
 
 
-def _join_example(data: str, collection_ids: list[str], request: Request) -> list[str]:
-    """A DuckDB query joining the table to the first published feature collection it reports on."""
+def _join_example(data: str, collection_ids: list[str], declared: TableSchema, request: Request) -> list[str]:
+    """A DuckDB query joining the table to the first published feature collection it reports on.
+
+    None for a table whose schema has no feature role: its rows report on no collection.
+    """
     from open_geo_service.features.services import registered_collections
 
+    collection, feature = declared.role("collection"), declared.role("feature")
+    if collection is None or feature is None:
+        return []
+    shown = [
+        f"t.{_sql_identifier(name)}"
+        for name in (feature, declared.role("feature_name"), declared.role("period"), *declared.values)
+        if name
+    ]
+    order = ", ".join(f"t.{_sql_identifier(name)}" for name in (feature, declared.role("period")) if name)
     published = services._eligible_artifacts_by_dataset()
     collections = registered_collections()
     for collection_id in collection_ids:
@@ -276,32 +292,39 @@ def _join_example(data: str, collection_ids: list[str], request: Request) -> lis
         geometry = _sql_identifier(record.features.primary_geometry)
         return [
             "INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;",
-            "SELECT t.feature_id, t.feature_name, t.period_start, t.value, ST_AsText(f." + geometry + ") AS geometry",
+            "SELECT " + ", ".join(shown) + ", ST_AsText(f." + geometry + ") AS geometry",
             "FROM '" + data.replace("'", "''") + "' AS t",
             "JOIN '" + features.replace("'", "''") + "' AS f",
-            "  ON t.collection_id = '" + collection_id.replace("'", "''") + "'",
-            "  AND CAST(f." + id_column + " AS VARCHAR) = t.feature_id",
-            "ORDER BY t.feature_id, t.period_start;",
+            "  ON t." + _sql_identifier(collection) + " = '" + collection_id.replace("'", "''") + "'",
+            "  AND CAST(f." + id_column + " AS VARCHAR) = t." + _sql_identifier(feature),
+            "ORDER BY " + order + ";",
         ]
     return []
 
 
 def _table_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -> str:
     """How an agent reads one table dataset: the file, its key columns, and the rows API."""
+    from open_geo_service.tables.store import schema_of
+
+    declared = schema_of(artifact)
     data = absolute_url(request, f"/tables/{path_segment(dataset_id)}/data.parquet")
     rows = absolute_url(request, f"/tables/{path_segment(dataset_id)}/rows")
+    key = ", ".join(f"`{name}`" for name in declared.key)
+    about = [f"- The rows are {declared.holds(artifact.period_type)}, one per key: {key}."]
+    if declared.values:
+        about.append(f"- The values are in {', '.join(f'`{name}`' for name in declared.values)}.")
+    if (collection := declared.role("collection")) and (feature := declared.role("feature")):
+        about.append(
+            f"- Join it to the feature collection's GeoParquet on `{collection}` and `{feature}`; the README "
+            "shows a DuckDB query."
+        )
     return "\n".join(
         [
             f"# Reading {artifact.dataset_name}",
             "",
             f"The data is one Parquet file: {data}",
             "",
-            "- One row per feature, period and value: `feature_id` in the feature collection `collection_id`, "
-            "and the period starting on `period_start`. `value` is the value; the other columns say how it was "
-            "computed, and `class`, `reducer`, `weights` and forecast columns tell apart several values per "
-            "feature and period.",
-            "- Join it to the feature collection's GeoParquet on `collection_id` and `feature_id`; the README "
-            "shows a DuckDB query.",
+            *about,
             "",
             "With pandas:",
             "",
@@ -310,7 +333,9 @@ def _table_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -
             f'rows = pd.read_parquet("{data}")',
             "```",
             "",
-            f"Or as JSON or CSV, filtered by feature, collection or period: {rows}?feature=<feature_id>",
+            f"Or as JSON or CSV, filtered by feature, collection or period: {rows}?feature=<feature_id>"
+            if declared.role("feature")
+            else f"Or as JSON or CSV: {rows}",
             "",
             f"The licence, providers and columns are in the STAC collection: "
             f"{absolute_url(request, services.collection_path(dataset_id))}",

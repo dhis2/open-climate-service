@@ -1,0 +1,81 @@
+# The built-in aggregation schema: values aggregated per feature and period, with how each was
+# aggregated. The pipeline table destination writes it, and a table dataset that names no schema
+# gets it. See "Table schemas" in docs/managed_data_api_guide.md.
+- id: aggregation
+  name: Aggregated values per feature and period
+  description: Values aggregated per feature and period, with how each was aggregated.
+  columns:
+    - name: collection_id
+      type: string
+      nullable: false
+      description: Id of the feature collection the value is reported on; joins to its GeoParquet.
+    - name: feature_id
+      type: string
+      required: true
+      nullable: false
+      description: Id of the feature, its collection's identifier property; joins to the feature collection.
+    - name: feature_name
+      type: string
+      description: Name of the feature when the value was written.
+    - name: dataset_id
+      type: string
+      nullable: false
+      description: Id of this table dataset.
+    - name: period_start
+      type: date
+      required: true
+      nullable: false
+      description: First day of the period the value is for.
+    - name: class
+      type: string
+      description: Category a per-class value belongs to, empty for a value without one.
+    - name: reducer
+      type: string
+      description: How the values within the feature were combined, e.g. mean or sum.
+    - name: weights
+      type: string
+      description: Dataset the values were weighted by, e.g. population, empty for unweighted ones.
+    - name: value
+      type: double
+      required: true
+      description: The value, empty when the feature has no valid data for the period.
+    - name: coverage
+      type: double
+      description: Fraction of the feature, from 0 to 1, with valid data behind the value.
+    - name: unit
+      type: string
+      description: Unit of the value.
+    - name: reference_time
+      type: timestamp
+      description: When the forecast the value comes from was issued.
+    - name: lead_time
+      type: duration
+      description: Time from the forecast's reference time to the period, in seconds.
+    - name: member
+      type: int32
+      description: Ensemble member of the forecast the value comes from.
+    - name: collection_version
+      type: string
+      description: Version of the feature collection the value was computed for.
+  key:
+    - collection_id
+    - collection_version
+    - feature_id
+    - dataset_id
+    - period_start
+    - class
+    - reducer
+    - weights
+    - reference_time
+    - lead_time
+    - member
+  roles:
+    dataset: dataset_id
+    collection: collection_id
+    collection_version: collection_version
+    feature: feature_id
+    feature_name: feature_name
+    period: period_start
+    values: [value]
+    unit: unit
+    coverage: coverage
