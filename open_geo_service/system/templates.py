@@ -534,7 +534,7 @@ TABLE_PREVIEW_ROWS = 10
 def _table_view(dataset_id: str) -> dict[str, Any] | None:
     """Each feature's latest value, by feature name, for a table dataset's page.
 
-    None for a table whose schema has no feature, period or value role: it has no latest value
+    None for a table without columns representing the feature, the period and a value: it has no latest value
     per feature. A table with several value columns shows its first.
     """
     from open_geo_service.tables import store
@@ -543,13 +543,20 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
     if record is None:
         return None
     declared = store.schema_of(record)
-    feature, period = declared.role("feature"), declared.role("period")
+    feature, period = declared.represented_by("feature"), declared.represented_by("period")
     latest = store.latest_values(record, TABLE_PREVIEW_ROWS)
     if latest is None or feature is None or period is None or not declared.values or latest.row_count == 0:
         return None
-    value, name, coverage = declared.values[0], declared.role("feature_name"), declared.role("coverage")
+    value, name, coverage = (
+        declared.values[0],
+        declared.represented_by("feature_name"),
+        declared.represented_by("coverage"),
+    )
     # What tells a feature's values for one period apart: the key columns other than its feature and period.
-    located = {declared.role(role) for role in ("dataset", "collection", "collection_version", "feature", "period")}
+    located = {
+        declared.represented_by(meaning)
+        for meaning in ("dataset", "collection", "collection_version", "feature", "period")
+    }
     series_columns = [column for column in declared.key if column not in located]
     preview = latest.rows.to_pylist()
     series = {_series_label(row, series_columns) for row in preview}

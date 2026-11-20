@@ -115,7 +115,7 @@ class TableSources:
     def description(self, record: ArtifactRecord) -> str:
         """What the table holds and what it was computed from, for a table without a template's own prose.
 
-        What it holds comes from its schema's roles (`TableSchema.holds`).
+        What it holds comes from what its columns represent (`TableSchema.holds`).
         """
         from open_geo_service.tables.store import schema_of
 

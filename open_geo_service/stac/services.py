@@ -533,8 +533,8 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
     A table document, as for a feature collection, with no geometry: `table:columns` from the
     table's schema, each with its description and the value columns with their unit, and the file
     itself as the `data` asset. The spatial extent is the bounds of the feature collections the
-    values are reported on, and the temporal one the first and last period, as the schema's roles
-    provide them. A computed table has no
+    values are reported on, and the temporal one the first and last period, as the schema's columns
+    represent them. A computed table has no
     template, so its licence and providers are its sources' (`tables.sources`); `derived_from`
     links name those sources and `via` links the pages their data came from.
     """
@@ -638,7 +638,7 @@ def _table_dataset_columns(artifact: ArtifactRecord) -> list[dict[str, str]]:
         # Only `written_at` is not declared: the store adds it to every table.
         description = described.description if described is not None else WRITTEN_AT_DESCRIPTION
         unit = described.unit if described is not None else None
-        if field.name in declared.values and declared.role("unit"):
+        if field.name in declared.values and declared.represented_by("unit"):
             unit = artifact.units
         if description:
             column["description"] = description

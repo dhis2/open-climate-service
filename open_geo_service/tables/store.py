@@ -1,7 +1,7 @@
 """The table store: a table dataset's current rows, one Parquet file per dataset (CLIM-1553).
 
 A table's rows follow its schema (`tables.schemas`, CLIM-1971): the columns it declares, the key
-that says which stored row a write replaces, and roles that add rules, such as feature ids checked
+that says which stored row a write replaces, and what columns represent, which adds rules: feature ids checked
 against their collection and periods stored as their first day. The dataset's record names its schema.
 
 One folder per table dataset under `config.get_tables_root`, holding the dataset's one file of
@@ -117,7 +117,7 @@ def write_rows(
         merged = _merged(_read_file(existing, declared), table, declared, collection_id, period_type)
         written = _write_file(_dataset_root(dataset_id), merged, stamp)
         try:
-            unit_column = declared.role("unit")
+            unit_column = declared.represented_by("unit")
             units = table.column(unit_column).drop_null().unique().to_pylist() if unit_column else []
             record = ArtifactRecord(
                 artifact_id=str(uuid4()),
@@ -197,10 +197,10 @@ def check_rows(
     shares one `written_at`, now unless given. Rows that repeat a key are refused, and so is a
     dataset id a raster or feature collection already holds, so the two never share a listing.
 
-    The schema's roles add rules (docs/managed_data_api_guide.md, Table schemas):
+    What the schema's columns represent adds rules (docs/managed_data_api_guide.md, Table schemas):
 
     - `dataset` and `collection` are filled from *dataset_id* and *collection_id*; a row naming others is refused.
-    - `feature` must be a feature of the registered *collection_id*, which a schema with the role requires.
+    - `feature` must be a feature of the registered *collection_id*, which a schema with a feature column requires.
     - `period` is stored as the first day of the period that contains it (`start_of_period`). A
       dataset has one period type, the first written; a *period_type* that differs is refused,
       None keeps it. The table carries it as Parquet metadata (`PERIOD_TYPE_KEY`).
@@ -217,10 +217,10 @@ def check_rows(
     declared = _dataset_schema(dataset_id, existing, schema)
     _require_same_sources(dataset_id, existing, provenance)
     fixed: dict[str, str] = {}
-    if dataset_column := declared.role("dataset"):
+    if dataset_column := declared.represented_by("dataset"):
         fixed[dataset_column] = dataset_id
     feature_ids: set[str] | None = None
-    if collection_column := declared.role("collection"):
+    if collection_column := declared.represented_by("collection"):
         if collection_id is None:
             raise ValueError(f"table schema '{declared.id}' reports on features; name their feature collection")
         _require_id(collection_id, "feature collection")
@@ -228,12 +228,12 @@ def check_rows(
         feature_ids = _collection_feature_ids(collection_id)
     elif collection_id is not None:
         raise ValueError(f"table schema '{declared.id}' has no feature column, so rows report on no collection")
-    period_column = declared.role("period")
+    period_column = declared.represented_by("period")
     if period_column:
         period_type = _dataset_period_type(dataset_id, period_type)
     elif period_type is not None:
         raise ValueError(f"table schema '{declared.id}' has no period column, so it has no period type")
-    feature_column, unit_column = declared.role("feature"), declared.role("unit")
+    feature_column, unit_column = declared.represented_by("feature"), declared.represented_by("unit")
     unit = existing.units if existing else None
     stamp = _utc(written_at or datetime.now(UTC), "written_at")
     columns: dict[str, list[Any]] = {name: [] for name in declared.names}
@@ -284,19 +284,19 @@ def read_rows(
 ) -> pa.Table:
     """Return a table dataset's rows, filtered, in the order the file keeps them (`_order`).
 
-    *collection_id*, *feature_id*, *start* and *end* filter on the columns with those roles;
+    *collection_id*, *feature_id*, *start* and *end* filter on the columns representing them;
     *start* and *end* bound the period, inclusive. *equals* keeps rows whose named columns hold
-    the given values. A filter on a role or column the table's schema lacks raises ValueError.
+    the given values. A filter on a column the table's schema lacks raises ValueError.
     """
     declared = schema_of(record)
     conditions = []
-    for role, value in (("collection", collection_id), ("feature", feature_id)):
+    for meaning, value in (("collection", collection_id), ("feature", feature_id)):
         if value is not None:
-            conditions.append(pc.field(_role_column(declared, role)) == value)
+            conditions.append(pc.field(_column_representing(declared, meaning)) == value)
     if start is not None:
-        conditions.append(pc.field(_role_column(declared, "period")) >= start)
+        conditions.append(pc.field(_column_representing(declared, "period")) >= start)
     if end is not None:
-        conditions.append(pc.field(_role_column(declared, "period")) <= end)
+        conditions.append(pc.field(_column_representing(declared, "period")) <= end)
     for name, value in (equals or {}).items():
         if declared.column(name) is None:
             raise ValueError(f"table schema '{declared.id}' has no column '{name}'")
@@ -310,10 +310,10 @@ def read_rows(
     return dataset.to_table(filter=flt).sort_by(_order(declared))
 
 
-def _role_column(declared: TableSchema, role: str) -> str:
-    column = declared.role(role)
+def _column_representing(declared: TableSchema, meaning: str) -> str:
+    column = declared.represented_by(meaning)
     if column is None:
-        raise ValueError(f"table schema '{declared.id}' has no {role} column")
+        raise ValueError(f"table schema '{declared.id}' has no {meaning} column")
     return column
 
 
@@ -327,7 +327,7 @@ class FileSummary(NamedTuple):
 
 
 def summarize(record: ArtifactRecord) -> FileSummary:
-    """Count the dataset's rows and find the collections and periods they cover, as its roles allow.
+    """Count the dataset's rows and find the collections and periods they cover, where it has those columns.
 
     The row count and period range come from the Parquet footer, so no values are read; the
     collection ids from the dictionary of their column, one small index per row.
@@ -335,7 +335,7 @@ def summarize(record: ArtifactRecord) -> FileSummary:
     import pyarrow.parquet as pq
 
     declared = schema_of(record)
-    period_column, collection_column = declared.role("period"), declared.role("collection")
+    period_column, collection_column = declared.represented_by("period"), declared.represented_by("collection")
     row_count = 0
     collection_ids: set[str] = set()
     periods: list[date] = []
@@ -372,18 +372,18 @@ class LatestValues(NamedTuple):
 def latest_values(record: ArtifactRecord, limit: int) -> LatestValues | None:
     """Each feature's rows for the latest period it has a row for, ordered by feature name.
 
-    None for a table whose schema has no feature or no period role. Per feature, not the
+    None for a table without a feature or a period column. Per feature, not the
     dataset's last period: a feature whose newest value is older still has one. A feature with
     several values per period (per class, reducer or forecast) keeps them all. Whole rows are
     read for the first *limit* only; the latest periods are found from a few columns.
     """
     declared = schema_of(record)
-    collection, feature, period = (declared.role(role) for role in ("collection", "feature", "period"))
+    collection, feature, period = (declared.represented_by(meaning) for meaning in ("collection", "feature", "period"))
     if collection is None or feature is None or period is None:
         return None
     if not record.asset_paths:
         return LatestValues(declared.arrow.empty_table(), 0, [])
-    name = declared.role("feature_name")
+    name = declared.represented_by("feature_name")
     by_name = [*([(name, "ascending")] if name else []), (feature, "ascending")]
     dataset = pds.dataset(record.asset_paths, schema=declared.arrow, format="parquet")
     keys = [collection, feature]
@@ -411,10 +411,12 @@ def _order(declared: TableSchema) -> list[tuple[str, str]]:
     """How rows are stored and returned: by collection, feature and period, as the schema has them.
 
     A reader of the file then finds a feature's periods together. A schema with none of those
-    roles orders by its key.
+    columns orders by its key.
     """
-    roles = [column for role in ("collection", "feature", "period") if (column := declared.role(role))]
-    return [(name, "ascending") for name in roles or declared.key]
+    located = [
+        column for meaning in ("collection", "feature", "period") if (column := declared.represented_by(meaning))
+    ]
+    return [(name, "ascending") for name in located or declared.key]
 
 
 def _read_file(record: ArtifactRecord | None, declared: TableSchema) -> pa.Table | None:
@@ -430,12 +432,15 @@ def _merged(
     """The dataset's rows with *new* merged in: one row per key, the written one where they meet.
 
     A written row equal to the stored one in everything but `written_at` keeps the stored row, so
-    sending the same values again changes nothing. With a `collection_version` role, when every
+    sending the same values again changes nothing. With a column representing `collection_version`, when every
     written row names one version of the collection, the collection's rows of any other version
     are dropped, so values for two boundary versions never mix.
     """
     stored = existing.to_pylist() if existing is not None else []
-    version_column, collection_column = declared.role("collection_version"), declared.role("collection")
+    version_column, collection_column = (
+        declared.represented_by("collection_version"),
+        declared.represented_by("collection"),
+    )
     if version_column and collection_column:
         versions = set(new.column(version_column).to_pylist())
         if len(versions) == 1 and (version := next(iter(versions))) is not None:
@@ -525,19 +530,19 @@ _WHOLE_WORLD = CoverageSpatial(xmin=-180, ymin=-90, xmax=180, ymax=90)
 def _coverage(table: pa.Table, declared: TableSchema, period_type: str | None) -> ArtifactCoverage:
     """The period range of *table*'s rows, as period labels, and the extent of the collections they report on.
 
-    Each from its role: a table without a period role has no temporal extent, and one without a
-    collection role covers the whole world.
+    Each from the column representing it: a table without a period column has no temporal extent,
+    and one without a collection column covers the whole world.
     """
     from open_geo_service.features.services import registered_collections
 
     temporal = CoverageTemporal()
-    if period_column := declared.role("period"):
+    if period_column := declared.represented_by("period"):
         dates = table.column(period_column).unique().to_pylist()
         temporal = CoverageTemporal(
             start=period_label(min(dates), period_type), end=period_label(max(dates), period_type)
         )
     spatial = _WHOLE_WORLD
-    if collection_column := declared.role("collection"):
+    if collection_column := declared.represented_by("collection"):
         collections = registered_collections()
         boxes = [
             (record.coverage.spatial_wgs84 or record.coverage.spatial)
@@ -592,10 +597,10 @@ def _validated_row(row: object, *, index: int, schema: TableSchema, fixed: Mappi
         if value is None and not column.nullable:
             raise ValueError(f"row {index}: {column.name} must have a value")
         clean[column.name] = value
-    feature = schema.role("feature")
+    feature = schema.represented_by("feature")
     if feature and not clean[feature]:
         raise ValueError(f"row {index}: {feature} must be a non-empty string")
-    if coverage_column := schema.role("coverage"):
+    if coverage_column := schema.represented_by("coverage"):
         coverage = clean[coverage_column]
         if coverage is not None and not 0 <= coverage <= 1:
             raise ValueError(f"row {index}: {coverage_column} must be between 0 and 1, got {coverage}")

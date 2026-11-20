@@ -750,17 +750,20 @@ def test_a_period_ends_on_its_last_day(period_type: str | None, start: date, end
 
 
 @pytest.mark.parametrize(
-    ("change", "message"),
+    ("column", "message"),
     [
-        ({"roles": {"period": "day"}}, "role 'period' must name a declared date column"),
-        ({"roles": {"feature": "station"}}, "roles 'feature' and 'collection' go together"),
-        ({"key": ["station", "missing"]}, r"key columns it does not declare: \['missing'\]"),
-        ({"columns": [{"name": "written_at", "type": "timestamp"}]}, "declares 'written_at'"),
+        ({"name": "day", "type": "string", "represents": "period"}, "'day' represents period, so it must be a date"),
+        ({"name": "day", "type": "date", "represents": "day"}, "'day' represents unknown 'day'"),
+        (
+            {"name": "site", "type": "string", "represents": "feature"},
+            "representing feature needs one representing collection",
+        ),
+        ({"name": "written_at", "type": "timestamp"}, "declares 'written_at'"),
     ],
 )
-def test_a_schema_that_cannot_hold_its_rules_is_refused_naming_its_file(change: dict[str, Any], message: str) -> None:
+def test_a_schema_that_cannot_hold_its_rules_is_refused_naming_its_file(column: dict[str, Any], message: str) -> None:
     from open_geo_service.tables.schemas import parse_schema
 
-    declared = {"id": "stations", "columns": [{"name": "station", "type": "string"}], "key": ["station"], **change}
+    declared = {"id": "stations", "columns": [{"name": "station", "type": "string"}, column], "key": ["station"]}
     with pytest.raises(ValueError, match=f"table schema 'stations' in stations.yaml.*{message}"):
         parse_schema(declared, source="stations.yaml")

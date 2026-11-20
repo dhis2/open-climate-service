@@ -250,7 +250,7 @@ def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str,
 
     join = _join_example(data, summary.collection_ids, declared, request)
     if join:
-        collection, feature = declared.role("collection"), declared.role("feature")
+        collection, feature = declared.represented_by("collection"), declared.represented_by("feature")
         lines += [
             "",
             "## Joining to the features",
@@ -268,19 +268,24 @@ def _table_readme(dataset_id: str, artifact: ArtifactRecord, template: dict[str,
 def _join_example(data: str, collection_ids: list[str], declared: TableSchema, request: Request) -> list[str]:
     """A DuckDB query joining the table to the first published feature collection it reports on.
 
-    None for a table whose schema has no feature role: its rows report on no collection.
+    None for a table without a column representing the feature: its rows report on no collection.
     """
     from open_geo_service.features.services import registered_collections
 
-    collection, feature = declared.role("collection"), declared.role("feature")
+    collection, feature = declared.represented_by("collection"), declared.represented_by("feature")
     if collection is None or feature is None:
         return []
     shown = [
         f"t.{_sql_identifier(name)}"
-        for name in (feature, declared.role("feature_name"), declared.role("period"), *declared.values)
+        for name in (
+            feature,
+            declared.represented_by("feature_name"),
+            declared.represented_by("period"),
+            *declared.values,
+        )
         if name
     ]
-    order = ", ".join(f"t.{_sql_identifier(name)}" for name in (feature, declared.role("period")) if name)
+    order = ", ".join(f"t.{_sql_identifier(name)}" for name in (feature, declared.represented_by("period")) if name)
     published = services._eligible_artifacts_by_dataset()
     collections = registered_collections()
     for collection_id in collection_ids:
@@ -313,7 +318,7 @@ def _table_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -
     about = [f"- The rows are {declared.holds(artifact.period_type)}, one per key: {key}."]
     if declared.values:
         about.append(f"- The values are in {', '.join(f'`{name}`' for name in declared.values)}.")
-    if (collection := declared.role("collection")) and (feature := declared.role("feature")):
+    if (collection := declared.represented_by("collection")) and (feature := declared.represented_by("feature")):
         about.append(
             f"- Join it to the feature collection's GeoParquet on `{collection}` and `{feature}`; the README "
             "shows a DuckDB query."
@@ -334,7 +339,7 @@ def _table_agents(dataset_id: str, artifact: ArtifactRecord, request: Request) -
             "```",
             "",
             f"Or as JSON or CSV, filtered by feature, collection or period: {rows}?feature=<feature_id>"
-            if declared.role("feature")
+            if declared.represented_by("feature")
             else f"Or as JSON or CSV: {rows}",
             "",
             f"The licence, providers and columns are in the STAC collection: "

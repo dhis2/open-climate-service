@@ -1,14 +1,14 @@
-"""Table schemas: the columns, key and roles a table dataset declares (CLIM-1971).
+"""Table schemas: the columns and key a table dataset declares, and what columns represent (CLIM-1971).
 
 A table has no fixed schema. A schema file in a `tables/schemas/` folder declares one: its
-columns, the key columns that say which stored row a write replaces, and optional roles that
-tell the store and its readers which column holds the feature, the period, the values and so on.
-Files are read from core (`open_geo_service/plugins/tables/schemas/`), then installed plugin
+columns, the key columns that say which stored row a write replaces, and what a column
+represents, where the store and its readers need to know: the feature, the period, a value and
+so on. Files are read from core (`open_geo_service/plugins/tables/schemas/`), then installed plugin
 packages, then the instance `plugins_dir`; a later schema with the same id replaces an earlier one.
 
 The built-in `aggregation` schema, values aggregated per feature and period, is what the
 pipeline destination writes and what a table that names no schema gets. Core holds no schema
-of its own in code: the rules it applies come from roles, so any schema declaring a role gets them.
+of its own in code: its rules apply to what a column represents, whatever the column is called.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ TYPES: dict[str, pa.DataType] = {
 }
 """The column types a schema can declare, and how each is stored."""
 
-_SINGLE_ROLES = {
+_REPRESENTED_ONCE = {
     "dataset": ("string",),
     "collection": ("string",),
     "collection_version": ("string",),
@@ -59,7 +59,7 @@ _SINGLE_ROLES = {
     "unit": ("string",),
     "coverage": ("double",),
 }
-"""Roles naming one column, with the types that column may have."""
+"""What at most one column represents, with the types that column may have. Any number represent a value."""
 
 _NUMBER_TYPES = ("double", "int32", "int64")
 
@@ -76,21 +76,23 @@ class Column:
     """A row must name the column."""
     nullable: bool = True
     """The column may hold no value."""
+    represents: str | None = None
+    """What the column holds, for the rules and readers that need it: `feature`, `period`, `value`, …"""
 
 
 @dataclass(frozen=True)
 class TableSchema:
-    """A table's columns, key and roles, as one schema file declares them."""
+    """A table's columns, key and what its columns represent, as one schema file declares them."""
 
     id: str
     name: str
     description: str
     columns: tuple[Column, ...]
     key: tuple[str, ...]
-    roles: dict[str, str]
-    """Each single role and the column that holds it."""
+    represented: dict[str, str]
+    """What a column represents, other than a value, and that column."""
     values: tuple[str, ...]
-    """The value columns."""
+    """The columns that represent a value."""
 
     @property
     def names(self) -> list[str]:
@@ -105,18 +107,18 @@ class TableSchema:
     def column(self, name: str) -> Column | None:
         return next((column for column in self.columns if column.name == name), None)
 
-    def role(self, role: str) -> str | None:
-        """The column holding *role*, or None when the schema does not declare it."""
-        return self.roles.get(role)
+    def represented_by(self, meaning: str) -> str | None:
+        """The column that represents *meaning*, such as `period`, or None when no column does."""
+        return self.represented.get(meaning)
 
     def holds(self, period_type: str | None) -> str:
-        """What a row holds, from the feature and period roles: 'values per feature and monthly period'."""
+        """What a row holds, from its feature and period columns: 'values per feature and monthly period'."""
         period = f"{period_type} period" if period_type else "period"
-        if self.role("feature") and self.role("period"):
+        if self.represented_by("feature") and self.represented_by("period"):
             return f"values per feature and {period}"
-        if self.role("feature"):
+        if self.represented_by("feature"):
             return "values per feature"
-        if self.role("period"):
+        if self.represented_by("period"):
             return f"values per {period}"
         return "rows of values"
 
@@ -193,43 +195,45 @@ def parse_schema(declared: object, *, source: str) -> TableSchema:
         raise ValueError(f"{where} declares a column more than once")
     if WRITTEN_AT in names:
         raise ValueError(f"{where} declares '{WRITTEN_AT}', which the store adds to every table")
-    types = {column.name: column.type for column in columns}
     key = tuple(str(name) for name in _list(declared, "key", where))
     if unknown := sorted(set(key) - set(names)):
         raise ValueError(f"{where} has key columns it does not declare: {unknown}")
 
-    roles_declared = declared.get("roles") or {}
-    if not isinstance(roles_declared, dict):
-        raise ValueError(f"{where} has 'roles' that is not a mapping")
-    roles: dict[str, str] = {}
-    values: tuple[str, ...] = ()
-    for role, column in roles_declared.items():
-        if role == "values":
-            if not isinstance(column, list) or not column:
-                raise ValueError(f"{where}: role 'values' must list one or more columns")
-            values = tuple(str(name) for name in column)
-            for name in values:
-                if types.get(name) not in _NUMBER_TYPES:
-                    raise ValueError(f"{where}: value column '{name}' must be a declared number column")
+    if unknown := sorted(set(declared) - {"id", "name", "description", "columns", "key"}):
+        raise ValueError(f"{where} has unknown fields {unknown}")
+    represented: dict[str, str] = {}
+    values: list[str] = []
+    for column in columns:
+        meaning = column.represents
+        if meaning is None:
             continue
-        if role not in _SINGLE_ROLES:
-            raise ValueError(f"{where} has unknown role '{role}'; roles are {sorted([*_SINGLE_ROLES, 'values'])}")
-        if types.get(column) not in _SINGLE_ROLES[role]:
-            raise ValueError(f"{where}: role '{role}' must name a declared {' or '.join(_SINGLE_ROLES[role])} column")
-        roles[role] = str(column)
+        if meaning == "value":
+            if column.type not in _NUMBER_TYPES:
+                raise ValueError(f"{where}: column '{column.name}' represents a value, so it must be a number")
+            values.append(column.name)
+            continue
+        if meaning not in _REPRESENTED_ONCE:
+            known = sorted([*_REPRESENTED_ONCE, "value"])
+            raise ValueError(f"{where}: column '{column.name}' represents unknown '{meaning}'; known are {known}")
+        if column.type not in _REPRESENTED_ONCE[meaning]:
+            kinds = " or ".join(_REPRESENTED_ONCE[meaning])
+            raise ValueError(f"{where}: column '{column.name}' represents {meaning}, so it must be a {kinds}")
+        if meaning in represented:
+            raise ValueError(f"{where}: columns '{represented[meaning]}' and '{column.name}' both represent {meaning}")
+        represented[meaning] = column.name
     # A feature is checked against its collection, and a collection version is one of a collection's.
-    if ("feature" in roles) != ("collection" in roles):
-        raise ValueError(f"{where}: roles 'feature' and 'collection' go together")
-    if "collection_version" in roles and "collection" not in roles:
-        raise ValueError(f"{where}: role 'collection_version' needs role 'collection'")
-    if ("coverage" in roles or "unit" in roles) and not values:
-        raise ValueError(f"{where}: roles 'coverage' and 'unit' describe value columns; declare role 'values'")
+    if ("feature" in represented) != ("collection" in represented):
+        raise ValueError(f"{where}: a column representing feature needs one representing collection, and back")
+    if "collection_version" in represented and "collection" not in represented:
+        raise ValueError(f"{where}: a column representing collection_version needs one representing collection")
+    if ("coverage" in represented or "unit" in represented) and not values:
+        raise ValueError(f"{where}: coverage and unit describe values; mark the value columns 'represents: value'")
 
     name = declared.get("name", schema_id)
     description = declared.get("description", "")
     if not isinstance(name, str) or not isinstance(description, str):
         raise ValueError(f"{where} has a 'name' or 'description' that is not text")
-    return TableSchema(schema_id, name, description, columns, key, roles, values)
+    return TableSchema(schema_id, name, description, columns, key, represented, tuple(values))
 
 
 def _list(declared: dict[str, Any], field: str, where: str) -> list[Any]:
@@ -247,7 +251,7 @@ def _column(declared: object, where: str) -> Column:
         raise ValueError(f"{where} has a column without a name")
     if kind not in TYPES:
         raise ValueError(f"{where}: column '{name}' has type {kind!r}; types are {sorted(TYPES)}")
-    unknown = sorted(set(declared) - {"name", "type", "description", "unit", "required", "nullable"})
+    unknown = sorted(set(declared) - {"name", "type", "description", "unit", "required", "nullable", "represents"})
     if unknown:
         raise ValueError(f"{where}: column '{name}' has unknown fields {unknown}")
     return Column(
@@ -257,4 +261,5 @@ def _column(declared: object, where: str) -> Column:
         unit=declared.get("unit"),
         required=bool(declared.get("required", False)),
         nullable=bool(declared.get("nullable", True)),
+        represents=str(declared["represents"]) if declared.get("represents") is not None else None,
     )
