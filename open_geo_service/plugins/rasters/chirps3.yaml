@@ -25,20 +25,19 @@
   resolution: 5 km x 5 km
   source: CHIRPS v3, via dynamical.org
   # The page of the mirror the data is read from, as for the other mirrored datasets; CHC, where
-  # it originates, is the producer below. Separating the origin from the host is CLIM-1948.
+  # it originates, is the producer below.
   source_url: https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/
   license: CC-BY-4.0
   providers:
     - name: UCSB Climate Hazards Center
       url: https://www.chc.ucsb.edu/data/chirps
       roles: [producer, licensor]
-    # The mirror the data is read from. STAC names this instance as the only host, so it drops
-    # the host role here; the description says what dynamical.org hosts.
+    # The mirror the data is read from. The STAC publisher drops the host role, as this instance
+    # is the only host; the description says what dynamical.org hosts.
     - name: dynamical.org
       url: https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/
       description: >-
-        Mirror host: republishes CHIRPS3 final daily as an Icechunk Zarr store on AWS Open Data,
-        read from https://dynamical-ucsb-chc-chirps.s3.us-west-2.amazonaws.com/ucsb-chc-chirps-analysis-final/v0.1.0.icechunk
+        Mirror host: republishes CHIRPS3 final daily as an Icechunk Zarr store on AWS Open Data.
       roles: [processor, host]
   display:
     colormap: blues
@@ -86,7 +85,7 @@
       url: https://dynamical.org/catalog/ucsb-chc-chirps-analysis-preliminary/
       description: >-
         Mirror host: republishes CHIRPS3 preliminary daily as an Icechunk Zarr store on AWS Open
-        Data, read from https://dynamical-ucsb-chc-chirps.s3.us-west-2.amazonaws.com/ucsb-chc-chirps-analysis-preliminary/v0.1.0.icechunk
+        Data.
       roles: [processor, host]
   display:
     colormap: blues
@@ -134,8 +133,7 @@
     - name: dynamical.org
       url: https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/
       description: >-
-        Mirror host: republishes CHIRPS3 final daily as an Icechunk Zarr store on AWS Open Data,
-        read from https://dynamical-ucsb-chc-chirps.s3.us-west-2.amazonaws.com/ucsb-chc-chirps-analysis-final/v0.1.0.icechunk
+        Mirror host: republishes CHIRPS3 final daily as an Icechunk Zarr store on AWS Open Data.
       roles: [processor, host]
   display:
     colormap: blues

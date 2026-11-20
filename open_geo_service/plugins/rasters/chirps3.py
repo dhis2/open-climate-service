@@ -2,8 +2,7 @@
 
 dynamical.org republishes the CHC final (``rnl``) and preliminary (``sat``) daily products as
 Icechunk stores on AWS Open Data, updated daily, with no lag behind CHC. A year of an extent is
-one chunk read per 3 degree tile, where reading CHC's GeoTIFFs took dozens of range requests per
-day and ran into CHC's concurrent-request limit (CLIM-1946). See docs/built_in_datasets.md.
+one chunk read per 3 degree tile. See docs/built_in_datasets.md.
 """
 
 from __future__ import annotations

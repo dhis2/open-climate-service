@@ -18,8 +18,6 @@ See **[ERA5-Land datasets](era5_land_datasets.md)** for the full reference, incl
 
 All three CHIRPS3 datasets are read from [dynamical.org](https://dynamical.org/catalog/ucsb-chc-chirps-analysis-final/), which republishes the Climate Hazards Center's final and preliminary daily products as Icechunk Zarr stores on AWS Open Data. It updates daily and adds no delay to CHC's own releases. The values are CHC's, rounded in their least significant bits for compression: they differ from CHC's GeoTIFFs by well under 0.1 mm.
 
-CHC's server was the source before. It limits concurrent requests, and reading a day from its GeoTIFFs takes dozens of requests, so ingestions failed part-way through and risked an IP ban. From dynamical.org, a year of an extent is read in one request per 3° tile.
-
 ---
 
 ## CHIRPS v3 — daily precipitation
