@@ -240,8 +240,7 @@ def test_the_dataset_page_shows_each_features_latest_value(client: TestClient) -
     assert "UCSB Climate Hazards Center, Overture Maps" in page
     # No template to take prose from: what it holds and what it was computed from, as in STAC.
     description = (
-        "Precipitation by district: one value per feature and monthly period, "
-        "computed from Precipitation and Districts."
+        "Precipitation by district: values per feature and monthly period, computed from Precipitation and Districts."
     )
     assert description in page
     assert client.get("/stac/precip_districts/collection.json").json()["description"] == description
@@ -270,12 +269,18 @@ def test_the_page_shows_at_most_ten_latest_values(client: TestClient) -> None:
     store.write_rows(
         dataset_id="precip_districts",
         collection_id="districts",
-        rows=[_row(feature, 1.0, reducer=f"r{index:02d}") for index in range(12) for feature in ("D1", "D2")],
+        rows=[
+            _row(feature, 1.0, reducer=f"r{index:02d}", period_start=period)
+            for index in range(12)
+            for feature, period in (("D1", "2026-02-01"), ("D2", "2026-01-01"))
+        ],
         period_type="monthly",
     )
     page = client.get("/datasets/precip_districts", params={"f": "html"}).text
-    assert page.count('<td title="D') == 10
+    assert page.count('<td title="D1') == 10
     assert "14 more latest values." in page
+    # The rows shown share a period, but D2's latest is older, so the heading names none.
+    assert "Latest value of each feature</h3>" in page and ">Period</th>" in page
 
 
 def test_rows_computed_from_other_datasets_are_refused() -> None:

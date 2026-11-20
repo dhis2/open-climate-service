@@ -335,37 +335,75 @@ class FileSummary(NamedTuple):
 
 
 def summarize(record: ArtifactRecord) -> FileSummary:
-    """Count the dataset's rows and find the collections and periods they cover, reading two columns."""
-    if not record.asset_paths:
+    """Count the dataset's rows and find the collections and periods they cover.
+
+    The row count and period range come from the Parquet footer, so no values are read; the
+    collection ids from the dictionary of their column, one small index per row.
+    """
+    import pyarrow.parquet as pq
+
+    row_count = 0
+    collection_ids: set[str] = set()
+    periods: list[date] = []
+    for path in record.asset_paths:
+        metadata = pq.ParquetFile(path).metadata
+        row_count += metadata.num_rows
+        column = metadata.schema.names.index("period_start")
+        for group in range(metadata.num_row_groups):
+            statistics = metadata.row_group(group).column(column).statistics
+            if statistics is not None and statistics.has_min_max:
+                periods += [statistics.min, statistics.max]
+        ids = pq.read_table(path, columns=["collection_id"], read_dictionary=["collection_id"]).column("collection_id")
+        collection_ids.update(str(value) for chunk in ids.chunks for value in chunk.dictionary.to_pylist())
+    if row_count == 0:
         return FileSummary(0, [], None, None)
-    table = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table(
-        columns=["collection_id", "period_start"]
-    )
-    if table.num_rows == 0:
-        return FileSummary(0, [], None, None)
-    periods = table.column("period_start").unique().to_pylist()
-    return FileSummary(
-        row_count=table.num_rows,
-        collection_ids=sorted(set(table.column("collection_id").to_pylist())),
-        first_period=min(periods),
-        last_period=max(periods),
-    )
+    return FileSummary(row_count, sorted(collection_ids), min(periods), max(periods))
 
 
-def latest_values(record: ArtifactRecord) -> pa.Table:
+class LatestValues(NamedTuple):
+    """Each feature's rows for the latest period it has a row for, for a table dataset's page."""
+
+    rows: pa.Table
+    """The first rows by feature name, at most the limit asked for."""
+    row_count: int
+    """The latest rows of every feature."""
+    periods: list[date]
+    """Every feature's latest period, each once."""
+
+
+def latest_values(record: ArtifactRecord, limit: int) -> LatestValues:
     """Each feature's rows for the latest period it has a row for, ordered by feature name.
 
     Per feature, not the dataset's last period: a feature whose newest value is older still has one.
     A feature with several values per period (per class, reducer or forecast) keeps them all.
+    Whole rows are read for the first *limit* only; the latest periods are found from four columns.
     """
     if not record.asset_paths:
-        return SCHEMA.empty_table()
-    table = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet").to_table()
+        return LatestValues(SCHEMA.empty_table(), 0, [])
+    dataset = pds.dataset(record.asset_paths, schema=SCHEMA, format="parquet")
     keys = ["collection_id", "feature_id"]
-    newest = table.group_by(keys).aggregate([("period_start", "max")])
-    joined = table.join(newest, keys=keys)
-    latest = joined.filter(pc.field("period_start") == pc.field("period_start_max")).drop_columns(["period_start_max"])
-    return latest.sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
+    narrow = dataset.to_table(columns=[*keys, "feature_name", "period_start"])
+    newest = narrow.group_by(keys).aggregate([("period_start", "max")])
+    latest = (
+        narrow.join(newest, keys=keys)
+        .filter(pc.field("period_start") == pc.field("period_start_max"))
+        .sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
+    )
+    shown_keys = [*keys, "period_start_max"]
+    shown = latest.slice(0, limit).select(shown_keys).group_by(shown_keys).aggregate([])
+    candidates = dataset.to_table(
+        filter=pc.field("feature_id").isin(shown.column("feature_id"))
+        & pc.field("period_start").isin(shown.column("period_start_max"))
+    )
+    # A feature's rows of another shown feature's period are not its latest.
+    rows = (
+        candidates.join(shown, keys=keys)
+        .filter(pc.field("period_start") == pc.field("period_start_max"))
+        .drop_columns(["period_start_max"])
+        .sort_by([("feature_name", "ascending"), ("feature_id", "ascending")])
+        .slice(0, limit)
+    )
+    return LatestValues(rows, latest.num_rows, newest.column("period_start_max").unique().to_pylist())
 
 
 _ORDER = [("collection_id", "ascending"), ("feature_id", "ascending"), ("period_start", "ascending")]

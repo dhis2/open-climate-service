@@ -541,10 +541,11 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
     summary = store.summarize(record)
     if summary.last_period is None:
         return None
-    latest = store.latest_values(record)
-    preview = latest.slice(0, TABLE_PREVIEW_ROWS).to_pylist()
+    latest = store.latest_values(record, TABLE_PREVIEW_ROWS)
+    preview = latest.rows.to_pylist()
     series = {_series_label(row) for row in preview}
-    periods = {row["period_start"] for row in preview}
+    # Every feature's, not only the rows shown: the heading names a period all features share.
+    periods = latest.periods
     return {
         "row_count": summary.row_count,
         "preview": [
@@ -558,11 +559,11 @@ def _table_view(dataset_id: str) -> dict[str, Any] | None:
             }
             for row in preview
         ],
-        "more": max(latest.num_rows - TABLE_PREVIEW_ROWS, 0),
+        "more": max(latest.row_count - TABLE_PREVIEW_ROWS, 0),
         # A column only where it tells the rows apart, or says something: one period or one
         # reducer for every row goes in the heading, and a pipeline's rows have no coverage.
         "has_period": len(periods) > 1,
-        "common_period": store.period_label(next(iter(periods)), record.period_type) if len(periods) == 1 else "",
+        "common_period": store.period_label(periods[0], record.period_type) if len(periods) == 1 else "",
         "has_series": len(series) > 1,
         "common_series": next(iter(series)) if len(series) == 1 else "",
         "has_coverage": any(row["coverage"] is not None for row in preview),

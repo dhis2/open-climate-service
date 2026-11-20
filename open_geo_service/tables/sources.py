@@ -120,7 +120,7 @@ class TableSources:
         if names:
             joined = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
             computed = f", computed from {joined}"
-        return f"{record.dataset_name}: one value per feature and {period}{computed}."
+        return f"{record.dataset_name}: values per feature and {period}{computed}."
 
     def template(self) -> dict[str, Any]:
         """The table's metadata in a template's shape, for the pages that read one.
