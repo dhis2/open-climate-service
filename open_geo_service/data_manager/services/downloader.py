@@ -5,12 +5,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import xarray as xr
 import xproj  # noqa: F401  # type: ignore[import-untyped]  # pyright: ignore[reportUnusedImport]
 import zarr
 from geozarr_toolkit import MultiscalesConventionMetadata, create_geozarr_attrs
 from topozarr import CoarseningMethod
 from topozarr.coarsen import create_pyramid
+from xarray.backends.zarr import FillValueCoder
 
 from open_geo_service import config as api_config
 from open_geo_service.shared.crs import store_crs_attrs
@@ -705,6 +707,10 @@ def write_to_icechunk_store(
         # hotspot raster, where 0 is the no-data background) would have no sentinel at all.
         # Pin the fill_value to 0 for integer-coded variables (Pyramid.write applies it
         # across all levels); float variables already use NaN as both data and fill.
+        # Only the source's own fill values are declared to readers below: 0 can be a class in
+        # categorical data, so a pinned 0 stays a storage default until a template can declare
+        # its no-data code (CLIM-1450).
+        declared_fill_values = dict(pyramid.fill_values)
         for var_name, var_da in ds.data_vars.items():
             if var_da.dtype.kind != "f" and pyramid.fill_values.get(str(var_name)) is None:
                 pyramid.fill_values[str(var_name)] = 0
@@ -723,7 +729,10 @@ def write_to_icechunk_store(
         # consolidated metadata, which these stores do not have. So each level also gets the
         # GDAL GeoTransform, taken from its own layout entry (one copied from level 0 would
         # place every overview at twice its true size), and a CF `grid_mapping` on its data
-        # arrays, through which GDAL finds the CRS.
+        # arrays, through which GDAL finds the CRS. The data arrays also get the source's fill
+        # value as CF `_FillValue`: topozarr sets only Zarr's `fill_value`, and xarray reads a
+        # Zarr v3 array's missing value from `_FillValue` alone, so without it no level has
+        # one, and the STAC band no `nodata` (CLIM-1974).
         root = zarr.open_group(session.store, mode="a")
         if geometry is not None:
             write_gdal_geotransform(root, geometry["transform"])
@@ -738,10 +747,14 @@ def write_to_icechunk_store(
             transform = entry.get("spatial:transform")
             if geometry is not None and isinstance(transform, list):
                 write_gdal_geotransform(level_group, cast(list[float], transform))
-            if "spatial_ref" in level_group:
-                for _, array in level_group.arrays():
-                    if {x_dim, y_dim} <= set(_dimension_names(array)):
-                        array.attrs["grid_mapping"] = "spatial_ref"
+            for name, array in level_group.arrays():
+                if not {x_dim, y_dim} <= set(_dimension_names(array)):
+                    continue
+                if "spatial_ref" in level_group:
+                    array.attrs["grid_mapping"] = "spatial_ref"
+                fill = declared_fill_values.get(name)
+                if fill is not None:
+                    array.attrs["_FillValue"] = FillValueCoder.encode(fill, np.dtype(array.dtype))
 
         if t_dim is not None:
             _write_root_time_coordinate(session.store, ds, time_dim=t_dim)
