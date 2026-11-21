@@ -182,6 +182,11 @@ def _get_catalog_id() -> str:
     return api_config.get_id()
 
 
+def _stac_datetime(value: datetime) -> str:
+    """An instant as STAC writes it: RFC 3339, with `Z` for UTC."""
+    return value.isoformat().replace("+00:00", "Z")
+
+
 def build_catalog(request: Request) -> dict[str, object]:
     """Build the STAC catalog document."""
     self_href = self_url(request)
@@ -193,7 +198,8 @@ def build_catalog(request: Request) -> dict[str, object]:
         {"rel": "describedby", "href": "./README.md", "type": MARKDOWN_MEDIA_TYPE},
         {"rel": "agents", "href": "./AGENTS.md", "type": MARKDOWN_MEDIA_TYPE},
     ]
-    for dataset_id, artifact in _eligible_artifacts_by_dataset().items():
+    artifacts = _eligible_artifacts_by_dataset()
+    for dataset_id, artifact in artifacts.items():
         links.append(
             {
                 "rel": "child",
@@ -210,6 +216,9 @@ def build_catalog(request: Request) -> dict[str, object]:
         # The instance's own name, as in the web interface; "Open Geo Service" when unset.
         "title": _get_catalog_title(),
         "description": CATALOG_DESCRIPTION,
+        # Changed by every collection's sync, so the latest of theirs. A catalog whose collections
+        # are all mirrors is a mirror too, and Portolan requires it there (PORTO-CORE-057).
+        **({"updated": _stac_datetime(max(a.created_at for a in artifacts.values()))} if artifacts else {}),
         "links": links,
     }
 
@@ -313,7 +322,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
     # was last synced from it. A workflow output names the sources of the data it was made from.
     for source_url in _source_pages(artifact.dataset_id, source_dataset):
         template_links.append({"rel": "via", "href": source_url, "type": "text/html", "title": "Source"})
-    collection_payload["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
+    collection_payload["updated"] = _stac_datetime(artifact.created_at)
     # Relative, as for the catalog and feature collections, so they resolve beside the document.
     template_links.extend(_document_links())
     collection_payload["links"] = template_links
@@ -442,7 +451,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
 
     # When the collection was last refreshed, which for a mirror of an upstream source is when
     # it was last synced from it.
-    collection.extra_fields["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
+    collection.extra_fields["updated"] = _stac_datetime(artifact.created_at)
 
     _apply_table_extension(collection, artifact, detail)
     _add_feature_collection_links(
@@ -555,7 +564,7 @@ def _build_table_collection(dataset_id: str, artifact: ArtifactRecord, request: 
     )
     collection.extra_fields["keywords"] = [artifact.dataset_id, "table", "parquet", "stac"]
     # When a value last changed: the record is replaced on every write that changes one.
-    collection.extra_fields["updated"] = artifact.created_at.isoformat().replace("+00:00", "Z")
+    collection.extra_fields["updated"] = _stac_datetime(artifact.created_at)
     collection.stac_extensions.append(PORTOLAN_SCHEMA)
     table = TableExtension.ext(collection, add_if_missing=True)
     table.row_count = summary.row_count
@@ -840,7 +849,7 @@ def _processor_provider(artifact: ArtifactRecord, request: Request) -> dict[str,
         "name": _get_catalog_title(),
         "roles": ["processor"],
         "url": absolute_url(request, "/"),
-        "processing:datetime": artifact.created_at.isoformat().replace("+00:00", "Z"),
+        "processing:datetime": _stac_datetime(artifact.created_at),
     }
     if artifact.provenance is not None and artifact.provenance.ogs_version is not None:
         provider["processing:software"] = {"open-geo-service": artifact.provenance.ogs_version}

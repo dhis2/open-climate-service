@@ -117,19 +117,27 @@ def test_a_raster_collection_answers_head(client: TestClient, monkeypatch: pytes
 
 
 def test_stac_catalog_lists_child_collections(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        stac_services,
-        "_eligible_artifacts_by_dataset",
-        lambda: {"chirps3_precipitation_daily": _artifact(artifact_id="a1")},
-    )
+    artifacts = {
+        "chirps3_precipitation_daily": _artifact(artifact_id="a1"),
+        "era5_temperature_daily": _artifact(
+            dataset_id="era5_temperature_daily", artifact_id="a2", created_at=datetime(2026, 2, 3, 4, 5, tzinfo=UTC)
+        ),
+    }
+    monkeypatch.setattr(stac_services, "_eligible_artifacts_by_dataset", lambda: artifacts)
 
     response = client.get("/stac/catalog.json")
 
     assert response.status_code == 200
     payload = response.json()
     child_links = [link for link in payload["links"] if link["rel"] == "child"]
-    assert len(child_links) == 1
+    assert len(child_links) == 2
     assert child_links[0]["href"].endswith("/stac/chirps3_precipitation_daily/collection.json")
+    # The latest of its collections' `updated`: a catalog whose collections are all mirrors is
+    # itself a mirror, and Portolan requires a mirror's sync time on it (PORTO-CORE-057).
+    assert payload["updated"] == "2026-02-03T04:05:00Z"
+
+    monkeypatch.setattr(stac_services, "_eligible_artifacts_by_dataset", dict)
+    assert "updated" not in client.get("/stac/catalog.json").json(), "nothing synced, nothing to date"
 
 
 def test_catalog_links_leave_out_unset_fields(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
