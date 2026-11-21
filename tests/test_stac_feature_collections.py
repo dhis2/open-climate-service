@@ -166,6 +166,8 @@ def test_no_datacube_or_zarr_fields_are_emitted_for_a_feature_collection(
         assert field not in doc
     assert set(doc["assets"]) <= {"data", "thumbnail", "tiles", "style"}
     assert "zarr" not in doc["assets"] and "icechunk" not in doc["assets"]
+    # Every asset says what it is for, as Portolan asks (PORTO-CORE-088).
+    assert all(asset.get("title") and asset.get("description") for asset in doc["assets"].values()), doc["assets"]
     assert "renders" not in doc
 
 

@@ -550,6 +550,10 @@ def test_an_ingested_collection_publishes_measured_band_statistics(
 
     collection = client.get(f"/stac/{dataset_id}/collection.json").json()
 
+    # Every asset says what it is for, as Portolan asks (PORTO-CORE-088).
+    assets = collection["assets"]
+    assert {"zarr", "icechunk"} <= set(assets)
+    assert all(asset.get("title") and asset.get("description") for asset in assets.values()), assets
     bands = collection["assets"]["zarr"]["bands"]
     assert [band["name"] for band in bands] == list(collection["cube:variables"])
     # The store's own fill value, not the display's 0.0, which would mark every dry cell missing.

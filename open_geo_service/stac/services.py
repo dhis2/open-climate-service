@@ -182,6 +182,9 @@ def _get_catalog_id() -> str:
     return api_config.get_id()
 
 
+THUMBNAIL_DESCRIPTION = "A small preview image of the data, for listings and search results."
+
+
 def _stac_datetime(value: datetime) -> str:
     """An instant as STAC writes it: RFC 3339, with `Z` for UTC."""
     return value.isoformat().replace("+00:00", "Z")
@@ -339,6 +342,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
         "href": template_asset["href"],
         "type": template_asset.get("type"),
         "title": template_asset.get("title"),
+        "description": template_asset.get("description"),
         "roles": template_asset.get("roles"),
         "xarray:open_kwargs": xarray_open_kwargs,
     }
@@ -353,6 +357,7 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             "href": thumbnail_href,
             "type": "image/png",
             "title": "Thumbnail",
+            "description": THUMBNAIL_DESCRIPTION,
             "roles": ["thumbnail"],
             **file_fields(thumbnail_path(dataset_id)),
         }
@@ -362,6 +367,10 @@ def _build_raster_collection(dataset_id: str, artifact: ArtifactRecord, request:
             "href": absolute_url(request, f"/icechunk/{path_segment(dataset_id)}"),
             "type": "application/octet-stream",
             "title": "Icechunk store (native SDK access)",
+            "description": (
+                "The same data as an Icechunk repository, for the Icechunk libraries in Python and "
+                "JavaScript, with the dataset's version history."
+            ),
             "roles": ["data"],
             "xarray:open_kwargs": {"zarr_format": 3, "consolidated": False, **data_group},
         }
@@ -469,6 +478,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
             href=absolute_url(request, f"/features/{path_segment(dataset_id)}/data.parquet"),
             media_type=PARQUET_MEDIA_TYPE,
             title="GeoParquet collection",
+            description="Every feature with all its properties, in one GeoParquet file; table:columns describes them.",
             roles=["data"],
             extra_fields=file_size(data_path) if data_path is not None and data_path.is_file() else None,
         ),
@@ -483,6 +493,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 href=tiles_href,
                 media_type=tiles.PMTILES_MEDIA_TYPE,
                 title="Vector tiles (PMTiles)",
+                description="The features as vector tiles in one PMTiles archive, for drawing on a map.",
                 roles=["visual"],
                 extra_fields=file_size(tiles.archive_path(data_path)),
             ),
@@ -493,6 +504,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 href=absolute_url(request, f"/features/{path_segment(dataset_id)}/styles/default.json"),
                 media_type=tiles.STYLE_MEDIA_TYPE,
                 title="MapLibre style",
+                description="A MapLibre style that draws the vector tiles.",
                 roles=["style"],
             ),
         )
@@ -515,6 +527,7 @@ def _build_feature_collection(dataset_id: str, artifact: ArtifactRecord, request
                 href=absolute_url(request, f"/datasets/{path_segment(dataset_id)}/thumbnail.png"),
                 media_type="image/png",
                 title="Thumbnail",
+                description=THUMBNAIL_DESCRIPTION,
                 roles=["thumbnail"],
                 extra_fields=file_fields(thumbnail_path(dataset_id)),
             ),
@@ -951,6 +964,10 @@ def _build_collection_template(
             href=zarr_href,
             media_type=_zarr_media_type(artifact),
             title="Zarr store",
+            description=(
+                "The data as a Zarr v3 store, for any Zarr reader (xarray, zarrita, GDAL), served from "
+                "the dataset's Icechunk repository. xarray:open_kwargs says how to open it."
+            ),
             roles=["data"],
         ),
     )
@@ -1212,6 +1229,8 @@ def _asset_to_dict(asset: pystac.Asset) -> dict[str, Any]:
         payload["type"] = asset.media_type
     if asset.title is not None:
         payload["title"] = asset.title
+    if asset.description is not None:
+        payload["description"] = asset.description
     if asset.roles is not None:
         payload["roles"] = asset.roles
     payload.update(asset.extra_fields)
