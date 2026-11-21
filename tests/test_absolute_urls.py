@@ -297,6 +297,7 @@ def test_the_landing_page_links_under_the_mount_prefix(mounted_client: TestClien
     assert 'href="/geoservice/map"' in body
     assert 'href="/map"' not in body
     assert _CONFIGURED not in body
+    assert mounted_client.get("/datasets/", follow_redirects=False).headers["location"] == "/geoservice/datasets"
 
 
 def test_the_viewer_fetches_under_the_mount_prefix(mounted_client: TestClient) -> None:
@@ -364,6 +365,8 @@ def test_the_app_reads_the_root_path_itself(monkeypatch: pytest.MonkeyPatch) -> 
     assert 'action="/geoservice/manage/ingest"' in client.get(_SOURCE_PAGE).text
     self_href = next(link["href"] for link in client.get("/stac/catalog.json").json()["links"] if link["rel"] == "self")
     assert self_href == "http://testserver/geoservice/stac/catalog.json"
+    # A proxy that strips the prefix before forwarding, as the Nepal demo's does (CLIM-1975).
+    assert client.get("/datasets/", follow_redirects=False).headers["location"] == "/geoservice/datasets"
 
 
 @pytest.mark.parametrize("root_path", ["/geoservice", "/geoservice/"])

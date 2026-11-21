@@ -352,10 +352,11 @@ def test_the_trailing_slash_form_redirects_to_the_canonical_path(client: TestCli
     came into it — it acts on 4xx and 5xx, and leaves a 307 reporting success. Worth being
     exact about, because the obvious reading sends the next person after the wrong flag.
     """
-    redirect = client.get(f"{collection}/", follow_redirects=False)
+    redirect = client.get(f"{collection}/?q=1", follow_redirects=False)
 
     assert redirect.status_code == 307
-    assert redirect.headers["location"].endswith(collection)
+    # A path, not a URL: it keeps the scheme and host the client used (CLIM-1975).
+    assert redirect.headers["location"] == f"{collection}?q=1"
     assert client.get(f"{collection}/").status_code == 200, "and it still resolves when followed"
 
 
