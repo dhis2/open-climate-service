@@ -282,3 +282,5 @@ Both endpoints are advertised as assets in the STAC collection so clients can ch
 ## Fill values and NaN handling
 
 When writing float data to Zarr, missing data is stored as IEEE `NaN`. The map viewer uses the zarr `fill_value` attribute (which defaults to `NaN` for float arrays) to render missing pixels as transparent.
+
+xarray does not read a Zarr v3 array's `fill_value`; it reads the CF `_FillValue` attribute. Every data array declares it, at every pyramid level, and the STAC collection publishes it as the band's `nodata`. An integer array whose source declares no fill value is stored with a `fill_value` of 0 but declares no `_FillValue`, since 0 can be a class.
