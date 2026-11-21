@@ -275,7 +275,7 @@ def test_sync_dataset_append_policy_uses_store_based_append_for_plugin_backed_da
 
     monkeypatch.setattr(services, "create_artifact", fake_create_artifact)
     monkeypatch.setattr(services, "get_dataset_or_404", lambda _: _dataset_detail(dataset_id))
-    # Avoid a real network call from CHIRPS3DailyPlugin._availability_cutoff() —
+    # Avoid a real network call from CHIRPS3DailyPlugin.periods() —
     # this test is about the append plan, not plugin availability.
     monkeypatch.setattr(
         sync_engine,
@@ -641,7 +641,7 @@ def test_plan_sync_for_plugin_backed_icechunk_falls_back_to_artifact_end_when_co
 
     monkeypatch.setattr(sync_engine, "_artifact_storage_roots", lambda: (Path("/tmp").resolve(),))
     monkeypatch.setattr(sync_engine, "read_committed_period_ids", lambda *args, **kwargs: set())
-    # Avoid a real network call from CHIRPS3DailyPlugin._availability_cutoff() —
+    # Avoid a real network call from CHIRPS3DailyPlugin.periods() —
     # this test is about the committed-set fallback, not plugin availability.
     monkeypatch.setattr(sync_engine, "_query_available_periods", lambda *args, **kwargs: ["2026-01-31"])
 

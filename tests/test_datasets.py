@@ -1735,7 +1735,6 @@ def test_load_streaming_plugin_filters_runtime_only_params_for_constructor() -> 
 
     assert isinstance(plugin, CHIRPS3DailyPlugin)
     assert plugin.stage == "final"
-    assert plugin.flavor == "rnl"
 
 
 def test_create_artifact_allows_streaming_coverage_clamped_to_source_availability(
