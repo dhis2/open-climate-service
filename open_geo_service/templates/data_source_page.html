@@ -15,6 +15,7 @@
         {{ logo }}
         <h1>{{ name }}</h1>
       </a>
+      {{ account(mount) }}
     </header>
 
     <div class="layout">
@@ -49,9 +50,11 @@
                 Already ingested{% if ingested.coverage %} for {{ ingested.coverage }}{% endif %}.
                 <a href="{{ mount }}/datasets/{{ ingested.id }}">View the dataset</a>.
               </p>
+              {% if can_ingest %}
               <p class="note">
                 Ingesting again adds to it, or replaces it when <em>Overwrite</em> is checked.
               </p>
+              {% endif %}
               {% endif %}
               {% if can_ingest %}
               <form
@@ -117,6 +120,8 @@
                 This dataset is not fetched from a provider{% if produced_by %}; it is produced by the
                 <a href="{{ mount }}/workflows/{{ produced_by }}">{{ produced_by }}</a> workflow{% endif %}.
               </p>
+              {% elif sign_in %}
+              <p class="note">{{ sign_in_note(mount, "ingest data here") }}</p>
               {% elif read_only %}
               <p class="note">This instance is read-only, so data cannot be ingested here.</p>
               {% elif not has_extent %}

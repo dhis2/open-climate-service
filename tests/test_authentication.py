@@ -1,4 +1,4 @@
-"""Tests for named API tokens, tiers and the route table (CLIM-1292)."""
+"""Tests for named API tokens, tiers and the route table (CLIM-1292), and web sign-in (CLIM-1293)."""
 
 from __future__ import annotations
 
@@ -6,17 +6,21 @@ import asyncio
 import base64
 import re
 import time
+from http.cookiejar import DefaultCookiePolicy
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from starlette.types import Message
 
 from open_geo_service import config as api_config
+from open_geo_service.auth import middleware, sessions
 from open_geo_service.auth.route_table import ROUTE_TABLE, route_tier
 from open_geo_service.auth.tokens import Tier, configured_tokens
 from open_geo_service.main import app
 from open_geo_service.openeo.jobs import get_openeo_job_service
+from open_geo_service.system.templates import actions_closed
 
 from .conftest import MountedClientFactory
 
@@ -313,6 +317,126 @@ def test_openeo_basic_exchange_returns_the_secret(auth_on: None, client: TestCli
 def test_capabilities_omit_basic_auth_when_authentication_is_off(client: TestClient) -> None:
     endpoints = {endpoint["path"] for endpoint in client.get("/").json()["endpoints"]}
     assert "/credentials/basic" not in endpoints
+
+
+# --- web sign-in --------------------------------------------------------------------------
+
+SAME_ORIGIN = {"Origin": "https://testserver"}
+HTML = {"Accept": "text/html"}
+
+
+@pytest.fixture
+def browser(client: TestClient) -> TestClient:
+    """The client over HTTPS, which sign-in needs. It keeps no cookies: each test sends the
+    session cookie by hand, so which requests carry it is visible in the test."""
+    client.base_url = httpx.URL("https://testserver")
+    client.cookies.jar.set_policy(DefaultCookiePolicy(blocked_domains=["testserver.local"]))
+    return client
+
+
+def _session(client: TestClient, secret: str) -> dict[str, str]:
+    """Sign in through the form and return the cookie header the browser would send."""
+    signed_in = client.post(
+        "/sign-in", data={"token": secret, "next": "/datasets"}, headers=SAME_ORIGIN, follow_redirects=False
+    )
+    assert signed_in.status_code == 303 and signed_in.headers["location"] == "/datasets"
+    set_cookie = signed_in.headers["set-cookie"]
+    assert {"HttpOnly", "Secure", "SameSite=Lax", "Path=/"} <= {part.strip() for part in set_cookie.split(";")}
+    assert secret not in set_cookie
+    return {"Cookie": set_cookie.split(";")[0]}
+
+
+def test_web_sign_in_opens_the_forms_its_tier_allows(
+    auth_on: None, browser: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = browser
+    pause = "/schedules/sync/nothing/pause"
+    # A page rendered outside a request shows no operator forms.
+    assert actions_closed() == "sign-in"
+    signed_out = client.get("/data-sources", headers=HTML).text
+    assert 'href="/sign-in">Sign in</a>' in signed_out and "Sign out" not in signed_out
+    assert "Sign in</a> with an operator token to" in client.get("/", headers=HTML).text
+    assert client.post(pause, headers=SAME_ORIGIN).status_code == 401
+
+    came_from = client.get("/sign-in", headers={"Referer": "https://testserver/data-sources?q=1"})
+    assert 'name="next" value="/data-sources?q=1"' in came_from.text
+    monkeypatch.setattr(middleware, "_last_failure_log", float("-inf"))
+    wrong = client.post("/sign-in", data={"token": "x" * 40}, headers=SAME_ORIGIN)
+    assert wrong.status_code == 401 and "not valid" in wrong.text
+    assert "invalid credential" in caplog.text
+    other_site = {"Origin": "https://elsewhere.example"}
+    refused = client.post("/sign-in", data={"token": OPERATOR_SECRET}, headers=other_site)
+    assert refused.status_code == 403 and "GEOSERVICE_BASE_URL" in refused.json()["message"]
+    # Only a path on this instance is returned to.
+    off_site = client.post(
+        "/sign-in", data={"token": CLIENT_SECRET, "next": "//elsewhere.example/"}, headers=SAME_ORIGIN
+    )
+    assert off_site.url.path == "/"
+
+    # An authenticated token signs in, but the pages' forms need an operator.
+    client_cookie = _session(client, CLIENT_SECRET)
+    page = client.get("/", headers={**client_cookie, **HTML}).text
+    assert "Sign out" in page and "You are signed in as notebook, which is not an operator token" in page
+    assert client.post(pause, headers={**client_cookie, **SAME_ORIGIN}).status_code == 403
+
+    cookie = _session(client, OPERATOR_SECRET)
+    assert "with an operator token to" not in client.get("/", headers={**cookie, **HTML}).text
+    assert client.post(pause, headers={**cookie, **SAME_ORIGIN}).status_code not in (401, 403)
+    assert client.post(pause, headers={**cookie, "Sec-Fetch-Site": "same-origin"}).status_code not in (401, 403)
+    # A write from another site, the same host on another scheme, or with no sign of where it
+    # came from, is refused.
+    assert client.post(pause, headers={**cookie, **other_site}).status_code == 403
+    assert client.post(pause, headers={**cookie, "Origin": "http://testserver"}).status_code == 403
+    assert client.post(pause, headers=cookie).status_code == 403
+    # The page never gets the token back.
+    assert client.get("/credentials/basic", headers=cookie).status_code == 401
+
+    signed_out_now = client.post("/sign-out", headers={**cookie, **SAME_ORIGIN}, follow_redirects=False)
+    assert signed_out_now.status_code == 303 and "Max-Age=0" in signed_out_now.headers["set-cookie"]
+    # The ended session is no credential: pages stay readable and the stale cookie is cleared.
+    stale = client.get("/datasets", headers={**cookie, **HTML})
+    assert stale.status_code == 200 and "Max-Age=0" in stale.headers["set-cookie"]
+    assert client.post(pause, headers={**cookie, **SAME_ORIGIN}).status_code == 401
+    # Signing in again with the stale cookie sets only the new one.
+    again = client.post(
+        "/sign-in", data={"token": OPERATOR_SECRET}, headers={**cookie, **SAME_ORIGIN}, follow_redirects=False
+    )
+    set_cookies = again.headers.get_list("set-cookie")
+    assert len(set_cookies) == 1 and "Max-Age=28800" in set_cookies[0]
+
+
+def test_a_session_ends_when_it_expires_or_its_token_changes(
+    auth_on: None, monkeypatch: pytest.MonkeyPatch, browser: TestClient
+) -> None:
+    client = browser
+    cookie = _session(client, OPERATOR_SECRET)
+    assert "caps" in client.get("/", headers={**cookie, **HTML}).text
+    monkeypatch.setenv("GEOSERVICE_TEST_OPERATOR_TOKEN", "n" * 32)
+    assert "caps" not in client.get("/", headers={**cookie, **HTML}).text
+
+    cookie = _session(client, "n" * 32)
+    monkeypatch.setattr(sessions, "LIFETIME_SECONDS", -1)
+    expiring = _session(client, "n" * 32)
+    assert "caps" in client.get("/", headers={**cookie, **HTML}).text
+    assert "caps" not in client.get("/", headers={**expiring, **HTML}).text
+
+
+def test_sign_in_is_offered_only_over_https_or_on_this_machine(auth_on: None, client: TestClient) -> None:
+    over_http = client.get("/sign-in")
+    assert "needs HTTPS" in over_http.text and 'name="token"' not in over_http.text
+    refused = client.post("/sign-in", data={"token": OPERATOR_SECRET}, headers={"Origin": "http://testserver"})
+    assert refused.status_code == 403 and "set-cookie" not in refused.headers
+    client.base_url = httpx.URL("http://localhost:8000")
+    # The server offers the form; the browser shows it only in a secure context, which a proxy
+    # rewriting Host to a loopback address cannot fake.
+    local = client.get("/sign-in").text
+    assert 'name="token"' in local and 'id="sign-in" hidden' in local and "window.isSecureContext" in local
+
+
+def test_without_tokens_there_is_no_sign_in(client: TestClient) -> None:
+    assert client.get("/sign-in").status_code == 404
+    page = client.get("/data-sources", headers=HTML).text
+    assert "Sign in" not in page and "Sign out" not in page
 
 
 # --- configuration -----------------------------------------------------------------------

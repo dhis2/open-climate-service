@@ -320,9 +320,17 @@ connection = openeo.connect("https://geoservice.example.org").authenticate_basic
 ```
 
 `GET /me` reports the token a request ran as. Each token sees and changes only the batch jobs
-and stored process graphs it created; an `operator` token reaches all of them. The web interface has no sign-in yet, so with
-authentication on its forms are refused; operators act through the API until it does. The
-design and the later steps are in [Authentication and authorization](authentication.md).
+and stored process graphs it created; an `operator` token reaches all of them.
+
+In the web interface, **Sign in** in the header takes a token and opens a session for 8 hours,
+until **Sign out**, or until the instance restarts. Signed out, or signed in with an
+`authenticated` token, the pages stay readable and their forms say they need an operator token.
+Sign-in is offered only over HTTPS or on `localhost`, so a token is never sent in clear; over
+plain HTTP from another machine the page says so instead of showing the form. Behind a proxy that
+terminates TLS or rewrites the `Host` header, set `GEOSERVICE_BASE_URL` to the public origin, so
+the pages' origin is recognised; without it, sign-in is refused as coming from another site.
+
+The design and the later steps are in [Authentication and authorization](authentication.md).
 
 ### Read-only instances
 

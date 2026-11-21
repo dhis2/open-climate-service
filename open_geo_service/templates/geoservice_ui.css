@@ -880,6 +880,7 @@ p.note.table-title {
 .field input[type="text"],
 .field input[type="number"],
 .field input[type="time"],
+.field input[type="password"],
 .field select {
   font: inherit;
   color: var(--colors-grey900);
@@ -1735,3 +1736,21 @@ a:focus-visible .ag-node rect {
 .ag-chip-ok { background: var(--colors-green100); color: var(--colors-green800); }
 .ag-chip-paused, .ag-chip-dry_run { background: var(--colors-yellow100); color: var(--colors-yellow900); }
 .ag-chip-failed { background: var(--colors-red050); color: var(--colors-red800); }
+
+/* Who is signed in, at the right of the header bar; shown only with authentication on. */
+header .account {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--spacers-dp12);
+  white-space: nowrap;
+}
+header .account a,
+header .account span {
+  color: inherit;
+}
+header .account button {
+  background: transparent;
+  color: inherit;
+  border-color: currentColor;
+}

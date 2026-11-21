@@ -190,7 +190,6 @@ def _render_page(
             revision=revision,
             selection=_form_selection(choices, workflow_id, plugin_id) if tab == "create" else {},
             labels=labels,
-            read_only=api_config.is_read_only(),
         ),
         status_code=status_code or (400 if error else 200),
     )

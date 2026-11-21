@@ -15,6 +15,7 @@
         {{ logo }}
         <h1>{{ name }}</h1>
       </a>
+      {{ account(mount) }}
     </header>
 
     <div class="layout">
@@ -90,7 +91,9 @@
         {% endif %}
         {% endif %}
 
-        {% if tab == 'create' and read_only %}
+        {% if tab == 'create' and sign_in %}
+        <div class="notice">{{ sign_in_note(mount, "create or edit pipelines") }}</div>
+        {% elif tab == 'create' and read_only %}
         <div class="notice">This instance is read-only; pipelines cannot be created or edited.</div>
         {% elif tab == 'create' %}
         <section class="panel pipeline-create" aria-labelledby="create-title">

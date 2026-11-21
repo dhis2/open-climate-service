@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign in · {{ name }}</title>
+    <style>
+{{ styles | safe }}
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header>
+      <a class="home" href="{{ mount }}/">
+        {{ logo }}
+        <h1>{{ name }}</h1>
+      </a>
+    </header>
+    <div class="layout">
+      {{ nav }}
+      <main id="content">
+        <div class="page-title"><h2>Sign in</h2></div>
+        <div class="panel">
+          <p>Sign in with an API token from this instance's configuration. Reading needs no sign-in; ingesting, syncing and pipelines need an operator token.</p>
+          {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+          {% if form %}
+          {# Shown only in a secure context (HTTPS or this machine), the rule browsers apply to the
+             Secure cookie. A proxy can make plain HTTP look local to the server, never to the browser. #}
+          <div class="notice error" role="alert" id="needs-https" hidden>{{ needs_https }}</div>
+          <form method="post" action="{{ mount }}/sign-in" class="form-grid" id="sign-in" hidden>
+            <input type="hidden" name="next" value="{{ next_path }}" />
+            <div class="field">
+              <label for="token">Token</label>
+              <input id="token" name="token" type="password" autocomplete="current-password" required autofocus />
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="primary">Sign in</button>
+            </div>
+          </form>
+          <script>
+            document.getElementById(window.isSecureContext ? "sign-in" : "needs-https").hidden = false;
+          </script>
+          {% endif %}
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

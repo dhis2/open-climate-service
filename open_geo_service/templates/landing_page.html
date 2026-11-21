@@ -15,6 +15,7 @@
         {{ logo }}
         <h1>{{ name }}</h1>
       </a>
+      {{ account(mount) }}
     </header>
 
     <div class="layout">
@@ -75,6 +76,8 @@
             {% endif %}
             {% if read_only %}
             <p class="note">This instance is read-only: data can be browsed and processed, but not ingested.</p>
+            {% elif sign_in %}
+            <p class="note">{{ sign_in_note(mount, "ingest data, sync datasets and run pipelines") }}</p>
             {% endif %}
               </div>
               {% if globe %}

@@ -431,6 +431,12 @@ def test_a_source_ingested_under_another_id_still_shows_as_ingested(monkeypatch:
 
     assert "Already ingested" in html
     assert 'href="/datasets/chirps3_nepal"' in html
+    assert "Ingesting again" in html
+
+    # A viewer who cannot ingest still sees the dataset, but not how ingesting again behaves.
+    monkeypatch.setattr(api_config, "is_read_only", lambda: True)
+    html = landing.render_data_source_page(_ingestable("chirps3_precipitation_daily"), "")
+    assert "Already ingested" in html and "Ingesting again" not in html
 
 
 def test_a_release_version_without_a_value_is_left_blank(monkeypatch: pytest.MonkeyPatch) -> None:

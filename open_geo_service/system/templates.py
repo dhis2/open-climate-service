@@ -17,7 +17,8 @@ from fastapi import Request
 from markupsafe import Markup, escape
 
 from open_geo_service import config as api_config
-from open_geo_service.auth.tokens import Principal
+from open_geo_service.auth.middleware import current_viewer
+from open_geo_service.auth.tokens import Principal, Tier, configured_tokens
 from open_geo_service.data_registry.recipes import producing_workflow
 from open_geo_service.data_registry.services import datasets as registry_datasets
 from open_geo_service.extents.services import get_extent
@@ -209,6 +210,79 @@ def page_nav(mount: str, current: str) -> Markup:
         for key, label, path in _NAV_ITEMS
     )
     return Markup('<nav class="rail" aria-label="Sections"><ul>{}</ul></nav>').format(items)
+
+
+def account(mount: str) -> Markup:
+    """The header's sign-in link, or who is signed in and a sign-out button; empty with authentication off."""
+    if not configured_tokens():
+        return Markup("")
+    viewer = current_viewer()
+    if viewer.token is None:
+        return Markup('<div class="account"><a href="{}/sign-in">Sign in</a></div>').format(mount)
+    return Markup(
+        '<form class="account" method="post" action="{}/sign-out">'
+        '<span>{}</span><button type="submit">Sign out</button></form>'
+    ).format(mount, viewer.token.id)
+
+
+def sign_in_note(mount: str, action: str) -> Markup:
+    """Why a page's forms are hidden: a prompt to sign in, or that the signed-in token is not an operator's.
+
+    `action` completes "to ...", for example "ingest data here".
+    """
+    link = Markup('<a href="{}/sign-in">Sign in</a>').format(mount)
+    viewer = current_viewer()
+    if viewer.token is None:
+        return Markup("{} with an operator token to {}.").format(link, action)
+    return Markup("You are signed in as {}, which is not an operator token. {} with one to {}.").format(
+        viewer.token.id, link, action
+    )
+
+
+# Jinja types its globals as its own defaults, so a function of ours needs the cast.
+cast(dict[str, Any], _env.globals)["account"] = account
+cast(dict[str, Any], _env.globals)["sign_in_note"] = sign_in_note
+
+
+def actions_closed() -> str | None:
+    """Why the viewer cannot use a page's forms: "read-only", "sign-in", or None when it can.
+
+    Every form the pages post goes to an operator route (see `auth/route_table.py`), so the
+    operator tier is what a page checks.
+    """
+    if api_config.is_read_only():
+        return "read-only"
+    if configured_tokens() and current_viewer().tier < Tier.OPERATOR:
+        return "sign-in"
+    return None
+
+
+def _actions() -> dict[str, bool]:
+    """The page context that shows or hides forms.
+
+    `read_only` hides them; `sign_in` says they need an operator's sign-in, for a visitor signed
+    out or signed in with a lower tier.
+    """
+    closed = actions_closed()
+    return {"read_only": closed is not None, "sign_in": closed == "sign-in"}
+
+
+SIGN_IN_NEEDS_HTTPS = "Sign-in needs HTTPS, so the token is not sent in clear. Open this instance over https://."
+
+
+def render_sign_in_page(mount: str, *, next_path: str, error: str | None = None, form: bool = True) -> str:
+    """Render the form that exchanges a token for a session; without *form*, only *error*."""
+    return get_template("sign_in_page.html").render(
+        mount=mount,
+        name=api_config.get_name(),
+        logo=LOGO,
+        styles=_read_asset("geoservice_ui.css"),
+        nav=page_nav(mount, ""),
+        next_path=next_path,
+        error=error,
+        form=form,
+        needs_https=SIGN_IN_NEEDS_HTTPS,
+    )
 
 
 # The pages under the Pipelines entry; the first is where it opens.
@@ -685,7 +759,7 @@ def render_dataset_page(
         styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "datasets"),
         job_script=_read_asset("geoservice_jobs.js"),
-        read_only=api_config.is_read_only(),
+        **_actions(),
         **_dataset_page_context(record, template, refreshable, refresh_blocked),
     )
 
@@ -716,7 +790,7 @@ def render_schedules_page(status: Any, mount: str, *, change_warning: str | None
         styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "automation"),
         automation_tabs=automation_tabs(mount, "schedules"),
-        read_only=api_config.is_read_only(),
+        **_actions(),
         status=status,
         schedules=rows,
         change_warning=change_warning,
@@ -733,6 +807,7 @@ def render_schedule_delete_page(dataset_id: str, mount: str) -> str:
         styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "automation"),
         dataset_id=dataset_id,
+        **_actions(),
     )
 
 
@@ -934,7 +1009,7 @@ def _data_source_page_context(
 
 def render_data_source_page(template: dict[str, Any], mount: str) -> str:
     """Render the page for one data source, with the form that ingests it."""
-    read_only = api_config.is_read_only()
+    actions = _actions()
     return get_template("data_source_page.html").render(
         version=app_version,
         mount=mount,
@@ -943,10 +1018,11 @@ def render_data_source_page(template: dict[str, Any], mount: str) -> str:
         styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "data-sources"),
         job_script=_read_asset("geoservice_jobs.js"),
+        sign_in=actions["sign_in"],
         **_data_source_page_context(
             template,
             _load_datasets(),
-            read_only=read_only,
+            read_only=actions["read_only"],
             has_extent=_load_extent() is not None,
             today=date.today(),
         ),
@@ -1008,6 +1084,7 @@ def _feature_source_page_context(template: dict[str, Any], datasets: list[Any], 
 
 def render_feature_source_page(template: dict[str, Any], mount: str) -> str:
     """Render the page for one feature collection data source, with the form that fetches it."""
+    actions = _actions()
     return get_template("feature_source_page.html").render(
         version=app_version,
         mount=mount,
@@ -1016,7 +1093,8 @@ def render_feature_source_page(template: dict[str, Any], mount: str) -> str:
         styles=_read_asset("geoservice_ui.css"),
         nav=page_nav(mount, "data-sources"),
         job_script=_read_asset("geoservice_jobs.js"),
-        **_feature_source_page_context(template, _load_datasets(), read_only=api_config.is_read_only()),
+        sign_in=actions["sign_in"],
+        **_feature_source_page_context(template, _load_datasets(), read_only=actions["read_only"]),
     )
 
 
@@ -2059,6 +2137,7 @@ def render_landing(version: str, mount: str, viewer: Principal | None = None) ->
         workflows=catalogue["workflows"],
         # Shown on the overview, so a visitor knows why no page offers ingest or sync.
         read_only=api_config.is_read_only(),
+        sign_in=actions_closed() == "sign-in",
     )
 
 
@@ -2078,7 +2157,6 @@ def render_pipelines_page(
     revision: int | None = None,
     selection: dict[str, Any] | None = None,
     labels: dict[str, dict[str, str]] | None = None,
-    read_only: bool = False,
 ) -> str:
     """Render the pipeline listing, the creation tab, or the same tab prefilled for editing.
 
@@ -2179,7 +2257,7 @@ def render_pipelines_page(
         draft=draft,
         editing=editing,
         revision=revision,
-        read_only=read_only,
+        **_actions(),
     )
 
 
@@ -2299,7 +2377,7 @@ def render_pipeline_page(record: Any, runs: list[dict[str, Any]], mount: str) ->
         skipped_discarded_through=record.events.skipped_discarded_through,
         range_start=range_start,
         range_end=range_end,
-        read_only=api_config.is_read_only(),
+        **_actions(),
     )
 
 

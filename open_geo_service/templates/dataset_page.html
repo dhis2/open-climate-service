@@ -15,6 +15,7 @@
         {{ logo }}
         <h1>{{ name }}</h1>
       </a>
+      {{ account(mount) }}
     </header>
 
     <div class="layout">
@@ -337,6 +338,8 @@
                   selectFromLocation();
                 })();
               </script>
+              {% elif syncable and sign_in %}
+              <p class="note">{{ sign_in_note(mount, "sync this dataset or schedule its sync") }}</p>
               {% elif not syncable %}
               <p class="note">
                 {% if sync_kind == "static" %}This dataset does not update from a source, so there is nothing to sync.{% else %}This dataset has no source to sync from.{% endif %}

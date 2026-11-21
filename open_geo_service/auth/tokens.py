@@ -60,6 +60,11 @@ class Principal:
         return self.tier is Tier.OPERATOR or (owner is not None and owner == self.id)
 
 
+def principal_for(token: NamedToken) -> Principal:
+    """The principal a configured token runs as."""
+    return Principal(id=f"token:{token.id}", tier=token.tier, token=token)
+
+
 ANONYMOUS = Principal(id="anonymous", tier=Tier.PUBLIC)
 """A caller without a credential while authentication is on."""
 
@@ -124,7 +129,7 @@ def owner_principal(owner: str | None) -> Principal | None:
         return None
     for token in tokens:
         if owner == f"token:{token.id}":
-            return Principal(id=owner, tier=token.tier, token=token)
+            return principal_for(token)
     return Principal(id=owner, tier=Tier.PUBLIC)
 
 
@@ -152,5 +157,4 @@ def authenticate(authorization: str | None, tokens: tuple[NamedToken, ...]) -> P
     matches = [token for token in tokens if hmac.compare_digest(token.secret.encode(), secret.encode())]
     if not matches or (token_id is not None and matches[0].id != token_id):
         return None
-    token = matches[0]
-    return Principal(id=f"token:{token.id}", tier=token.tier, token=token)
+    return principal_for(matches[0])

@@ -15,6 +15,7 @@
         {{ logo }}
         <h1>{{ name }}</h1>
       </a>
+      {{ account(mount) }}
     </header>
     <div class="layout">
       {{ nav }}
@@ -22,6 +23,11 @@
         <div class="page-title"><h2>Delete sync schedule?</h2></div>
         <div class="panel">
           <p>The schedule for <strong class="mono">{{ dataset_id }}</strong> will be removed. Existing data and sync jobs remain available.</p>
+          {% if sign_in %}
+          <p class="note">{{ sign_in_note(mount, "delete this schedule") }}</p>
+          {% elif read_only %}
+          <p class="note">This instance is read-only, so schedules cannot be deleted here.</p>
+          {% else %}
           <form method="post" action="{{ mount }}/schedules/sync/{{ dataset_id }}/delete">
             <input type="hidden" name="confirm" value="yes" />
             <div class="form-actions">
@@ -29,6 +35,7 @@
               <a class="button-link" href="{{ mount }}/schedules">Cancel</a>
             </div>
           </form>
+          {% endif %}
         </div>
       </main>
     </div>

@@ -13,6 +13,7 @@ from starlette.responses import Response
 
 import open_geo_service.startup  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from open_geo_service import config as api_config
+from open_geo_service.auth import routes as auth_routes
 from open_geo_service.auth.middleware import AccessMiddleware
 from open_geo_service.auth.tokens import configured_tokens
 from open_geo_service.automation import routes as automation_routes
@@ -376,6 +377,7 @@ def create_app() -> FastAPI:
         return response
 
     _app.include_router(system_routes.router, tags=["System"])
+    _app.include_router(auth_routes.router, tags=["System"])
     _app.include_router(openeo_routes.capabilities_router, tags=["openEO"])
     _app.include_router(stac_routes.router, prefix="/stac", tags=["STAC"])
     _app.include_router(openeo_routes.collections_router, prefix="/collections", tags=["openEO"])

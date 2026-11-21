@@ -1,9 +1,9 @@
 # Authentication and authorization
 
-This note records how Open Geo Service authenticates callers and decides what they may do. The first step
-of the [order of delivery](#order-of-delivery) is in place: named tokens, tiers and the route
-table, configured as described in [Authentication](instance_guide.md#authentication). The rest is
-design. Until web sign-in ships, operators act through the API on an instance with tokens on.
+This note records how Open Geo Service authenticates callers and decides what they may do. The first two steps
+of the [order of delivery](#order-of-delivery) are in place: named tokens, tiers and the route
+table, and web interface sign-in, configured as described in
+[Authentication](instance_guide.md#authentication). The rest is design.
 
 ## The principle
 
@@ -121,10 +121,22 @@ Named tokens are permanent. They remain the credential for machine clients after
 
 ## The web interface
 
-The pages post plain HTML forms, which cannot send a bearer header, so the web interface gets a
-sign-in page. It sets a session cookie marked `HttpOnly`, `Secure` and `SameSite=Lax` that holds a
-signed session id, never the secret. Every write made with the cookie carries a CSRF token.
-Signed out, the pages stay readable and their action panels say what signing in would allow.
+The pages post plain HTML forms, which cannot send a bearer header, so the web interface has a
+sign-in page. It takes a token once and sets a session cookie marked `HttpOnly`, `Secure` and
+`SameSite=Lax` that holds a random session id, never the secret. Sessions are kept in memory, so a
+restart signs everyone out; a session also ends after 8 hours, at sign-out, or when its token is
+removed or given a new secret. An expired or unknown cookie counts as no credential and is
+cleared, rather than refused, so it cannot lock the browser out of the pages.
+
+Sign-in is offered only over HTTPS or on `localhost`, where the token does not travel in clear.
+A write made with the cookie must come from the instance's own pages: its `Origin`, scheme, host
+and port, must be the one the request addressed or `GEOSERVICE_BASE_URL`'s, or, without `Origin`,
+`Sec-Fetch-Site` must say `same-origin`. The middleware checks this before reading the body, which a CSRF token in the
+form would need. `GET /credentials/basic` answers only a `Basic` credential, so a signed-in page
+cannot read the secret back.
+
+Signed out, or signed in below the operator tier, the pages stay readable and their action panels
+say they need an operator's sign-in.
 
 The cookie serves only the Open Geo Service interface on its own origin. A client on another origin, such as a
 browser app or the openEO Web Editor, sends a bearer token. Cross-site cookies, which would need
@@ -213,9 +225,11 @@ Each step ships on its own and is useful alone; no later step redoes an earlier 
 
 1. Principals and tiers, the route table, the middleware, named tokens, the openEO basic exchange,
    and owners on jobs and stored process graphs.
-2. Web interface sign-in with a session cookie and CSRF.
+2. Web interface sign-in with a session cookie and an origin check on its writes.
 3. Optional gating of reads, advertised in STAC.
-4. OIDC and per-person ownership.
+4. OIDC and per-person ownership. Signing in through the provider and validating its tokens
+   use an established library, such as Authlib, rather than code of our own; the session
+   handling from step 2 is reconsidered then, to keep one mechanism.
 5. Role mapping and quotas.
 6. Per-dataset access with signed links.
 7. DHIS2 routes, for the operations the first DHIS2 app names.
