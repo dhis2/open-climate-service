@@ -294,6 +294,7 @@ def create_app() -> FastAPI:
     # instead of on the first request that builds a link.
     _app = FastAPI(lifespan=_lifespan, root_path=urls.configured_root_path())
     urls.configured_base()
+    _app.add_middleware(urls.RelativeSlashRedirects)
 
     # Registered *before* CORS so it ends up innermost: Starlette applies the most recently
     # added middleware outermost, so CORS wraps this and a 401 or 403 still carries the headers

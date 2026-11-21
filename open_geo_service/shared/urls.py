@@ -31,6 +31,8 @@ import urllib.parse
 from typing import NamedTuple
 
 from fastapi import Request
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +235,52 @@ def route_path(request: Request) -> str:
     strips the same way Starlette strips it.
     """
     return strip_mount(request.url.path, str(request.scope.get("root_path", "")))
+
+
+class RelativeSlashRedirects:
+    """Sends Starlette's trailing-slash redirect as a path under the mount prefix.
+
+    Starlette builds that redirect's `Location` from the request scope: absolute, with the
+    scheme uvicorn saw, and with the scope's path, which lacks the prefix when the proxy strips
+    it before forwarding. Behind such a proxy `/nepal/datasets/` went to `http://host/datasets`
+    (CLIM-1975). Rewritten to the form the module docstring gives every in-page redirect. Other
+    redirects keep their `Location`: only one whose path is the request's with the trailing
+    slash added or removed is Starlette's.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_relative(message: Message) -> None:
+            if message["type"] == "http.response.start" and message["status"] in (307, 308):
+                headers = MutableHeaders(scope=message)
+                location = _relative_slash_location(scope, headers.get("location"))
+                if location is not None:
+                    headers["location"] = location
+            await send(message)
+
+        await self.app(scope, receive, send_relative)
+
+
+def _relative_slash_location(scope: Scope, location: str | None) -> str | None:
+    """The prefixed path for Starlette's slash redirect to `location`, or None for any other."""
+    if location is None:
+        return None
+    target = urllib.parse.urlsplit(location)
+    # The scope's path is decoded and the `Location` escaped, so `%20` in an id still matches.
+    decoded = urllib.parse.unquote(target.path)
+    requested = str(scope["path"])
+    if decoded == requested or decoded.rstrip("/") != requested.rstrip("/"):
+        return None
+    # Starlette's path, escaping kept, less any prefix the scope carried.
+    path = strip_mount(target.path, str(scope.get("root_path", "")))
+    query = f"?{target.query}" if target.query else ""
+    return f"{mount_prefix(Request(scope))}{path}{query}"
 
 
 def self_url(request: Request) -> str:
