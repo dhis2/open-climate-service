@@ -46,6 +46,9 @@ def test_write_to_icechunk_store_builds_pyramid(tmp_path: Path) -> None:
     import icechunk
 
     ds = _pyramid_sized_cube()
+    # Valid zeros, as a categorical class 0 would be: the source declares no fill value, so the
+    # storage fill of 0 the writer pins must not be declared to readers (CLIM-1974).
+    ds["hotspot"][:, :1024, :1024] = 0
     assert needs_pyramid(ds)
 
     store_path = tmp_path / "pyramid.icechunk"
@@ -65,6 +68,15 @@ def test_write_to_icechunk_store_builds_pyramid(tmp_path: Path) -> None:
     with xr.open_zarr(store, group="0", consolidated=False, zarr_format=3) as lvl0:
         assert "hotspot" in lvl0.data_vars
         assert lvl0.sizes["y"] == 2100 and lvl0.sizes["x"] == 2100
+
+    # Every level stores 0 as its fill but declares no `_FillValue`, so xarray keeps the zeros.
+    for level in sorted(level_groups):
+        hotspot = root[level]["hotspot"]
+        assert hotspot.fill_value == 0, level
+        assert "_FillValue" not in hotspot.attrs, level
+        with xr.open_zarr(store, group=level, consolidated=False, zarr_format=3) as ds_level:
+            assert ds_level["hotspot"].dtype == np.uint8, level
+            assert int(ds_level["hotspot"].min()) == 0, level
 
 
 def test_resampling_method_from_template() -> None:
