@@ -272,14 +272,15 @@ def _relative_slash_location(scope: Scope, location: str | None) -> str | None:
     if location is None:
         return None
     target = urllib.parse.urlsplit(location)
+    # The scope's path is decoded and the `Location` escaped, so `%20` in an id still matches.
+    decoded = urllib.parse.unquote(target.path)
     requested = str(scope["path"])
-    if target.path == requested or target.path.rstrip("/") != requested.rstrip("/"):
+    if decoded == requested or decoded.rstrip("/") != requested.rstrip("/"):
         return None
-    request = Request(scope)
-    path = route_path(request)
-    toggled = path.rstrip("/") if path.endswith("/") else f"{path}/"
+    # Starlette's path, escaping kept, less any prefix the scope carried.
+    path = strip_mount(target.path, str(scope.get("root_path", "")))
     query = f"?{target.query}" if target.query else ""
-    return f"{mount_prefix(request)}{toggled}{query}"
+    return f"{mount_prefix(Request(scope))}{path}{query}"
 
 
 def self_url(request: Request) -> str:

@@ -367,6 +367,9 @@ def test_the_app_reads_the_root_path_itself(monkeypatch: pytest.MonkeyPatch) -> 
     assert self_href == "http://testserver/geoservice/stac/catalog.json"
     # A proxy that strips the prefix before forwarding, as the Nepal demo's does (CLIM-1975).
     assert client.get("/datasets/", follow_redirects=False).headers["location"] == "/geoservice/datasets"
+    # A workflow id may hold a space; the redirect keeps it escaped.
+    escaped = client.get("/process_graphs/my%20workflow/", follow_redirects=False)
+    assert escaped.headers["location"] == "/geoservice/process_graphs/my%20workflow"
 
 
 @pytest.mark.parametrize("root_path", ["/geoservice", "/geoservice/"])
