@@ -964,10 +964,7 @@ def _build_collection_template(
             href=zarr_href,
             media_type=_zarr_media_type(artifact),
             title="Zarr store",
-            description=(
-                "The data as a Zarr v3 store, for any Zarr reader (xarray, zarrita, GDAL), served from "
-                "the dataset's Icechunk repository. xarray:open_kwargs says how to open it."
-            ),
+            description="The data as a Zarr store, for any Zarr reader. xarray:open_kwargs says how to open it.",
             roles=["data"],
         ),
     )
